@@ -1,0 +1,80 @@
+# yamllint disable
+{{- range .Values.health_checks }}
+{{- if .run_check}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .runner_name }}
+  labels:
+    app: {{ .runner_name }}
+spec:
+  timeZone: America/Los_Angeles
+  schedule: {{ .schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          serviceAccountName: ds-create
+          containers:
+          - name: {{ .runner_name | quote}}
+            image: "{{ .image.repo }}:{{ .image.tag }}"
+            imagePullPolicy: {{ .image.pull_policy }}
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+            env:
+            {{- range $key, $value := .env}}
+            - name: {{ $key | quote }}
+              value: {{ $value | quote }}
+            {{- end }} # iteration over .env
+            {{- with .blast_mode }}
+            {{- if .blast_mode_enabled }}
+            - name: BLAST_MODE_ENABLED
+              value: "true" # "true" or "1"
+            {{- range $key, $value := .env}}
+            - name: {{ $key | quote }}
+              value: {{ $value | quote }}
+            {{- end }} # iteration over .blast_mode.env
+            {{- end }} # if .blast_mode.blast_mode_enabled
+            {{- end }} # if .blast_mode scope
+          restartPolicy: OnFailure
+---
+{{- end }} # if .run_check
+{{- end }} # iteration over .Values.health_checks
+## Below should be the same for all health checks
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ds-create
+  namespace: default
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ds-create
+rules:
+- apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
+  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services"]
+  verbs: ["list", "get", "create", "delete", "watch", "patch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ds-create
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: ds-create
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: ds-create
+  apiGroup: rbac.authorization.k8s.io
+

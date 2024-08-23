@@ -1,0 +1,159 @@
+# yamllint disable
+apiVersion: v1
+kind: Service
+metadata:
+  name: neper-headless-svc-${CHECK_TIME_EPOCH_SEC}
+spec:
+  clusterIP: None  #  clusterIP must be None to create a headless service
+  selector:
+    name: neper-healthcheck-${CHECK_TIME_EPOCH_SEC}  # must match Job name
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neper-healthcheck-${CHECK_TIME_EPOCH_SEC}
+spec:
+  completions: 2
+  parallelism: 2
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        name: neper-healthcheck-${CHECK_TIME_EPOCH_SEC}
+    spec:
+      tolerations:
+      - operator: "Exists"
+      serviceAccountName: neper-node-list-${CHECK_TIME_EPOCH_SEC}
+      subdomain: neper-headless-svc-${CHECK_TIME_EPOCH_SEC}  # has to match Service name
+      restartPolicy: Never
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      volumes:
+      - name: tmpfs
+        emptyDir: {}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            # Multiple matchExpressions ORed between each other. Statements whithin matchExpressions ANDed.
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+                # It will trigger if label value is older than 24 hours (default) ago
+                # or label does not exists.
+              - key: aiinfra/neper-healthcheck-valid-till-sec
+                operator: Lt
+                values:
+                - "${CHECK_TIME_EPOCH_SEC}"
+              - key: aiinfra/node-not-ready
+                operator: DoesNotExist
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+              - key: aiinfra/neper-healthcheck-valid-till-sec
+                operator: DoesNotExist
+              - key: aiinfra/node-not-ready
+                operator: DoesNotExist
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: aiinfra/neper-healthcheck-valid-till-sec
+                operator: DoesNotExist
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: aiinfra/neper-healthcheck-valid-till-sec
+                operator: Lt
+                values:
+                - "${CHECK_TIME_EPOCH_SEC}"
+      initContainers:
+      - name: get-ip-addrs
+        image: us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:${IMAGE_TAG}
+        command: ["sh", "-c"]
+        args:
+        - >
+          NODE_NAME=$NODE_NAME;
+          ANNOTATION=$(curl -k -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://$KUBERNETES_SERVICE_HOST:443/api/v1/nodes/$NODE_NAME);
+          echo -n $ANNOTATION | jq -r '.metadata.annotations."networking.gke.io/nic-info"' | jq -r '.[] | select(.birthName != "eth0") | .birthIP' > /tmp/ip_addrs;
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: KUBERNETES_SERVICE_HOST
+          value: "kubernetes.default.svc"
+        - name: KUBERNETES_PORT_443
+          value: "443"
+        volumeMounts:
+        - name: tmpfs
+          mountPath: /tmp
+      containers:
+      - name: neper-healthcheck
+        image: us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:${IMAGE_TAG}
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_PTRACE
+            - IPC_LOCK
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: JOB_NAME
+          value: neper-healthcheck-${CHECK_TIME_EPOCH_SEC}
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: GOOD_THROUGHPUT
+          value: "130000000000"
+        - name: HEALTH_VALIDITY_HOURS
+          value: "5"
+        - name: SERVICE_NAME
+          value: neper-headless-svc-${CHECK_TIME_EPOCH_SEC}  # has to match Service name
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: DRY_RUN
+          value: "${DRY_RUN}"
+        volumeMounts:
+        - name: tmpfs
+          mountPath: /tmp
+        resources:
+          limits:
+            nvidia.com/gpu: !!int 8
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: neper-node-list-${CHECK_TIME_EPOCH_SEC}
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: neper-node-list-${CHECK_TIME_EPOCH_SEC}
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list", "get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: neper-node-list-${CHECK_TIME_EPOCH_SEC}
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: neper-node-list-${CHECK_TIME_EPOCH_SEC}
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: neper-node-list-${CHECK_TIME_EPOCH_SEC}
+  apiGroup: rbac.authorization.k8s.io

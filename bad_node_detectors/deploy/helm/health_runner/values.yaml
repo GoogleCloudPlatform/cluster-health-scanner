@@ -1,0 +1,54 @@
+# For use with A3-Plus machines
+health_runner:
+  name: "health-runner"
+# Multiple health checks can be added below
+# Note that only NCCL health check (A3+) is enabled by default
+health_checks:
+  nccl_healthcheck:
+    run_check: true
+    runner_name: nccl-health-runner-a3plus
+    schedule: "*/5 * * * *"  # run every five minutes
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "subset"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "5"
+      YAML_FILE: "a3plus/nccl_healthcheck.yaml"
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      IMAGE_TAG: "subset"
+    # Blast Mode
+    blast_mode:
+      blast_mode_enabled: false
+      env:
+        BLAST_MODE_NUM_TESTS_LIMIT: "10"
+        NODES_CHECKED_PER_TEST:  "2"
+  gpu_healthcheck:
+    run_check: false
+    runner_name: gpu-health-runner
+    schedule: "0 * * * *"  # run every hour
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "v2.1.9-public"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "15"
+      YAML_FILE: "gpu_healthcheck.yaml"
+      R_LEVEL: "2"
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+  neper_healthcheck:
+    run_check: false
+    runner_name: neper-health-runner
+    schedule: "*/5 * * * *"  # run every 5 min
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "v2.1.9-public"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "10"
+      YAML_FILE: "neper_healthcheck.yaml"
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      IMAGE_TAG: "v2.1.9-public"

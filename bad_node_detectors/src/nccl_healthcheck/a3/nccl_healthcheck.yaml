@@ -1,0 +1,228 @@
+# yamllint disable
+apiVersion: v1
+kind: Service
+metadata:
+  name: nccl-headless-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+spec:
+  clusterIP: None  #  clusterIP must be None to create a headless service
+  selector:
+    job-name: nccl-healthcheck-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}  # must match Job name
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nccl-healthcheck-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+spec:
+  completions: 2
+  parallelism: 2
+  completionMode: Indexed
+  template:
+    spec:
+      tolerations:
+      - operator: "Exists"
+      serviceAccountName: nccl-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+      subdomain: nccl-headless-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}  # has to match Service name
+      restartPolicy: Never
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      volumes:
+      - name: nvidia-install-dir-host
+        hostPath:
+          path: /home/kubernetes/bin/nvidia/lib64
+      - name: tcpd-socket
+        hostPath:
+          path: /run/tcpx
+      - name: tcpx-nccl-plugin-volume
+        emptyDir: {}
+      - name: workload-terminated-volume
+        emptyDir: {}
+      nodeSelector:
+        node.kubernetes.io/instance-type: a3-highgpu-8g
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            # Multiple matchExpressions ORed between each other. Statements whithin matchExpressions ANDed.
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+                # It will trigger if label value is older than 24 hours (default) ago
+                # or label does not exists.
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: Lt
+                values:
+                - "${CHECK_TIME_EPOCH_SEC}"
+              - key: aiinfra/node-not-ready
+                operator: DoesNotExist
+              # If aiinfra/nccl-healthcheck-test label is true then it will trigger
+              - key: aiinfra/nccl-healthcheck-test
+                operator: In
+                values:
+                - "true"
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: DoesNotExist
+              - key: aiinfra/node-not-ready
+                operator: DoesNotExist
+              # If aiinfra/nccl-healthcheck-test label is true then it will trigger
+              - key: aiinfra/nccl-healthcheck-test
+                operator: In
+                values:
+                - "true"
+          # prefere rule with higher weight
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: DoesNotExist
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: Lt
+                values:
+                - "${CHECK_TIME_EPOCH_SEC}"
+      initContainers:
+      - name: tcpx-nccl-plugin-installer
+        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-dev:v3.1.7
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: tcpx-nccl-plugin-volume
+          mountPath: /var/lib/tcpx
+        resources:
+          requests:
+            cpu: 150m
+        command:
+          - /bin/sh
+          - -c
+          - |
+            /scripts/container_entry.sh install --install-nccl
+      containers:
+      - name: tcpd-daemon
+        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/tcpgpudmarxd-dev:v2.0.11
+        imagePullPolicy: Always
+        command:
+        - "bash"
+        - "-c"
+        - |
+          /tcpgpudmarxd/build/app/tcpgpudmarxd --gpu_nic_preset a3vm --gpu_shmem_type fd --setup_param "--verbose 128 2 0" --uds_path /run/tcpx &
+          while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 10; done
+          pkill -e "^"tcpgpudmarxd || true
+          sleep 10
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: nvidia-install-dir-host
+          mountPath: /usr/local/nvidia/lib64
+        - name: tcpd-socket
+          mountPath: /run/tcpx
+        - name: workload-terminated-volume
+          mountPath: /usr/share/nemo
+        env:
+        - name: LD_LIBRARY_PATH
+          value: /usr/local/nvidia/lib64
+      - name: nccl-healthcheck
+        image: us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:${IMAGE_TAG}
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_PTRACE
+            - IPC_LOCK
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: JOB_NAME
+          value: nccl-healthcheck-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+        - name: SERVICE_NAME
+          value: nccl-headless-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+        - name: LD_LIBRARY_PATH
+          value: /usr/local/nvidia/lib64
+        - name: NHOSTS
+          value: "2"
+        - name: nr
+          value: "8"
+        - name: BANDWIDTH_THRESHOLD
+          value: "60"
+        - name: START_MESSAGE_SIZE
+          value: "2G"
+        - name: END_MESSAGE_SIZE
+          value: "8G"
+        - name: HEALTH_VALIDITY_HOURS
+          value: "24"
+        - name: USE_TCPX
+          value: "true"
+        - name: DRY_RUN
+          value: "${DRY_RUN}"
+        - name: SHORT_GUID
+          value: "${SHORT_GUID}"
+        - name: CHECK_TIME_EPOCH_SEC
+          value: "${CHECK_TIME_EPOCH_SEC}"
+        - name: SECOND_PASS_YAML_FILE
+          value: "nccl_secondpass_a3.yaml"
+        - name: ENABLE_TWO_PASS_STRATEGY
+          value: "true"
+        - name: INSTANCE_TYPE
+          value: "a3-highgpu-8g"
+        - name: IMAGE_TAG
+          value: "${IMAGE_TAG}"
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: NCCL_DEBUG_SUBSYS
+          value: "INIT,ENV"
+        - name: UNIX_CLIENT_PREFIX
+          value: "/run/tcpx"
+        - name: ITERATIONS
+          value: "${ITERATIONS}"
+        volumeMounts:
+        - name: nvidia-install-dir-host
+          mountPath: /usr/local/nvidia/lib64
+        - name: tcpx-nccl-plugin-volume
+          mountPath: /usr/local/tcpx
+        - name: tcpd-socket
+          mountPath: /run/tcpx
+        - name: workload-terminated-volume
+          mountPath: /usr/share/nemo
+        resources:
+          limits:
+            nvidia.com/gpu: !!int 8
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nccl-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nccl-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+rules:
+- apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
+  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services"]
+  verbs: ["list", "get", "create", "delete", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nccl-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: nccl-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: nccl-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  apiGroup: rbac.authorization.k8s.io

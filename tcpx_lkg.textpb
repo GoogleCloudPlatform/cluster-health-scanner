@@ -1,0 +1,39 @@
+version: {
+  nickname: "gke-r24"
+  cos_version: {
+    cos_image_bucket: ""
+    cos_image_name: ""
+  }
+  rxdm_flags: "--setup_param \"--verbose 128 2 0\""
+  rx_buf_manager_image_version: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/tcpgpudmarxd-dev:v2.0.9"
+  gke_version: {
+    version: "1.27.7-gke.1121000"
+    publicly_available: true
+  }
+  cuda_version: "12.2"
+  nccl_plugin_image_version: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-dev:v3.1.6_2023_10_06"
+  nccl_version: "2.18.5unpack_memcpyasyncfix"
+  nccl_configs: [
+    "LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH}:/usr/local/tcpx/lib64\"",
+    "NCCL_GPUDIRECTTCPX_FORCE_ACK=0",
+    "NCCL_GPUDIRECTTCPX_TX_COMPLETION_NANOSLEEP=1000",
+    "NCCL_SOCKET_IFNAME=\"eth0\"",
+    "NCCL_DYNAMIC_CHUNK_SIZE=524288",
+    "NCCL_P2P_NET_CHUNKSIZE=524288",
+    "NCCL_P2P_PCI_CHUNKSIZE=524288",
+    "NCCL_P2P_NVL_CHUNKSIZE=1048576",
+    "NCCL_GPUDIRECTTCPX_TX_BINDINGS=\"eth1:8-21,112-125;eth2:8-21,112-125;eth3:60-73,164-177;eth4:60-73,164-177\"",
+    "NCCL_GPUDIRECTTCPX_RX_BINDINGS=\"eth1:22-35,124-139;eth2:22-35,124-139;eth3:74-87,178-191;eth4:74-87,178-191\"",
+    "NCCL_NSOCKS_PERTHREAD=4",
+    "NCCL_SOCKET_NTHREADS=1",
+    "NCCL_MAX_NCHANNELS=8",
+    "NCCL_MIN_NCHANNELS=8",
+    "NCCL_GPUDIRECTTCPX_SOCKET_IFNAME=eth1,eth2,eth3,eth4",
+    "NCCL_GPUDIRECTTCPX_CTRL_DEV=eth0",
+    "NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS=1000000"
+  ]
+  gpu_driver_version: {
+    version: "latest" # 535.104.05
+  }
+  status: LKG
+}

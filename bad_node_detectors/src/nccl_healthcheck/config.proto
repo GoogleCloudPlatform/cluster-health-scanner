@@ -1,0 +1,14 @@
+edition = "2023";
+
+package cloud_cluster_supercomputer_validation_bad_node_detectors_nccl_healthcheck;
+
+option features.utf8_validation = NONE;
+option java_multiple_files = true;
+
+message ASeriesConfig {
+  string instance_type = 1;
+  string second_pass_yaml_path = 2;
+  string nccl_test_command_template = 3;
+  string ld_library_path = 4;
+  int32 default_threshold = 5;
+}

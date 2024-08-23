@@ -1,0 +1,6 @@
+apiVersion: v2
+name: health_runner
+description: A chart for running health runner to kick off Bad Node Detector health checks/tests.
+type: application
+version: 0.3.0
+appVersion: "2.0.0"
