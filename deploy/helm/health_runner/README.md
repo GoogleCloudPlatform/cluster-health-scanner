@@ -27,7 +27,7 @@ helm install my-nccl-health-check ./health_runner \
 ## Preparation Before Installation
 
 Bad Node Detector uses some labels on nodes to determine how some health checks
-should run. For this prepartion step, please see the [usage guide](../README-usage.md)
+should run. For this preparation step, please see the [usage guide](../README-usage.md)
 for details.
 
 ## Installing Helm Chart

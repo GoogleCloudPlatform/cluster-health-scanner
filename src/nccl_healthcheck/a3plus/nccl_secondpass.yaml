@@ -60,6 +60,21 @@ spec:
                 operator: In
                 values:
                 - "true"
+      initContainers:
+      - name: nccl-plugin-installer
+        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: tcpxo-nccl-plugin-volume
+          mountPath: /var/lib/tcpxo
+        resources:
+          requests:
+            cpu: 150m
+        command:
+          - /bin/sh
+          - -c
+          - |
+            /scripts/container_entry.sh install --install-nccl
       containers:
       - name: tcpxo-daemon
         image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
@@ -208,21 +223,6 @@ spec:
                 operator: Gt
                 values:
                 - "${CHECK_TIME_EPOCH_SEC}"
-      initContainers:
-      - name: nccl-plugin-installer
-        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
-        imagePullPolicy: Always
-        volumeMounts:
-        - name: tcpxo-nccl-plugin-volume
-          mountPath: /var/lib/tcpxo
-        resources:
-          requests:
-            cpu: 150m
-        command:
-          - /bin/sh
-          - -c
-          - |
-            /scripts/container_entry.sh install --install-nccl
       containers:
       - name: tcpxo-daemon
         image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8

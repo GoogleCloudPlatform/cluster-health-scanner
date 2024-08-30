@@ -1,0 +1,206 @@
+# yamllint disable
+{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.node_match.check_time -}}
+{{- $health_check_uniq_str := printf "%s-%s" (toString .Values.node_match.guid) (toString $check_time) -}}
+{{- $health_check_service_name := printf "%s-%s" .Values.service.prefix $health_check_uniq_str -}}
+{{- $health_check_job_name := printf "%s-%s" "nccl-healthcheck" $health_check_uniq_str -}}
+{{- $node_list_name := printf "%s-%s" "nccl-node-list" $health_check_uniq_str -}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $health_check_service_name }}
+spec:
+  clusterIP: None  #  clusterIP must be None to create a headless service
+  selector:
+    job-name: {{ $health_check_job_name }}  # must match Job name
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $health_check_job_name }}
+spec:
+  completions: 2
+  parallelism: 2
+  completionMode: Indexed
+  template:
+    spec:
+      tolerations:
+      - operator: "Exists"
+      serviceAccountName: {{ $node_list_name }}
+      subdomain: "{{ $health_check_service_name }}"  # has to match Service name
+      restartPolicy: Never
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      volumes:
+      - name: nvidia-install-dir-host
+        hostPath:
+          path: /home/kubernetes/bin/nvidia/lib64
+      - name: tcpd-socket
+        hostPath:
+          {{- /* Different tcpd-socket depending on accelerator type */}}
+          path: {{ .Values.volumes.tcpd_socket.hostPath.path | quote }}
+      - name: {{ .Values.initContainers.nccl_plugin_installer.volumeMounts.name | quote }}
+        emptyDir: {}
+      - name: workload-terminated-volume
+        emptyDir: {}
+      nodeSelector:
+        node.kubernetes.io/instance-type: {{ .Values.health_check.env.INSTANCE_TYPE  | quote }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            # Multiple matchExpressions ORed between each other. Statements whithin matchExpressions ANDed.
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+                # It will trigger if label value is older than 24 hours (default) ago
+                # or label does not exists.
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: Lt
+                values:
+                - "{{ $check_time }}"
+              - key: aiinfra/node-not-ready
+                operator: DoesNotExist
+              # If label is true then it will trigger
+              - key: aiinfra/nccl-healthcheck-test
+                operator: In
+                values:
+                - "true"
+            - matchExpressions:
+              - key: cloud.google.com/gke-accelerator
+                operator: Exists
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: DoesNotExist
+              - key: aiinfra/node-not-ready
+                operator: DoesNotExist
+              # If label is true then it will trigger
+              - key: aiinfra/nccl-healthcheck-test
+                operator: In
+                values:
+                - "true"
+          # prefer rule with higher weight
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: DoesNotExist
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: aiinfra/nccl-healthcheck-valid-till-sec
+                operator: Lt
+                values:
+                - "{{ $check_time }}"
+      {{- /* Different image & volume depending on accelerator type */}}
+      initContainers:
+      - name: nccl-plugin-installer
+        image: {{ .Values.initContainers.nccl_plugin_installer.image | quote }}
+        imagePullPolicy: {{ .Values.initContainers.nccl_plugin_installer.imagePullPolicy | quote }}
+        volumeMounts:
+        - name: {{ .Values.initContainers.nccl_plugin_installer.volumeMounts.name | quote }}
+          mountPath: {{ .Values.initContainers.nccl_plugin_installer.volumeMounts.mountPath| quote }}
+        resources:
+          requests:
+            cpu: 150m
+        command:
+        - /bin/sh
+        - -c
+        - |
+          /scripts/container_entry.sh install --install-nccl
+      {{- /* Different tcpd-daemon container depending on accelerator type */}}
+      containers:
+      - name: tcpd-daemon
+        image: {{ .Values.tcpd_daemon.image | quote }}
+        imagePullPolicy: {{ .Values.tcpd_daemon.imagePullPolicy | quote }}
+        command: {{ .Values.tcpd_daemon.command | toJson }}
+        args: {{ .Values.tcpd_daemon.args | toJson }}
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: nvidia-install-dir-host
+          mountPath: /usr/local/nvidia/lib64
+        - name: tcpd-socket
+        {{- if eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g" }}
+          mountPath: /tmp
+        {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
+          mountPath: /run/tcpx
+        {{- end }}
+        - name: workload-terminated-volume
+          mountPath: /usr/share/nemo
+        env:
+        - name: LD_LIBRARY_PATH
+          value: /usr/local/nvidia/lib64
+      - name: nccl-healthcheck
+        image: {{ printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag }}
+        imagePullPolicy: {{ .Values.health_check.image.pull_policy | quote}}
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - SYS_PTRACE
+            - IPC_LOCK
+        {{- /* Different environment variables depending on accelerator type */}}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: JOB_NAME
+          value: "{{ $health_check_job_name }}"
+        - name: SERVICE_NAME
+          value: "{{ $health_check_service_name }}"
+        - name: SHORT_GUID
+          value: "{{ .Values.node_match.guid }}"
+        - name: CHECK_TIME_EPOCH_SEC
+          value: "{{ $check_time }}"
+        {{- range $key, $value := .Values.health_check.env }}
+        - name: {{ $key | quote }}
+          value: {{ $value | quote }}
+        {{- end }} {{- /* end iteration over .env */}}
+        volumeMounts:
+        - name: nvidia-install-dir-host
+          mountPath: /usr/local/nvidia/lib64
+        - name: workload-terminated-volume
+          mountPath: /usr/share/nemo
+        {{- range $value := .Values.health_check.volumeMounts }}
+        - name: {{ $value.name | quote }}
+          mountPath: {{ $value.mountPath | quote }}
+        {{- end }} {{- /* end iteration over .volumeMounts */}}
+        resources:
+          limits:
+            nvidia.com/gpu: !!int 8
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $node_list_name }}
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $node_list_name }}
+rules:
+- apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
+  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services"]
+  verbs: ["list", "get", "create", "delete", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $node_list_name }}
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: {{ $node_list_name }}
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: {{ $node_list_name }}
+  apiGroup: rbac.authorization.k8s.io

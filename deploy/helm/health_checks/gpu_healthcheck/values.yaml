@@ -1,0 +1,21 @@
+job:
+  prefix: "nvidia-dcgm-diag"
+
+# This is used to create a unique identifer
+node_match:
+  guid: "xkcd"
+  # check_time: "1590303600" # Will automatically be set if not given
+
+health_check:
+  name: "gpu-healthcheck"
+  test_label:
+    name: "aiinfra/gpu-healthcheck-test"
+    value: "true"
+  image:
+    repo: "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck"
+    tag: "subset"
+    pull_policy: "Always"
+  env:
+    R_LEVEL: "3"
+    HEALTH_VALIDITY_HOURS: "24"
+    DRY_RUN: "true"

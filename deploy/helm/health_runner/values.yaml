@@ -30,7 +30,7 @@ health_checks:
     schedule: "0 * * * *"  # run every hour
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v2.1.9-public"
+      tag: "subset"
       pull_policy: "Always"
     env:
       DRY_RUN: "true"
@@ -38,6 +38,7 @@ health_checks:
       YAML_FILE: "gpu_healthcheck.yaml"
       R_LEVEL: "2"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      IMAGE_TAG: "subset"
   neper_healthcheck:
     run_check: false
     runner_name: neper-health-runner

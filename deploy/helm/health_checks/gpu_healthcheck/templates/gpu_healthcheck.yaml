@@ -1,15 +1,20 @@
 # yamllint disable
+{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.node_match.check_time -}}
+{{- $health_check_uniq_str := printf "%s-%s" (toString .Values.node_match.guid) (toString $check_time) -}}
+{{- $health_check_job_name := printf "%s-%s" .Values.job.prefix $health_check_uniq_str -}}
+{{- $node_list_name := printf "%s-%s" "gpu-node-list" $health_check_uniq_str -}}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: nvidia-dcgm-diag-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  name: {{ $health_check_job_name }}
 spec:
   completions: 1
   parallelism: 1
   completionMode: Indexed
   template:
     spec:
-      serviceAccountName: gpu-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+      serviceAccountName: {{ $node_list_name }}
       restartPolicy: Never
       affinity:
         nodeAffinity:
@@ -24,14 +29,14 @@ spec:
               - key: aiinfra/gpu-healthcheck-valid-till-sec
                 operator: Lt
                 values:
-                - "${CHECK_TIME_EPOCH_SEC}"
+                - {{ $check_time | quote }}
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If label is true then it will trigger
-              - key: "aiinfra/gpu-healthcheck-test"
+              - key: {{ .Values.health_check.test_label.name | quote }}
                 operator: In
                 values:
-                - "true"
+                - {{ .Values.health_check.test_label.value | quote }}
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
@@ -40,10 +45,10 @@ spec:
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If label is true then it will trigger
-              - key: "aiinfra/gpu-healthcheck-test"
+              - key: {{ .Values.health_check.test_label.name | quote }}
                 operator: In
                 values:
-                - "true"
+                - {{ .Values.health_check.test_label.value | quote }}
       tolerations:
       - operator: "Exists"
       volumes:
@@ -51,7 +56,7 @@ spec:
         hostPath:
           path: /home/kubernetes/bin/nvidia
       containers:
-      - image: "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:${IMAGE_TAG}"
+      - image: {{ printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag }}
         name: "gpu-healthcheck"
         imagePullPolicy: Always
         ports:
@@ -71,12 +76,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: status.hostIP
-        - name: R_LEVEL
-          value: "${R_LEVEL}"
-        - name: HEALTH_VALIDITY_HOURS
-          value: "24"
-        - name: DRY_RUN
-          value: "${DRY_RUN}"
+        {{- range $key, $value := .Values.health_check.env }}
+        - name: {{ $key | quote }}
+          value: {{ $value | quote }}
+        {{- end }} {{- /* end iteration over .env */}}
         resources:
           limits:
             nvidia.com/gpu: !!int 8
@@ -84,13 +87,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: gpu-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  name: {{ $node_list_name }}
   namespace: default
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: gpu-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  name: {{ $node_list_name }}
 rules:
 - apiGroups: [""]
   resources: ["nodes"]
@@ -99,13 +102,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: gpu-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  name: {{ $node_list_name }}
   namespace: default
 subjects:
 - kind: ServiceAccount
-  name: gpu-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  name: {{ $node_list_name }}
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: gpu-node-list-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
+  name: {{ $node_list_name }}
   apiGroup: rbac.authorization.k8s.io

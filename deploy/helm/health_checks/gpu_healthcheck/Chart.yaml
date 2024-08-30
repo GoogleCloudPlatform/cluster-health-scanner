@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nccl_health_check
+description: A chart for running GPU health check
+type: application
+version: 0.1.0
+appVersion: "2.0.0"

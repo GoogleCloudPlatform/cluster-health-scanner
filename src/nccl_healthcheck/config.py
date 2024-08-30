@@ -1,6 +1,7 @@
 """Contains a series of config objects to use when using A-Series VMs."""
 import config_pb2
 
+
 def _create_a3_config():
   return config_pb2.ASeriesConfig(
       instance_type="a3-highgpu-8g",

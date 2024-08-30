@@ -12,7 +12,7 @@ deployment. Installing the Helm CLI will be the most straight-forward way of
 taking advantage of what BND has to offer.
 
 You can see Helm's [installation documentation](https://helm.sh/docs/intro/install/)
-for details, but most users will find using the commands below to get adn use
+for details, but most users will find using the commands below to get and use
 the installer script to be sufficient:
 
 ```bash
@@ -83,7 +83,7 @@ kubectl describe nodes $NODE_NAME_0 $NODE_NAME_1 $NODE_NAME_2
 
 You can also run the same command for all the nodes by not listing any specific
 nodes. This however can be overwhelming & take time to collect information 
-depending on the nubmer of nodes in your cluster:
+depending on the number of nodes in your cluster:
 ```bash
 kubectl get nodes --show-labels=true
 kubectl describe nodes
