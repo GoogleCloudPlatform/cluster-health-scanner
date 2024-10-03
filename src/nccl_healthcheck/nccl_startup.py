@@ -17,14 +17,13 @@
 This module controls execution of pairwise NCCL test.
 """
 
-import json
 import os
 import re
+import signal
 import time
 from typing import List
 
 import checker_common
-import metrics
 import config
 
 JOB_NAME = os.environ.get("JOB_NAME")
@@ -135,14 +134,15 @@ def run_nccl_test(hosts: List[str]) -> None:
     print(f"I am a master that will run nccl test on {nhosts} nodes")
     start_message_size = os.environ["START_MESSAGE_SIZE"] or "2G"
     end_message_size = os.environ["END_MESSAGE_SIZE"] or "8G"
+    iterations = int(os.getenv("ITERATIONS", "300"))
+    benchmark = os.environ.get("BENCHMARK", "all_gather_perf")
     ld_library_path = config_obj.ld_library_path
 
     print("Sleeping for 30 seconds to let rxdm spin up...")
     time.sleep(30)
 
     bandwidths = []
-    iterations = int(os.getenv("ITERATIONS", "5"))
-    for _ in range(iterations):
+    for _ in range(1):
       # Run the test 'iter' amount of times and average the performance.
       test_result = checker_common.run_command(
           config_obj.nccl_test_command_template.format(
@@ -150,6 +150,8 @@ def run_nccl_test(hosts: List[str]) -> None:
               start_message_size=start_message_size,
               end_message_size=end_message_size,
               nhosts=nhosts,
+              iterations=iterations,
+              benchmark=benchmark,
           )
       )
       bandwidths.append(get_bandwidth(test_result.stdout))
@@ -166,9 +168,6 @@ def run_nccl_test(hosts: List[str]) -> None:
 def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
   """Process test results. Add node taints and labels."""
   threshold = int(os.environ["BANDWIDTH_THRESHOLD"])
-  enable_two_pass = (
-      os.environ.get("ENABLE_TWO_PASS_STRATEGY", "").lower() == "true"
-  )
   second_pass = os.environ.get("SECOND_PASS", "").lower() == "true"
   failures = 0
   total_bandwidth = 0
@@ -183,89 +182,52 @@ def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
 
   # If more than half of the iterations failed or the average bandwidth is
   # below the threshold, the test is considered failed.
-  passed = (
-      failures <= iterations / 2
-      and avg_bandwidth >= threshold
-  )
+  passed = failures <= iterations / 2 and avg_bandwidth >= threshold
 
+  # failed case
+  lbl = HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY
   if passed:
-    print("nccl test passed. Removing node taints...")
-    taint = None
-    # removing healthcheck label and taint
-    for node in nodes:
-      remove_node_taint(node, TAINT_KEY)
-      remove_label(node, "aiinfra/nccl-healthcheck")
-      if second_pass:
-        remove_label(node, HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY)
-  elif enable_two_pass:
-    print("ENABLE_TWO_PASS_STRATEGY is set.")
-    if second_pass:
-      # failed with two pass enabled
-      print("nccl test failed final pass. Adding node taint to Master Node...")
-      taint = TAINT_VALUE_FAILED
-      node = os.environ.get("NODE_NAME")
-      mark_failed_node(
-          node,
-          nodes,
-          TAINT_VALUE_FAILED,
-          TAINT_EFFECT_NOSCHEDULE,
-      )
-      remove_label(node, HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY)
-    else:
-      # failed with two pass disabled
-      print("nccl test failed first pass. Adding node taints...")
-      taint = TAINT_VALUE_SUSPECT
-      for node in nodes:
-        mark_failed_node(
-            node,
-            nodes,
-            TAINT_VALUE_SUSPECT,
-            TAINT_EFFECT_PREFERNOSCHEDULE,
-        )
-        time.sleep(2)  # Sleep to force a different check-time
-        deploy_second_pass(node)
-  else:
-    # failed and two pass disabled
-    print("ENABLE_TWO_PASS_STRATEGY is not set.")
-    print("nccl test failed. Adding node taint to nodes...")
-    taint = TAINT_VALUE_FAILED
-    for node in nodes:
-      mark_failed_node(
-          node,
-          nodes,
-          TAINT_VALUE_FAILED,
-          TAINT_EFFECT_NOSCHEDULE,
-      )
+    lbl = "aiinfra/nccl-healthcheck-good-pass-needed"
 
+  for node in nodes:
+    checker_common.add_label(
+        node,
+        lbl,
+        "true",
+        K_ADD_LABEL_FORMAT,
+    )
+
+  test_name = os.environ.get("TEST_NAME", "nccl")
   for node in nodes:
     add_healthcheck_time_label(node)
     mark_node_bandwidth(node, avg_bandwidth)
 
-    if second_pass and node != os.environ.get("NODE_NAME"):
-      # Do not log metric if we're testing against a known-good node
-      continue
-    terminal = taint != TAINT_VALUE_SUSPECT
-    log = metrics.log_dict(
-        test_name="nccl",
-        did_pass=passed,
+    terminal = second_pass or passed
+    checker_common.log_results(
+        test_name=test_name,
+        passed=passed,
         node_name=node,
+        workflow_id=os.environ.get("WORKFLOW_ID"),
         result_data={
             "avg_bus_bandwidth": avg_bandwidth,
             "num_nodes": len(nodes),
             "all_nodes": sorted(nodes),
-            "taint_applied": taint,
             "terminal_test": terminal,
         },
     )
     if terminal:
+      result = "fail"
+      if passed:
+        result = "pass"
+      elif avg_bandwidth == -1:
+        result = "crash"
+
       checker_common.add_label(
           node,
           _RESULT_LABEL_KEY,
-          "pass" if passed else "fail",
+          result,
           K_ADD_LABEL_FORMAT,
       )
-
-    print(json.dumps(log))
 
 
 def mark_failed_node(
@@ -345,6 +307,11 @@ def timeout_check(start_time: float, pod_name: str) -> bool:
   """
   elapsed_time = time.time() - start_time
   if elapsed_time >= 10 * 60:  # 10 minutes
+    print(
+        "Timeout Error: 10min Timeout reached while trying to ssh to pod"
+        f" {pod_name}"
+    )
+    print(f"node calling from is: {os.environ.get('NODE_NAME')}")
     raise TimeoutError(
         f"10min Timeout reached while trying to ssh to pod {pod_name}"
     )
@@ -422,7 +389,6 @@ def cleanup(hosts: List[str]) -> None:
       checker_common.run_command(
           f"ssh {JOB_NAME}-{i}.{SERVICE_NAME} -p 222 -- touch /master.done",
       )
-    checker_common.run_command(K_DELETE_SERVICE_FORMAT % (SERVICE_NAME))
 
 
 def main() -> None:
@@ -445,4 +411,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+  signal.signal(signal.SIGTERM, checker_common.sigterm_handler)
   main()

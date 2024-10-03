@@ -17,14 +17,12 @@
 This module control execution of pairwise NCCL test.
 """
 
-import json
 import os
 import re
 import time
 from typing import Callable, Dict, List
 
 import checker_common
-import metrics
 
 JOB_NAME = os.getenv("JOB_NAME")
 SERVICE_NAME = os.getenv("SERVICE_NAME")
@@ -94,7 +92,7 @@ def get_host_to_ips() -> Dict[str, List[str]]:
 
 
 def run_neper_test(
-    hosts_to_ips: Dict[str, List[str]]
+    hosts_to_ips: Dict[str, List[str]],
 ) -> List[Callable[[], None]]:
   """Runs the Neper test."""
 
@@ -121,9 +119,9 @@ def run_neper_test(
         log_file = f"/tmp/{self_host}_{host}_eth{count}.log"
         log_files.append(log_file)
         checker_common.run_command(
-            f"taskset -c 17-32 /scripts/tcp_stream -rw --client -H '{dst_ip}' "
-            "--skip-rx-copy --num-threads=16 --num-flows=200 "
-            f"--suicide-length=600 --test-length=30 > '{log_file}' 2>&1"
+            "taskset -c 17-24,73-80 /scripts/tcp_stream -rw --client -H"
+            f" '{dst_ip}' --skip-rx-copy --num-threads=16 --num-flows=200"
+            f" --suicide-length=600 --test-length=30 > '{log_file}' 2>&1"
         )
         cleanup_functions.append(cleanup_delete_temp_files(log_file))
 
@@ -139,7 +137,7 @@ def run_neper_test(
         count += 1
         print(f"spinning up neper server for {dst_ip}...")
         checker_common.run_command(
-            "taskset -c 17-32 /scripts/tcp_stream -rw --skip-rx-copy "
+            "taskset -c 17-24,73-80 /scripts/tcp_stream -rw --skip-rx-copy "
             "--num-threads=16 --num-flows=200 --suicide-length=600 "
             "--test-length=30 &"
         )
@@ -211,30 +209,42 @@ def process_test_result(
   add_healthcheck_time_label(remote_host)
 
   server_client = {"server": local_host, "client": remote_host}
-  local_result = metrics.log_dict(
+  checker_common.log_results(
       test_name="neper",
-      did_pass=not local_test_failed,
+      passed=not local_test_failed,
       node_name=local_host,
+      workflow_id=os.environ.get("WORKFLOW_ID"),
       result_data={
           "throughput_by_eth": local_throughput_by_eth,
           "server_client": server_client,
       },
   )
-  print(json.dumps(local_result))
-  remote_result = metrics.log_dict(
+  checker_common.log_results(
       test_name="neper",
-      did_pass=not remote_test_failed,
+      passed=not remote_test_failed,
       node_name=remote_host,
+      workflow_id=os.environ.get("WORKFLOW_ID"),
       result_data={
           "throughput_by_eth": remote_throughput_by_eth,
           "server_client": server_client,
       },
   )
-  print(json.dumps(remote_result))
+
+  # Add a label to the local and remote host to indicate if the test passed or
+  # failed.
+  result = (
+      "pass" if not local_test_failed and not remote_test_failed else "fail"
+  )
   checker_common.add_label(
       local_host,
       _RESULT_LABEL_KEY,
-      "pass" if not local_test_failed and not remote_test_failed else "fail",
+      result,
+      K_ADD_LABEL_FORMAT,
+  )
+  checker_common.add_label(
+      remote_host,
+      _RESULT_LABEL_KEY,
+      result,
       K_ADD_LABEL_FORMAT,
   )
 

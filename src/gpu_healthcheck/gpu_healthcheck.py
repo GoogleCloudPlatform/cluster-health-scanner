@@ -23,6 +23,8 @@ Environment Variables:
     Defaults to "1" (basic tests).
     - NODE_NAME: The name of the node on which the diagnostics are to be run.
     Defaults to the hostname.
+    - STRICT_MODE: If "true", the test will fail on any error. If "false", the
+    test will only fail on critical errors. Defaults to "true".
 
 Note:
     Make sure you have the necessary permissions to apply taints to nodes in the
@@ -34,7 +36,7 @@ import os
 import time
 
 import checker_common
-import metrics
+import dcgm_pb2
 
 _RESULT_LABEL_KEY = "aiinfra/gpu-healthcheck-result"
 TAINT_KEY = "aiinfra/gpu-healthcheck"
@@ -45,7 +47,7 @@ HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/gpu-healthcheck-valid-till-sec"
 # for r level see:
 # https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html
 R_LEVEL = os.environ.get("R_LEVEL") or "1"
-DCGM_COMMAND = "dcgmi diag -g 0 -r %s --verbose" % R_LEVEL
+DCGM_COMMAND = "dcgmi diag -g 0 -r %s -j --verbose" % R_LEVEL
 NVIDIA_SMI_COMMAND = (
     "/usr/local/nvidia/bin/nvidia-smi"
     " --query-gpu=ecc.errors.uncorrected.volatile.total"
@@ -55,6 +57,11 @@ K_ADD_LABEL_FORMAT = "/app/kubectl label node %s %s=%s --overwrite"
 K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
 K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
 K_UNTAINT_NODE_FORMAT = "/app/kubectl taint node %s %s-"
+
+# The two error types that require action on the node.
+# https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html
+K_DCGM_ERROR_ISOLATE = 2
+K_DCGM_ERROR_RESET = 3
 
 
 def main() -> None:
@@ -79,6 +86,46 @@ def main() -> None:
       f"{health_validity}",
       K_ADD_LABEL_FORMAT,
   )
+
+
+def convert_output_to_proto(output: str) -> dcgm_pb2.DiagnosticReport:
+  """Converts the output of the DCGM diagnostic tool to a proto message."""
+  json_data = json.loads(output)
+  report = dcgm_pb2.DiagnosticReport()
+  report.version = json_data.get("version", "")
+  report.driver_version_detected = json_data.get("Driver Version Detected", "")
+  report.gpu_device_ids.extend(json_data.get("GPU Device IDs", []))
+
+  for gpu_index, serial in json_data.get("GPU Device Serials", {}).items():
+    report.gpu_device_serials[gpu_index] = serial
+
+  for category_data in json_data.get("DCGM GPU Diagnostic", {}).get(
+      "test_categories", []
+  ):
+    category = report.dcgm_gpu_diagnostic.test_categories.add()
+    category.category = category_data["category"]
+
+    for test_data in category_data.get("tests", []):
+      test = category.tests.add()
+      test.name = test_data["name"]
+      for result_data in test_data.get("results", []):
+        result = test.results.add()
+        result.status = result_data["status"]
+
+        if "gpu_id" in result_data:
+          result.gpu_id = result_data["gpu_id"]
+
+        if "info" in result_data:
+          result.info = result_data["info"]
+        if "warnings" in result_data:
+          for warning_data in result_data["warnings"]:
+            warning = result.warnings.add()
+            warning.error_category = warning_data["error_category"]
+            warning.error_id = warning_data["error_id"]
+            warning.error_severity = warning_data["error_severity"]
+            warning.warning = warning_data["warning"]
+
+  return report
 
 
 def run_reboot_required_check(node_name: str) -> bool:
@@ -124,17 +171,20 @@ def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
   """run dcgm diag."""
   diag_output = checker_common.run_command(DCGM_COMMAND)
 
-  failed = is_bad_node(diag_output.stdout)
+  try:
+    print("Converting from json output to proto")
+    output = convert_output_to_proto(diag_output.stdout)
+    print(output)
+    failed = is_bad_node_from_proto(output)
+  except json.JSONDecodeError as e:
+    print("Error deserializing JSON: %s", e)
+    failed = True
 
-  print(
-      json.dumps(
-          metrics.log_dict(
-              test_name="dcgm",
-              did_pass=not failed,
-              node_name=node_name,
-              result_data={},
-          )
-      )
+  checker_common.log_results(
+      test_name="dcgm",
+      passed=not failed,
+      node_name=node_name,
+      workflow_id=os.environ.get("WORKFLOW_ID"),  # Remove workflow id
   )
   checker_common.add_label(
       node_name,
@@ -169,8 +219,35 @@ def un_taint_node(node_name: str, key: str) -> None:
   checker_common.run_command(K_UNTAINT_NODE_FORMAT % (node_name, key))
 
 
-def is_bad_node(diag_output: str) -> bool:
-  return "error" in diag_output.lower()
+def is_bad_node_from_proto(report: dcgm_pb2.DiagnosticReport) -> bool:
+  """Returns True if the node is bad based on the DCGM diagnostic report."""
+  bad_node = False
+  strict_mode = os.environ.get("STRICT_MODE", "true")
+  for category in report.dcgm_gpu_diagnostic.test_categories:
+    for test in category.tests:
+      for result in test.results:
+        if result.status.lower() == "fail":
+          gpu_info = (
+              f" (GPU {result.gpu_id})" if result.gpu_id else ""
+          )  # Add GPU ID if available
+          print(
+              f"Test '{test.name}' in category '{category.category}'"
+              f" {gpu_info}: {result.status} - {result.info}",
+          )
+          # If in strict mode, fail on any error.
+          if strict_mode == "true":
+            bad_node = True
+            continue
+
+          # If not in strict mode check the error severity and only fail on
+          # critical errors.
+          for warning in result.warnings:
+            if warning.error_severity in [
+                K_DCGM_ERROR_ISOLATE,
+                K_DCGM_ERROR_RESET,
+            ]:
+              bad_node = True
+  return bad_node
 
 
 if __name__ == "__main__":

@@ -1,0 +1,38 @@
+edition = "2023";
+
+package supercomputer_tasks_common;
+
+option features.field_presence = IMPLICIT;
+
+// Represents the capacity.
+message Capacity {
+  // List of clusters in the capacity.
+  repeated Cluster clusters = 1;
+}
+
+// Clusters in this case mean physical clusters in a datacenter.
+message Cluster {
+  // The id of the cluster.
+  string id = 1;
+
+  // List of racks in the cluster.
+  repeated Rack racks = 2;
+}
+
+// Represents a rack in a cluster.
+message Rack {
+  // The id of the rack.
+  string id = 1;
+
+  // List of nodes in the rack.
+  repeated Node nodes = 2;
+}
+
+// Represents a node in a rack.
+message Node {
+  // The id of the node.
+  string id = 1;
+
+  // The host name of the node.
+  string host = 2;
+}

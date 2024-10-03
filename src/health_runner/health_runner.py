@@ -25,14 +25,16 @@ Note:
 
 import logging
 import os
+import signal
 import time
 
 import checker_common
+import nccl_runner
 
 
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
+
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
-_IMAGE_VERSION_PATH = os.environ.get("IMAGE_VERSION_PATH", "image_version.txt")
 _K_GPU_NODES_IN_CLUSTER_COMMAND = (
     f"{_KUBECTL} get nodes -l cloud.google.com/gke-accelerator"
     " --no-headers | wc -l"
@@ -101,25 +103,24 @@ def determine_test_iterations() -> int:
 
 
 def main() -> None:
-  ensure_env_variables()
-
-  if (
-      os.path.exists(_IMAGE_VERSION_PATH)
-      and os.environ.get("IMAGE_TAG") is None
-  ):
-    logging.info("Loading image tag based on %s", _IMAGE_VERSION_PATH)
-    with open(_IMAGE_VERSION_PATH, "r") as f:
-      tag = f.read().strip()
-      os.environ["IMAGE_TAG"] = tag
-
-  # Step 1: Create k8s components
-  yaml_path = os.path.join("/app", os.environ.get("YAML_FILE"))
-
   # Determine number of tests to run
   num_tests = determine_test_iterations()
+  health_app = os.environ.get("HEALTH_APP", "").lower()
+  if health_app == "nccl":
+    nccl_runner.run_nccl_healthcheck(num_tests)
+  else:
+    run_health_check(num_tests)
 
+
+def run_health_check(num_tests: int) -> None:
+  """Run the health check.
+
+  Args:
+    num_tests: Number of tests to run.
+  """
+  ensure_env_variables()
   cleanup_functions = []
-
+  yaml_path = os.path.join("/app", os.environ.get("YAML_FILE"))
   logging.info("Creating %d tests...", num_tests)
   for i in range(num_tests):
     cleanup_functions.extend(
@@ -141,5 +142,7 @@ def main() -> None:
     except Exception:  # pylint: disable=broad-exception-caught
       logging.exception("Cleanup failed.")
 
+
 if __name__ == "__main__":
+  signal.signal(signal.SIGTERM, checker_common.sigterm_handler)
   main()
