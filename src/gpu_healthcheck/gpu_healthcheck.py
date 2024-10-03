@@ -41,7 +41,7 @@ TAINT_KEY = "aiinfra/gpu-healthcheck"
 TAINT_VALUE = "failed"
 TAINT_EFFECT = "NoSchedule"
 REBOOT_REQUIRED_LABEL_KEY = "aiinfra/reboot-required"
-HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/gpu-healthcheck-valid-till-sec"
+HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/gpu-healthcheck-runtime-sec"
 # for r level see:
 # https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html
 R_LEVEL = os.environ.get("R_LEVEL") or "1"
@@ -65,18 +65,10 @@ def main() -> None:
 
   reboot_required = run_reboot_required_check(node_name)
   run_dcgm_diag(node_name, reboot_required)
-
-  # Add timestampt as number of seconds
-  # since epoch time January 1, 1970, 00:00:00 (UTC) + 24 (default) hours
-  # health validity.
-  health_validity = (
-      int(time.time())
-      + int(os.environ.get("HEALTH_VALIDITY_HOURS", "24")) * 60 * 60
-  )
   checker_common.add_label(
       node_name,
       HEALTHCHECK_TIME_LABEL_KEY,
-      f"{health_validity}",
+      f"{int(time.time())}",
       K_ADD_LABEL_FORMAT,
   )
 

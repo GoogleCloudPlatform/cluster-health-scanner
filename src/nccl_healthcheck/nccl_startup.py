@@ -40,7 +40,7 @@ TAINT_VALUE_FAILED = "failed"
 TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
 TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
-HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-valid-till-sec"
+HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-runtime-sec"
 HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY = (
     "aiinfra/nccl-healthcheck-second-pass-needed"
 )
@@ -376,17 +376,10 @@ def remove_node_taint(node_name: str, taint_key: str) -> None:
 
 def add_healthcheck_time_label(node_name: str) -> None:
   """Add healthcheck time label to node."""
-  # Add timestampt as number of seconds
-  # since epoch time January 1, 1970, 00:00:00 (UTC) + 5 (default) hours
-  # health validity.
-  health_validity = (
-      int(time.time())
-      + int(os.environ.get("HEALTH_VALIDITY_HOURS", "5")) * 60 * 60
-  )
   checker_common.add_label(
       node_name,
       HEALTHCHECK_TIME_LABEL_KEY,
-      f"{health_validity}",
+      f"{int(time.time())}",
       K_ADD_LABEL_FORMAT,
   )
 

@@ -84,14 +84,14 @@ progress as follows.
 
 
 ```
-kubectl get nodes -o custom-columns="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-valid-till-sec" 
+kubectl get nodes -o custom-columns="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,TIME:.metadata.labels.aiinfra/nccl-healthcheck-runtime-sec" 
 ```
 
 If the command `watch` is installed, you can create a quick screen for live
 updates.
 
 ```
-watch -n10 -d "kubectl get nodes -o custom-columns=\"NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-valid-till-sec\""
+watch -n10 -d "kubectl get nodes -o custom-columns=\"NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,TIME:.metadata.labels.aiinfra/nccl-healthcheck-runtime-sec\""
 ```
 
 This will output a table with columns showing the node names and the status of
@@ -108,12 +108,11 @@ You can remove the resulting labels from a set of nodes using the following
 command.
 
 ```
-kubectl label nodes $NODE1 $NODE2 aiinfra/nccl-healthcheck-bandwidth- aiinfra/nccl-healthcheck-result- aiinfra/nccl-healthcheck-valid-till-sec-
+kubectl label nodes $NODE1 $NODE2 aiinfra/nccl-healthcheck-bandwidth- aiinfra/nccl-healthcheck-result- aiinfra/nccl-healthcheck-runtime-sec-
 ```
 
 This may be particularly useful if you want to re-run tests on a specific node
-within 24 hours, because the aiinfra/nccl-healthcheck-valid-till-sec label marks
-the node as not needing to be rerun for 24 hours. Removing the tag opens the
+within 24 hours, because the aiinfra/nccl-healthcheck-runtime-sec label marks last test execution time. By default, the tool will not reschedule test on same node for 24h. Removing the tag opens the
 node up for being scheduled for testing.
 
 > NOTE: This command may complain that it isn't finding labels (e.g. `node/$NAME`
@@ -197,6 +196,127 @@ helm install my-bnd-release health_runner \
   --set health_checks.nccl_healthcheck.run_check=true
 ```
 
+## Running Parallel Tests
+
+When running health checks on a cluster, it's possible to run one health check
+at a time (usually a single node or a pair of nodes) or run multiple health
+check instances in parallel.
+
+This is referred to as "blast mode" where multiple health checks on different 
+nodes are run in parallel.
+
+
+Below is a summary of running these health checks in parallel
+
+
+### Step 0: Label Nodes to Test
+
+We can specify which nodes that should be tested with the health checks
+with labeling the nodes.
+This label will come in the form `aiinfra/{healthcheck-name}-test=true`.
+This will ensure that only these nodes are considered when running the health
+check.
+
+For example, to label specific nodes for the GPU health check to test, a user
+can run:
+```bash
+kubectl label nodes $NODE1 $NODE2 aiinfra/gpu-healthcheck-test=true
+```
+
+where `$NODE1` & `$NODE2` are node IDs.
+
+
+### Step 1: Enable Parallel Health Checks ("Blast Mode") with Helm
+
+To run parallel health checks across multiple nodes, you can set a few changes
+to the values used in `helm install` for the health runner Helm chart.
+
+These values include:
+- `blast_mode.blast_mode_enabled`
+  * Setting to `true` will enable blast mode (parallel tests). Note that if set
+  to `false` then all other blast mode related settings will be ignored.
+- `blast_mode.env.BLAST_MODE_NUM_TESTS_LIMIT` can be set to a positive, non-zero
+  integer `N`. This will create a maximum of `N` health checks/tests to run in
+  parallel.
+
+The values can override the chart's defaults in `helm install` by specifying
+via the `--set` flag or using values file(s) (specified with the `--values`/`-f`
+flag).
+
+> Note that running health checks in parallel will still respect which nodes
+> that have been marked/labeled to be tested.
+> (As noted in the [previous section](#step-0-label-nodes-to-test).)
+
+
+#### Using the `--set` flag
+
+Using the `--set` flag with `helm install` allows a user to specify values
+during the installation via the command line. Multiple values can be specified
+using multiple `--set` flags.
+
+For example, the following installs health runner with the release name
+`my-release-name` with some configuration changes:
+
+```bash
+helm install my-release-name health_runner \
+  --set health_checks.gpu_healthcheck.run_check=true \
+  --set health_checks.gpu_healthcheck.blast_mode.blast_mode_enabled=true \
+  --set health_checks.gpu_healthcheck.blast_mode.env.BLAST_MODE_NUM_TESTS_LIMIT=27
+```
+
+Here's a breakdown of each line:
+
+- `helm install my-release-name health_runner`
+  * This line is the main installation of health runner. Running just this line
+  with no `--set` flag installs the release named `my-release-name` with the
+  default values.
+- `--set health_checks.gpu_healthcheck.run_check=true`
+  * This line tells the health runner that the GPU health check should run.
+- `--set health_checks.gpu_healthcheck.blast_mode.blast_mode_enabled=true`
+  * This line tells the health runner that the GPU health check (enabled in the
+  previous line) should run health checks in parallel.
+- `--set health_checks.gpu_healthcheck.blast_mode.env.BLAST_MODE_NUM_TESTS_LIMIT=27`
+  * This line sets the maximum number of health checks that will run in
+  parallel.
+
+
+#### Using value files
+
+The [previous section](#using-the---set-flag) can be identically reproduced by
+instead providing a values file.
+
+For example, suppose a YAML file `enable-gpu-healthchecks-in-parallel.yaml` is
+defined as below:
+
+```yaml
+health_checks:
+  nccl_healthcheck:
+    run_check: false
+  gpu_healthcheck:
+    run_check: true
+    blast_mode:
+      blast_mode_enabled: true
+      env:
+        BLAST_MODE_NUM_TESTS_LIMIT: "27"
+```
+
+This file can be used for the health runner release installation using the
+either the `--values` or `-f` flag:
+
+```bash
+helm install my-release-name health_runner \
+  -f enable-gpu-healthchecks-in-parallel.yaml
+```
+
+This will override any conflicting configuration from the default health runner
+chart and include new values that were not already defined for the health runner
+chart (in `values.yaml`).
+
+> Note multiple value files can be provided with multiple `--values`/`-f` flags.
+> The last (right-most) value file provided will be given priority and will
+> overwrite other values specified.
+> See the official [Helm documentation](https://helm.sh/docs/helm/helm_install/#synopsis:~:text=The%20priority%20will%20be%20given%20to%20the%20last%20(right%2Dmost)%20file%20specified)
+> for more details.
 
 
 ## Appendix
@@ -275,9 +395,9 @@ errors, it will taint the node with
 
 ### Scheduling Behaviors
 To minimize the occupation of the cluster by health checks,
-the application assigns a label, `aiinfra/${IMAGE-NAME}-valid-till-sec`,
+the application assigns a label, `aiinfra/${IMAGE-NAME}-runtime-sec`,
 to every node where the health checker runs. This label contains
- the current epoch timestamp plus 24 hours, thus enabling the
+ the timestamp for last completed run, thus enabling the
  health check to run only once a day for each visible node.
  If a node lacks this label, the health checker will be scheduled
  at the next round hour.
@@ -345,12 +465,12 @@ Examples of nodes that failed the health check:
 $ kubectl describe node/gke-my-node
 Name:               gke-my-node
 Roles:              <none>
-Labels:             aiinfra/gpu-healthcheck-valid-till-sec=1699664935
+Labels:             aiinfra/gpu-healthcheck-runtime-sec=1699664935
                     aiinfra/nccl-healthcheck=failed
                     aiinfra/nccl-healthcheck-bandwidth=37
-                    aiinfra/nccl-healthcheck-valid-till-sec=1699615262
+                    aiinfra/nccl-healthcheck-runtime-sec=1699615262
                     aiinfra/neper-healthcheck=failed
-                    aiinfra/neper-healthcheck-valid-till-sec=1699600358
+                    aiinfra/neper-healthcheck-runtime-sec=1699600358
                     aiinfra/neper-healthcheck_eth1=115368761582
 
 ```

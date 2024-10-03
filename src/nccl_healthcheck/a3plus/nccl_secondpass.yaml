@@ -233,10 +233,10 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Gt
                 values:
-                - "${CHECK_TIME_EPOCH_SEC}"
+                - "${EXPIRY_TIME_EPOCH_SEC}"
       containers:
       - name: tcpxo-daemon
         image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
