@@ -30,7 +30,7 @@ steps:
 # ================================== NCCL Healthcheck Tests ===========================================================
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
   id: 'nccl_healthcheck_uninstall'
-  entrypoint: "chmod +x uninstall_from_cluster.sh && ./uninstall_from_cluster.sh"
+  entrypoint: "./uninstall_from_cluster.sh"
   args: ["healthcheck-test", "*health-runner*", "*healthcheck*"]
 
   env:
@@ -65,7 +65,7 @@ steps:
 # ================================== Neper Healthcheck Tests ===========================================================
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
   id: 'neper_healthcheck_uninstall'
-  entrypoint: "chmod +x uninstall_from_cluster.sh && ./uninstall_from_cluster.sh"
+  entrypoint: "./uninstall_from_cluster.sh"
   args: ["healthcheck-test", "*health-runner*", "*healthcheck*"]
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
@@ -98,7 +98,7 @@ steps:
 # ================================== GPU Healthcheck Tests ===========================================================
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
   id: 'gpu_healthcheck_uninstall'
-  entrypoint: "chmod +x uninstall_from_cluster.sh && ./uninstall_from_cluster.sh"
+  entrypoint: "./uninstall_from_cluster.sh"
   args: ["healthcheck-test", "*health-runner*", "*healthcheck*"]
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
