@@ -27,13 +27,16 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
+# Install & setup Helm - https://helm.sh/docs/intro/install/
+RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+RUN chmod +x get_helm.sh
+RUN ./get_helm.sh
+# helm installed into /usr/local/bin/helm
+
 COPY src/health_runner/health_runner.py .
 COPY src/checker_common.py .
-COPY src/gpu_healthcheck/gpu_healthcheck.yaml .
-COPY src/nccl_healthcheck/a3/ a3/
-COPY src/nccl_healthcheck/a3plus/  a3plus/
-COPY src/neper_healthcheck/neper_healthcheck.yaml .
-
+# Local copies of health check YAMLs
+COPY src/deploy/helm/health_checks/ health_checks/
 
 RUN chmod -R g+rwx /app/
 RUN chgrp -R 1000 /app/

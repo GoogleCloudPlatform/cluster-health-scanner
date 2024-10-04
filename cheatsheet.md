@@ -67,7 +67,7 @@ beginning of the output:
 kubectl describe nodes $NODE_NAME
 ```
 
-Below will printout information about the node in a table and include a list of
+Below will print out information about the node in a table and include a list of
 the nodes
 ```bash
 kubectl get nodes $NODE_NAME --show-labels=true
