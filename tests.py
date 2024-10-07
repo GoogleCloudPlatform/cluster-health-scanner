@@ -194,6 +194,7 @@ class ClusterStatusChecker:
         for node in nodes
         if all([pred(node) for pred in self.predicates_to_filter_for])
     ]
+    print("Predicates:", self.predicates_to_filter_for)
 
     if not nodes_passing_filter:
       raise Exception("No nodes satisfying all arguments were found.")
