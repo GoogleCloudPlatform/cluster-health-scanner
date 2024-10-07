@@ -6,5 +6,6 @@ RUN apt-get -y update && \
 	apt-get install -y python3-pip && \
 	python3 -m pip install kubernetes
 
+COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 ENTRYPOINT ["./entrypoint.sh"]
