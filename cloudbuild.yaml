@@ -57,7 +57,7 @@ steps:
 - name: "us-docker.pkg.dev/gce-ai-infra/health-check/cicd_tests:$SHORT_SHA"
   id: 'nccl_healthcheck_check'
   args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
-    'aiinfra/nccl-healthcheck-valid-till-sec=^\d*$']
+    'aiinfra/nccl-healthcheck-valid-till-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
