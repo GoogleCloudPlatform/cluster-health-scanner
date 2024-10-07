@@ -156,7 +156,7 @@ class ClusterStatusChecker:
   ) -> bool:
     start_time: float = monotonic()
     nodes_to_check: set[str] = self._node_names_passing_filters()
-
+    print("Nodes to check:", nodes_to_check) 
     while monotonic() - start_time < timeout_secs:
       if self.check_cluster_status(nodes_to_check):
         return True
