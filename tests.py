@@ -246,14 +246,14 @@ This allows the test to run on a subset of the nodes""",
 
   # Filter is added b/c gpu_healthchecks only run on a3-megagpu nodes
   args: Namespace = parser.parse_args()
-
+  print("Args:", args)
   filter_predicates: list[LabelRegexMatchPredicate] = (
       parse_dict_args_to_predicates(args.filter)
   )
   check_predicates: list[LabelRegexMatchPredicate] = (
       parse_dict_args_to_predicates(args.check)
   )
-
+  print("filter_predicates:", filter_predicates)
   return ClusterStatusChecker(
       check_predicates=check_predicates,
       filter_predicates=filter_predicates,
