@@ -19,8 +19,8 @@ from typing import Any, Iterable
 from kubernetes import client, config
 from kubernetes.client.models import V1Node
 
-TIMEOUT_SECS: int = 30
-POLL_INTERVAL_SECS: int = 10
+TIMEOUT_SECS: int = 60 * 15
+POLL_INTERVAL_SECS: int = 60
 
 V1API: client.CoreV1Api | None = None
 
