@@ -135,7 +135,7 @@ spec:
             fieldRef:
               fieldPath: status.hostIP
         - name: GOOD_THROUGHPUT
-          value: "130000000000"
+          value: "65000000000"
         - name: HEALTH_VALIDITY_HOURS
           value: "5"
         - name: SERVICE_NAME
