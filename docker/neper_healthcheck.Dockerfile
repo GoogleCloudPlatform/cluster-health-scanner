@@ -20,10 +20,11 @@ WORKDIR /scripts
 
 # Install build dependencies and utilities
 RUN apt-get update &&\
+    apt-get -y upgrade &&\
+    apt-get -y autoremove &&\
     apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq &&\
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
-
 
 # Clone and build Neper
 RUN git clone https://github.com/google/neper.git && \
@@ -36,6 +37,9 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   cp /root/.ssh/google_compute_engine.pub /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
+
+# Disable ssh login grace period to prevent race condition vulnerability
+RUN echo "LoginGraceTime 0" >> /etc/ssh/sshd_config
 
 COPY src/neper_healthcheck/neper_runner.py .
 COPY src/checker_common.py .
