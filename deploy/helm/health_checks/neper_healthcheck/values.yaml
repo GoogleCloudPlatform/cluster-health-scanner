@@ -25,6 +25,9 @@ node_match:
 
 health_check:
   name: "neper-healthcheck"
+  test_label:
+    name: "aiinfra/neper-healthcheck-test"
+    value: "true"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck"
     tag: "subset"
