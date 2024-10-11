@@ -101,8 +101,7 @@ class PredicateTableRenderer(ClusterRenderer):
         for node in nodes
     ]
 
-  @staticmethod
-  def _render_table(cells: list[list[Any]]) -> str:
+  def _render_table(self, cells: list[list[Any]]) -> str:
     # Could just use pandas here, but choosing to avoid unnecessary deps
 
     # Convert all elements to strings
@@ -165,8 +164,7 @@ class ClusterStatusChecker:
 
     return False
 
-  @staticmethod
-  def _get_nodes(node_names: set[str]) -> list[V1Node]:
+  def _get_nodes(self, node_names: set[str]) -> list[V1Node]:
     nodes: Iterable[V1Node] = list_nodes()
     result: list[V1Node] = [
         node for node in nodes if node.metadata.name in node_names
