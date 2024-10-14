@@ -51,10 +51,15 @@ NVIDIA_SMI_COMMAND = (
     " --query-gpu=ecc.errors.uncorrected.volatile.total"
     " --format=csv,noheader,nounits"
 )
-K_ADD_LABEL_FORMAT = "/app/kubectl label node %s %s=%s --overwrite"
-K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
-K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
-K_UNTAINT_NODE_FORMAT = "/app/kubectl taint node %s %s-"
+# K_ADD_LABEL_FORMAT = "/app/kubectl label node %s %s=%s --overwrite"
+# K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
+# K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
+# K_UNTAINT_NODE_FORMAT = "/app/kubectl taint node %s %s-"
+
+TAINT_EFFECT = "DRAINING"
+K_ADD_LABEL_FORMAT = "scontrol update nodename=%s comment=%s:%s"
+K_TAINT_NODE_FORMAT = "scontrol update nodename=%s reason=%s:%s state=%s"
+K_UNTAINT_NODE_FORMAT = "scontrol update nodename=%s reason=%s state=RESUME"
 
 
 def main() -> None:
@@ -153,8 +158,8 @@ def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
 
 def remove_label(node_name: str, label: str) -> None:
   print("removing label %s from node %s" % (label, node_name))
-  checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
-
+  # checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
+  remove_specific_label(node_name, label)
 
 def taint_node(node_name: str, key: str, value: str, effect: str) -> None:
   print("adding taint %s=%s to node %s" % (key, value, node_name))
@@ -171,6 +176,37 @@ def un_taint_node(node_name: str, key: str) -> None:
 
 def is_bad_node(diag_output: str) -> bool:
   return "error" in diag_output.lower()
+
+
+##########SLURM RELATED ########################
+import subprocess
+def get_node_comment(node_name):
+  result = subprocess.run(['scontrol', 'show', 'node', node_name], capture_output=True, text=True)
+  for line in result.stdout.split('\n'):
+    if line.strip().startswith('Comment='):
+      return line.split('=', 1)[1].strip()
+  return ''
+
+def update_node_comment(node_name, new_comment):
+  subprocess.run(['scontrol', 'update', f'nodename={node_name}', f'comment="{new_comment}"'])
+
+def remove_specific_label(node_name, key_to_remove):
+  current_comment = get_node_comment(node_name)
+  
+  # Split the comment into key-value pairs
+  pairs = [pair.strip() for pair in current_comment.split(':') if pair.strip()]
+  
+  # Filter out the pair with the key to remove
+  new_pairs = [pair for pair in pairs if not pair.startswith(f"{key_to_remove}=")]
+  
+  # Join the remaining pairs back into a comment string
+  new_comment = ':'.join(new_pairs)
+  
+  # Update the node's comment
+  update_node_comment(node_name, new_comment)
+  
+  print(f"Updated comment for {node_name}: {new_comment}")
+######################## END ######################
 
 
 if __name__ == "__main__":

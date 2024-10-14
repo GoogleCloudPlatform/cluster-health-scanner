@@ -22,9 +22,10 @@ RUN mkdir -p /usr/local/gcloud \
   && /usr/local/gcloud/google-cloud-sdk/install.sh
 ENV PATH $PATH:/usr/local/gcloud/google-cloud-sdk/bin
 COPY src/gpu_healthcheck/gpu_healthcheck.py .
+COPY src/gpu_healthcheck/gpu_healthcheck.sh .
 COPY src/checker_common.py .
 COPY src/metrics.py .
 ENV PYTHONUNBUFFERED=1
 
-RUN chmod +x /app/gpu_healthcheck.py /app/checker_common.py /app/metrics.py
-ENTRYPOINT ["python3", "/app/gpu_healthcheck.py"]
+RUN chmod +x /app/gpu_healthcheck.py /app/gpu_healthcheck.sh /app/checker_common.py /app/metrics.py
+ENTRYPOINT ["bash", "/app/gpu_healthcheck.sh"]

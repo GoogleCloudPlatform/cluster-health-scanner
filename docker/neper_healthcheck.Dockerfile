@@ -38,8 +38,9 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
 COPY src/neper_healthcheck/neper_runner.py .
+COPY src/neper_healthcheck/neper_runner.sh .
 COPY src/checker_common.py .
 COPY src/metrics.py .
 
-RUN chmod +x /scripts/neper_runner.py /scripts/checker_common.py /scripts/metrics.py
-CMD ["python3", "/scripts/neper_runner.py"]
+RUN chmod +x /scripts/neper_runner.py /scripts/neper_runner.sh /scripts/checker_common.py /scripts/metrics.py
+CMD ["bash", "/scripts/neper_runner.sh"]

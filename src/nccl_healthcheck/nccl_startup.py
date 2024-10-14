@@ -37,7 +37,7 @@ _RESULT_LABEL_KEY = "aiinfra/nccl-healthcheck-result"
 TAINT_KEY = "aiinfra/nccl-healthcheck"
 TAINT_VALUE_SUSPECT = "suspect"
 TAINT_VALUE_FAILED = "failed"
-TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
+# TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
 TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
 HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-valid-till-sec"
@@ -45,11 +45,17 @@ HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY = (
     "aiinfra/nccl-healthcheck-second-pass-needed"
 )
 
-K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
-K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
-K_REMOVE_LABEL_FORMAT = "{k} label node %s %s-".format(k=KUBECTL)
-K_REMOVE_TAINT_NODE_FORMAT = "{k} taint node %s %s-".format(k=KUBECTL)
+# K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
+# K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
+# K_REMOVE_LABEL_FORMAT = "{k} label node %s %s-".format(k=KUBECTL)
+# K_REMOVE_TAINT_NODE_FORMAT = "{k} taint node %s %s-".format(k=KUBECTL)
 K_DELETE_SERVICE_FORMAT = "{k} delete svc %s".format(k=KUBECTL)
+
+
+TAINT_EFFECT_NOSCHEDULE = "DRAINING"
+K_ADD_LABEL_FORMAT = "scontrol update nodename=%s comment=%s:%s"
+K_TAINT_NODE_FORMAT = "scontrol update nodename=%s reason=%s:%s state=%s"
+K_REMOVE_TAINT_NODE_FORMAT = "scontrol update nodename=%s reason=%s state=RESUME"
 
 
 def ensure_env_variables() -> None:
@@ -411,8 +417,8 @@ def mark_node_bandwidth(node: str, bandwidth: int) -> None:
 
 def remove_label(node_name: str, label: str) -> None:
   print("removing label %s from node %s" % (label, node_name))
-  checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
-
+  # checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
+  remove_specific_label(node_name, label)
 
 def cleanup(hosts: List[str]) -> None:
   """Clean up any additional resources deployed to the cluster."""
@@ -424,6 +430,36 @@ def cleanup(hosts: List[str]) -> None:
       )
     checker_common.run_command(K_DELETE_SERVICE_FORMAT % (SERVICE_NAME))
 
+
+##########SLURM RELATED ########################
+import subprocess
+def get_node_comment(node_name):
+  result = subprocess.run(['scontrol', 'show', 'node', node_name], capture_output=True, text=True)
+  for line in result.stdout.split('\n'):
+    if line.strip().startswith('Comment='):
+      return line.split('=', 1)[1].strip()
+  return ''
+
+def update_node_comment(node_name, new_comment):
+  subprocess.run(['scontrol', 'update', f'nodename={node_name}', f'comment="{new_comment}"'])
+
+def remove_specific_label(node_name, key_to_remove):
+  current_comment = get_node_comment(node_name)
+  
+  # Split the comment into key-value pairs
+  pairs = [pair.strip() for pair in current_comment.split(':') if pair.strip()]
+  
+  # Filter out the pair with the key to remove
+  new_pairs = [pair for pair in pairs if not pair.startswith(f"{key_to_remove}=")]
+  
+  # Join the remaining pairs back into a comment string
+  new_comment = ':'.join(new_pairs)
+  
+  # Update the node's comment
+  update_node_comment(node_name, new_comment)
+  
+  print(f"Updated comment for {node_name}: {new_comment}")
+######################## END ######################
 
 def main() -> None:
   """Main function."""

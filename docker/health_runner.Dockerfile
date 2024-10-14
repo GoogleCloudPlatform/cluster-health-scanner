@@ -28,6 +28,7 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
 COPY src/health_runner/health_runner.py .
+COPY src/health_runner/health_runner.sh .
 COPY src/checker_common.py .
 COPY src/gpu_healthcheck/gpu_healthcheck.yaml .
 COPY src/nccl_healthcheck/a3/ a3/
@@ -40,4 +41,4 @@ RUN chgrp -R 1000 /app/
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python3", "/app/health_runner.py"]
+CMD ["bash", "/app/health_runner.sh"]

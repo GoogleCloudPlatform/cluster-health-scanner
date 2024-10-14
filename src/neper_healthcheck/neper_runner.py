@@ -32,15 +32,19 @@ POD_NAME = os.getenv("POD_NAME")
 
 _RESULT_LABEL_KEY = "aiinfra/neper-healthcheck-result"
 TAINT_KEY = "aiinfra/neper-healthcheck"
-TAINT_EFFECT = "NoSchedule"
+# TAINT_EFFECT = "NoSchedule"
 
 HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/neper-healthcheck-valid-till-sec"
 
-K_ADD_LABEL_FORMAT = "/scripts/kubectl label node %s %s=%s --overwrite"
-K_TAINT_NODE_FORMAT = "/scripts/kubectl taint node %s %s=%s:%s"
-K_REMOVE_LABEL_FORMAT = "/scripts/kubectl label node %s %s-"
-K_REMOVE_TAINT_NODE_FORMAT = "/scripts/kubectl taint node %s %s-"
+# K_ADD_LABEL_FORMAT = "/scripts/kubectl label node %s %s=%s --overwrite"
+# K_TAINT_NODE_FORMAT = "/scripts/kubectl taint node %s %s=%s:%s"
+# K_REMOVE_LABEL_FORMAT = "/scripts/kubectl label node %s %s-"
+# K_REMOVE_TAINT_NODE_FORMAT = "/scripts/kubectl taint node %s %s-"
 
+TAINT_EFFECT = "DRAINING"
+K_ADD_LABEL_FORMAT = "scontrol update nodename=%s comment=%s:%s"
+K_TAINT_NODE_FORMAT = "scontrol update nodename=%s reason=%s:%s state=%s"
+K_REMOVE_TAINT_NODE_FORMAT = "scontrol update nodename=%s reason=%s state=RESUME"
 
 def ensure_env_variables() -> None:
   """Ensure necessary environment variables are set."""
@@ -376,9 +380,39 @@ def apply_fail_label(check_failed: bool, node_name: str, value: str) -> None:
 
 def remove_label(node_name: str, label: str) -> None:
   print("removing label %s from node %s" % (label, node_name))
-  checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
+  # checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
+  remove_specific_label(node_name, label)
 
+##########SLURM RELATED ########################
+import subprocess
+def get_node_comment(node_name):
+  result = subprocess.run(['scontrol', 'show', 'node', node_name], capture_output=True, text=True)
+  for line in result.stdout.split('\n'):
+    if line.strip().startswith('Comment='):
+      return line.split('=', 1)[1].strip()
+  return ''
 
+def update_node_comment(node_name, new_comment):
+  subprocess.run(['scontrol', 'update', f'nodename={node_name}', f'comment="{new_comment}"'])
+
+def remove_specific_label(node_name, key_to_remove):
+  current_comment = get_node_comment(node_name)
+  
+  # Split the comment into key-value pairs
+  pairs = [pair.strip() for pair in current_comment.split(':') if pair.strip()]
+  
+  # Filter out the pair with the key to remove
+  new_pairs = [pair for pair in pairs if not pair.startswith(f"{key_to_remove}=")]
+  
+  # Join the remaining pairs back into a comment string
+  new_comment = ':'.join(new_pairs)
+  
+  # Update the node's comment
+  update_node_comment(node_name, new_comment)
+  
+  print(f"Updated comment for {node_name}: {new_comment}")
+######################## END ######################
+  
 def main() -> None:
   """Main function."""
   ensure_env_variables()

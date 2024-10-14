@@ -41,4 +41,5 @@ ENV PYTHONUNBUFFERED=1
 
 RUN apt-get install -y dnsutils
 
-ENTRYPOINT ["python3", "/scripts/nccl_startup.py"]
+# ENTRYPOINT ["python3", "/scripts/nccl_startup.py"]
+ENTRYPOINT ["bash", "/scripts/a3plus/nccl_healthcheck.sh"]

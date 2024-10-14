@@ -23,7 +23,9 @@ import time
 import uuid
 
 
-K_APPLY_FORMAT = "%s apply -f %s"
+# K_APPLY_FORMAT = "%s apply -f %s"
+
+K_APPLY_FORMAT = "%s %s"
 K_DELETE_FORMAT = "%s delete -f %s"
 
 
@@ -84,12 +86,12 @@ def create_k8s_objects(
 
   cleanup_functions = []
 
-  expanded_yaml_content = expand_template(yaml_path)
-  with tempfile.NamedTemporaryFile(delete=False, mode="w") as f:
-    file_name = f.name
-    f.write(expanded_yaml_content)
+  # expanded_yaml_content = expand_template(yaml_path)
+  # with tempfile.NamedTemporaryFile(delete=False, mode="w") as f:
+  #   file_name = f.name
+  #   f.write(expanded_yaml_content)
 
-  cleanup_functions.append(apply_yaml_file(file_name, kubectl_path))
+  cleanup_functions.append(apply_bash_file(yaml_path))
   return cleanup_functions
 
 
@@ -113,6 +115,28 @@ def apply_yaml_file(
     return run_command(K_DELETE_FORMAT % (kubectl_path, yaml_path))
 
   return delete_yaml_file
+
+
+def apply_bash_file(
+    bash_path: str
+) -> Callable[[], subprocess.CompletedProcess[str]]:
+  """Applies shell script.
+
+  Args:
+    bash_path (str): Relative filesystem path to the shell script to apply.
+  
+  Returns:
+    Callable((), subprocess.CompletedProcess(str)): A function that will run
+    `scancel` on the bash file provided for easy cleanup of temporary
+    resources.
+
+  """
+  run_command(K_APPLY_FORMAT % ("sbatch", bash_path))
+  
+  def delete_bash_file():
+    return run_command(K_APPLY_FORMAT % ("scancel", bash_path))
+
+  return delete_bash_file
 
 
 def expand_template(yaml_template: str) -> str:
