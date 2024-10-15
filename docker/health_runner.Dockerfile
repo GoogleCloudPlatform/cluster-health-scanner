@@ -36,7 +36,7 @@ RUN ./get_helm.sh
 COPY src/health_runner/health_runner.py .
 COPY src/checker_common.py .
 # Local copies of health check YAMLs
-COPY src/deploy/helm/health_checks/ health_checks/
+COPY deploy/helm/health_checks/ health_checks/
 
 RUN chmod -R g+rwx /app/
 RUN chgrp -R 1000 /app/
