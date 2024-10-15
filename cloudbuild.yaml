@@ -72,7 +72,7 @@ steps:
 - name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
   id: 'nccl_healthcheck_check'
   args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
-    'aiinfra/nccl-healthcheck-valid-till-sec=^\d*$, '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
+    'aiinfra/nccl-healthcheck-valid-till-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
@@ -105,7 +105,7 @@ steps:
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
   id: 'neper_healthcheck_check'
-  args: ['--check', 'aiinfra/neper-healthcheck-result=^pass$', 'aiinfra/neper-healthcheck-valid-till-sec=^\d*$'
+  args: ['--check', 'aiinfra/neper-healthcheck-result=^pass$', 'aiinfra/neper-healthcheck-valid-till-sec=^\d*$',
     '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
