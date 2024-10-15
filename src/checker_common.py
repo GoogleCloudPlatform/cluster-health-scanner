@@ -15,6 +15,7 @@
 """Common functions shared between health checkers."""
 
 from collections.abc import Callable
+import enum
 import os
 import string
 import subprocess
@@ -25,6 +26,12 @@ import uuid
 
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
+
+
+# class syntax
+class HelmCommand(enum.Enum):
+  INSTALL: str = "install"
+  UNINSTALL: str = "uninstall"
 
 
 def add_label(
@@ -77,6 +84,96 @@ def run_command(
   return diag
 
 
+def generate_helm_command(
+    helm_path: str,
+    release_name: str,
+    chart: str | None = None,
+    values: dict[str, str] | None = None,
+    chart_version: str | None = None,
+    helm_install_flags: str | None = None,
+    helm_command_type: HelmCommand = HelmCommand.INSTALL,
+) -> str:
+  """Generates a helm command."""
+  command = f"{helm_path}"
+  if helm_command_type == HelmCommand.UNINSTALL:
+    command = f"{command} uninstall {release_name}"
+  else:  # Default to `helm install` if not specified
+    command = f"{command} install {release_name} {chart}"
+    # Will default to latest version if not set
+    # 
+    if chart_version is not None:
+      command = f"{command} --version {chart_version}"
+    # Allows for custom values to be set in release
+    # 
+    if values is not None:
+      for k, v in values.items():
+        command = f"{command} --set {k}={v}"
+    # 
+    if helm_install_flags is not None:
+      command = f"{command} {helm_install_flags}"
+  return command
+
+
+def create_helm_release(
+    helm_path: str,
+    release_name: str,
+    chart: str,
+    values: dict[str, str] | None = None,
+    chart_version: str | None = None,
+    helm_install_flags: str | None = None,
+) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
+  """Creates a helm release and returns a function to uninstall it."""
+
+  cleanup_functions = []
+
+  cleanup_functions.append(
+      install_helm_release(
+          helm_path=helm_path,
+          release_name=release_name,
+          chart=chart,
+          values=values,
+          chart_version=chart_version,
+          helm_install_flags=helm_install_flags,
+      )
+  )
+  return cleanup_functions
+
+
+def install_helm_release(
+    helm_path: str,
+    release_name: str,
+    chart: str,
+    values: dict[str, str] | None = None,
+    chart_version: str | None = None,
+    helm_install_flags: str | None = None,
+) -> Callable[[], subprocess.CompletedProcess[str]]:
+  """Applies a helm chart and returns a function to uninstall it."""
+
+  # generate the helm command
+  helm_install_command = generate_helm_command(
+      helm_path=helm_path,
+      release_name=release_name,
+      chart=chart,
+      values=values,
+      chart_version=chart_version,
+      helm_install_flags=helm_install_flags,
+      helm_command_type=HelmCommand.INSTALL,
+  )
+  # Will do the specific release installation
+  run_command(helm_install_command)
+
+  # Will give a function to later uninstall the release
+  helm_uninstall_command = generate_helm_command(
+      helm_path=helm_path,
+      release_name=release_name,
+      helm_install_flags=helm_install_flags,
+      helm_command_type=HelmCommand.UNINSTALL,
+  )
+  # 
+  uninstall_helm_release = lambda: run_command(helm_uninstall_command)
+  return uninstall_helm_release
+
+
 def create_k8s_objects(
     yaml_path: str, kubectl_path: str
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
@@ -127,4 +224,8 @@ def expand_template(yaml_template: str) -> str:
         "IMAGE_TAG": os.environ.get("IMAGE_TAG", "latest"),
         "SHORT_GUID": os.environ.get("SHORT_GUID", str(uuid.uuid4())[:4]),
         "ITERATIONS": os.environ.get("ITERATIONS", 5),
+        "EXPIRY_TIME_EPOCH_SEC": (
+            int(time.time())
+            - int(os.environ.get("HEALTH_VALIDITY_HOURS", "24")) * 60 * 60
+        ),
     })

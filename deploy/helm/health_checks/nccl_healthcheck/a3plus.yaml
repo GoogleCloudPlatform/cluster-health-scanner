@@ -45,7 +45,6 @@ health_check:
     BANDWIDTH_THRESHOLD: "90"
     USE_TCPX: "false"
     USE_FASTRAK: "true"
-    SECOND_PASS_YAML_FILE: "nccl_secondpass_a3plus.yaml"
     # Note A3+ (a3-megagpu-8g) has no UNIX_CLIENT_PREFIX
     NCCL_LIB_DIR: /usr/local/nvidia/lib64
     NCCL_FASTRAK_USE_SNAP: "1"

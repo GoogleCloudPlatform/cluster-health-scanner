@@ -12,27 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#
-service:
-  prefix: "neper-headless-svc"
-job:
-  prefix: "neper-healthcheck"
+FROM gcr.io/cloud-builders/kubectl
 
-# This is used to create a unique identifer
-node_match:
-  guid: "xkcd"
-  # check_time: "1590303600" # Will automatically be set if not given
+# reinstall python3
+RUN apt-get -y update && \
+    apt-get dist-upgrade -y && \
+    apt-get install -y python3-pip && \
+    python3 -m pip install kubernetes
 
-health_check:
-  name: "neper-healthcheck"
-  test_label:
-    name: "aiinfra/neper-healthcheck-test"
-    value: "true"
-  image:
-    repo: "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck"
-    tag: "subset"
-    pull_policy: "Always"
-  env:
-    GOOD_THROUGHPUT: "70000000000"
-    HEALTH_VALIDITY_HOURS: "5"
-    DRY_RUN: "true"
+COPY src/entrypoint.sh .
+RUN chmod +x entrypoint.sh
+ENTRYPOINT ["sh", "./entrypoint.sh"]

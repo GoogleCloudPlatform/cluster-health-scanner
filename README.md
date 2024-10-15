@@ -21,19 +21,19 @@ Each test emits a log line that can be consumed in Cloud Logging.
 ## Running Health Checks
 
 For detailed information about running health checks see the
-[README-usage.md](README-usage.md).
+[README-usage.md](bad_node_detectors/health_runner/README.md).
 
-You also might want to check the [cheatsheet](cheatsheet.md) that lists a few
+You also might want to check the [cheatsheet](bad_node_detectors/cheatsheet.md) that lists a few
 useful commands on various parts of using BND.
 
 ### Note on Implementation 
 
 Bad Node Detector is implemented through a provided Helm Chart
-([health_runner](deploy/helm/health_runner/)) which will kick off the specified health
-checks with given configurations. See the chart's [README.md](deploy/helm/health_runner/README.md)
+([health_runner](bad_node_detectors/health_runner)) which will kick off the specified health
+checks with given configurations. See the chart's [README.md](bad_node_detectors/health_runner/README.md)
 
 Although the preferred method of implementing is using the `health_runner` Helm
 Chart, some users may find it useful working with an equivalent YAML file.
-Details regarding generating a YAML file from the Helm Chart can be foud in 
-[this section](deploy/helm/health_runner/README.md#generating-yaml-files-from-helm) along
+Details regarding generating a YAML file from the Helm Chart can be found in 
+[this section](bad_node_detectors/health_runner/README.md#generating-yaml-files-from-helm) along
 with the equivalent YAML file of the default configuration.

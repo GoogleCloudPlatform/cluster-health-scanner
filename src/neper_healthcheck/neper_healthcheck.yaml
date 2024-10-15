@@ -53,31 +53,41 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-                # It will trigger if label value is older than 24 hours (default) ago
+                # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
-              - key: aiinfra/neper-healthcheck-valid-till-sec
+              - key: aiinfra/neper-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "${CHECK_TIME_EPOCH_SEC}"
+                - "${EXPIRY_TIME_EPOCH_SEC}"
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
+              # If label is true then it will trigger
+              - key: "aiinfra/neper-healthcheck-test"
+                operator: In
+                values:
+                - "true"
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-              - key: aiinfra/neper-healthcheck-valid-till-sec
+              - key: aiinfra/neper-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
+              # If label is true then it will trigger
+              - key: "aiinfra/neper-healthcheck-test"
+                operator: In
+                values:
+                - "true"
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 50
             preference:
               matchExpressions:
-              - key: aiinfra/neper-healthcheck-valid-till-sec
+              - key: aiinfra/neper-healthcheck-runtime-sec
                 operator: DoesNotExist
           - weight: 1
             preference:
               matchExpressions:
-              - key: aiinfra/neper-healthcheck-valid-till-sec
+              - key: aiinfra/neper-healthcheck-runtime-sec
                 operator: Lt
                 values:
                 - "${CHECK_TIME_EPOCH_SEC}"
@@ -125,7 +135,7 @@ spec:
             fieldRef:
               fieldPath: status.hostIP
         - name: GOOD_THROUGHPUT
-          value: "130000000000"
+          value: "70000000000"
         - name: HEALTH_VALIDITY_HOURS
           value: "5"
         - name: SERVICE_NAME
