@@ -12,27 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#
-service:
-  prefix: "neper-headless-svc"
-job:
-  prefix: "neper-healthcheck"
+#!/bin/bash
+/builder/kubectl.bash # default script for image, which sets up various environment variables
 
-# This is used to create a unique identifer
-node_match:
-  guid: "xkcd"
-  # check_time: "1590303600" # Will automatically be set if not given
-
-health_check:
-  name: "neper-healthcheck"
-  test_label:
-    name: "aiinfra/neper-healthcheck-test"
-    value: "true"
-  image:
-    repo: "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck"
-    tag: "subset"
-    pull_policy: "Always"
-  env:
-    GOOD_THROUGHPUT: "70000000000"
-    HEALTH_VALIDITY_HOURS: "5"
-    DRY_RUN: "true"
+python3 tests.py "$@"

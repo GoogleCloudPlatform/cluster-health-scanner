@@ -45,7 +45,6 @@ health_check:
     BANDWIDTH_THRESHOLD: "60"
     USE_TCPX: "true"
     USE_FASTRAK: "false"
-    SECOND_PASS_YAML_FILE: "nccl_secondpass_a3.yaml"
     UNIX_CLIENT_PREFIX: "/run/tcpx"
     # Note A3 (a3-highgpu-8g) has no NCCL_LIB_DIR
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_USE_SNAP
