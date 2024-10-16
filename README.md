@@ -17,7 +17,7 @@ scheduling, launching, and post-processing of individual health checks that run
 on the nodes in the cluster.
 
 
-### Repo Folder Structure
+### 2.1 Repo Folder Structure
 
 This repository is structured to separate running/deploying CHS and
 building CHS.
@@ -49,7 +49,7 @@ used with `src/` to build your own Docker images for CHS.
 useful to customize their version of CHS
 
 
-### CHS Design
+### 2.2 CHS Design
 
 CHS is broken up into the following parts:
 - Health Runner
@@ -105,3 +105,99 @@ Runs the [neper Linux networking performance tool](https://github.com/google/nep
 to report the health of a node.
 A 'pass' is given when the bandwidth across connections in the node meet or
 exceed a given threshold.
+
+
+## 3. Running CHS
+
+Running CHS only requires installing the Health Runner on the cluster.
+
+The Health Runner will be able to launch health checks on the cluster based on
+the user's installation configuration.
+
+> Note:
+> Currently this is done on GKE/Kubernetes using Helm charts.
+> The description below focuses on running CHS using Helm charts on GKE.
+
+### 3.1 Setup & Configuration
+
+#### Default Configuration 
+
+### 3.2 Running CHS
+
+Running CHS involves installing Health Runner.
+This is done on Kubernetes orchestration by deploying the Helm chart for Health
+Runner.
+
+We the Helm Chart to install the release with the `helm` command shown below
+
+```bash
+MY_HEALTH_RUNNER_RELEASE_NAME="my-hr-release"
+
+helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
+  deploy/helm/health_runner
+```
+
+This will install the Health Runner with the default configuration which will
+kick off the health checks automatically to be run on the nodes in the cluster.
+
+You can also specify your own configuration using your own value files:
+
+```bash
+MY_HEALTH_RUNNER_RELEASE_NAME="my-hr-release-custom-config"
+MY_CONFIG="./my-config.yaml"
+
+helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
+  deploy/helm/health_runner \
+  -f "${MY_CONFIG}"
+```
+
+You can also set set specific configurations in the command line using 
+`helm install` `--set` parameter.
+For example, the following command will only launch the GPU health check on the
+nodes using `R_LEVEL: "1"` instead of the default values.
+
+```bash
+MY_HEALTH_RUNNER_RELEASE_NAME="my-hr-release-gpu-only"
+
+helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
+  deploy/helm/health_runner \
+  --set health_checks.nccl_healthcheck.run_check=false \
+  --set health_checks.gpu_healthcheck.run_check=true \
+  --set health_checks.gpu_healthcheck.R_LEVEL="1" \
+```
+
+
+### 3.3 Viewing Results
+
+As the Health Runner launches health checks, are run on nodes, and complete,
+users can view the health check results.
+
+These health check results are available as node labels and can be viewed using
+Kubernetes `kubectl` tool.
+
+The following command displays results for the NCCL health check for each node:
+
+```bash
+CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-valid-till-sec"
+
+kubectl get nodes -o custom-columns="${CUSTOM_COLS}"
+```
+
+This will output a table with columns showing the node names and the status of
+each of their tags.
+
+If the command `watch` is installed, you can create a quick screen for live
+updates.
+
+```bash
+watch -n 10 -d "kubectl get nodes -o custom-columns=${CUSTOM_COLS}"
+```
+
+Watch will rerun the table display command every 10 seconds, highlighting any
+changes that occur each time.
+
+
+### 3.4 Cleanup
+
+
+## 4. Building CHS
