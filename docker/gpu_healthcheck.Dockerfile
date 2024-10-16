@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from nvidia/dcgm:3.3.5-1-ubuntu22.04
-RUN apt-get update && apt-get install -y ca-certificates curl python3
+RUN apt-get update && apt-get install -y ca-certificates curl python3 slurm-wlm
 workdir /app
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl
 RUN curl https://dl.google.com/dl/cloudsdk/release/google-cloud-sdk.tar.gz > /tmp/google-cloud-sdk.tar.gz
