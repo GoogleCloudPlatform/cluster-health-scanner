@@ -1,5 +1,4 @@
 ## 1. Introduction
-> Description what this is, who should run this 
 
 The **Cluster Health Scanner** tool or simply **CHS** runs a series of tests
 called _health checks_ to analyze the health of a cluster of GPU nodes.
@@ -46,7 +45,7 @@ See the [section below](#4-building-chs-from-src) for more details.
 The **[`docker/`](docker/)** directory contains the Dockerfiles that can be
 used with `src/` to build your own Docker images for CHS.
 ***This is not necessary to run CHS.*** However, certain users might find it 
-useful to customize their version of CHS
+useful to customize their version of CHS.
 
 
 ### 2.2 CHS Design
@@ -87,19 +86,19 @@ by node labels.
 These health checks are all launched by the Health Runner & are set by the
 Health Runner's configuration.
 
-##### NCCL
+##### NCCL Health Check
 
 Runs on two nodes to check networking across these nodes.
 A 'pass' is given when both nodes have an average bandwidth that meets or
 exceeds a given threshold.
 
-##### GPU
+##### GPU Health Check
 
 Runs the [NVIDIA's DCGM diagnostic tool](https://developer.nvidia.com/dcgm) to
 report a single node's health.
 A 'pass' is given when no errors appear while running the tool.
 
-##### Neper
+##### Neper Health Check
 
 Runs the [neper Linux networking performance tool](https://github.com/google/neper)
 to report the health of a node.
@@ -118,17 +117,51 @@ the user's installation configuration.
 > Currently this is done on GKE/Kubernetes using Helm charts.
 > The description below focuses on running CHS using Helm charts on GKE.
 
-### 3.1 Setup & Configuration
+### 3.1 Setup
 
-#### Default Configuration 
+#### Labeling Nodes to be Tested
+
+The current practice is to mark nodes in the cluster to be tested in a given
+health check using a node label related to that health check.
+
+The node label keys are dependent on the health check
+(values expected are `"true"`):
+
+- NCCL Health Check: `aiinfra/nccl-healthcheck-test`
+- GPU Health Check: `aiinfra/nccl-healthcheck-test`
+- Neper Health Check: `aiinfra/neper-healthcheck-test`
+
+These label keys & values can be set using the `kubectl` tool 
+using the following command:
+
+```bash
+kubectl label nodes \
+    --all \
+    aiinfra/nccl-healthcheck-test="true"
+```
+
+> Note this sets all nodes to be labeled for the NCCL health check
+
+
+#### Configuration of the Health Runner & Health Checks
+
+The user can configure the Health Runner via the command line or as part of a
+YAML configuration file. This configuration also gives the settings for the
+health checks to be run.
+
+
+##### Default Configuration
+
+
 
 ### 3.2 Running CHS
 
 Running CHS involves installing Health Runner.
-This is done on Kubernetes orchestration by deploying the Helm chart for Health
-Runner.
+This is done on a Kubernetes orchestration by deploying the Helm chart for
+Health Runner.
 
-We the Helm Chart to install the release with the `helm` command shown below
+We can use the Health Runner Helm chart to install the release with the `helm`
+command shown below:
 
 ```bash
 MY_HEALTH_RUNNER_RELEASE_NAME="my-hr-release"
@@ -200,4 +233,10 @@ changes that occur each time.
 ### 3.4 Cleanup
 
 
-## 4. Building CHS
+## 4. Building CHS from src 
+
+
+## 5. Miscellaneous configuration options 
+
+
+## 6. Useful commands / cheat sheet
