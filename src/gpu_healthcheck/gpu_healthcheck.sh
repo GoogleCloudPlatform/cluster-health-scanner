@@ -5,9 +5,10 @@
 #SBATCH --gpus-per-node 8
 #SBATCH --nodes 1
 
+NODE_NAME=$SLURMD_NODENAME
 HEALTH_VALIDITY_HOURS=24
 DRY_RUN=true
 R_LEVEL=2
 
 # Launch the script
-sbatch gpu_healthcheck.py
+sbatch /app/gpu_healthcheck.py
