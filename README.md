@@ -1,3 +1,5 @@
+# Cluster Health Scanner
+
 ## 1. Introduction
 
 The **Cluster Health Scanner** tool or simply **CHS** runs a series of tests
@@ -205,6 +207,7 @@ This section specifies information regarding the Docker image for health check.
   the pull policy for the Docker image for the health check.
 
 Example:
+
 ```yaml
 health_checks:
   HC_NAME:
@@ -564,22 +567,26 @@ Below are some commands that can help in identifying resources/installations to
 clean up.
 
 To list current Helm Release installations:
+
 ```bash
 helm ls
 ```
 
 To more thoroughly list current Helm Release installations, you can include the
 `-a` flag:
+
 ```bash
 helm ls -a
 ```
 
 To view current CronJobs in Kubernetes cluster:
+
 ```bash
 kubectl get cronjobs
 ```
 
 To view current Jobs in Kubernetes cluster:
+
 ```bash
 kubectl get jobs
 ```
@@ -606,12 +613,14 @@ You can inspect a particular node `$NODE_NAME` in a few ways.
 
 This command will give details of the node including the labels near the
 beginning of the output:
+
 ```bash
 kubectl describe nodes $NODE_NAME
 ```
 
 This command will print information about the node in a table format and
 include a list of labels:
+
 ```bash
 kubectl get nodes $NODE_NAME --show-labels=true
 ```
@@ -619,6 +628,7 @@ kubectl get nodes $NODE_NAME --show-labels=true
 You can also run either of these commands on multiple nodes.
 
 This can be done for a subset of nodes by listing them:
+
 ```bash
 kubectl get nodes $NODE_NAME_0 $NODE_NAME_1 $NODE_NAME_2 --show-labels=true
 kubectl describe nodes $NODE_NAME_0 $NODE_NAME_1 $NODE_NAME_2
@@ -626,6 +636,7 @@ kubectl describe nodes $NODE_NAME_0 $NODE_NAME_1 $NODE_NAME_2
 
 You can also run the same command for all the nodes by not listing any specific
 nodes:
+
 ```bash
 kubectl get nodes --show-labels=true
 kubectl describe nodes
@@ -644,11 +655,13 @@ kubectl label nodes $NODE_NAME_0 $NODE_NAME_1 LABEL_NAME-
 ```
 
 This command can also be used to remove multiple labels:
+
 ```bash
 kubectl label nodes $NODE_NAME_0 $NODE_NAME_1 LABEL_NAME- LABEL_NAME_2-
 ```
 
 You may also want to remove labels from all nodes in the cluster:
+
 ```bash
 kubectl label nodes --all LABEL_NAME-
 ```
@@ -670,12 +683,14 @@ Health checks require you to label the nodes before running the health check.
 
 The command below labels a specific set of nodes with the label `LABEL_NAME`
 and value `VALUE`:
+
 ```bash
 kubectl label nodes $NODE_NAME_0 $NODE_NAME_1 LABEL_NAME=VALUE
 ```
 
 You can also apply to all nodes or apply to nodes with a specific different
 label `FILTER_LABEL` & value `FILTER_VALUE`:
+
 ```bash
 # Applies to all nodes in cluster
 kubectl label nodes --all LABEL_NAME=VALUE
@@ -695,11 +710,13 @@ may find the specific documentation within a Helm chart to be helpful.
 
 The below command will install the Helm chart `CHS_CHART` with the Release name
 `MY_RELEASE` using the default configurations for the chart:
+
 ```bash
 helm install MY_RELEASE CHS_CHART
 ```
 
 You can overwrite the defaults in the command with the `--set` flag:
+
 ```bash
 helm install MY_RELEASE CHS_CHART \
   --set health_check.param_0=true \
@@ -708,6 +725,7 @@ helm install MY_RELEASE CHS_CHART \
 
 You can also specify a file, such as `my_values.yaml`, to provide configuration
 values for your installation:
+
 ```bash
 helm install MY_RELEASE CHS_CHART \
   -f my_values.yaml
@@ -775,6 +793,7 @@ the data to display using the flag `-o custom-columns=$CUSTOM_COLS` where
 For example, we can define `CUSTOM_COLS` where `TEST_LABEL` is a label for if
 the node should be tested and `RESULT_LABEL` is the label with the value for
 the health check's result:
+
 ```bash
 CUSTOM_COLS="NODE:.metadata.name,TEST:.metadata.labels.TEST_LABEL,RESULT:.metadata.labels.RESULT_LABEL
 
@@ -782,6 +801,7 @@ kubectl get nodes -o custom-columns=$CUSTOM_COLS
 ```
 
 The output something like this:
+
 ```
 NODE                                 TEST     RESULT
 gke-cluter-name-np-0-dcs1a6c6-24rm   true     pass
@@ -805,6 +825,7 @@ kubectl get nodes -l RESULT_LABEL='fail' -o custom-columns=$CUSTOM_COLS
 ```
 
 Which will produce something like this (using the previous example result):
+
 ```
 NODE                                 TEST     RESULT
 gke-cluter-name-np-0-dcs1a6c6-8lc9   false    fail
@@ -851,6 +872,7 @@ kubectl get jobs | grep healthcheck
 ```
 
 To remove lingering CronJobs and Jobs:
+
 ```bash
 kubectl delete cronjobs CRONJOB_NAME
 
@@ -887,6 +909,7 @@ To generate the file, you can run the same `helm` command with configurations
 as you would with installation but instead replacing `helm install` with
 `helm template` and then redirecting the standard output to a file
 `my_deployment.yaml`:
+
 ```bash
 helm template MY_RELEASE CHS_CHART \
   -f my_values.yaml \
