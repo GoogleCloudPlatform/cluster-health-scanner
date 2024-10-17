@@ -149,9 +149,190 @@ The user can configure the Health Runner via the command line or as part of a
 YAML configuration file. This configuration also gives the settings for the
 health checks to be run.
 
+Go to the [_'Default Configuration'_ section](#default-configuration) for an
+example of a full configuration file.
 
-##### Default Configuration
+Below are the configuration options that are used for the Health Runner.
 
+##### `health_runner.name`
+
+This will be used as the name of the Kubernetes Job for the Health Runner.
+
+```yaml
+health_runner:
+  name: "health-runner"
+```
+
+##### `health_checks.HC_NAME`
+
+Each health check is listed under the `health_checks` section. It is specific
+to each health check though there are specific settings that apply to all
+health checks.
+
+Note in the section below we use the placeholder `HC_NAME` that would
+be replaced with an identifying name of a health check, such as 
+`nccl_healthcheck`.
+
+##### `health_checks.HC_NAME.run_check`
+
+This is either `true` or `false` and gives the name of the Job to be used to
+run the health check.
+
+##### `health_checks.HC_NAME.runner_name`
+
+The value for `runner_name` will be used as the base of the name of the
+Kubernetes Job for each health check instance launched.
+
+##### `health_checks.HC_NAME.schedule`
+
+`schedule` is given as a [unix-cron string format](https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules) and will specify how often a batch of these health checks
+should run.
+
+##### `health_checks.HC_NAME.image`
+
+This section specifies information regarding the docker image for health check.
+
+- `health_checks.HC_NAME.image.repo`:
+  the base repo URL for the docker image for the health check.
+- `health_checks.HC_NAME.image.tag`: 
+  the image tag for for the docker image for the health check.
+- `health_checks.HC_NAME.image.pull_policy`: 
+  the pull policy for the docker image for the health check.
+
+Example:
+```yaml
+health_checks:
+  HC_NAME:
+    ...
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "subset"
+      pull_policy: "Always"
+    ...
+```
+
+##### `health_checks.HC_NAME.blast_mode`
+
+The `blast_mode` section of the configuration gives settings for running health
+checks in parallel.
+
+- `health_checks.HC_NAME.image.repo`:
+  the base repo URL for the docker image for the health check.
+- `health_checks.HC_NAME.image.tag`: 
+  the image tag for for the docker image for the health check.
+- `health_checks.HC_NAME.image.pull_policy`: 
+  the pull policy for the docker image for the health check.
+
+
+##### `health_checks.HC_NAME.env`
+
+The `env` section of the configuration is specific to each health check and is
+used to modify the settings for the health check(s) to be kicked off by the
+health runner. Some settings are specific to the health check type but there
+are others that are universal to all health checks.
+
+
+###### Universal Health Check Settings 
+
+- `health_checks.HC_NAME.env.DRY_RUN`:
+  this is either set to `"true"` or `"false"`. If set to `"false"`, if a health
+  check fails on a node or nodes it will taint the respective node/nodes.
+- `health_checks.HC_NAME.env.SLEEP_TIME_MINUTES`:
+  this is set to an integers and essentially works as a timeout for the health
+  check. It specifies how long the health check has to complete before being
+  canceled, and if the health check is canceled the test result will not be
+  updated.
+- `health_checks.HC_NAME.env.YAML_FILE`:
+  this specifies which YAML file is used by the Health Runner in launching the
+  health check. This YAML file should already be present in the Health Runner
+  container (via the Docker image).
+
+
+###### NCCL Health Check Settings
+
+- `health_checks.HC_NAME.env.YAML_FILE`:
+  must be set to either `"a3plus/nccl_healthcheck.yaml"` or
+  `"a3/nccl_healthcheck.yaml"` depending on the nodes' accelerator type.
+
+###### GPU Health Check Settings
+
+- `health_checks.HC_NAME.env.YAML_FILE`: 
+  must be set to `"gpu_healthcheck.yaml"`.
+- `health_checks.HC_NAME.env.R_LEVEL`:
+  set to `1`, `2`, `3`, or `4` defining what level of diagnostics to run.
+  The lower the number, the quicker but the more basic the diagnostics.
+  It is recommended to set to `2` or `3` with the `3` being a longer more
+  extensive diagnostic check.
+
+###### Neper Health Check Settings
+
+- `health_checks.HC_NAME.env.YAML_FILE`: 
+  must be set to `"neper_healthcheck.yaml"`.
+
+
+
+#### Default Configuration
+
+The default configuration is set so that the Health Runner will run only the
+NCCL health check every 5 minutes (10 health checks at a time) for A3+ GPU
+nodes.
+
+Below is the default configuration used for the Health Runner
+(can be found in the Helm chart [values.yaml](deploy/helm/health_runner/values.yaml)):
+
+```yaml
+health_runner:
+  name: "health-runner"
+health_checks:
+  nccl_healthcheck:
+    run_check: true
+    runner_name: nccl-health-runner-a3plus
+    schedule: "*/5 * * * *"  # run every five minutes
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "subset"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "5"
+      YAML_FILE: "a3plus/nccl_healthcheck.yaml"
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      IMAGE_TAG: "subset"
+    blast_mode:
+      blast_mode_enabled: false
+      env:
+        BLAST_MODE_NUM_TESTS_LIMIT: "10"
+        NODES_CHECKED_PER_TEST:  "2"
+  gpu_healthcheck:
+    run_check: false
+    runner_name: gpu-health-runner
+    schedule: "0 * * * *"  # run every hour
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "subset"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "15"
+      YAML_FILE: "gpu_healthcheck.yaml"
+      R_LEVEL: "2"
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      IMAGE_TAG: "subset"
+  neper_healthcheck:
+    run_check: false
+    runner_name: neper-health-runner
+    schedule: "*/5 * * * *"  # run every 5 min
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "v2.1.9-public"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "10"
+      YAML_FILE: "neper_healthcheck.yaml"
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      IMAGE_TAG: "v2.1.9-public"
+```
 
 
 ### 3.2 Running CHS
