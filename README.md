@@ -93,8 +93,8 @@ Health Runner's configuration.
 ##### NCCL Health Check
 
 Runs on two nodes to check networking across these nodes.
-A 'pass' is given when both nodes have an average bandwidth that meets or
-exceeds a given threshold.
+A 'pass' is given to both nodes when they have an average bandwidth that meets
+or exceeds a given threshold.
 
 ##### GPU Health Check
 
@@ -154,7 +154,7 @@ The user can configure the Health Runner via the command line or as part of a
 YAML configuration file. This configuration also gives the settings for the
 health checks to be run.
 
-Go to the [_'Default Configuration'_ section](#default-configuration) for an
+Refer to the [_'Default Configuration'_ section](#default-configuration) for an
 example of a full configuration file.
 
 The following are the Health Runner configuration options:
@@ -235,7 +235,7 @@ checks in parallel.
 
 The `env` section of the configuration is specific to each health check and is
 used to modify the settings for the health check(s) to be kicked off by the
-health runner. Some settings are specific to the health check type but there
+Health Runner. Some settings are specific to the health check type but there
 are others that are universal to all health checks.
 
 
@@ -474,13 +474,14 @@ kubectl get jobs --no-headers \
 
 CHS already has available Docker images that can be used via installing the
 default Health Runner Helm chart.
-However, some users may find it useful to the Docker images for CHS themselves.
+However, some users may find it useful to create and use the Docker images for
+CHS themselves.
 
 This could be to add custom functionality, extending CHS for their use case, or
 simply creating their own images that they can pull from their registry.
 
 Whatever the case, this can be done by using the Dockerfiles found in the
-[`docker/`](docker/) folder. There you will find Docker files for the Health
+[`docker/`](docker/) folder. There you will find Dockerfiles for the Health
 Runner and one for each health check.
 
 ----
@@ -495,7 +496,7 @@ docker build \
 ```
 
 This builds the image for the Health Runner and can be similarly done for each
-health checks. It uses the code found in the [`src/`](src/) directory.
+health check. It uses the code found in the [`src/`](src/) directory.
 
 After the images have been built and uploaded to a registry, the Helm chart for
 the Health Runner can be installed just as we saw in the 
@@ -517,7 +518,7 @@ IMAGE_TAG="v1.0"
 FULL_REPO_NAME="${REGISTRY_NAME}/${USERNAME}/${IMAGE_NAME}"
 
 docker build \
-  -t "${FULL_IMAGE_NAME}:${IMAGE_TAG}"
+  -t "${FULL_REPO_NAME}:${IMAGE_TAG}"
   -f docker/health_runner.Dockerfile .
 
  docker push "${FULL_REPO_NAME}:${IMAGE_TAG}"
@@ -535,9 +536,9 @@ helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
 
 ## 5. Useful Commands and Cheat Sheet
 
-The following sections shows some potentially useful commands and processes
-when working with CHS. These have been organized by sections based on what
-stage of CHS you are focusing on.
+The following sections show some potentially useful commands and processes
+when working with CHS. These sections are organized based on the CHS stage you
+are focusing on.
 
 ### 5.1 Preparation
 
@@ -546,9 +547,9 @@ stage of CHS you are focusing on.
 CHS uses [Helm](https://helm.sh) as the main method of deployment for a cluster
 orchestrated with Kubernetes.
 
-You can see Helm's [installation documentation](https://helm.sh/docs/intro/install/)
-for details, but most users will find using the commands below to get and use
-the installer script to be sufficient:
+Helm's [installation documentation](https://helm.sh/docs/intro/install/)
+provides detailed instructions. However, most users can simply use the
+following commands to download and run the installer script:
 
 ```bash
 curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
@@ -609,39 +610,40 @@ beginning of the output:
 kubectl describe nodes $NODE_NAME
 ```
 
-Below will printout information about the node in a table and include a list of
-the nodes
+This command will print information about the node in a table format and
+include a list of labels:
 ```bash
 kubectl get nodes $NODE_NAME --show-labels=true
 ```
 
 You can also run either of these commands on multiple nodes.
 
-This can be done by a subset by listing them:
+This can be done for a subset of nodes by listing them:
 ```bash
 kubectl get nodes $NODE_NAME_0 $NODE_NAME_1 $NODE_NAME_2 --show-labels=true
 kubectl describe nodes $NODE_NAME_0 $NODE_NAME_1 $NODE_NAME_2
 ```
 
 You can also run the same command for all the nodes by not listing any specific
-nodes. This however can be overwhelming & take time to collect information 
-depending on the number of nodes in your cluster:
+nodes:
 ```bash
 kubectl get nodes --show-labels=true
 kubectl describe nodes
 ```
 
+However, this can be overwhelming and time-consuming, depending on the number
+of nodes in your cluster.
+
 ##### Removing labels
 
-To remove labels from nodes, you can use the following on specified nodes where
-`LABEL_NAME` is the name of the label (note the `-` suffix):
+To remove labels from nodes, use the following command on specified nodes,
+where `LABEL_NAME` is the name of the label (note the `-` suffix):
 
 ```bash
 kubectl label nodes $NODE_NAME_0 $NODE_NAME_1 LABEL_NAME-
 ```
 
-This can also be done with multiple labels
-
+This command can also be used to remove multiple labels:
 ```bash
 kubectl label nodes $NODE_NAME_0 $NODE_NAME_1 LABEL_NAME- LABEL_NAME_2-
 ```
@@ -651,8 +653,8 @@ You may also want to remove labels from all nodes in the cluster:
 kubectl label nodes --all LABEL_NAME-
 ```
 
-You can filter to only apply to certain nodes based on another label
-`FILTER_LABEL` of the nodes.
+You can filter the command to apply only to certain nodes based on another 
+label (`FILTER_LABEL`):
 
 ```bash
 # Any nodes with FILTER_LABEL (any value)
@@ -688,8 +690,8 @@ kubectl label nodes -l FILTER_LABEL=FILTER_VALUE LABEL_NAME=VALUE
 
 ### 5.2 Deployment
 
-Below will briefly show some options for deploying by utilizing Helm. However,
-users may find the specific documentation within a Helm chart to be helpful.
+This section briefly shows some options for deploying with Helm. However, users
+may find the specific documentation within a Helm chart to be helpful.
 
 The below command will install the Helm chart `CHS_CHART` with the Release name
 `MY_RELEASE` using the default configurations for the chart:
@@ -697,15 +699,15 @@ The below command will install the Helm chart `CHS_CHART` with the Release name
 helm install MY_RELEASE CHS_CHART
 ```
 
-We can overwrite the defaults in the command with the `--set` flag like below:
+You can overwrite the defaults in the command with the `--set` flag:
 ```bash
 helm install MY_RELEASE CHS_CHART \
   --set health_check.param_0=true \
   --set health_check.env.setting_0="value"
 ```
 
-You can also specify a file with a set configuration `my_values.yaml` as part
-of your installation:
+You can also specify a file, such as `my_values.yaml`, to provide configuration
+values for your installation:
 ```bash
 helm install MY_RELEASE CHS_CHART \
   -f my_values.yaml
@@ -722,10 +724,11 @@ helm install MY_RELEASE CHS_CHART \
 
 ### 5.3 Observations
 
-After deploying the health runner for CHS, you might find it useful to make
-observations of the cluster's nodes that are relevant.
 
-#### Use the `watch` command to get periodic updated
+After deploying the CHS Health Runner, you may want to observe relevant 
+information about the cluster's nodes.
+
+#### Use the `watch` command to get periodic updates
 
 The `watch` command can be paired with other commands to show updates to
 relevant observations.
@@ -742,7 +745,7 @@ watch -n10 -d "kubectl get jobs | grep healthcheck"
 Since CHS uses node labels to update information about health checks for that
 node, it can be useful to print information about those nodes.
 
-We already saw briefly how to get some information on nodes in the
+We already saw how to get some information on nodes in the 
 ['Identifying labels' section](#identifying-labels):
 
 ```bash
@@ -778,7 +781,7 @@ CUSTOM_COLS="NODE:.metadata.name,TEST:.metadata.labels.TEST_LABEL,RESULT:.metada
 kubectl get nodes -o custom-columns=$CUSTOM_COLS
 ```
 
-The printout something like this:
+The output something like this:
 ```
 NODE                                 TEST     RESULT
 gke-cluter-name-np-0-dcs1a6c6-24rm   true     pass
@@ -817,8 +820,8 @@ installation.
 
 #### Uninstalling with Helm
 
-To uninstall a Helm release installed, simply use the name of the release
-`RELEASE_NAME` in the following command:
+To uninstall a Helm release, use the release name `RELEASE_NAME` in the
+following command:
 
 ```bash
 helm uninstall RELEASE_NAME
@@ -826,9 +829,9 @@ helm uninstall RELEASE_NAME
 
 #### Uninstalling with `kubectl`
 
-Because some users maybe have opted to use `kubectl` over directly using the
-Helm chart to deploy, it's important to uninstall using the same YAML file used
-in `kubectl apply`:
+Because some users may have opted to use `kubectl` instead of directly using
+the Helm chart to deploy, it's important to uninstall using `kubectl delete`
+with the same YAML file that was used in `kubectl apply`:
 
 ```bash
 kubectl delete -f my_deployment.yaml
@@ -836,26 +839,26 @@ kubectl delete -f my_deployment.yaml
 
 #### Cleaning up lingering CronJobs and Jobs
 
-Using a Helm chart makes clean up simpler, but it's important to remove any
-lingering CronJobs and Jobs in your cluster that doesn't get cleaned up
+Using a Helm chart simplifies cleanup, but it's important to remove any
+lingering CronJobs and Jobs in your cluster that don't get cleaned up
 automatically.
 
-You can list these with the commands like the following using `grep`:
+You can list these with the commands using `grep`:
 
 ```bash
 kubectl get cronjobs | grep healthcheck
 kubectl get jobs | grep healthcheck
 ```
 
-To remove lingering CronJobs & Jobs:
+To remove lingering CronJobs and Jobs:
 ```bash
 kubectl delete cronjobs CRONJOB_NAME
 
 kubectl delete jobs JOB_NAME_0 JOB_NAME_1
 ```
 
-Because Jobs from CHS tend to have similar names, you can filter those jobs
-by name (such `healthcheck` in this example) with something like below:
+Because Jobs from CHS tend to have similar names, you can filter those jobs by
+name (like `healthcheck` in this example):
 
 ```bash
 # Gets list of jobs, filters for `healthcheck`, selects only the Job name
@@ -864,8 +867,8 @@ kubectl get jobs \
   | cut -d ' ' -f1
 ```
 
-After confirming the jobs listed are the ones to delete, you can use the above
-command to delete those jobs:
+After confirming that the listed jobs are the ones to delete, use the above
+command to delete them:
 
 ```bash
 kubectl get jobs \
