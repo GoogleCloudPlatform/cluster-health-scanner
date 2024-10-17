@@ -3,6 +3,9 @@
 The **Cluster Health Scanner** tool or simply **CHS** runs a series of tests
 called _health checks_ to analyze the health of a cluster of GPU nodes.
 
+For instructions on how to run CHS, go directly to the
+['Running CHS' section](#3-running-chs).
+
 Currently CHS is structured to run on [Google Kubernetes Engine](https://cloud.google.com/kubernetes-engine) (GKE) and can in theory run on clusters also run on other
 Kubernetes orchestration implementations. There are plans to have CHS be able 
 to run on additional cluster orchestrations such as [Slurm](https://slurm.schedmd.com/overview.html)
@@ -216,12 +219,14 @@ health_checks:
 The `blast_mode` section of the configuration gives settings for running health
 checks in parallel.
 
-- `health_checks.HC_NAME.image.repo`:
-  the base repo URL for the docker image for the health check.
-- `health_checks.HC_NAME.image.tag`: 
-  the image tag for for the docker image for the health check.
-- `health_checks.HC_NAME.image.pull_policy`: 
-  the pull policy for the docker image for the health check.
+- `health_checks.HC_NAME.blast_mode.blast_mode_enabled`:
+  either set to `"true"` or `"false"` to enable 'blast mode' (multiple health
+  checks are launched in parallel on the cluster).
+- `health_checks.HC_NAME.blast_mode.BLAST_MODE_NUM_TESTS_LIMIT`: 
+  set to an integer specifying how many health checks can be launched simultaneously across the cluster.
+- `health_checks.HC_NAME.blast_mode.NODES_CHECKED_PER_TEST`: 
+  set to an integer to specify how many nodes are run for each test. NCCL & 
+  neper health checks use 2 nodes while the GPU health check only uses 1.
 
 
 ##### `health_checks.HC_NAME.env`
