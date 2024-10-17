@@ -469,3 +469,65 @@ kubectl get jobs --no-headers \
   | cut -d ' ' -f1 \
   | xargs kubectl delete jobs
 ```
+
+## 4. Building CHS from Scratch
+
+CHS already has available Docker images that can be used via installing the
+default Health Runner Helm chart.
+However, some users may find it useful to the Docker images for CHS themselves.
+
+This could be to add custom functionality, extending CHS for their use case, or
+simply creating their own images that they can pull from their registry.
+
+Whatever the case, this can be done by using the Dockerfiles found in the
+[`docker/`](docker/) folder. There you will find Docker files for the Health
+Runner and one for each health check.
+
+----
+
+You can build your own Docker images using the Dockerfiles with the
+[`docker build`](https://docs.docker.com/reference/cli/docker/buildx/build/)
+command:
+
+```bash
+docker build \
+  -f docker/health_runner.Dockerfile .
+```
+
+This builds the image for the Health Runner and can be similarly done for each
+health checks. It uses the code found in the [`src/`](src/) directory.
+
+After the images have been built and uploaded to a registry, the Helm chart for
+the Health Runner can be installed just as we saw in the 
+['Running CHS' section](#32-running-chs) but instead specifying the image repo
+and tag for the health check in the configuration.
+
+### 4.1 Example Build
+
+The following is an example of how a user could build a Docker image, push that
+image to their registry, and then run Health Runner with that newly created 
+image using the Helm chart we saw before:
+
+```bash
+REGISTRY_NAME="my-registry-example.com"
+USERNAME="my-user-name"
+IMAGE_NAME="my-health-runner"
+IMAGE_TAG="v1.0"
+
+FULL_REPO_NAME="${REGISTRY_NAME}/${USERNAME}/${IMAGE_NAME}"
+
+docker build \
+  -t "${FULL_IMAGE_NAME}:${IMAGE_TAG}"
+  -f docker/health_runner.Dockerfile .
+
+ docker push "${FULL_REPO_NAME}:${IMAGE_TAG}"
+
+MY_HEALTH_RUNNER_RELEASE_NAME="my-custom-hr" 
+
+helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
+  deploy/helm/health_runner \
+  --set health_checks.nccl_healthcheck.run_check=false \
+  --set health_checks.gpu_healthcheck.run_check=true \
+  --set health_checks.gpu_healthcheck.image.repo="${FULL_REPO_NAME}"
+  --set health_checks.gpu_healthcheck.image.tag="${IMAGE_TAG}"
+```
