@@ -413,11 +413,55 @@ changes that occur each time.
 
 ### 3.4 Cleanup
 
+After deploying and running CHS, users might desire to clean up their
+installation.
 
-## 4. Building CHS from src 
+#### Uninstalling Health Runner Helm Release 
 
+To uninstall the Health Runner (a Helm release), simply use the name of the
+release `RELEASE_NAME` in the following command:
 
-## 5. Miscellaneous configuration options 
+```bash
+helm uninstall RELEASE_NAME
+```
 
+#### Removing Leftover CronJobs and Jobs
 
-## 6. Useful commands / cheat sheet
+Using the Health Runner Helm chart makes clean up simpler, but it's important
+to remove any lingering CronJobs and Jobs in the cluster that don't get removed
+automatically.
+
+You can list these with the commands like the following:
+
+```bash
+kubectl get cronjobs | grep healthcheck
+kubectl get jobs | grep healthcheck
+```
+
+To remove lingering CronJobs & Jobs:
+
+```bash
+kubectl delete cronjobs $CRONJOB_NAME
+
+kubectl delete jobs $JOB_NAME_0 $JOB_NAME_1
+```
+
+Because Jobs from CHS tend to have similar names, you can filter those jobs
+by name (such `healthcheck` in this example) with something like below:
+
+```bash
+# Gets list of jobs, filters for `healthcheck`, selects only the Job name
+kubectl get jobs \
+  | grep healthcheck \
+  | cut -d ' ' -f1
+```
+
+After confirming the jobs listed are the ones to delete, you can use the above
+command to delete those jobs:
+
+```bash
+kubectl get jobs --no-headers \
+  | grep healthcheck \
+  | cut -d ' ' -f1 \
+  | xargs kubectl delete jobs
+```
