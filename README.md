@@ -6,10 +6,11 @@ called _health checks_ to analyze the health of a cluster of GPU nodes.
 For instructions on how to run CHS, go directly to the
 ['Running CHS' section](#3-running-chs).
 
-Currently CHS is structured to run on [Google Kubernetes Engine](https://cloud.google.com/kubernetes-engine) (GKE) and can in theory run on clusters also run on other
-Kubernetes orchestration implementations. There are plans to have CHS be able 
-to run on additional cluster orchestrations such as [Slurm](https://slurm.schedmd.com/overview.html)
-for HPC.
+While currently structured for Google Kubernetes Engine (GKE), CHS can
+theoretically run on clusters using other Kubernetes orchestration
+implementations.
+There are plans to enable CHS to run on additional cluster orchestrators, such
+as [Slurm](https://slurm.schedmd.com/overview.html) for HPC.
 
 
 ## 2. Architecture
@@ -29,9 +30,9 @@ building CHS.
 The **[`deploy/`](deploy/)** directory contains the code to deploy CHS on a
 cluster.
 This is currently done for GKE clusters using [Helm](https://helm.sh/). If
-you're looking to quickly start using CHS on your cluster, you will only need
-to install the Health Runner Helm chart which will already contain all the
-health checks that are part of CHS.
+you're looking to quickly start using CHS on your cluster, you only need to
+install the Health Runner Helm chart, which contains all the health checks
+included in CHS.
 See the [section below](#3-running-chs) for details on running CHS.
 
 
@@ -124,11 +125,11 @@ the user's installation configuration.
 
 #### Labeling Nodes to be Tested
 
-The current practice is to mark nodes in the cluster to be tested in a given
-health check using a node label related to that health check.
+Nodes to be included in a health check are marked using a corresponding node
+label.
 
-The node label keys are dependent on the health check
-(values expected are `"true"`):
+The node label keys depend on the health check,
+with expected values of `"true"`:
 
 - NCCL Health Check: `aiinfra/nccl-healthcheck-test`
 - GPU Health Check: `aiinfra/nccl-healthcheck-test`
@@ -143,7 +144,8 @@ kubectl label nodes \
     aiinfra/nccl-healthcheck-test="true"
 ```
 
-> Note this sets all nodes to be labeled for the NCCL health check
+> Note:
+> This sets all nodes to be labeled for the NCCL health check.
 
 
 #### Configuration of the Health Runner & Health Checks
@@ -155,7 +157,7 @@ health checks to be run.
 Go to the [_'Default Configuration'_ section](#default-configuration) for an
 example of a full configuration file.
 
-Below are the configuration options that are used for the Health Runner.
+The following are the Health Runner configuration options:
 
 ##### `health_runner.name`
 
@@ -193,14 +195,14 @@ should run.
 
 ##### `health_checks.HC_NAME.image`
 
-This section specifies information regarding the docker image for health check.
+This section specifies information regarding the Docker image for health check.
 
 - `health_checks.HC_NAME.image.repo`:
-  the base repo URL for the docker image for the health check.
+  the base repo URL for the Docker image for the health check.
 - `health_checks.HC_NAME.image.tag`: 
-  the image tag for for the docker image for the health check.
+  the image tag for the Docker image for the health check.
 - `health_checks.HC_NAME.image.pull_policy`: 
-  the pull policy for the docker image for the health check.
+  the pull policy for the Docker image for the health check.
 
 Example:
 ```yaml
@@ -220,8 +222,8 @@ The `blast_mode` section of the configuration gives settings for running health
 checks in parallel.
 
 - `health_checks.HC_NAME.blast_mode.blast_mode_enabled`:
-  either set to `"true"` or `"false"` to enable 'blast mode' (multiple health
-  checks are launched in parallel on the cluster).
+  set to `"true"` or "false". If set to `"false"`, a failed health check will
+  taint the corresponding node(s).
 - `health_checks.HC_NAME.blast_mode.BLAST_MODE_NUM_TESTS_LIMIT`: 
   set to an integer specifying how many health checks can be launched simultaneously across the cluster.
 - `health_checks.HC_NAME.blast_mode.NODES_CHECKED_PER_TEST`: 
@@ -243,21 +245,20 @@ are others that are universal to all health checks.
   this is either set to `"true"` or `"false"`. If set to `"false"`, if a health
   check fails on a node or nodes it will taint the respective node/nodes.
 - `health_checks.HC_NAME.env.SLEEP_TIME_MINUTES`:
-  this is set to an integers and essentially works as a timeout for the health
-  check. It specifies how long the health check has to complete before being
-  canceled, and if the health check is canceled the test result will not be
-  updated.
+  this is set to integer value and acts as a timeout for the health check,
+  specifying the maximum time allowed for completion. If a health check exceeds
+  this time, it is canceled, and the test result is not updated.
 - `health_checks.HC_NAME.env.YAML_FILE`:
-  this specifies which YAML file is used by the Health Runner in launching the
-  health check. This YAML file should already be present in the Health Runner
-  container (via the Docker image).
+  this specifies the YAML file used by the Health Runner to launch the health
+  check. This YAML file must be present in the Health Runner container (via the
+  Docker image).
 
 
 ###### NCCL Health Check Settings
 
 - `health_checks.HC_NAME.env.YAML_FILE`:
   must be set to either `"a3plus/nccl_healthcheck.yaml"` or
-  `"a3/nccl_healthcheck.yaml"` depending on the nodes' accelerator type.
+  `"a3/nccl_healthcheck.yaml"`, depending on the nodes' accelerator type.
 
 ###### GPU Health Check Settings
 
@@ -265,7 +266,7 @@ are others that are universal to all health checks.
   must be set to `"gpu_healthcheck.yaml"`.
 - `health_checks.HC_NAME.env.R_LEVEL`:
   set to `1`, `2`, `3`, or `4` defining what level of diagnostics to run.
-  The lower the number, the quicker but the more basic the diagnostics.
+  Lower numbers indicate faster but more basic diagnostics.
   It is recommended to set to `2` or `3` with the `3` being a longer more
   extensive diagnostic check.
 
@@ -282,8 +283,8 @@ The default configuration is set so that the Health Runner will run only the
 NCCL health check every 5 minutes (10 health checks at a time) for A3+ GPU
 nodes.
 
-Below is the default configuration used for the Health Runner
-(can be found in the Helm chart [values.yaml](deploy/helm/health_runner/values.yaml)):
+The default configuration for the Health Runner (found in the Helm chart 
+[values.yaml](deploy/helm/health_runner/values.yaml) file) is shown below:
 
 ```yaml
 health_runner:
@@ -346,8 +347,8 @@ Running CHS involves installing Health Runner.
 This is done on a Kubernetes orchestration by deploying the Helm chart for
 Health Runner.
 
-We can use the Health Runner Helm chart to install the release with the `helm`
-command shown below:
+The Health Runner Helm chart can be used to install the release using the 
+`helm` command shown below:
 
 ```bash
 MY_HEALTH_RUNNER_RELEASE_NAME="my-hr-release"
@@ -370,9 +371,9 @@ helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
   -f "${MY_CONFIG}"
 ```
 
-You can also set set specific configurations in the command line using 
+You can also set specific configurations in the command line using 
 `helm install` `--set` parameter.
-For example, the following command will only launch the GPU health check on the
+For example, the following command launches only the GPU health check on the
 nodes using `R_LEVEL: "1"` instead of the default values.
 
 ```bash
@@ -388,10 +389,10 @@ helm install "${MY_HEALTH_RUNNER_RELEASE_NAME}" \
 
 ### 3.3 Viewing Results
 
-As the Health Runner launches health checks, are run on nodes, and complete,
-users can view the health check results.
+As the Health Runner launches health checks, runs them on nodes, and they
+complete, users can view the health check results.
 
-These health check results are available as node labels and can be viewed using
+Health check results are stored as node labels and can be viewed using the
 Kubernetes `kubectl` tool.
 
 The following command displays results for the NCCL health check for each node:
@@ -402,41 +403,39 @@ CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-
 kubectl get nodes -o custom-columns="${CUSTOM_COLS}"
 ```
 
-This will output a table with columns showing the node names and the status of
-each of their tags.
+This outputs a table with columns showing the node names and the status of each
+of their tags.
 
-If the command `watch` is installed, you can create a quick screen for live
+If the command `watch` is installed, you can create a dynamic display for live
 updates.
 
 ```bash
 watch -n 10 -d "kubectl get nodes -o custom-columns=${CUSTOM_COLS}"
 ```
 
-Watch will rerun the table display command every 10 seconds, highlighting any
-changes that occur each time.
+`watch` reruns the table display command every 10 seconds, highlighting any
+changes.
 
 
 ### 3.4 Cleanup
 
-After deploying and running CHS, users might desire to clean up their
-installation.
+After deploying and running CHS, users may wish to clean up the installation.
 
 #### Uninstalling Health Runner Helm Release 
 
-To uninstall the Health Runner (a Helm release), simply use the name of the
-release `RELEASE_NAME` in the following command:
+To uninstall the Health Runner (a Helm release), use the release name
+(`RELEASE_NAME`) in the following command:
 
 ```bash
 helm uninstall RELEASE_NAME
 ```
 
 #### Removing Leftover CronJobs and Jobs
-
-Using the Health Runner Helm chart makes clean up simpler, but it's important
-to remove any lingering CronJobs and Jobs in the cluster that don't get removed
+While the Health Runner Helm chart simplifies cleanup, it's important to remove
+any lingering CronJobs and Jobs in the cluster that are not removed
 automatically.
 
-You can list these with the commands like the following:
+You can list these with commands such as the following:
 
 ```bash
 kubectl get cronjobs | grep healthcheck
@@ -452,7 +451,7 @@ kubectl delete jobs $JOB_NAME_0 $JOB_NAME_1
 ```
 
 Because Jobs from CHS tend to have similar names, you can filter those jobs
-by name (such `healthcheck` in this example) with something like below:
+by name (such as `healthcheck` in this example) with something like below:
 
 ```bash
 # Gets list of jobs, filters for `healthcheck`, selects only the Job name
@@ -461,8 +460,8 @@ kubectl get jobs \
   | cut -d ' ' -f1
 ```
 
-After confirming the jobs listed are the ones to delete, you can use the above
-command to delete those jobs:
+After confirming the jobs listed are the ones to delete, you can use the
+command below to delete those jobs:
 
 ```bash
 kubectl get jobs --no-headers \
