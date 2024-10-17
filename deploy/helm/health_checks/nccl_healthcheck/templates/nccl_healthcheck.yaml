@@ -37,6 +37,9 @@ spec:
   parallelism: 2
   completionMode: Indexed
   template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: nccl-healthcheck
     spec:
       tolerations:
       - operator: "Exists"
