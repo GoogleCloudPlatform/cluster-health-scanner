@@ -35,6 +35,7 @@ COPY src/checker_common.py /scripts/
 COPY src/metrics.py /scripts/
 COPY src/nccl_healthcheck/a3/ a3/
 COPY src/nccl_healthcheck/a3plus/ a3plus/
+COPY src/nccl_healthcheck/a3ultra/ a3ultra/
 COPY src/nccl_healthcheck/run-nccl-combined-plugins.sh .
 RUN chmod +x /scripts/run-nccl-combined-plugins.sh
 ENV PYTHONUNBUFFERED=1

@@ -1,0 +1,158 @@
+# yamllint disable
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gpu-health-runner
+  labels:
+    app: gpu-health-runner
+spec:
+  timeZone: America/Los_Angeles
+  schedule: "0/15 * * * *"  # run every hour
+  # suspend: true
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          serviceAccountName: ds-create
+          containers:
+          - name: gpu-health-runner
+            image: us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:a3ultra
+            imagePullPolicy: Always
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+            env:
+            - name: SLEEP_TIME_MINUTES
+              value: "120"
+            - name: YAML_FILE
+              value: "gpu_healthcheck.yaml"
+            - name: DRY_RUN
+              value: "true"
+            - name: IMAGE_TAG
+              value: "a3ultra"
+            - name: R_LEVEL
+              value: "2"
+            - name: ACCELERATOR_TYPE
+              value: "nvidia-h100-mega-80gb"
+          restartPolicy: OnFailure
+---
+#For use with A3-Plus machines
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nccl-health-runner-a3plus
+  labels:
+    app: nccl-health-runner-a3plus
+spec:
+  timeZone: America/Los_Angeles
+  schedule: "*/5 * * * *"  # run every five minutes
+  # suspend: true
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          serviceAccountName: ds-create
+          containers:
+          - name: nccl-health-runner
+            image: us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:a3ultra
+            imagePullPolicy: Always
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+            env:
+            - name: SLEEP_TIME_MINUTES
+              value: "5"
+            - name: YAML_FILE
+              value: "a3ultra/nccl_healthcheck.yaml"
+            - name: DRY_RUN
+              value: "true"
+            - name: IMAGE_TAG
+              value: "a3ultra"
+            - name: ACCELERATOR_TYPE
+              value: "nvidia-h100-mega-80gb"
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: neper-health-runner
+  labels:
+    app: neper-health-runner
+spec:
+  timeZone: America/Los_Angeles
+  schedule: "*/1 * * * *"  # run every 1 min
+  # suspend: true
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          serviceAccountName: ds-create
+          containers:
+          - name: neper-health-runner
+            image: us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:a3ultra
+            imagePullPolicy: Always
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+            env:
+            - name: SLEEP_TIME_MINUTES
+              value: "5"
+            - name: YAML_FILE
+              value: "neper_healthcheck.yaml"
+            - name: DRY_RUN
+              value: "true"
+            - name: IMAGE_TAG
+              value: "a3ultra"
+            - name: ACCELERATOR_TYPE
+              value: "nvidia-h100-mega-80gb"
+          restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ds-create
+  namespace: default
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ds-create
+rules:
+- apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
+  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services"]
+  verbs: ["list", "get", "create", "delete", "watch", "patch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ds-create
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: ds-create
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: ds-create
+  apiGroup: rbac.authorization.k8s.io

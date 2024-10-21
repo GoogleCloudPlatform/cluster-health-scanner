@@ -32,6 +32,7 @@ COPY src/checker_common.py .
 COPY src/gpu_healthcheck/gpu_healthcheck.yaml .
 COPY src/nccl_healthcheck/a3/ a3/
 COPY src/nccl_healthcheck/a3plus/  a3plus/
+COPY src/nccl_healthcheck/a3ultra/  a3ultra/
 COPY src/neper_healthcheck/neper_healthcheck.yaml .
 
 
