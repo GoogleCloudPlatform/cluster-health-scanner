@@ -50,7 +50,7 @@ spec:
       - name: tcpd-socket
         hostPath:
           path: /run/tcpxo
-      - name: tcpx-nccl-plugin-volume
+      - name: tcpxo-nccl-plugin-volume
         emptyDir: {}
       - name: workload-terminated-volume
         emptyDir: {}
@@ -156,7 +156,7 @@ spec:
         - name: HEALTH_VALIDITY_HOURS
           value: "24"
         - name: USE_TCPX
-          value: "true"
+          value: "false"
         - name: USE_FASTRAK
           value: "true"
         - name: DRY_RUN
@@ -180,8 +180,8 @@ spec:
         volumeMounts:
         - name: nvidia-install-dir-host
           mountPath: /usr/local/nvidia/lib64
-        - name: tcpx-nccl-plugin-volume
-          mountPath: /usr/local/tcpx
+        - name: tcpxo-nccl-plugin-volume
+          mountPath: /usr/local/tcpxo
         - name: tcpd-socket
           mountPath: /tmp
         - name: workload-terminated-volume
@@ -218,7 +218,7 @@ spec:
       - name: tcpd-socket
         hostPath:
           path: /run/tcpxo
-      - name: tcpx-nccl-plugin-volume
+      - name: tcpxo-nccl-plugin-volume
         emptyDir: {}
       - name: workload-terminated-volume
         emptyDir: {}
@@ -304,7 +304,7 @@ spec:
         - name: HEALTH_VALIDITY_HOURS
           value: "24"
         - name: USE_TCPX
-          value: "true"
+          value: "false"
         - name: USE_FASTRAK
           value: "true"
         - name: DRY_RUN
@@ -330,7 +330,7 @@ spec:
         volumeMounts:
         - name: nvidia-install-dir-host
           mountPath: /usr/local/nvidia/lib64
-        - name: tcpx-nccl-plugin-volume
+        - name: tcpxo-nccl-plugin-volume
           mountPath: /usr/local/tcpx
         - name: tcpd-socket
           mountPath: /tmp
