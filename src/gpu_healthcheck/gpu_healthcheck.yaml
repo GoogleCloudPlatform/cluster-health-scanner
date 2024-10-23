@@ -54,7 +54,7 @@ spec:
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If label is true then it will trigger
-              - key: "aiinfra/gpu-healthcheck-test" ##### This is potentially a bug making subset  feature is not abled
+              - key: "aiinfra/gpu-healthcheck-test"
                 operator: In
                 values:
                 - "true"

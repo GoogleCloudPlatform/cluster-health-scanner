@@ -21,7 +21,7 @@ set -x
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-run_nccl_gib() {
+run_nccl_rdma() {
   local -r benchmark=$1
   local -r ld_library_path_override=$2
   local -r gpu_per_node=$3
@@ -49,8 +49,6 @@ run_nccl_gib() {
     -x NCCL_PROTO=Simple \
     -x NCCL_NSOCKS_PERTHREAD=4 \
     -x NCCL_SOCKET_NTHREADS=1 \
-    -x NCCL_MAX_NCHANNELS=${num_channel} \
-    -x NCCL_MIN_NCHANNELS=${num_channel} \
     -x NCCL_DYNAMIC_CHUNK_SIZE=524288 \
     -x NCCL_BUFFSIZE=4194304 \
     -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
@@ -63,12 +61,12 @@ run_nccl_gib() {
     -x NCCL_P2P_PCI_CHUNKSIZE=524288 \
     -x NCCL_P2P_NVL_CHUNKSIZE=1048576 \
     -x NCCL_NVLS_CHUNKSIZE=524288 \
-    -x NCCL_DEBUG=INFO -x NCCL_DEBUG_SUBSYS=INIT,ENV,NET,GRAPH \
+    -x NCCL_DEBUG=INFO -x NCCL_DEBUG_SUBSYS=ENV \
     -x NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX="${UNIX_CLIENT_PREFIX}" \
     -x NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS=1000000 \
     -x NCCL_GPUDIRECTTCPX_FORCE_ACK \
     /opt/nccl-tests/build/"${benchmark}" \
-      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters 20 2>&1 | \
+      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5--iters "${iter}" 2>&1 | \
     tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
 }
 
@@ -154,8 +152,8 @@ run_nccl_gpudirect() {
 
 plugin_name=$1
 shift
-if [[ "$plugin_name" == "gib" ]]; then
-  run_nccl_gib "$@"
+if [[ "$plugin_name" == "rdma" ]]; then
+  run_nccl_rdma "$@"
 elif [[ "$plugin_name" == "fastrak" ]]; then
   run_nccl_fastrak "$@"
 elif [[ "$plugin_name" == "gpudirect" ]]; then

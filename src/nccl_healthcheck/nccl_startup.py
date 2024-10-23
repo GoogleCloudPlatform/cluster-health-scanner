@@ -158,10 +158,12 @@ def run_nccl_test(hosts: List[str]) -> None:
     while not os.path.exists("/master.done"):
       print("waiting for master pod...")
       time.sleep(10)
-  # Create file to let tcpd daemon to terminate
-  # with open("/usr/share/nemo/workload_terminated", "w") as _:
-  #   pass
-
+  try:
+    # Create file to let tcpxo daemon to terminate
+    with open("/usr/share/nemo/workload_terminated", "w") as _:
+      pass
+  except OSError:
+    print('cannot open workload_terminated. This is not needed in a3ultra.')
 
 def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
   """Process test results. Add node taints and labels."""
