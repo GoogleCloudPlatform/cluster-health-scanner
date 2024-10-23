@@ -61,6 +61,10 @@ spec:
                 - "${CHECK_TIME_EPOCH_SEC}"
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
+              - key: aiinfra/neper-healthcheck-test
+                operator: In
+                values:
+                - "true"
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
@@ -68,6 +72,10 @@ spec:
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
+              - key: aiinfra/neper-healthcheck-test
+                operator: In
+                values:
+                - "true"
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 50
             preference:
