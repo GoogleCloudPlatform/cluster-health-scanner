@@ -176,7 +176,7 @@ spec:
         - name: nr
           value: "8"
         - name: BANDWIDTH_THRESHOLD
-          value: "90"
+          value: "150"
         - name: START_MESSAGE_SIZE
           value: "2G"
         - name: END_MESSAGE_SIZE
