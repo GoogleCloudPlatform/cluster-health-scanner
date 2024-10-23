@@ -44,15 +44,16 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       volumes:
-      - name: nvidia-install-dir-host
+      - name: library-dir-host
         hostPath:
-          path: /home/kubernetes/bin/nvidia/lib64
-      - name: tcpd-socket
-        hostPath:
-          path: /run/tcpxo
-      - name: tcpx-nccl-plugin-volume
+          path: /home/kubernetes/bin/nvidia
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+          sizeLimit: 250Gi
+      - name: usr-local-gib
         emptyDir: {}
-      - name: workload-terminated-volume
+      - name: run-sshd
         emptyDir: {}
       nodeSelector:
         node.kubernetes.io/instance-type: a3-ultragpu-8g
@@ -79,8 +80,8 @@ spec:
         image: us-docker.pkg.dev/kernel-net-team/anthonyhan-test/nccl-ib:nccl2.23.4
         imagePullPolicy: Always
         volumeMounts:
-        - name: tcpxo-nccl-plugin-volume
-          mountPath: /var/lib/tcpxo
+        - name: usr-local-gib
+          mountPath: /target/usr/local/gib
         resources:
           requests:
             cpu: 150m
@@ -91,34 +92,34 @@ spec:
             /scripts/container_entry.sh install --install-nccl
             cp -R /var/lib/gib/. /target/usr/local/gib
       containers:
-      - name: tcpxo-daemon
-        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
-        imagePullPolicy: Always
-        command:
-        - "bash"
-        - "-c"
-        - |
-          set -ex
+      # - name: tcpxo-daemon
+      #   image: us-docker.pkg.dev/kernel-net-team/anthonyhan-test/nccl-ib:nccl2.23.4
+      #   imagePullPolicy: Always
+      #   command:
+      #   - "bash"
+      #   - "-c"
+      #   - |
+      #     set -ex
 
-          # Patch ssh config to disable host key checking.
-          sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config
-          echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
-          sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config
+      #     # Patch ssh config to disable host key checking.
+      #     sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config
+      #     echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
+      #     sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config
 
-          mkdir -p /run/sshd
-          /usr/sbin/sshd -De -p 22
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - name: usr-local-gib
-          mountPath: /usr/local/gib
-        - name: library-dir-host
-          mountPath: /usr/local/nvidia
-        - name: shared-memory
-          mountPath: /dev/shm
-        env:
-        - name: LD_LIBRARY_PATH
-          value: /usr/local/gib/lib64:/usr/local/nvidia/lib64
+      #     mkdir -p /run/sshd
+      #     /usr/sbin/sshd -De -p 222
+      #   securityContext:
+      #     privileged: true
+      #   volumeMounts:
+      #   - name: usr-local-gib
+      #     mountPath: /usr/local/gib
+      #   - name: library-dir-host
+      #     mountPath: /usr/local/nvidia
+      #   - name: shared-memory
+      #     mountPath: /dev/shm
+      #   env:
+      #   - name: LD_LIBRARY_PATH
+      #     value: /usr/local/gib/lib64:/usr/local/nvidia/lib64
       - name: nccl-healthcheck
         image: us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:${IMAGE_TAG}
         imagePullPolicy: Always
@@ -144,7 +145,7 @@ spec:
         - name: SERVICE_NAME
           value: nccl-secondpass-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
         - name: LD_LIBRARY_PATH
-          value: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
+          value: /usr/local/gib/lib64:/usr/local/nvidia/lib64
         - name: NCCL_LIB_DIR
           value: /usr/local/nvidia/lib64
         - name: NHOSTS
@@ -182,14 +183,12 @@ spec:
         - name: NCCL_FASTRAK_NUM_FLOWS
           value: "2"
         volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
-        - name: tcpx-nccl-plugin-volume
-          mountPath: /usr/local/tcpx
-        - name: tcpd-socket
-          mountPath: /tmp
-        - name: workload-terminated-volume
-          mountPath: /usr/share/nemo
+        - name: usr-local-gib
+          mountPath: /usr/local/gib
+        - name: library-dir-host
+          mountPath: /usr/local/nvidia
+        - name: shared-memory
+          mountPath: /dev/shm
         resources:
           limits:
             nvidia.com/gpu: !!int 8
@@ -216,15 +215,16 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       volumes:
-      - name: nvidia-install-dir-host
+      - name: library-dir-host
         hostPath:
-          path: /home/kubernetes/bin/nvidia/lib64
-      - name: tcpd-socket
-        hostPath:
-          path: /run/tcpxo
-      - name: tcpx-nccl-plugin-volume
+          path: /home/kubernetes/bin/nvidia
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+          sizeLimit: 250Gi
+      - name: usr-local-gib
         emptyDir: {}
-      - name: workload-terminated-volume
+      - name: run-sshd
         emptyDir: {}
       nodeSelector:
         node.kubernetes.io/instance-type: a3-ultragpu-8g
@@ -242,31 +242,34 @@ spec:
                 values:
                 - "${CHECK_TIME_EPOCH_SEC}"
       containers:
-      - name: tcpxo-daemon
-        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
-        imagePullPolicy: Always
-        command:
-        - "bash"
-        - "-c"
-        - |
-          set -ex
-          chmod 755 /fts/entrypoint_rxdm_container.sh
-          /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8  --uid= --alsologtostderr &
-          while [ ! -e "/usr/share/nemo/workload_terminated" ]; do echo "waiting for exit signal..."; sleep 10; done
-          pkill -e "^"tcpgpudmarxd || true
-          sleep 30
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
-        - name: tcpd-socket
-          mountPath: /tmp
-        - name: workload-terminated-volume
-          mountPath: /usr/share/nemo
-        env:
-        - name: LD_LIBRARY_PATH
-          value: /usr/local/nvidia/lib64
+      # - name: tcpxo-daemon
+      #   image: us-docker.pkg.dev/kernel-net-team/anthonyhan-test/nccl-ib:nccl2.23.4
+      #   imagePullPolicy: Always
+      #   command:
+      #   - "bash"
+      #   - "-c"
+      #   - |
+      #     set -ex
+
+      #     # Patch ssh config to disable host key checking.
+      #     sed -i 's/[ #]\(.*StrictHostKeyChecking \).*/ \1no/g' /etc/ssh/ssh_config
+      #     echo "    UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
+      #     sed -i 's/#\(StrictModes \).*/\1no/g' /etc/ssh/sshd_config
+
+      #     mkdir -p /run/sshd
+      #     /usr/sbin/sshd -De -p 222
+      #   securityContext:
+      #     privileged: true
+      #   volumeMounts:
+      #   - name: usr-local-gib
+      #     mountPath: /usr/local/gib
+      #   - name: library-dir-host
+      #     mountPath: /usr/local/nvidia
+      #   - name: shared-memory
+      #     mountPath: /dev/shm
+      #   env:
+      #   - name: LD_LIBRARY_PATH
+      #     value: /usr/local/nvidia/lib64
       - name: nccl-healthcheck
         image: us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:${IMAGE_TAG}
         imagePullPolicy: Always
@@ -292,7 +295,7 @@ spec:
         - name: SERVICE_NAME
           value: nccl-secondpass-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
         - name: LD_LIBRARY_PATH
-          value: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
+          value: /usr/local/gib/lib64:/usr/local/nvidia/lib64
         - name: NCCL_LIB_DIR
           value: /usr/local/nvidia/lib64
         - name: NHOSTS
@@ -332,14 +335,12 @@ spec:
         - name: ITERATIONS
           value: "${ITERATIONS}"
         volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
-        - name: tcpx-nccl-plugin-volume
-          mountPath: /usr/local/tcpx
-        - name: tcpd-socket
-          mountPath: /tmp
-        - name: workload-terminated-volume
-          mountPath: /usr/share/nemo
+        - name: usr-local-gib
+          mountPath: /usr/local/gib
+        - name: library-dir-host
+          mountPath: /usr/local/nvidia
+        - name: shared-memory
+          mountPath: /dev/shm
         resources:
           limits:
             nvidia.com/gpu: !!int 8

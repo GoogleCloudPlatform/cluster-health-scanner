@@ -159,8 +159,8 @@ def run_nccl_test(hosts: List[str]) -> None:
       print("waiting for master pod...")
       time.sleep(10)
   # Create file to let tcpd daemon to terminate
-  with open("/usr/share/nemo/workload_terminated", "w") as _:
-    pass
+  # with open("/usr/share/nemo/workload_terminated", "w") as _:
+  #   pass
 
 
 def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:

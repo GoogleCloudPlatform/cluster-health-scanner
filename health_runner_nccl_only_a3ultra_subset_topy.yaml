@@ -21,7 +21,7 @@ spec:
           serviceAccountName: ds-create
           containers:
           - name: nccl-health-runner
-            image: us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:a3ultra
+            image: us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:a3ultra_1022
             imagePullPolicy: Always
             securityContext:
               allowPrivilegeEscalation: false
@@ -30,13 +30,13 @@ spec:
                 - ALL
             env:
             - name: SLEEP_TIME_MINUTES
-              value: "5"
+              value: "15"
             - name: YAML_FILE
               value: "a3ultra/nccl_healthcheck.yaml"
             - name: DRY_RUN
               value: "true"
             - name: IMAGE_TAG
-              value: "a3ultra"
+              value: "a3ultra_1022"
             - name: ACCELERATOR_TYPE
               value: "nvidia-h100-mega-80gb"
           restartPolicy: OnFailure

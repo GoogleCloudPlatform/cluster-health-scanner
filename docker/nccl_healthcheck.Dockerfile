@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-nightly-cuda12.0:2024_03_04
+# FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-nightly-cuda12.0:2024_03_04
+# FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
+FROM  us-docker.pkg.dev/kernel-net-team/anthonyhan-test/nccl-ib:nccl2.23.4
 
 WORKDIR /scripts
-RUN apt-get update && apt-get install -y openssh-server python3.9 ca-certificates curl python3-pip &&\
-  update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 &&\
+RUN apt-get update && apt-get install -y openssh-server python3.10 ca-certificates curl python3-pip &&\
+  update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 &&\
   mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   ssh-keygen -t rsa -f /root/.ssh/google_compute_engine -b 2048 -P "" &&\
   cp /root/.ssh/google_compute_engine.pub /root/.ssh/authorized_keys &&\

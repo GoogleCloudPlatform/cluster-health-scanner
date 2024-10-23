@@ -67,7 +67,7 @@ run_nccl_gib() {
     -x NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX="${UNIX_CLIENT_PREFIX}" \
     -x NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS=1000000 \
     -x NCCL_GPUDIRECTTCPX_FORCE_ACK \
-    /third_party/nccl-tests-mpi/build/"${benchmark}" \
+    /opt/nccl-tests/build/"${benchmark}" \
       -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters 20 2>&1 | \
     tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
 }

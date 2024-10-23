@@ -1,14 +1,14 @@
 # yamllint disable
+#For use with A3-Ultra machines
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: gpu-health-runner
+  name: neper-health-runner-a3ultra
   labels:
-    app: gpu-health-runner
+    app: neper-health-runner-a3ultra
 spec:
   timeZone: America/Los_Angeles
-  schedule: "*/30 * * * *"  # run every 30 minutes
-  # suspend: true
+  schedule: "*/15 * * * *"  # run every five minutes
   jobTemplate:
     spec:
       template:
@@ -20,7 +20,7 @@ spec:
               type: RuntimeDefault
           serviceAccountName: ds-create
           containers:
-          - name: gpu-health-runner
+          - name: neper-health-runner
             image: us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:a3ultra
             imagePullPolicy: Always
             securityContext:
@@ -32,13 +32,11 @@ spec:
             - name: SLEEP_TIME_MINUTES
               value: "15"
             - name: YAML_FILE
-              value: "gpu_healthcheck.yaml"
+              value: "neper_healthcheck.yaml"
             - name: DRY_RUN
               value: "true"
             - name: IMAGE_TAG
               value: "a3ultra"
-            - name: R_LEVEL
-              value: "2"
             - name: ACCELERATOR_TYPE
               value: "nvidia-h100-mega-80gb"
           restartPolicy: OnFailure
