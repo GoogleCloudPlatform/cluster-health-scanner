@@ -18,6 +18,7 @@
 {{- $health_check_service_name := printf "%s-%s" .Values.service.prefix $health_check_uniq_str -}}
 {{- $health_check_job_name := printf "%s-%s" "nccl-healthcheck" $health_check_uniq_str -}}
 {{- $node_list_name := printf "%s-%s" "nccl-node-list" $health_check_uniq_str -}}
+{{- $expiry_time := int (sub  $check_time (mul .Values.health_check.env.HEALTH_VALIDITY_HOURS 60 60)) -}}
 ---
 apiVersion: v1
 kind: Service
@@ -67,12 +68,12 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-                # It will trigger if label value is older than 24 hours (default) ago
+                # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "{{ $check_time }}"
+                - "{{ $expiry_time }}"
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If label is true then it will trigger
@@ -83,7 +84,7 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
@@ -97,15 +98,15 @@ spec:
           - weight: 50
             preference:
               matchExpressions:
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
           - weight: 1
             preference:
               matchExpressions:
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "{{ $check_time }}"
+                - "{{ $expiry_time }}"
       {{- /* Different image & volume depending on accelerator type */}}
       initContainers:
       - name: nccl-plugin-installer
