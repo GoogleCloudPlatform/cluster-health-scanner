@@ -1,0 +1,77 @@
+edition = "2023";
+
+package dcgm_diagnostics;
+
+option features.field_presence = IMPLICIT;
+
+// Top-level message representing the entire diagnostic report
+message DiagnosticReport {
+  // Version of the DCGM tool
+  string version = 1;
+
+  // NVIDIA driver version on the node
+  string driver_version_detected = 2;
+
+  // The ids of the GPUs on the node
+  repeated string gpu_device_ids = 3;
+
+  // The serial numbers of the GPUs on the node
+  map<string, string> gpu_device_serials = 4;
+
+  // The results of the dcgm dianostic test
+  DcgmGpuDiagnostic dcgm_gpu_diagnostic = 5;
+}
+
+// Message for the "DCGM GPU Diagnostic" section
+message DcgmGpuDiagnostic {
+  // The test split into categories (e.g., "GPU", "Memory", "PCIe")
+  repeated TestCategory test_categories = 1;
+}
+
+// Represents a category of tests (e.g., "Deployment", "Integration")
+message TestCategory {
+  // The name of the category
+  string category = 1;
+
+  // The tests in this category and their results
+  repeated Test tests = 2;
+}
+
+// Represents an individual test
+message Test {
+  // The name of the test
+  string name = 1;
+
+  // The results of the test
+  repeated TestResult results = 2;
+}
+
+// Represents the result of a single test on a GPU (or without a GPU)
+message TestResult {
+  // The status of the test (e.g., "pass", "fail")
+  string status = 1;
+
+  // The Id of the GPU on which the test was run. May be empty if the test was
+  // not run on a particular GPU.
+  string gpu_id = 2;
+
+  // Description of the test result.
+  string info = 3;
+
+  // Warnings from the test
+  repeated Warning warnings = 4;
+}
+
+message Warning {
+  // The category of the warning
+  int32 error_category = 1;
+
+  // The id of the warning
+  int32 error_id = 2;
+
+  // The severity of the warning
+  int32 error_severity = 3;
+
+  // The warning message
+  string warning = 4;
+}

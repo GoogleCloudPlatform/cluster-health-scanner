@@ -12,19 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs the NCCL test.
+"""Runs the neper test.
 
-This module control execution of pairwise NCCL test.
+This module control execution of neper test.
 """
 
-import json
 import os
 import re
 import time
 from typing import Callable, Dict, List
 
 import checker_common
-import metrics
 
 JOB_NAME = os.getenv("JOB_NAME")
 SERVICE_NAME = os.getenv("SERVICE_NAME")
@@ -34,7 +32,7 @@ _RESULT_LABEL_KEY = "aiinfra/neper-healthcheck-result"
 TAINT_KEY = "aiinfra/neper-healthcheck"
 TAINT_EFFECT = "NoSchedule"
 
-HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/neper-healthcheck-valid-till-sec"
+HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/neper-healthcheck-runtime-sec"
 
 K_ADD_LABEL_FORMAT = "/scripts/kubectl label node %s %s=%s --overwrite"
 K_TAINT_NODE_FORMAT = "/scripts/kubectl taint node %s %s=%s:%s"
@@ -121,9 +119,9 @@ def run_neper_test(
         log_file = f"/tmp/{self_host}_{host}_eth{count}.log"
         log_files.append(log_file)
         checker_common.run_command(
-            f"taskset -c 17-32 /scripts/tcp_stream -rw --client -H '{dst_ip}' "
-            "--skip-rx-copy --num-threads=16 --num-flows=200 "
-            f"--suicide-length=600 --test-length=30 > '{log_file}' 2>&1"
+            "taskset -c 17-24,73-80 /scripts/tcp_stream -rw --client -H"
+            f" '{dst_ip}' --skip-rx-copy --num-threads=16 --num-flows=200"
+            f" --suicide-length=600 --test-length=30 > '{log_file}' 2>&1"
         )
         cleanup_functions.append(cleanup_delete_temp_files(log_file))
 
@@ -139,7 +137,7 @@ def run_neper_test(
         count += 1
         print(f"spinning up neper server for {dst_ip}...")
         checker_common.run_command(
-            "taskset -c 17-32 /scripts/tcp_stream -rw --skip-rx-copy "
+            "taskset -c 17-24,73-80 /scripts/tcp_stream -rw --skip-rx-copy "
             "--num-threads=16 --num-flows=200 --suicide-length=600 "
             "--test-length=30 &"
         )
@@ -211,30 +209,42 @@ def process_test_result(
   add_healthcheck_time_label(remote_host)
 
   server_client = {"server": local_host, "client": remote_host}
-  local_result = metrics.log_dict(
+  checker_common.log_results(
       test_name="neper",
-      did_pass=not local_test_failed,
+      passed=not local_test_failed,
       node_name=local_host,
+      workflow_id=os.environ.get("WORKFLOW_ID"),
       result_data={
           "throughput_by_eth": local_throughput_by_eth,
           "server_client": server_client,
       },
   )
-  print(json.dumps(local_result))
-  remote_result = metrics.log_dict(
+  checker_common.log_results(
       test_name="neper",
-      did_pass=not remote_test_failed,
+      passed=not remote_test_failed,
       node_name=remote_host,
+      workflow_id=os.environ.get("WORKFLOW_ID"),
       result_data={
           "throughput_by_eth": remote_throughput_by_eth,
           "server_client": server_client,
       },
   )
-  print(json.dumps(remote_result))
+
+  # Add a label to the local and remote host to indicate if the test passed or
+  # failed.
+  result = (
+      "pass" if not local_test_failed and not remote_test_failed else "fail"
+  )
   checker_common.add_label(
       local_host,
       _RESULT_LABEL_KEY,
-      "pass" if not local_test_failed and not remote_test_failed else "fail",
+      result,
+      K_ADD_LABEL_FORMAT,
+  )
+  checker_common.add_label(
+      remote_host,
+      _RESULT_LABEL_KEY,
+      result,
       K_ADD_LABEL_FORMAT,
   )
 
@@ -350,17 +360,10 @@ def remove_node_taint(node_name: str, taint_key: str) -> None:
 
 def add_healthcheck_time_label(node_name: str) -> None:
   """Add healthcheck time label to node."""
-  # Add timestampt as number of seconds
-  # since epoch time January 1, 1970, 00:00:00 (UTC) + 24 (default) hours
-  # health validity.
-  health_validity = (
-      int(time.time())
-      + int(os.environ.get("HEALTH_VALIDITY_HOURS", "24")) * 60 * 60
-  )
   checker_common.add_label(
       node_name,
       HEALTHCHECK_TIME_LABEL_KEY,
-      f"{health_validity}",
+      f"{int(time.time())}",
       K_ADD_LABEL_FORMAT,
   )
 
