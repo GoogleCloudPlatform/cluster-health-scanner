@@ -31,10 +31,11 @@ SERVICE_NAME = os.getenv("SERVICE_NAME")
 POD_NAME = os.getenv("POD_NAME")
 
 _RESULT_LABEL_KEY = "aiinfra/neper-healthcheck-result"
+_ALLOWLIST_LABEL_KEY = "aiinfra/neper-healthcheck-test"
 TAINT_KEY = "aiinfra/neper-healthcheck"
 TAINT_EFFECT = "NoSchedule"
 
-HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/neper-healthcheck-valid-till-sec"
+HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/neper-healthcheck-runtime-sec"
 
 K_ADD_LABEL_FORMAT = "/scripts/kubectl label node %s %s=%s --overwrite"
 K_TAINT_NODE_FORMAT = "/scripts/kubectl taint node %s %s=%s:%s"
@@ -350,17 +351,10 @@ def remove_node_taint(node_name: str, taint_key: str) -> None:
 
 def add_healthcheck_time_label(node_name: str) -> None:
   """Add healthcheck time label to node."""
-  # Add timestampt as number of seconds
-  # since epoch time January 1, 1970, 00:00:00 (UTC) + 24 (default) hours
-  # health validity.
-  health_validity = (
-      int(time.time())
-      + int(os.environ.get("HEALTH_VALIDITY_HOURS", "24")) * 60 * 60
-  )
   checker_common.add_label(
       node_name,
       HEALTHCHECK_TIME_LABEL_KEY,
-      f"{health_validity}",
+      f"{int(time.time())}",
       K_ADD_LABEL_FORMAT,
   )
 
@@ -396,6 +390,8 @@ def main() -> None:
   for cleanup in cleanup_funcs:
     cleanup()
   print("cleanups are done... exiting...")
+  # Remove CHS test marker for this node for next iteration
+  remove_label(node_name, _ALLOWLIST_LABEL_KEY)
 
 
 if __name__ == "__main__":

@@ -60,12 +60,12 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-                # It will trigger if label value is older than 24 hours (default) ago
+                # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "${CHECK_TIME_EPOCH_SEC}"
+                - "${EXPIRY_TIME_EPOCH_SEC}"
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If aiinfra/nccl-healthcheck-test label is true then it will trigger
@@ -76,7 +76,7 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
@@ -90,15 +90,15 @@ spec:
           - weight: 50
             preference:
               matchExpressions:
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
           - weight: 1
             preference:
               matchExpressions:
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "${CHECK_TIME_EPOCH_SEC}"
+                - "${EXPIRY_TIME_EPOCH_SEC}"
       initContainers:
       - name: tcpx-nccl-plugin-installer
         image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-dev:v3.1.7
@@ -183,8 +183,6 @@ spec:
           value: "${SHORT_GUID}"
         - name: CHECK_TIME_EPOCH_SEC
           value: "${CHECK_TIME_EPOCH_SEC}"
-        - name: SECOND_PASS_YAML_FILE
-          value: "nccl_secondpass_a3.yaml"
         - name: ENABLE_TWO_PASS_STRATEGY
           value: "true"
         - name: INSTANCE_TYPE

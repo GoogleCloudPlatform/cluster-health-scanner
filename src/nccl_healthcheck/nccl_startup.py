@@ -34,13 +34,14 @@ KUBECTL = os.environ.get("KUBECTL_PATH", "/scripts/kubectl")
 JOB_INDEX = int(os.getenv("JOB_COMPLETION_INDEX", "-1"))
 
 _RESULT_LABEL_KEY = "aiinfra/nccl-healthcheck-result"
+_ALLOWLIST_LABEL_KEY = "aiinfra/nccl-healthcheck-test"
 TAINT_KEY = "aiinfra/nccl-healthcheck"
 TAINT_VALUE_SUSPECT = "suspect"
 TAINT_VALUE_FAILED = "failed"
 TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
 TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
-HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-valid-till-sec"
+HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-runtime-sec"
 HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY = (
     "aiinfra/nccl-healthcheck-second-pass-needed"
 )
@@ -222,11 +223,7 @@ def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
             TAINT_VALUE_SUSPECT,
             TAINT_EFFECT_PREFERNOSCHEDULE,
         )
-        time.sleep(2)  # Sleep to force a different check-time
-        deploy_second_pass(node)
   else:
-    # failed and two pass disabled
-    print("ENABLE_TWO_PASS_STRATEGY is not set.")
     print("nccl test failed. Adding node taint to nodes...")
     taint = TAINT_VALUE_FAILED
     for node in nodes:
@@ -241,8 +238,8 @@ def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
     add_healthcheck_time_label(node)
     mark_node_bandwidth(node, avg_bandwidth)
 
+    # Do not log metric if we're testing against a known-good node
     if second_pass and node != os.environ.get("NODE_NAME"):
-      # Do not log metric if we're testing against a known-good node
       continue
     terminal = taint != TAINT_VALUE_SUSPECT
     log = metrics.log_dict(
@@ -280,16 +277,6 @@ def mark_failed_node(
   checker_common.add_label(
       node, "aiinfra/nccl-healthcheck", other_nodes, K_ADD_LABEL_FORMAT
   )
-
-
-def deploy_second_pass(node: str) -> None:
-  print("deploying second pass...")
-  config_obj = config.get_config(INSTANCE_TYPE)
-  checker_common.add_label(
-      node, HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY, "true", K_ADD_LABEL_FORMAT
-  )
-  yaml_path = os.path.join("/scripts", config_obj.second_pass_yaml_path)
-  checker_common.create_k8s_objects(yaml_path, KUBECTL)
 
 
 def get_bandwidth(test_result: str) -> int:
@@ -376,17 +363,10 @@ def remove_node_taint(node_name: str, taint_key: str) -> None:
 
 def add_healthcheck_time_label(node_name: str) -> None:
   """Add healthcheck time label to node."""
-  # Add timestampt as number of seconds
-  # since epoch time January 1, 1970, 00:00:00 (UTC) + 5 (default) hours
-  # health validity.
-  health_validity = (
-      int(time.time())
-      + int(os.environ.get("HEALTH_VALIDITY_HOURS", "5")) * 60 * 60
-  )
   checker_common.add_label(
       node_name,
       HEALTHCHECK_TIME_LABEL_KEY,
-      f"{health_validity}",
+      f"{int(time.time())}",
       K_ADD_LABEL_FORMAT,
   )
 
@@ -440,7 +420,8 @@ def main() -> None:
   create_hostfile(hosts, nr)
   run_nccl_test(hosts)
   cleanup(hosts)
-
+  # Remove CHS test marker for this node for next iteration
+  remove_label(node_name, _ALLOWLIST_LABEL_KEY)
   print("my job is done")
 
 

@@ -1,0 +1,24 @@
+edition = "2023";
+
+package cloud_cluster_supercomputer_validation_bad_node_detectors_vmconfig_healthcheck_lib;
+
+import "storage/datapol/annotations/proto/semantic_annotations.proto";
+
+option (datapol.file_vetting_status) = "latest";
+
+// Stores dependency specific information (e.g. NCCL version + config settings)
+message DependencyConfiguration {
+  string name = 1 [(datapol.semantic_type) = ST_NOT_REQUIRED];
+  string version = 2;
+  // Stores the configuration settings for the dependency.
+  // The key is the name of the configuration setting and the value
+  //  is the value of the setting.
+  map<string, string> config_settings = 3;
+}
+
+// Stores Node configuration details, including all containers running on the
+// node
+message NodeConfiguration {
+  string hostname = 1 [(datapol.semantic_type) = ST_IDENTIFYING_ID];
+  repeated DependencyConfiguration configurations = 2;
+}

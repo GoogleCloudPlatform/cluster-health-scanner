@@ -13,6 +13,8 @@
 # limitations under the License.
 
 # yamllint disable
+{{- $ds_create_name := printf "%s-%s" "health-runner-ds-create" .Values.health_runner.name -}}
+---
 {{- range .Values.health_checks }}
 {{- if .run_check}}
 apiVersion: batch/v1
@@ -33,7 +35,7 @@ spec:
             runAsGroup: 1000
             seccompProfile:
               type: RuntimeDefault
-          serviceAccountName: ds-create
+          serviceAccountName: {{ $ds_create_name }}
           containers:
           - name: {{ .runner_name | quote}}
             image: "{{ .image.repo }}:{{ .image.tag }}"
@@ -44,6 +46,8 @@ spec:
                 drop:
                 - ALL
             env:
+            - name: "check_name"
+              value: {{ .check_name | quote}}
             {{- range $key, $value := .env}}
             - name: {{ $key | quote }}
               value: {{ $value | quote }}
@@ -66,29 +70,29 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ds-create
+  name: {{ $ds_create_name }}
   namespace: default
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: ds-create
+  name: {{ $ds_create_name }}
 rules:
 - apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
-  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services"]
+  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services", "secrets"]
   verbs: ["list", "get", "create", "delete", "watch", "patch"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: ds-create
+  name: {{ $ds_create_name }}
   namespace: default
 subjects:
 - kind: ServiceAccount
-  name: ds-create
+  name: {{ $ds_create_name }}
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: ds-create
+  name: {{ $ds_create_name }}
   apiGroup: rbac.authorization.k8s.io
 
