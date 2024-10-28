@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: gpu_health_check
-description: A chart for running GPU health check
-type: application
-version: 0.1.0
-appVersion: "2.1.0"
+#!/bin/bash
+/builder/kubectl.bash # default script for image, which sets up various environment variables
+
+python3 tests.py "$@"
