@@ -31,13 +31,12 @@ health_check:
   env:
     # A3 instance type is a3-highgpu-8g
     INSTANCE_TYPE: "a3-highgpu-8g"
-    IMAGE_TAG: "subset"
     ENABLE_TWO_PASS_STRATEGY: "true"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
     START_MESSAGE_SIZE: "2G"
     END_MESSAGE_SIZE: "8G"
-    ITERATIONS: "5"
+    TEST_ITERATIONS: "5"
     NHOSTS: "2"
     nr: "8"
     # Specific to A3
@@ -45,7 +44,6 @@ health_check:
     BANDWIDTH_THRESHOLD: "60"
     USE_TCPX: "true"
     USE_FASTRAK: "false"
-    SECOND_PASS_YAML_FILE: "nccl_secondpass_a3.yaml"
     UNIX_CLIENT_PREFIX: "/run/tcpx"
     # Note A3 (a3-highgpu-8g) has no NCCL_LIB_DIR
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_USE_SNAP

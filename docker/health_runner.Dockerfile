@@ -17,7 +17,7 @@ FROM ubuntu:latest
 WORKDIR /app
 
 RUN apt-get update &&\
-    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq &&\
+    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq python3 python3-pip python3-venv &&\
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
 
@@ -27,13 +27,31 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
-COPY src/health_runner/health_runner.py .
-COPY src/checker_common.py .
-COPY src/gpu_healthcheck/gpu_healthcheck.yaml .
-COPY src/nccl_healthcheck/a3/ a3/
-COPY src/nccl_healthcheck/a3plus/  a3plus/
-COPY src/neper_healthcheck/neper_healthcheck.yaml .
+# Install & setup Helm - https://helm.sh/docs/intro/install/
+RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+RUN chmod +x get_helm.sh
+RUN ./get_helm.sh
+# helm installed into /usr/local/bin/helm
 
+COPY src/common.proto /app/
+
+RUN python3 -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
+
+RUN pip install --no-cache-dir grpcio-tools
+RUN pip install kubernetes
+RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/common.proto
+
+# Health runner
+COPY src/checker_common.py .
+COPY src/health_runner/health_runner.py .
+COPY src/health_runner/nccl_runner.py .
+
+# Health checks
+# Helm charts
+COPY deploy/helm/ health_checks/
+# YAML version
+COPY src/nccl_healthcheck/ health_checks/nccl/
 
 RUN chmod -R g+rwx /app/
 RUN chgrp -R 1000 /app/
