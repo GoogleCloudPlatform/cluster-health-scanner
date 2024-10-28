@@ -20,16 +20,23 @@ WORKDIR /scripts
 
 # Install build dependencies and utilities
 RUN apt-get update &&\
-    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq &&\
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
+    apt-get -y upgrade &&\
+    apt-get -y autoremove &&\
+    apt-get install -y \
+        git make gcc g++ util-linux software-properties-common \
+        openssh-server ca-certificates curl jq \
+        python3-kubernetes
+
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
 
-
 # Clone and build Neper
-RUN git clone https://github.com/google/neper.git && \
-    cd /scripts/neper && \
-    make tcp_stream && \
-    cp /scripts/neper/tcp_stream /scripts/ && rm -rf /scripts/neper/* && chmod +x /scripts/tcp_stream
+RUN git clone https://github.com/google/neper.git &&\
+    cd /scripts/neper &&\
+    make tcp_stream &&\
+    cp /scripts/neper/tcp_stream /scripts/ &&\
+    rm -rf /scripts/neper/* &&\
+    chmod +x /scripts/tcp_stream
 
 RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   ssh-keygen -t rsa -f /root/.ssh/google_compute_engine -b 2048 -P "" &&\
@@ -37,9 +44,11 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
-COPY src/neper_healthcheck/neper_runner.py .
-COPY src/checker_common.py .
-COPY src/metrics.py .
+# Disable ssh login grace period to prevent race condition vulnerability
+RUN echo "LoginGraceTime 0" >> /etc/ssh/sshd_config
 
-RUN chmod +x /scripts/neper_runner.py /scripts/checker_common.py /scripts/metrics.py
+COPY src/neper/neper_runner.py .
+COPY checker_common.py .
+
+RUN chmod +x /scripts/neper_runner.py /scripts/checker_common.py
 CMD ["python3", "/scripts/neper_runner.py"]
