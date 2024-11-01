@@ -30,6 +30,6 @@ health_check:
     tag: "subset"
     pull_policy: "Always"
   env:
-    R_LEVEL: "3"
+    R_LEVEL: "2"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
