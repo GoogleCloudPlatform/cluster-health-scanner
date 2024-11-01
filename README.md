@@ -401,7 +401,7 @@ Kubernetes `kubectl` tool.
 The following command displays results for the NCCL health check for each node:
 
 ```bash
-CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-valid-till-sec"
+CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-runtime-sec"
 
 kubectl get nodes -o custom-columns="${CUSTOM_COLS}"
 ```

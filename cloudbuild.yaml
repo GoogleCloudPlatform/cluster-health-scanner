@@ -1,3 +1,17 @@
+# Copyright 2024 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # yamllint disable
 steps:
 # ================================ DOCKER CONTAINER BUILDS ==============================================================
@@ -41,7 +55,7 @@ steps:
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'nccl_healthcheck_clean'
   args: ['label', 'nodes', '--all', 'aiinfra/nccl-healthcheck-test=true', 'aiinfra/nccl-healthcheck-bandwidth-',
-    'aiinfra/nccl-healthcheck-result-', 'aiinfra/nccl-healthcheck-valid-till-sec-']
+    'aiinfra/nccl-healthcheck-result-', 'aiinfra/nccl-healthcheck-runtime-sec-']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
@@ -58,7 +72,7 @@ steps:
 - name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
   id: 'nccl_healthcheck_check'
   args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
-    'aiinfra/nccl-healthcheck-valid-till-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
+    'aiinfra/nccl-healthcheck-runtime-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
@@ -75,7 +89,7 @@ steps:
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'neper_healthcheck_clean'
   args: ['label', 'nodes', '--all', 'aiinfra/neper-healthcheck-test=true', 'aiinfra/neper-healthcheck-result-',
-    'aiinfra/neper-healthcheck-valid-till-sec-']
+    'aiinfra/neper-healthcheck-runtime-sec-']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
@@ -91,7 +105,7 @@ steps:
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
   id: 'neper_healthcheck_check'
-  args: ['--check', 'aiinfra/neper-healthcheck-result=^pass$', 'aiinfra/neper-healthcheck-valid-till-sec=^\d*$',
+  args: ['--check', 'aiinfra/neper-healthcheck-result=^pass$', 'aiinfra/neper-healthcheck-runtime-sec=^\d*$',
     '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
@@ -109,7 +123,7 @@ steps:
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'gpu_healthcheck_clean'
   args: ['label', 'nodes', '--all', 'aiinfra/gpu-healthcheck-test=true', 'aiinfra/gpu-healthcheck-result-',
-    'aiinfra/gpu-healthcheck-valid-till-sec-']
+    'aiinfra/gpu-healthcheck-runtime-sec-']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
@@ -125,7 +139,7 @@ steps:
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
   id: 'gpu_healthcheck_check'
-  args: ['--check', 'aiinfra/gpu-healthcheck-result=^pass$', 'aiinfra/gpu-healthcheck-valid-till-sec=^\d*$',
+  args: ['--check', 'aiinfra/gpu-healthcheck-result=^pass$', 'aiinfra/gpu-healthcheck-runtime-sec=^\d*$',
     '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
