@@ -12,21 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Methods for health check metrics.
-"""
+FROM gcr.io/cloud-builders/kubectl
 
-from typing import Any, Dict
+# reinstall python3
+RUN apt-get -y update && \
+    apt-get dist-upgrade -y && \
+    apt-get install -y python3-pip && \
+    python3 -m pip install kubernetes
 
-
-def log_dict(
-    test_name: str,
-    did_pass: bool,
-    node_name: str,
-    result_data: Dict[str, Any],
-) -> Dict[str, Any]:
-  return {
-      "test_name": test_name,
-      "did_pass": did_pass,
-      "node_name": node_name,
-      "result_data": result_data,
-  }
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+ENTRYPOINT ["sh", "./entrypoint.sh"]
