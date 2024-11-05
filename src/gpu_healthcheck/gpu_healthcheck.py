@@ -47,10 +47,15 @@ HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/gpu-healthcheck-valid-till-sec"
 R_LEVEL = os.environ.get("R_LEVEL") or "1"
 DCGM_COMMAND = "dcgmi diag -g 0 -r %s --verbose" % R_LEVEL
 NVIDIA_SMI_COMMAND = (
-    "/usr/local/nvidia/bin/nvidia-smi"
+    "/usr/bin/nvidia-smi"
     " --query-gpu=ecc.errors.uncorrected.volatile.total"
     " --format=csv,noheader,nounits"
 )
+#NVIDIA_SMI_COMMAND = (
+#    "/usr/local/nvidia/bin/nvidia-smi"
+#    " --query-gpu=ecc.errors.uncorrected.volatile.total"
+#    " --format=csv,noheader,nounits"
+#)
 # K_ADD_LABEL_FORMAT = "/app/kubectl label node %s %s=%s --overwrite"
 # K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
 # K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
