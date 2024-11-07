@@ -23,22 +23,22 @@ steps:
   waitFor: ['-']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'health_runner_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:$SHORT_SHA",
     "-f", "docker/health_runner.Dockerfile", '.']
   waitFor: ['-']  # Technically redundant, as this is the first step.
 - name: 'gcr.io/cloud-builders/docker'
   id: 'gpu_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:$SHORT_SHA",
     "-f", "docker/gpu_healthcheck.Dockerfile", '.']
   waitFor: ['-']  # Specifying a list of nothing to wait for makes these all run in parallel
 - name: 'gcr.io/cloud-builders/docker'
   id: 'nccl_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:$SHORT_SHA",
     "-f", "docker/nccl_healthcheck.Dockerfile", '.']
   waitFor: ['-']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'neper_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:$SHORT_SHA",
     "-f", "docker/neper_healthcheck.Dockerfile", '.']
   waitFor: ['-']
 # NOTE: all subsequent steps will be run sequentially & only start after all of the images are built
@@ -49,55 +49,55 @@ steps:
   waitFor: ['integration_tests_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'health_runner_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:$SHORT_SHA"]
   waitFor: ['health_runner_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'gpu_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:$SHORT_SHA"]
   waitFor: ['gpu_healthcheck_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'nccl_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:$SHORT_SHA"]
   waitFor: ['nccl_healthcheck_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'neper_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:$SHORT_SHA"]
   waitFor: ['neper_healthcheck_build']
 # ================================== NCCL Healthcheck Tests ===========================================================
-# - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
-#   id: 'nccl_healthcheck_uninstall'
-#   entrypoint: "bash"
-#   args: ["./uninstall_from_cluster.sh", "healthcheck-test", "*health-runner*", "*healthcheck*"]
+- name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
+  id: 'nccl_healthcheck_uninstall'
+  entrypoint: "bash"
+  args: ["./uninstall_from_cluster.sh", "healthcheck-test", "*health-runner*", "*healthcheck*"]
 
-#   env:
-#   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-#   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
-#   - 'GCLOUD_PROJECT=supercomputer-testing'
-# - name: 'gcr.io/cloud-builders/kubectl'
-#   id: 'nccl_healthcheck_clean'
-#   args: ['label', 'nodes', '--all', 'aiinfra/nccl-healthcheck-test=true', 'aiinfra/nccl-healthcheck-bandwidth-',
-#     'aiinfra/nccl-healthcheck-result-', 'aiinfra/nccl-healthcheck-runtime-sec-']
-#   env:
-#   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-#   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
-#   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
-# - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
-#   id: 'nccl_healthcheck_run'
-#   args: ['upgrade', '-i', 'healthcheck-test', 'deploy/helm/health_runner', '--set',
-#     'health_checks.nccl_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.nccl_healthcheck.run_check=true',
-#     '--set', 'health_checks.nccl_healthcheck.DRY_RUN="false"', '--set', 'health_checks.nccl_healthcheck.blast_mode.blast_mode_enabled=true']
-#   env:
-#   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-#   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
-#   - 'GCLOUD_PROJECT=supercomputer-testing'
-# - name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
-#   id: 'nccl_healthcheck_check'
-#   args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
-#     'aiinfra/nccl-healthcheck-runtime-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
-#   env:
-#   - 'CLOUDSDK_COMPUTE_REGION=us-central1'
-#   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
-#   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
+  - 'GCLOUD_PROJECT=supercomputer-testing'
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'nccl_healthcheck_clean'
+  args: ['label', 'nodes', '--all', 'aiinfra/nccl-healthcheck-test=true', 'aiinfra/nccl-healthcheck-bandwidth-',
+    'aiinfra/nccl-healthcheck-result-', 'aiinfra/nccl-healthcheck-runtime-sec-']
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
+  - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
+- name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
+  id: 'nccl_healthcheck_run'
+  args: ['upgrade', '-i', 'healthcheck-test', 'deploy/helm/health_runner', '--set',
+    'health_checks.nccl_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.nccl_healthcheck.run_check=true',
+    '--set', 'health_checks.nccl_healthcheck.DRY_RUN="false"', '--set', 'health_checks.nccl_healthcheck.blast_mode.blast_mode_enabled=true']
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
+  - 'GCLOUD_PROJECT=supercomputer-testing'
+- name: "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
+  id: 'nccl_healthcheck_check'
+  args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
+    'aiinfra/nccl-healthcheck-runtime-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-bnd-temp'  # TODO: read these from secrets
+  - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 # ================================== Neper Healthcheck Tests ===========================================================
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
   id: 'neper_healthcheck_uninstall'
@@ -168,7 +168,7 @@ steps:
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 images:  # these images will be uploaded to cloud build
 - "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:$SHORT_SHA"
