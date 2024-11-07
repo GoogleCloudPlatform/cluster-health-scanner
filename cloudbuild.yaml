@@ -23,22 +23,22 @@ steps:
   waitFor: ['-']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'health_runner_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner_dummy:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner:$SHORT_SHA",
     "-f", "docker/health_runner.Dockerfile", '.']
   waitFor: ['-']  # Technically redundant, as this is the first step.
 - name: 'gcr.io/cloud-builders/docker'
   id: 'gpu_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck_dummy:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck:$SHORT_SHA",
     "-f", "docker/gpu_healthcheck.Dockerfile", '.']
   waitFor: ['-']  # Specifying a list of nothing to wait for makes these all run in parallel
 - name: 'gcr.io/cloud-builders/docker'
   id: 'nccl_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck_dummy:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck:$SHORT_SHA",
     "-f", "docker/nccl_healthcheck.Dockerfile", '.']
   waitFor: ['-']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'neper_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck_dummy:$SHORT_SHA",
+  args: ['build', '-t', "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck:$SHORT_SHA",
     "-f", "docker/neper_healthcheck.Dockerfile", '.']
   waitFor: ['-']
 # NOTE: all subsequent steps will be run sequentially & only start after all of the images are built
@@ -49,19 +49,19 @@ steps:
   waitFor: ['integration_tests_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'health_runner_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner_dummy:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner:$SHORT_SHA"]
   waitFor: ['health_runner_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'gpu_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck_dummy:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck:$SHORT_SHA"]
   waitFor: ['gpu_healthcheck_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'nccl_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck_dummy:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck:$SHORT_SHA"]
   waitFor: ['nccl_healthcheck_build']
 - name: 'gcr.io/cloud-builders/docker'
   id: 'neper_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck_dummy:$SHORT_SHA"]
+  args: ['push', "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck:$SHORT_SHA"]
   waitFor: ['neper_healthcheck_build']
 # ================================== NCCL Healthcheck Tests ===========================================================
 # - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
@@ -168,7 +168,7 @@ steps:
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 images:  # these images will be uploaded to cloud build
 - "us-docker.pkg.dev/gce-ai-infra/health-check/integration_tests:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner_dummy:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck_dummy:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck_dummy:$SHORT_SHA"
-- "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck_dummy:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/health_runner:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/gpu_healthcheck:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/nccl_healthcheck:$SHORT_SHA"
+- "us-docker.pkg.dev/gce-ai-infra/health-check/neper_healthcheck:$SHORT_SHA"
