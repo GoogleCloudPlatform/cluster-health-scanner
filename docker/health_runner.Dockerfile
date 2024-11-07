@@ -49,7 +49,7 @@ COPY src/health_runner/nccl_runner.py .
 
 # Health checks
 # Helm charts
-COPY deploy/helm/ health_checks/
+COPY deploy/helm/health_checks/ health_checks/
 # YAML version
 COPY src/nccl_healthcheck/ health_checks/nccl/
 
