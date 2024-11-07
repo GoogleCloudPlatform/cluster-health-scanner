@@ -31,40 +31,46 @@ health_check:
   env:
     # A3+ instance type is a3-megagpu-8g
     INSTANCE_TYPE: "a3-megagpu-8g"
-    IMAGE_TAG: "subset"
     ENABLE_TWO_PASS_STRATEGY: "true"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
     START_MESSAGE_SIZE: "2G"
     END_MESSAGE_SIZE: "8G"
-    ITERATIONS: "5"
+    TEST_ITERATIONS: "5"
     NHOSTS: "2"
     nr: "8"
     # Specific to A3+
     LD_LIBRARY_PATH: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
-    BANDWIDTH_THRESHOLD: "90"
+    BANDWIDTH_THRESHOLD: "150"
     USE_TCPX: "false"
     USE_FASTRAK: "true"
-    SECOND_PASS_YAML_FILE: "nccl_secondpass_a3plus.yaml"
     # Note A3+ (a3-megagpu-8g) has no UNIX_CLIENT_PREFIX
     NCCL_LIB_DIR: /usr/local/nvidia/lib64
     NCCL_FASTRAK_USE_SNAP: "1"
     NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL: "0"
     NCCL_FASTRAK_NUM_FLOWS: "2"
   volumeMounts:
-    tcpxo_nccl_plugin_volume:
-      name: "tcpxo-nccl-plugin-volume"
-      mountPath: /usr/local/tcpxo
-    tcpd_socket:
-      name: "tcpd-socket"
-      mountPath: /tmp
+  - name: nvidia-install-dir-host
+    mountPath: /usr/local/nvidia/lib64
+  - name: tcpxo-nccl-plugin-volume
+    mountPath: /usr/local/tcpxo
+  - name: tcpd-socket
+    mountPath: /tmp
+  - name: workload-terminated-volume
+    mountPath: /usr/share/nemo
 
 # Configuration specific to a3plus
 volumes:
-  tcpd_socket:
-    name: "tcpd-socket"
-    hostPath:
-      path: "/run/tcpxo"
+- name: nvidia-install-dir-host
+  hostPath:
+    path: /home/kubernetes/bin/nvidia/lib64
+- name: tcpd-socket
+  hostPath:
+    path: /run/tcpxo
+- name: tcpxo-nccl-plugin-volume
+  emptyDir: {}
+- name: workload-terminated-volume
+  emptyDir: {}
 initContainers:
   nccl_plugin_installer:
     name: "nccl-plugin-installer"

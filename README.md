@@ -306,7 +306,7 @@ health_checks:
       SLEEP_TIME_MINUTES: "5"
       YAML_FILE: "a3plus/nccl_healthcheck.yaml"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "subset"
+      HC_IMAGE_TAG: "subset"
     blast_mode:
       blast_mode_enabled: false
       env:
@@ -326,7 +326,7 @@ health_checks:
       YAML_FILE: "gpu_healthcheck.yaml"
       R_LEVEL: "2"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "subset"
+      HC_IMAGE_TAG: "subset"
   neper_healthcheck:
     run_check: false
     runner_name: neper-health-runner
@@ -340,7 +340,7 @@ health_checks:
       SLEEP_TIME_MINUTES: "10"
       YAML_FILE: "neper_healthcheck.yaml"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "v2.1.9-public"
+      HC_IMAGE_TAG: "v2.1.9-public"
 ```
 
 
@@ -401,7 +401,7 @@ Kubernetes `kubectl` tool.
 The following command displays results for the NCCL health check for each node:
 
 ```bash
-CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-valid-till-sec"
+CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,RUNTIME:.metadata.labels.aiinfra/nccl-healthcheck-runtime-sec"
 
 kubectl get nodes -o custom-columns="${CUSTOM_COLS}"
 ```
