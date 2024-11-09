@@ -20,7 +20,7 @@ WORKDIR /scripts
 
 # Install build dependencies and utilities
 RUN apt-get update &&\
-    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq &&\
+    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq slurm-client &&\
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
 
@@ -38,9 +38,9 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
 COPY src/neper_healthcheck/neper_runner.py .
-COPY src/neper_healthcheck/neper_runner.sh .
+COPY src/neper_healthcheck/neper_healthcheck.sh .
 COPY src/checker_common.py .
 COPY src/metrics.py .
 
-RUN chmod +x /scripts/neper_runner.py /scripts/neper_runner.sh /scripts/checker_common.py /scripts/metrics.py
-CMD ["bash", "/scripts/neper_runner.sh"]
+RUN chmod +x /scripts/neper_runner.py /scripts/neper_healthcheck.sh /scripts/checker_common.py /scripts/metrics.py
+CMD ["bash", "/scripts/neper_healthcheck.sh"]
