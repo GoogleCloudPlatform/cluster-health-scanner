@@ -299,7 +299,7 @@ def get_host_name(pod_name: str) -> str:
   start_time = time.time()
   while timeout_check(start_time, pod_name):
     result = checker_common.run_command(
-        f"ssh {pod_name} -p 222 -- cat /host.name",
+        f"ssh {pod_name} -p 222 -- cat /tmp/host.name",
         check=False,
     )
     if result.returncode == 0:
@@ -419,7 +419,7 @@ def main() -> None:
   configure_ssh()
 
   node_name = os.environ["NODE_NAME"]
-  with open("/host.name", "w") as f:
+  with open("/tmp/host.name", "w") as f:
     f.write(node_name)
 
   host_to_ips = get_host_to_ips()
