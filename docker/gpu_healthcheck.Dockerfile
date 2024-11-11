@@ -13,7 +13,13 @@
 # limitations under the License.
 
 from nvidia/dcgm:3.3.8-1-ubuntu22.04
-RUN apt-get update && apt-get install -y ca-certificates curl python3 slurm-client
+RUN apt-get update && apt-get install -y ca-certificates curl python3 slurm-client sudo
+
+# Fix ownership and permissions
+#RUN chown root:root /usr/bin/sudo && \
+#    chmod 4755 /usr/bin/sudo && \
+#    chown root:root /etc/sudo.conf
+
 workdir /app
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl
 RUN curl https://dl.google.com/dl/cloudsdk/release/google-cloud-sdk.tar.gz > /tmp/google-cloud-sdk.tar.gz
@@ -28,4 +34,11 @@ COPY src/metrics.py .
 ENV PYTHONUNBUFFERED=1
 
 RUN chmod +x /app/gpu_healthcheck.py /app/gpu_healthcheck.sh /app/checker_common.py /app/metrics.py
-ENTRYPOINT ["bash", "/app/gpu_healthcheck.sh"]
+
+USER root
+RUN chown root:root /usr/bin/sudo && chmod u+s /usr/bin/sudo
+RUN chown root:root /etc/sudo.conf
+RUN chmod 4755 /usr/bin/sudo
+RUN sudo --version
+
+#ENTRYPOINT ["bash", "/app/gpu_healthcheck.sh"]

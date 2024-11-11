@@ -43,4 +43,4 @@ COPY src/checker_common.py .
 COPY src/metrics.py .
 
 RUN chmod +x /scripts/neper_runner.py /scripts/neper_healthcheck.sh /scripts/checker_common.py /scripts/metrics.py
-CMD ["bash", "/scripts/neper_healthcheck.sh"]
+CMD ["python3", "/scripts/neper_runner.py"]
