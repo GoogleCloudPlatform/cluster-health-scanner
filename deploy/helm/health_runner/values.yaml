@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# For use with A3-Plus machines
+# 
 health_runner:
   name: "health-runner"
 # Multiple health checks can be added below
@@ -21,49 +21,63 @@ health_checks:
   nccl_healthcheck:
     run_check: true
     runner_name: nccl-health-runner-a3plus
-    schedule: "*/5 * * * *"  # run every five minutes
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "subset"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "5"
-      YAML_FILE: "a3plus/nccl_healthcheck.yaml"
+      SLEEP_TIME_MINUTES: "30"
+      HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
+      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$HC_IMAGE_TAG"  # Specific to A3+
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "subset"
+      HEALTH_APP: "nccl"
+      PAIRING_MODE: "random"
+      SECOND_PASS_ENABLED: "true"
     # Blast Mode
     blast_mode:
-      blast_mode_enabled: false
+      blast_mode_enabled: true
       env:
-        BLAST_MODE_NUM_TESTS_LIMIT: "10"
+        # BLAST_MODE_NUM_TESTS_LIMIT: "200"  # Number of health checks to run in parallel
         NODES_CHECKED_PER_TEST:  "2"
   gpu_healthcheck:
     run_check: false
     runner_name: gpu-health-runner
-    schedule: "0 * * * *"  # run every hour
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "subset"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "15"
-      YAML_FILE: "gpu_healthcheck.yaml"
+      SLEEP_TIME_MINUTES: "30"
+      HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
       R_LEVEL: "2"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "subset"
+    # Blast Mode
+    blast_mode:
+      blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
+      env:
+        # BLAST_MODE_NUM_TESTS_LIMIT: "200"  # Number of health checks to run in parallel
+        NODES_CHECKED_PER_TEST:  "1"
   neper_healthcheck:
     run_check: false
     runner_name: neper-health-runner
-    schedule: "*/5 * * * *"  # run every 5 min
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v2.1.9-public"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "10"
-      YAML_FILE: "neper_healthcheck.yaml"
+      SLEEP_TIME_MINUTES: "30"
+      HELM_CHART: "/app/health_checks/neper_healthcheck"  # Path to Helm chart in container
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "v2.1.9-public"
+    blast_mode:
+      blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
+      env:
+        # BLAST_MODE_NUM_TESTS_LIMIT: "200"  # Number of health checks to run in parallel
+        NODES_CHECKED_PER_TEST:  "2"

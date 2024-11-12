@@ -31,13 +31,12 @@ health_check:
   env:
     # A3 instance type is a3-highgpu-8g
     INSTANCE_TYPE: "a3-highgpu-8g"
-    IMAGE_TAG: "subset"
     ENABLE_TWO_PASS_STRATEGY: "true"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
     START_MESSAGE_SIZE: "2G"
     END_MESSAGE_SIZE: "8G"
-    ITERATIONS: "5"
+    TEST_ITERATIONS: "5"
     NHOSTS: "2"
     nr: "8"
     # Specific to A3
@@ -45,26 +44,39 @@ health_check:
     BANDWIDTH_THRESHOLD: "60"
     USE_TCPX: "true"
     USE_FASTRAK: "false"
-    SECOND_PASS_YAML_FILE: "nccl_secondpass_a3.yaml"
     UNIX_CLIENT_PREFIX: "/run/tcpx"
     # Note A3 (a3-highgpu-8g) has no NCCL_LIB_DIR
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_USE_SNAP
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_NUM_FLOWS
   volumeMounts:
-    tcpx_nccl_plugin_volume:
-      name: "tcpx-nccl-plugin-volume"
-      mountPath: /usr/local/tcpx
-    tcp_socket:
-      name: "tcpd-socket"
-      mountPath: /run/tcpx
+  - name: nvidia-install-dir-host
+    mountPath: /usr/local/nvidia/lib64
+  - name: tcpx-nccl-plugin-volume
+    mountPath: /usr/local/tcpx
+  - name: tcpd-socket
+    mountPath: /run/tcpx
+  - name: workload-terminated-volume
+    mountPath: /usr/share/nemo
+  - name: shared-memory
+    mountPath: /dev/shm
 
 # Configuration specific to a3plus
 volumes:
-  tcpd_socket:
-    name: "tcpd-socket"
-    hostPath:
-      path: "/run/tcpx"
+- name: nvidia-install-dir-host
+  hostPath:
+    path: /home/kubernetes/bin/nvidia/lib64
+- name: tcpd-socket
+  hostPath:
+    path: /run/tcpx
+- name: tcpx-nccl-plugin-volume
+  emptyDir: {}
+- name: workload-terminated-volume
+  emptyDir: {}
+- name: shared-memory
+  emptyDir:
+    medium: "Memory"
+    sizeLimit: 200Gi
 initContainers:
   nccl_plugin_installer:
     name: "nccl-plugin-installer"
@@ -74,7 +86,7 @@ initContainers:
       name: "tcpx-nccl-plugin-volume"
       mountPath: "/var/lib/tcpx"
 tcpd_daemon:
-  image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/tcpgpudmarxd-dev:v2.0.11"
+  image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/tcpgpudmarxd-dev:v2.0.12"
   imagePullPolicy: "Always"
   command:
   - "bash"
@@ -82,6 +94,12 @@ tcpd_daemon:
   - "-c"
   - |
     /tcpgpudmarxd/build/app/tcpgpudmarxd --gpu_nic_preset a3vm --gpu_shmem_type fd --setup_param "--verbose 128 2 0" --uds_path /run/tcpx &
-    while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 10; done
-    pkill -e "^"tcpgpudmarxd || true
+    cleanup() {
+      echo "Received SIGTERM or workload terminated, starting cleanup..."
+      pkill -e "^"tcpgpudmarxd || true
+      exit 0
+    }
+    trap cleanup SIGTERM
+    while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 1; done
+    cleanup
     sleep 10

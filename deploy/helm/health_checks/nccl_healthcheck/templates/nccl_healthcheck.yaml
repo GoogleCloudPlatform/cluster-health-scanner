@@ -16,8 +16,9 @@
 {{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.node_match.check_time -}}
 {{- $health_check_uniq_str := printf "%s-%s" (toString .Values.node_match.guid) (toString $check_time) -}}
 {{- $health_check_service_name := printf "%s-%s" .Values.service.prefix $health_check_uniq_str -}}
-{{- $health_check_job_name := printf "%s-%s" "nccl-healthcheck" $health_check_uniq_str -}}
+{{- $health_check_job_name := default (printf "%s-%s" "nccl-healthcheck" $health_check_uniq_str) .Values.job.name -}}
 {{- $node_list_name := printf "%s-%s" "nccl-node-list" $health_check_uniq_str -}}
+{{- $expiry_time := int (sub  $check_time (mul .Values.health_check.env.HEALTH_VALIDITY_HOURS 60 60)) -}}
 ---
 apiVersion: v1
 kind: Service
@@ -32,11 +33,16 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ $health_check_job_name }}
+  labels:
+    app-name: {{ .Values.health_check.name }}
 spec:
   completions: 2
   parallelism: 2
   completionMode: Indexed
   template:
+    metadata:
+      labels:
+        app-name: {{ .Values.health_check.name }}
     spec:
       tolerations:
       - operator: "Exists"
@@ -45,34 +51,27 @@ spec:
       restartPolicy: Never
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      volumes:
-      - name: nvidia-install-dir-host
-        hostPath:
-          path: /home/kubernetes/bin/nvidia/lib64
-      - name: tcpd-socket
-        hostPath:
-          {{- /* Different tcpd-socket depending on accelerator type */}}
-          path: {{ .Values.volumes.tcpd_socket.hostPath.path | quote }}
-      - name: {{ .Values.initContainers.nccl_plugin_installer.volumeMounts.name | quote }}
-        emptyDir: {}
-      - name: workload-terminated-volume
-        emptyDir: {}
+      volumes: {{- toYaml .Values.volumes | nindent 8 }}
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .Values.health_check.env.INSTANCE_TYPE  | quote }}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
-            # Multiple matchExpressions ORed between each other. Statements whithin matchExpressions ANDed.
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-                # It will trigger if label value is older than 24 hours (default) ago
+                # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - {{ .Values.health_check.env.NODE0 }}
+                - {{ .Values.health_check.env.NODE1 }}
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "{{ $check_time }}"
+                - "{{ $expiry_time }}"
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If label is true then it will trigger
@@ -83,7 +82,7 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
@@ -97,15 +96,15 @@ spec:
           - weight: 50
             preference:
               matchExpressions:
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
           - weight: 1
             preference:
               matchExpressions:
-              - key: aiinfra/nccl-healthcheck-valid-till-sec
+              - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - "{{ $check_time }}"
+                - "{{ $expiry_time }}"
       {{- /* Different image & volume depending on accelerator type */}}
       initContainers:
       - name: nccl-plugin-installer
@@ -122,8 +121,12 @@ spec:
         - -c
         - |
           /scripts/container_entry.sh install --install-nccl
+          {{- if eq .Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g" }}
+          cp -R /var/lib/gib/. /target/usr/local/gib
+          {{- end }}
       {{- /* Different tcpd-daemon container depending on accelerator type */}}
       containers:
+      {{- if or (eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g") (eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g") }}
       - name: tcpd-daemon
         image: {{ .Values.tcpd_daemon.image | quote }}
         imagePullPolicy: {{ .Values.tcpd_daemon.imagePullPolicy | quote }}
@@ -145,6 +148,7 @@ spec:
         env:
         - name: LD_LIBRARY_PATH
           value: /usr/local/nvidia/lib64
+      {{- end }}
       - name: nccl-healthcheck
         image: {{ printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag }}
         imagePullPolicy: {{ .Values.health_check.image.pull_policy | quote}}
@@ -177,15 +181,7 @@ spec:
         - name: {{ $key | quote }}
           value: {{ $value | quote }}
         {{- end }} {{- /* end iteration over .env */}}
-        volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
-        - name: workload-terminated-volume
-          mountPath: /usr/share/nemo
-        {{- range $value := .Values.health_check.volumeMounts }}
-        - name: {{ $value.name | quote }}
-          mountPath: {{ $value.mountPath | quote }}
-        {{- end }} {{- /* end iteration over .volumeMounts */}}
+        volumeMounts: {{- toYaml .Values.health_check.volumeMounts | nindent 8 }}
         resources:
           limits:
             nvidia.com/gpu: !!int 8
