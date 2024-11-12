@@ -22,7 +22,7 @@ def _create_a3_config():
       instance_type="a3-highgpu-8g",
       second_pass_yaml_path="a3/nccl_secondpass.yaml",
       nccl_test_command_template=(
-          "/scripts/run-nccl-combined-plugins.sh gpudirect {benchmark}"
+          "bash /scripts/run-nccl-combined-plugins.sh gpudirect {benchmark}"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4"
           " {start_message_size} {end_message_size} {nhosts} 1 {iterations}"
       ),
@@ -36,7 +36,7 @@ def _create_a3plus_config():
       instance_type="a3-megagpu-8g",
       second_pass_yaml_path="a3plus/nccl_secondpass.yaml",
       nccl_test_command_template=(
-          "/scripts/run-nccl-combined-plugins.sh fastrak {benchmark}"
+          "bash /scripts/run-nccl-combined-plugins.sh fastrak {benchmark}"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
           " {start_message_size} {end_message_size} {nhosts} 3 {iterations}"
       ),
@@ -50,7 +50,7 @@ def _create_a3ultra_config():
       instance_type="a3-ultragpu-8g",
       second_pass_yaml_path="a3ultra/nccl_secondpass.yaml",
       nccl_test_command_template=(
-          "/scripts/run-nccl-combined-plugins.sh rdma all_gather_perf"
+          "bash /scripts/run-nccl-combined-plugins.sh rdma all_gather_perf"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
           " {start_message_size} {end_message_size} {nhosts} 3"
       ),
