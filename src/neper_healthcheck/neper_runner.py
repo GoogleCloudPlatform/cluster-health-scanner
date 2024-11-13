@@ -79,23 +79,59 @@ IdentityFile /root/.ssh/google_compute_engine
 Port 222""")
 
 
+#def get_host_to_ips() -> Dict[str, List[str]]:
+#  """Generates a hostfile based on host names from pods."""
+#
+#  hosts = {}
+#  pod_name = f"{JOB_NAME}-1.{SERVICE_NAME}"
+#  host_name = get_host_name(pod_name)
+#  raw_ip_addresses = get_ip_addresses(pod_name)
+#
+#  ip_addresses = raw_ip_addresses.strip().split("\n")
+#
+#  if host_name and ip_addresses:
+#    hosts[host_name] = ip_addresses
+#    print(f"Got host information from pod: {pod_name} on host {host_name}")
+#    print(f"Got ip information from pod: {pod_name} on ip {ip_addresses}")
+#
+#  return hosts
+
 def get_host_to_ips() -> Dict[str, List[str]]:
-  """Generates a hostfile based on host names from pods."""
+    """Generates a hostfile based on Slurm environment variables."""
+    hosts = {}
 
-  hosts = {}
-  pod_name = f"{JOB_NAME}-1.{SERVICE_NAME}"
-  host_name = get_host_name(pod_name)
-  raw_ip_addresses = get_ip_addresses(pod_name)
+    # SLURM_NODELIST contains all allocated nodes
+    # SLURM_JOB_NODELIST is an alternative
+    nodelist = os.environ.get('SLURM_NODELIST')
+    if not nodelist:
+        print("Error: SLURM_NODELIST environment variable not found")
+        return hosts
 
-  ip_addresses = raw_ip_addresses.strip().split("\n")
+    # Run scontrol to expand the node list (converts node[1-3] to node1,node2,node3)
+    result = checker_common.run_command(
+        f"scontrol show hostnames {nodelist}",
+        check=False,
+    )
+    if result.returncode != 0:
+        print(f"Error getting hostnames: {result.stderr}")
+        return hosts
 
-  if host_name and ip_addresses:
-    hosts[host_name] = ip_addresses
-    print(f"Got host information from pod: {pod_name} on host {host_name}")
-    print(f"Got ip information from pod: {pod_name} on ip {ip_addresses}")
+    # Get list of hostnames
+    hostnames = result.stdout.strip().split('\n')
 
-  return hosts
+    # For each hostname, get its IP addresses
+    for hostname in hostnames:
+        result = checker_common.run_command(
+            f"srun --nodelist={hostname} hostname -I",
+            check=False,
+        )
+        if result.returncode == 0:
+            ip_addresses = result.stdout.strip().split()
+            hosts[hostname] = ip_addresses
+            print(f"Got host information from node: {hostname}")
+            print(f"Got ip information from node: {hostname} on ip {ip_addresses}")
 
+    return hosts
 
 def run_neper_test(
     hosts_to_ips: Dict[str, List[str]]
