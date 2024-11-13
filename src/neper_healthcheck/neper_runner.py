@@ -96,40 +96,73 @@ Port 222""")
 #
 #  return hosts
 
+#def get_host_to_ips() -> Dict[str, List[str]]:
+#    """Generates a hostfile based on Slurm environment variables."""
+#    hosts = {}
+#
+#    # SLURM_NODELIST contains all allocated nodes
+#    # SLURM_JOB_NODELIST is an alternative
+#    nodelist = os.environ.get('SLURM_NODELIST')
+#    if not nodelist:
+#        print("Error: SLURM_NODELIST environment variable not found")
+#        return hosts
+#
+#    # Run scontrol to expand the node list (converts node[1-3] to node1,node2,node3)
+#    result = checker_common.run_command(
+#        f"scontrol show hostnames {nodelist}",
+#        check=False,
+#    )
+#    if result.returncode != 0:
+#        print(f"Error getting hostnames: {result.stderr}")
+#        return hosts
+#
+#    # Get list of hostnames
+#    hostnames = result.stdout.strip().split('\n')
+#    print("hostnames: ", hostnames)
+#
+#    # For each hostname, get its IP addresses
+#    for hostname in hostnames:
+#        result = checker_common.run_command(
+#            f"srun --nodelist={hostname} hostname -I",
+#            check=False,
+#        )
+#        print("result of ips: ", result)
+#        if result.returncode == 0:
+#            ip_addresses = result.stdout.strip().split()
+#            hosts[hostname] = ip_addresses
+#            print(f"Got host information from node: {hostname}")
+#            print(f"Got ip information from node: {hostname} on ip {ip_addresses}")
+#
+#    return hosts
+
 def get_host_to_ips() -> Dict[str, List[str]]:
-    """Generates a hostfile based on Slurm environment variables."""
+    """Gets IPs from just the first node in allocation."""
     hosts = {}
-
-    # SLURM_NODELIST contains all allocated nodes
-    # SLURM_JOB_NODELIST is an alternative
-    nodelist = os.environ.get('SLURM_NODELIST')
-    if not nodelist:
-        print("Error: SLURM_NODELIST environment variable not found")
-        return hosts
-
-    # Run scontrol to expand the node list (converts node[1-3] to node1,node2,node3)
+    
+    # Get the first node from SLURM_NODELIST
     result = checker_common.run_command(
-        f"scontrol show hostnames {nodelist}",
-        check=False,
+        "scontrol show hostnames $SLURM_NODELIST | head -n 1",
+        check=False
     )
-    if result.returncode != 0:
-        print(f"Error getting hostnames: {result.stderr}")
-        return hosts
-
-    # Get list of hostnames
-    hostnames = result.stdout.strip().split('\n')
-
-    # For each hostname, get its IP addresses
-    for hostname in hostnames:
+    if result.returncode == 0:
+        hostname = result.stdout.strip()
+        # Get all IPs for the first node
+        cmd = "/usr/sbin/ip addr | grep -E 'inet' | awk '{print $2}' | cut -d'/' -f1"
         result = checker_common.run_command(
-            f"srun --nodelist={hostname} hostname -I",
-            check=False,
+            cmd,
+            check=False
         )
+        print("result: ", result)
         if result.returncode == 0:
-            ip_addresses = result.stdout.strip().split()
-            hosts[hostname] = ip_addresses
+            ips = []
+            for line in result.stdout.split('\n'):
+                if '.' in line:
+                    ip = line
+                    if not ip.startswith('127.') and not ip.startswith('172.'):
+                        ips.append(ip)
+            hosts[hostname] = ips
             print(f"Got host information from node: {hostname}")
-            print(f"Got ip information from node: {hostname} on ip {ip_addresses}")
+            print(f"Got ip information from node: {hostname} on ip {ips}")
 
     return hosts
 

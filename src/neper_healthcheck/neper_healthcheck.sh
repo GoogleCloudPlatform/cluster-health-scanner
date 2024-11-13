@@ -26,7 +26,7 @@ export JOB_NAME="neper-healthcheck-${CHECK_TIME_EPOCH_SEC}"
 export SERVICE_NAME="neper-headless-svc-${CHECK_TIME_EPOCH_SEC}"
 export INSTANCE_TYPE="a3-megagpu-8g"
 export GOOD_THROUGHPUT="50000000000"
-CONTAINER_MOUNTS="/usr/local/bin,/usr/local/lib,/var/spool/slurmd,/var/spool/slurm,/var/run/slurm,/etc/passwd:/etc/passwd,/usr/lib64,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh"
+CONTAINER_MOUNTS="/usr/local/bin,/usr/local/lib,/usr/sbin,/var/spool/slurmd,/var/spool/slurm,/var/run/slurm,/etc/passwd:/etc/passwd,/usr/lib64,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh"
 
 # Launch the litgpt script
 #srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" bash -c "python3 /scripts/neper_runner.py"

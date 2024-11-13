@@ -20,10 +20,9 @@ WORKDIR /scripts
 
 # Install build dependencies and utilities
 RUN apt-get update &&\
-    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq slurm-client &&\
+    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq slurm-client iproute2 &&\
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
-
 
 # Clone and build Neper
 RUN git clone https://github.com/google/neper.git && \
