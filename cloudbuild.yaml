@@ -19,9 +19,9 @@ steps:
   args:
     - '-c'
     - |
-      ongoing_builds=$(gcloud builds list --ongoing --format='value(id)' --filter="substitutions.TRIGGER_NAME=$TRIGGER_NAME")
-      if [ -n "$ongoing_builds" ]; then
-        echo "Cancelling current build because of ongoing builds: $ongoing_builds"
+      build_count=$(gcloud builds list --ongoing --format='value(id)' --filter="substitutions.TRIGGER_NAME=$TRIGGER_NAME" | wc -l)
+      if [ "$build_count" -gt 1 ]; then
+        echo "Cancelling current build an build count > 1: $build_count"
         gcloud builds cancel $BUILD_ID
       fi
 # ================================ DOCKER CONTAINER BUILDS ==============================================================
