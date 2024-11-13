@@ -14,6 +14,16 @@
 
 # yamllint disable
 steps:
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      ongoing_builds=$(gcloud builds list --ongoing --format='value(id)' --filter="substitutions.TRIGGER_NAME=$TRIGGER_NAME")
+      if [ -n "$ongoing_builds" ]; then
+        echo "Cancelling current build because of ongoing builds: $ongoing_builds"
+        gcloud builds cancel $BUILD_ID
+      fi
 # ================================ DOCKER CONTAINER BUILDS ==============================================================
 - name: 'gcr.io/cloud-builders/docker'
   # TODO: we don't necessarily need to build this every time, it will barely ever change
