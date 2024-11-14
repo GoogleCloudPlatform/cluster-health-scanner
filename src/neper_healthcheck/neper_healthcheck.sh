@@ -4,6 +4,8 @@
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --nodes 2
+#SBATCH --output=slurm-%N-%j.out
+#SBATCH --error=slurm-%N-%j.err
 
 export HEALTH_VALIDITY_HOURS=24
 export DRY_RUN=true
@@ -26,8 +28,8 @@ export JOB_NAME="neper-healthcheck-${CHECK_TIME_EPOCH_SEC}"
 export SERVICE_NAME="neper-headless-svc-${CHECK_TIME_EPOCH_SEC}"
 export INSTANCE_TYPE="a3-megagpu-8g"
 export GOOD_THROUGHPUT="50000000000"
-CONTAINER_MOUNTS="/usr/local/bin,/usr/local/lib,/usr/sbin,/var/spool/slurmd,/var/spool/slurm,/var/run/slurm,/etc/passwd:/etc/passwd,/usr/lib64,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh"
+CONTAINER_MOUNTS="/usr/local/bin,/usr/local/lib,/usr/sbin,/var/spool/slurmd,/var/spool/slurm,/var/run/slurm,/etc/passwd:/etc/passwd,/usr/lib64,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh,/opt/apps:/opt/apps"
 
 # Launch the litgpt script
 #srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" bash -c "python3 /scripts/neper_runner.py"
-sudo srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST  --gpus=8 --nodes 2 --exclusive bash -c "export NODE_NAME=$(hostname); python3 /scripts/neper_runner.py"
+sudo srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST  --gpus=8 --nodes 2 --exclusive bash -c "export NODE_NAME=$HOSTNAME; python3 /scripts/neper_runner.py"

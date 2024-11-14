@@ -65,20 +65,32 @@ def ensure_env_variables() -> None:
   print("ENV %s=%s" % ("SLURM_PROCID", os.environ["SLURM_PROCID"]))
 
 
+#def configure_ssh() -> None:
+#  """Configures SSH settings."""
+#  checker_common.run_command(
+#      "sed -i 's/#Port 22/Port 22/g' /etc/ssh/sshd_config", check=False
+#  )
+#  checker_common.run_command("service ssh restart")
+#  with open("/root/.ssh/config", "a") as f:
+#    f.write("""
+#Host *
+#StrictHostKeyChecking no
+#User root
+#IdentityFile /root/.ssh/google_compute_engine
+#Port 22""")
 def configure_ssh() -> None:
-  """Configures SSH settings."""
-  checker_common.run_command(
-      "sed -i 's/#Port 22/Port 22/g' /etc/ssh/sshd_config", check=False
-  )
-  checker_common.run_command("service ssh restart")
-  with open("/root/.ssh/config", "a") as f:
-    f.write("""
-Host *
-StrictHostKeyChecking no
-User root
-IdentityFile /root/.ssh/google_compute_engine
-Port 22""")
-
+    """Configures SSH settings."""
+    checker_common.run_command(
+        "sed -i 's/#Port 22/Port 22/g' /etc/ssh/sshd_config", check=False
+    )
+    checker_common.run_command("service ssh restart")
+    with open("/root/.ssh/config", "a") as f:
+        f.write("""
+    Host *
+    StrictHostKeyChecking no
+    User root
+    ForwardAgent yes
+    Port 22""")
 
 #def get_host_to_ips() -> Dict[str, List[str]]:
 #  """Generates a hostfile based on host names from pods."""
@@ -170,6 +182,7 @@ Port 22""")
 def get_host_to_ips() -> Dict[str, List[str]]:
     """Gets IPs from pod-1, regardless of which pod is running the function."""
     hosts = {}
+    shared_dir = "/opt/apps/"
     
     # Get all nodes from SLURM_NODELIST
     result = checker_common.run_command(
@@ -186,6 +199,7 @@ def get_host_to_ips() -> Dict[str, List[str]]:
 
     # pod-1 is the second node in the allocation
     target_hostname = all_hosts[1]
+    master_hostname = all_hosts[0]
     
     # Get current node's rank
     rank_result = checker_common.run_command(
@@ -200,24 +214,43 @@ def get_host_to_ips() -> Dict[str, List[str]]:
     if current_rank == 1:
         # If we're on pod-1, run locally
         ip_result = checker_common.run_command(ip_cmd, check=False)
-    else:
         # If we're on pod-0, run the command on pod-1 using ssh
-        ip_result = checker_common.run_command(
-            f"ssh {target_hostname} '{ip_cmd}'",
-            check=False
-        )
+        #ip_result = checker_common.run_command(
+        #    f"ssh {target_hostname} -p 22 '{ip_cmd}'",
+        #    check=False
+        #)
 
-    if ip_result.returncode == 0:
-        ips = []
-        for line in ip_result.stdout.split('\n'):
-            if '.' in line:
-                ip = line
-                if not ip.startswith('127.') and not ip.startswith('172.'):
-                    ips.append(ip)
-        hosts[target_hostname] = ips
-        print(f"Got host information from node: {target_hostname}")
-        print(f"Got ip information from node: {target_hostname} on ip {ips}")
+        if ip_result.returncode == 0:
+            ips = []
+            for line in ip_result.stdout.split('\n'):
+                if '.' in line:
+                    ip = line
+                    if not ip.startswith('127.') and not ip.startswith('172.'):
+                        ips.append(ip)
+            hosts[target_hostname] = ips
+            print(f"Got host information from node: {target_hostname}")
+            print(f"Got ip information from node: {target_hostname} on ip {ips}")
 
+            # Save IP information to a shared file
+            shared_file = os.path.join(shared_dir, f"{target_hostname}_{current_rank}_ips.txt")
+            #checker_common.run_command(f"mkdir -p {shared_dir}")
+            with open(shared_file, "w") as f:
+                f.write(target_hostname+"\n")
+                f.write("\n".join(ips))
+            print("Done writing hostname ips to the shared file")
+    else:
+        shared_file = os.path.join(shared_dir, f"{target_hostname}_1_info.txt")
+        print("master node is looking for : ", shared_file)
+        time.sleep(120)
+        if os.path.exists(shared_file):
+            with open(shared_file, "r") as f:
+                lines = f.readlines()
+                hostname = lines[0].strip()
+                ips = [line.strip() for line in lines[1:]]
+            hosts[target_hostname]=ips
+            return hosts
+        else:
+            print("No ip file found")
     return hosts
 
 def run_neper_test(
