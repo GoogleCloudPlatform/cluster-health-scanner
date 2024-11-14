@@ -239,7 +239,7 @@ def get_host_to_ips() -> Dict[str, List[str]]:
                 f.write("\n".join(ips))
             print("Done writing hostname ips to the shared file")
     else:
-        shared_file = os.path.join(shared_dir, f"{target_hostname}_1_info.txt")
+        shared_file = os.path.join(shared_dir, f"{target_hostname}_1_ips.txt")
         print("master node is looking for : ", shared_file)
         time.sleep(120)
         if os.path.exists(shared_file):
