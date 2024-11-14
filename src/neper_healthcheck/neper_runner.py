@@ -68,7 +68,7 @@ def ensure_env_variables() -> None:
 def configure_ssh() -> None:
   """Configures SSH settings."""
   checker_common.run_command(
-      "sed -i 's/#Port 22/Port 222/g' /etc/ssh/sshd_config", check=False
+      "sed -i 's/#Port 22/Port 22/g' /etc/ssh/sshd_config", check=False
   )
   checker_common.run_command("service ssh restart")
   with open("/root/.ssh/config", "a") as f:
@@ -77,7 +77,7 @@ Host *
 StrictHostKeyChecking no
 User root
 IdentityFile /root/.ssh/google_compute_engine
-Port 222""")
+Port 22""")
 
 
 #def get_host_to_ips() -> Dict[str, List[str]]:
