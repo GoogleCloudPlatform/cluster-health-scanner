@@ -18,7 +18,7 @@ NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL="0"
 NCCL_FASTRAK_NUM_FLOWS="2"
 GOOD_THROUGHPUT=130000000000
 
-export NODE_NAME=$HOSTNAME
+
 export NODE_IP=""
 export POD_NAME=""
 export JOB_COMPLETION_INDEX=-1
@@ -30,4 +30,4 @@ CONTAINER_MOUNTS="/usr/local/bin,/usr/local/lib,/usr/sbin,/var/spool/slurmd,/var
 
 # Launch the litgpt script
 #srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" bash -c "python3 /scripts/neper_runner.py"
-sudo srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,NODE_NAME=$HOSTNAME,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST  --gpus=8 --nodes 2 --exclusive bash -c "python3 /scripts/neper_runner.py"
+sudo srun --container-image=./neper+slurm.sqsh --container-mounts="${CONTAINER_MOUNTS}" --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST  --gpus=8 --nodes 2 --exclusive bash -c "export NODE_NAME=$(hostname); python3 /scripts/neper_runner.py"

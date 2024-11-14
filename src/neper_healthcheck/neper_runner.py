@@ -62,6 +62,7 @@ def ensure_env_variables() -> None:
     if env not in os.environ:
       raise ValueError(f"Must set {env}")
     print("ENV %s=%s" % (env, os.environ[env]))
+  print("ENV %s=%s" % ("SLURM_PROCID", os.environ["SLURM_PROCID"]))
 
 
 def configure_ssh() -> None:
@@ -135,34 +136,87 @@ Port 222""")
 #
 #    return hosts
 
+# def get_host_to_ips() -> Dict[str, List[str]]:
+#     """Gets IPs from just the first node in allocation."""
+#     hosts = {}
+    
+#     # Get the first node from SLURM_NODELIST
+#     result = checker_common.run_command(
+#         "scontrol show hostnames $SLURM_NODELIST | head -n 1",
+#         check=False
+#     )
+#     if result.returncode == 0:
+#         hostname = result.stdout.strip()
+#         # Get all IPs for the first node
+#         cmd = "/usr/sbin/ip addr | grep -E 'inet' | awk '{print $2}' | cut -d'/' -f1"
+#         result = checker_common.run_command(
+#             cmd,
+#             check=False
+#         )
+#         print("result: ", result)
+#         if result.returncode == 0:
+#             ips = []
+#             for line in result.stdout.split('\n'):
+#                 if '.' in line:
+#                     ip = line
+#                     if not ip.startswith('127.') and not ip.startswith('172.'):
+#                         ips.append(ip)
+#             hosts[hostname] = ips
+#             print(f"Got host information from node: {hostname}")
+#             print(f"Got ip information from node: {hostname} on ip {ips}")
+
+#     return hosts
+    
 def get_host_to_ips() -> Dict[str, List[str]]:
-    """Gets IPs from just the first node in allocation."""
+    """Gets IPs from pod-1, regardless of which pod is running the function."""
     hosts = {}
     
-    # Get the first node from SLURM_NODELIST
+    # Get all nodes from SLURM_NODELIST
     result = checker_common.run_command(
-        "scontrol show hostnames $SLURM_NODELIST | head -n 1",
+        "scontrol show hostnames $SLURM_NODELIST",
         check=False
     )
-    if result.returncode == 0:
-        hostname = result.stdout.strip()
-        # Get all IPs for the first node
-        cmd = "/usr/sbin/ip addr | grep -E 'inet' | awk '{print $2}' | cut -d'/' -f1"
-        result = checker_common.run_command(
-            cmd,
+    if result.returncode != 0:
+        return hosts
+
+    # Get list of all hostnames
+    all_hosts = result.stdout.strip().split('\n')
+    if len(all_hosts) < 2:
+        return hosts
+
+    # pod-1 is the second node in the allocation
+    target_hostname = all_hosts[1]
+    
+    # Get current node's rank
+    rank_result = checker_common.run_command(
+        "echo $SLURM_PROCID",
+        check=False
+    )
+    current_rank = int(rank_result.stdout.strip()) if rank_result.returncode == 0 else 0
+
+    # Command to get IPs
+    ip_cmd = "/usr/sbin/ip addr | grep -E 'inet' | awk '{print $2}' | cut -d'/' -f1"
+    
+    if current_rank == 1:
+        # If we're on pod-1, run locally
+        ip_result = checker_common.run_command(ip_cmd, check=False)
+    else:
+        # If we're on pod-0, run the command on pod-1 using ssh
+        ip_result = checker_common.run_command(
+            f"ssh {target_hostname} '{ip_cmd}'",
             check=False
         )
-        print("result: ", result)
-        if result.returncode == 0:
-            ips = []
-            for line in result.stdout.split('\n'):
-                if '.' in line:
-                    ip = line
-                    if not ip.startswith('127.') and not ip.startswith('172.'):
-                        ips.append(ip)
-            hosts[hostname] = ips
-            print(f"Got host information from node: {hostname}")
-            print(f"Got ip information from node: {hostname} on ip {ips}")
+
+    if ip_result.returncode == 0:
+        ips = []
+        for line in ip_result.stdout.split('\n'):
+            if '.' in line:
+                ip = line
+                if not ip.startswith('127.') and not ip.startswith('172.'):
+                    ips.append(ip)
+        hosts[target_hostname] = ips
+        print(f"Got host information from node: {target_hostname}")
+        print(f"Got ip information from node: {target_hostname} on ip {ips}")
 
     return hosts
 
@@ -180,10 +234,17 @@ def run_neper_test(
 
   cleanup_functions = []
 
-  if f"{JOB_NAME}-0" in POD_NAME:  # master node
+  # if f"{JOB_NAME}-0" in POD_NAME:  # master node
+      # Get current node's rank
+  rank_result = checker_common.run_command(
+      "echo $SLURM_PROCID",
+      check=False
+  )
+  current_rank = int(rank_result.stdout.strip()) if rank_result.returncode == 0 else 0
+  if current_rank == 0: 
     print("I am a master that will run neper test on 2 nodes")
 
-    self_host = checker_common.run_command("cat /host.name").stdout
+    self_host = os.environ["NODE_NAME"]
     log_files = []
 
     for host, ips in hosts_to_ips.items():
@@ -200,10 +261,10 @@ def run_neper_test(
         )
         cleanup_functions.append(cleanup_delete_temp_files(log_file))
 
-        checker_common.run_command(
-            f"ssh {JOB_NAME}-1.{SERVICE_NAME} -p 222 -- touch"
-            f" /master{count}.done",
-        )
+        done_file = f"/opt/apps/master{count}.done"
+        checker_common.run_command(f"touch {done_file}")
+        cleanup_functions.append(cleanup_delete_temp_files(done_file))
+
       process_test_result(log_files, self_host, host)
   else:  # secondary nodes
     for _, ips in hosts_to_ips.items():
@@ -216,12 +277,14 @@ def run_neper_test(
             "--num-threads=16 --num-flows=200 --suicide-length=600 "
             "--test-length=30 &"
         )
-        while not os.path.exists(f"/master{count}.done"):
-          print(f"test for {dst_ip} not done")
-          time.sleep(10)
+        # Wait for completion signal from master
+        done_file = f"/opt/apps/master{count}.done"
+        while not os.path.exists(done_file):
+            print(f"test for {dst_ip} not done")
+            time.sleep(10)
         print(f"test for {dst_ip} is done")
         cleanup_functions.append(
-            cleanup_delete_temp_files(f"/master{count}.done")
+            cleanup_delete_temp_files(done_file)
         )
 
   return cleanup_functions
@@ -331,50 +394,50 @@ def get_throughput(log_file: str, local: bool) -> int:
     return -1
 
 
-def get_ip_addresses(pod_name: str) -> str:
-  """Retrieve the host name where the specified pod is running.
+# def get_ip_addresses(pod_name: str) -> str:
+#   """Retrieve the host name where the specified pod is running.
 
-  Args:
-    pod_name (str): The name of the pod for which the host name is to be
-      retrieved.
+#   Args:
+#     pod_name (str): The name of the pod for which the host name is to be
+#       retrieved.
 
-  Returns:
-  str: The host name where the pod is running.
-  """
-  start_time = time.time()
+#   Returns:
+#   str: The host name where the pod is running.
+#   """
+#   start_time = time.time()
 
-  while timeout_check(start_time, pod_name):
-    result = checker_common.run_command(
-        f"ssh {pod_name} -p 222 -- cat /tmp/ip_addrs",
-        check=False,
-    )
-    if result.returncode == 0:
-      return result.stdout
-    time.sleep(1)
+#   while timeout_check(start_time, pod_name):
+#     result = checker_common.run_command(
+#         f"ssh {pod_name} -p 222 -- cat /tmp/ip_addrs",
+#         check=False,
+#     )
+#     if result.returncode == 0:
+#       return result.stdout
+#     time.sleep(1)
 
-  return ""
+#   return ""
 
 
-def get_host_name(pod_name: str) -> str:
-  """Retrieve the host name where the specified pod is running.
+# def get_host_name(pod_name: str) -> str:
+#   """Retrieve the host name where the specified pod is running.
 
-  Args:
-    pod_name (str): The name of the pod for which the host name is to be
-      retrieved.
+#   Args:
+#     pod_name (str): The name of the pod for which the host name is to be
+#       retrieved.
 
-  Returns:
-  str: The host name where the pod is running.
-  """
-  start_time = time.time()
-  while timeout_check(start_time, pod_name):
-    result = checker_common.run_command(
-        f"ssh {pod_name} -p 222 -- cat /tmp/host.name",
-        check=False,
-    )
-    if result.returncode == 0:
-      return result.stdout
-    time.sleep(1)
-  return ""
+#   Returns:
+#   str: The host name where the pod is running.
+#   """
+#   start_time = time.time()
+#   while timeout_check(start_time, pod_name):
+#     result = checker_common.run_command(
+#         f"ssh {pod_name} -p 222 -- cat /tmp/host.name",
+#         check=False,
+#     )
+#     if result.returncode == 0:
+#       return result.stdout
+#     time.sleep(1)
+#   return ""
 
 
 def timeout_check(start_time: float, pod_name: str) -> bool:
@@ -487,9 +550,9 @@ def main() -> None:
   ensure_env_variables()
   configure_ssh()
 
-  node_name = os.environ["NODE_NAME"]
-  with open("/tmp/host.name", "w") as f:
-    f.write(node_name)
+  # node_name = os.environ["NODE_NAME"]
+  # with open("/tmp/host.name", "w") as f:
+  #   f.write(node_name)
 
   host_to_ips = get_host_to_ips()
   cleanup_funcs = run_neper_test(host_to_ips)
