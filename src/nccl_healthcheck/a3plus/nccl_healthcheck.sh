@@ -67,4 +67,5 @@ srun -l \
         --container-image="${CONTAINER_IMAGE}" \
         --container-env="${HOST_VARS}" \
         --container-mounts="${CONTAINER_MOUNTS}" \
-        sh -c "python3 /scripts/nccl_startup.py"
+        --export=JOB_COMPLETION_INDEX=0 \
+	sh -c "python3 /scripts/nccl_startup.py"
