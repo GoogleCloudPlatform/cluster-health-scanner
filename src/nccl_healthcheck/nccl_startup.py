@@ -107,19 +107,34 @@ Port 222""")
   )
 
 
+# def get_host_list(nhosts: int) -> List[str]:
+#   """Generate a hostfile based on host names from pods."""
+
+#   hosts = []
+#   for i in range(nhosts):
+#     pod_name = f"{JOB_NAME}-{i}.{SERVICE_NAME}"
+#     host_name = get_host_name(pod_name)
+#     if host_name:
+#       hosts.append(host_name)
+#       print(f"Got host information from pod: {pod_name} on host {host_name}")
+
+#   return hosts
+
 def get_host_list(nhosts: int) -> List[str]:
   """Generate a hostfile based on host names from pods."""
+    hosts = {}
+    
+    # Get all nodes from SLURM_NODELIST
+    result = checker_common.run_command(
+        "scontrol show hostnames $SLURM_NODELIST",
+        check=False
+    )
+    if result.returncode != 0:
+        return hosts
 
-  hosts = []
-  for i in range(nhosts):
-    pod_name = f"{JOB_NAME}-{i}.{SERVICE_NAME}"
-    host_name = get_host_name(pod_name)
-    if host_name:
-      hosts.append(host_name)
-      print(f"Got host information from pod: {pod_name} on host {host_name}")
-
-  return hosts
-
+    # Get list of all hostnames
+    all_hosts = result.stdout.strip().split('\n')
+  return all_hosts
 
 def create_hostfile(hosts: List[str], nr: str) -> None:
   nhosts = len(hosts)
@@ -137,7 +152,13 @@ def run_nccl_test(hosts: List[str]) -> None:
   """Run the NCCL test."""
   nhosts = len(hosts)
   config_obj = config.get_config(INSTANCE_TYPE)
-  if JOB_INDEX == 0:  # master node
+  
+  rank_result = checker_common.run_command(
+      "echo $SLURM_PROCID",
+      check=False
+  )
+  current_rank = int(rank_result.stdout.strip()) if rank_result.returncode == 0 else 0
+  if current_rank == 0: 
     print(f"I am a master that will run nccl test on {nhosts} nodes")
     start_message_size = os.environ["START_MESSAGE_SIZE"] or "2G"
     end_message_size = os.environ["END_MESSAGE_SIZE"] or "8G"
@@ -165,8 +186,8 @@ def run_nccl_test(hosts: List[str]) -> None:
       print("waiting for master pod...")
       time.sleep(10)
   # Create file to let tcpd daemon to terminate
-  with open("/usr/share/nemo/workload_terminated", "w") as _:
-    pass
+  # with open("/usr/share/nemo/workload_terminated", "w") as _:
+  #   pass
 
 
 def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
@@ -469,9 +490,9 @@ def main() -> None:
 
   nhosts = int(os.environ["NHOSTS"])
   nr = os.environ["nr"]
-  node_name = os.environ["NODE_NAME"]
-  with open("/host.name", "w") as f:
-    f.write(node_name)
+  # node_name = os.environ["NODE_NAME"]
+  # with open("/host.name", "w") as f:
+  #   f.write(node_name)
   hosts = get_host_list(nhosts)
   create_hostfile(hosts, nr)
   run_nccl_test(hosts)

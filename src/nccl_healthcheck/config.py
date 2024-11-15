@@ -40,8 +40,8 @@ def _create_a3plus_config():
           " {start_message_size} {end_message_size} {nhosts} 3"
       ),
       default_threshold=120,
-      ld_library_path="/usr/local/fastrak/lib64:/usr/local/nvidia/lib64/"
-      )
+      ld_library_path="/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:/var/lib/nvidia/lib64/"
+      )   
 
 
 def get_config(instance_type: str) -> config_pb2.ASeriesConfig:

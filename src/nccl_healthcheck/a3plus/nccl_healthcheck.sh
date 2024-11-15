@@ -33,39 +33,15 @@ echo $HOST_VARS
 
 CONTAINER_MOUNTS="/var/tmp:/var/tmp"
 
-#CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"$PWD:/opt/"
-
 CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"/var/lib/tcpxo/lib64/"
-#CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"/usr/local/tcpxo/lib64/"
-# Launch the litgpt script
-#srun -l \
-#	-N "${SLURM_NNODES}" \
-#	--mpi=pmi2 \
-#	--ntasks-per-node=8 \
-#	--container-image="${CONTAINER_IMAGE}" \
-#	--container-env="${HOST_VARS}" \
-#	--container-mounts="${CONTAINER_MOUNTS}" \
-#	sh -c "
-#  export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH;
-#  /third_party/nccl-tests-mpi/build/all_gather_perf -b 2G -e 8G -f 2 -g 1 -w 5 --iters 200 -c 0;
-#  "
-#srun -l \
-#        -N "${SLURM_NNODES}" \
-#        --mpi=pmi2 \
-#        --ntasks-per-node=8 \
-#        --container-image="${CONTAINER_IMAGE}" \
-#        --container-env="${HOST_VARS}" \
-#        --container-mounts="${CONTAINER_MOUNTS}" \
-#        sh -c "
-#  export LD_LIBRARY_PATH=/usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/;
-#  /third_party/nccl-tests-mpi/build/all_gather_perf -b 2G -e 8G -f 2 -g 1 -w 5 --iters 200 -c 0;
-#  "
-srun -l \
+
+sudo srun  \
         -N "${SLURM_NNODES}" \
-        --mpi=pmi2 \
         --ntasks-per-node=8 \
-        --container-image="${CONTAINER_IMAGE}" \
+        --container-image=./nccl_slurm.sqsh \
         --container-env="${HOST_VARS}" \
+        --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST  --gpus=8 --nodes 2 --exclusive
         --container-mounts="${CONTAINER_MOUNTS}" \
         --export=JOB_COMPLETION_INDEX=0 \
-	sh -c "python3 /scripts/nccl_startup.py"
+        sh -c "export NODE_NAME=$HOSTNAME; python3 /scripts/nccl_startup.py"
+
