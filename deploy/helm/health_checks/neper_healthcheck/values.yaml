@@ -25,11 +25,14 @@ node_match:
 
 health_check:
   name: "neper-healthcheck"
+  test_label:
+    name: "aiinfra/neper-healthcheck-test"
+    value: "true"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck"
-    tag: "subset"
+    tag: "v4.1.0"
     pull_policy: "Always"
   env:
-    GOOD_THROUGHPUT: "130000000000"
-    HEALTH_VALIDITY_HOURS: "5"
+    GOOD_THROUGHPUT: "50000000000"
+    HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"

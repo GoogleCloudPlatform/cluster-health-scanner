@@ -22,17 +22,20 @@ Note:
     You must have the necessary permissions to create and delete daemonsets in
     the specified Kubernetes namespace.
 """
-
+from collections.abc import Iterable
 import logging
 import os
+import signal
 import time
+import uuid
 
 import checker_common
+import nccl_runner
 
 
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
+_HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
-_IMAGE_VERSION_PATH = os.environ.get("IMAGE_VERSION_PATH", "image_version.txt")
 _K_GPU_NODES_IN_CLUSTER_COMMAND = (
     f"{_KUBECTL} get nodes -l cloud.google.com/gke-accelerator"
     " --no-headers | wc -l"
@@ -41,14 +44,26 @@ _K_GPU_NODES_IN_CLUSTER_COMMAND = (
 logging.root.setLevel(logging.INFO)
 
 
-def ensure_env_variables() -> None:
+def main() -> None:
+  # Test for NCCL health check
+  health_app = os.environ.get("HEALTH_APP", "").lower()
+  # Create Helm releases for each health check
+  if health_app == "nccl":
+    logging.info("Running NCCL health check via `HEALTH_APP`")
+    nccl_runner.run_nccl_healthcheck()
+  else:
+    logging.info("Running Helm health check")
+    run_health_check()
+
+
+def ensure_env_variables(required_envs: Iterable[str]) -> None:
   """Ensure necessary environment variables are set."""
-  required_envs = ["YAML_FILE", "DRY_RUN"]
   for env in required_envs:
     if env not in os.environ:
       raise ValueError(f"Must set {env}")
 
 
+# 
 def determine_test_iterations() -> int:
   """Determine the number of tests to run.
 
@@ -100,46 +115,107 @@ def determine_test_iterations() -> int:
     return 1
 
 
-def main() -> None:
-  ensure_env_variables()
+def is_hc_finished(
+    target_count: int = 0,
+    timeout_seconds: int = 300,
+    check_interval: int = 10,
+) -> bool:
+  """Waits for pods to reach target count."""
 
-  if (
-      os.path.exists(_IMAGE_VERSION_PATH)
-      and os.environ.get("IMAGE_TAG") is None
-  ):
-    logging.info("Loading image tag based on %s", _IMAGE_VERSION_PATH)
-    with open(_IMAGE_VERSION_PATH, "r") as f:
-      tag = f.read().strip()
-      os.environ["IMAGE_TAG"] = tag
+  print(f"Pods to be completed: {target_count=}")
 
-  # Step 1: Create k8s components
-  yaml_path = os.path.join("/app", os.environ.get("YAML_FILE"))
+  start_time = time.time()
+  while time.time() - start_time < timeout_seconds:
+    # TODO: Add a check for the number of pods still running
+    time.sleep(check_interval)
+    logging.info(
+        "(%.2f sec) out of (%d sec)",
+        int(time.time() - start_time),
+        timeout_seconds,
+    )
+
+  message_timeout: str = (
+      "Timeout reached after %f seconds."
+      " Some pods may still not be in Error or Completed state."
+  )
+  logging.info(
+      message_timeout,
+      timeout_seconds,
+  )
+
+  return True
+
+
+def run_health_check() -> None:
+  """Run the health check."""
+
+  # PREPARATION
+  ensure_env_variables(
+      required_envs={
+          "DRY_RUN",
+          "HELM_CHART",  # Must be defined since can't assume health check type
+      },
+  )
 
   # Determine number of tests to run
-  num_tests = determine_test_iterations()
+  num_tests: int = determine_test_iterations()
 
   cleanup_functions = []
 
   logging.info("Creating %d tests...", num_tests)
+  # This must be defined in the YAML configuration
+  helm_chart_path = os.environ.get("HELM_CHART")
+  # 
+  helm_chart_version = os.environ.get("HELM_CHART_VERSION")
+  # 
+  helm_install_flags = os.environ.get("HELM_INSTALL_FLAGS")
+  # 
+  helm_values = os.environ.get("HELM_VALUES")
+
+  # RUN HC
   for i in range(num_tests):
-    cleanup_functions.extend(
-        checker_common.create_k8s_objects(yaml_path, _KUBECTL)
+    # If Helm release name is not unique, it will not install the release
+    unique_release_name = os.environ.get(
+        "HELM_RELEASE_NAME",
+        f"internal-health-check-{i}-{str(uuid.uuid4())[:8]}"
     )
-    # Sleep to force a different timestamp
-    time.sleep(1.5)
-    logging.info("Deployed test %d / %d.", i, num_tests)
 
+    cleanup_functions.extend(
+        checker_common.create_helm_release(
+            helm_path=_HELM,
+            release_name=unique_release_name,
+            chart=helm_chart_path,
+            values=helm_values,
+            chart_version=helm_chart_version,
+            helm_install_flags=helm_install_flags,
+        )
+    )
+    # TODO - Find a better way to avoid this sleep
+    # Sleep to allow time for helm releases to create proper ServiceAccount,
+    # ClusterRole, etc.
+    time.sleep(1)
+    # Count of tests deployed should start at 1 to make it clear
+    logging.info("Deployed test %d (%d of %d total)", i, i + 1, num_tests)
+
+  # TODO - Sleep section
   logging.info(
-      "Health check is running. Waiting for %s minutes...", _SLEEP_TIME_MINUTES
+      "Waiting for maximum of %s minutes before cleaning up...",
+      _SLEEP_TIME_MINUTES,
   )
-  time.sleep(int(_SLEEP_TIME_MINUTES) * 60)
+  is_hc_finished(
+      target_count=num_tests,
+      timeout_seconds=int(_SLEEP_TIME_MINUTES) * 60,
+      check_interval=10,
+  )
 
-  # Step 3: Cleanup cluster
+  # Cleanup cluster (uninstall helm releases, delete k8s objects, etc.)
   for func in cleanup_functions:
     try:
       func()
     except Exception:  # pylint: disable=broad-exception-caught
       logging.exception("Cleanup failed.")
 
+
 if __name__ == "__main__":
+  signal.signal(signal.SIGTERM, checker_common.sigterm_handler)
   main()

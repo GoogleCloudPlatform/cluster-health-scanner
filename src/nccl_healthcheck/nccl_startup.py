@@ -17,14 +17,11 @@
 This module controls execution of pairwise NCCL test.
 """
 
-import json
 import os
 import re
 import time
-from typing import List
 
 import checker_common
-import metrics
 import config
 
 JOB_NAME = os.environ.get("JOB_NAME")
@@ -40,16 +37,19 @@ TAINT_VALUE_FAILED = "failed"
 TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
 TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
-HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-valid-till-sec"
+HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-runtime-sec"
 HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY = (
     "aiinfra/nccl-healthcheck-second-pass-needed"
 )
+NCCL_PRE_RESULT_KEY = "aiinfra/nccl-healthcheck-pre-result"
 
 K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
 K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
 K_REMOVE_LABEL_FORMAT = "{k} label node %s %s-".format(k=KUBECTL)
 K_REMOVE_TAINT_NODE_FORMAT = "{k} taint node %s %s-".format(k=KUBECTL)
 K_DELETE_SERVICE_FORMAT = "{k} delete svc %s".format(k=KUBECTL)
+
+WORKLOAD_TERMINATE_FILE = "/usr/share/nemo/workload_terminated"
 
 
 def ensure_env_variables() -> None:
@@ -101,7 +101,9 @@ Port 222""")
   )
 
 
-def get_host_list(nhosts: int) -> List[str]:
+def get_host_list(
+    nhosts: int,
+) -> list[str]:
   """Generate a hostfile based on host names from pods."""
 
   hosts = []
@@ -115,7 +117,16 @@ def get_host_list(nhosts: int) -> List[str]:
   return hosts
 
 
-def create_hostfile(hosts: List[str], nr: str) -> None:
+def create_hostfile(
+    hosts: list[str],
+    nr: str,
+) -> None:
+  """Create a hostfile for the NCCL test.
+  
+  Args:
+    hosts (list[str]): The list of hosts to include in the hostfile.
+    nr (str): The number of ranks to use in the hostfile.
+  """
   nhosts = len(hosts)
   os.makedirs(f"hostfiles{nhosts}", exist_ok=True)
 
@@ -127,7 +138,9 @@ def create_hostfile(hosts: List[str], nr: str) -> None:
         f.write(f"{host} port=222 slots={nr}\n")
 
 
-def run_nccl_test(hosts: List[str]) -> None:
+def run_nccl_test(
+    hosts: list[str],
+) -> None:
   """Run the NCCL test."""
   nhosts = len(hosts)
   config_obj = config.get_config(INSTANCE_TYPE)
@@ -135,142 +148,118 @@ def run_nccl_test(hosts: List[str]) -> None:
     print(f"I am a master that will run nccl test on {nhosts} nodes")
     start_message_size = os.environ["START_MESSAGE_SIZE"] or "2G"
     end_message_size = os.environ["END_MESSAGE_SIZE"] or "8G"
+    # Number of times NCCL operation will run in a test
+    # TODO - Rename 'ITERATIONS' to be more descriptive & clear
+    nccl_operation_iterations = int(os.getenv("ITERATIONS", "300"))
+    # Number of times the test will run (a bandwidth for each)
+    test_iterations = int(os.getenv("TEST_ITERATIONS", "5"))
+    benchmark = os.environ.get("BENCHMARK", "all_gather_perf")
     ld_library_path = config_obj.ld_library_path
 
     print("Sleeping for 30 seconds to let rxdm spin up...")
     time.sleep(30)
 
     bandwidths = []
-    iterations = int(os.getenv("ITERATIONS", "5"))
-    for _ in range(iterations):
-      # Run the test 'iter' amount of times and average the performance.
+    # Run the test 'iter' amount of times and average the performance.
+    for _ in range(test_iterations):
       test_result = checker_common.run_command(
           config_obj.nccl_test_command_template.format(
               ld_library_path=ld_library_path,
               start_message_size=start_message_size,
               end_message_size=end_message_size,
               nhosts=nhosts,
+              iterations=nccl_operation_iterations,
+              benchmark=benchmark,
           )
       )
       bandwidths.append(get_bandwidth(test_result.stdout))
-    process_test_result(bandwidths, hosts)
+    process_test_result(
+        bandwidths=bandwidths,
+        nodes=hosts,
+        bandwidth_threshold=int(os.environ["BANDWIDTH_THRESHOLD"]),
+    )
   else:  # secondary nodes
     while not os.path.exists("/master.done"):
       print("waiting for master pod...")
       time.sleep(10)
-  # Create file to let tcpd daemon to terminate
-  with open("/usr/share/nemo/workload_terminated", "w") as _:
-    pass
+  # Create file to let tcpxo daemon to terminate, this only applies to A3
+  # and A3+ machines which use rxdm.
+  if INSTANCE_TYPE == "a3-highgpu-8g" or INSTANCE_TYPE == "a3-megagpu-8g":
+    with open(WORKLOAD_TERMINATE_FILE, "w") as _:
+      pass
 
 
-def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
+def process_test_result(
+    bandwidths: list[int],
+    nodes: list[str],
+    bandwidth_threshold: int,
+    acceptable_failure_rate: float = 0.5,
+) -> None:
   """Process test results. Add node taints and labels."""
-  threshold = int(os.environ["BANDWIDTH_THRESHOLD"])
-  enable_two_pass = (
-      os.environ.get("ENABLE_TWO_PASS_STRATEGY", "").lower() == "true"
-  )
   second_pass = os.environ.get("SECOND_PASS", "").lower() == "true"
-  failures = 0
-  total_bandwidth = 0
-  for bandwidth in bandwidths:
-    if bandwidth == -1:
-      failures += 1
-      continue
-    total_bandwidth += bandwidth
 
-  iterations = len(bandwidths) - failures
-  avg_bandwidth = int(total_bandwidth / iterations) if iterations > 0 else -1
+  # Filter for only valid bandwidths
+  valid_bandwidths: tuple[int, ...] = tuple(bw for bw in bandwidths if bw != -1)
+  iteration_failure_rate: float = 1.0 - len(valid_bandwidths) / len(bandwidths)
 
-  # If more than half of the iterations failed or the average bandwidth is
-  # below the threshold, the test is considered failed.
-  passed = (
-      failures <= iterations / 2
-      and avg_bandwidth >= threshold
+  # Average bandwidth is -1 if there are no valid bandwidths
+  # Average bandwidth is rounded up to nearest integer
+  avg_bandwidth: int = (
+      sum(valid_bandwidths) // len(valid_bandwidths) if valid_bandwidths else -1
+  )
+  has_sufficient_bandwidth: bool = avg_bandwidth >= bandwidth_threshold
+  has_acceptable_failure_rate: bool = (
+      iteration_failure_rate <= acceptable_failure_rate
   )
 
-  if passed:
-    print("nccl test passed. Removing node taints...")
-    taint = None
-    # removing healthcheck label and taint
-    for node in nodes:
-      remove_node_taint(node, TAINT_KEY)
-      remove_label(node, "aiinfra/nccl-healthcheck")
-      if second_pass:
-        remove_label(node, HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY)
-  elif enable_two_pass:
-    print("ENABLE_TWO_PASS_STRATEGY is set.")
-    if second_pass:
-      # failed with two pass enabled
-      print("nccl test failed final pass. Adding node taint to Master Node...")
-      taint = TAINT_VALUE_FAILED
-      node = os.environ.get("NODE_NAME")
-      mark_failed_node(
-          node,
-          nodes,
-          TAINT_VALUE_FAILED,
-          TAINT_EFFECT_NOSCHEDULE,
-      )
-      remove_label(node, HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY)
-    else:
-      # failed with two pass disabled
-      print("nccl test failed first pass. Adding node taints...")
-      taint = TAINT_VALUE_SUSPECT
-      for node in nodes:
-        mark_failed_node(
-            node,
-            nodes,
-            TAINT_VALUE_SUSPECT,
-            TAINT_EFFECT_PREFERNOSCHEDULE,
-        )
-        time.sleep(2)  # Sleep to force a different check-time
-        deploy_second_pass(node)
-  else:
-    # failed and two pass disabled
-    print("ENABLE_TWO_PASS_STRATEGY is not set.")
-    print("nccl test failed. Adding node taint to nodes...")
-    taint = TAINT_VALUE_FAILED
-    for node in nodes:
-      mark_failed_node(
-          node,
-          nodes,
-          TAINT_VALUE_FAILED,
-          TAINT_EFFECT_NOSCHEDULE,
-      )
+  passed: bool = has_sufficient_bandwidth and has_acceptable_failure_rate
 
+  # Pre-result label is used to determine if this run met criteria
+  for node in nodes:
+    checker_common.add_label(
+        node,
+        NCCL_PRE_RESULT_KEY,
+        "pass" if passed else "fail",
+        K_ADD_LABEL_FORMAT,
+    )
+
+  test_name = os.environ.get("TEST_NAME", "nccl")
   for node in nodes:
     add_healthcheck_time_label(node)
     mark_node_bandwidth(node, avg_bandwidth)
 
-    if second_pass and node != os.environ.get("NODE_NAME"):
-      # Do not log metric if we're testing against a known-good node
-      continue
-    terminal = taint != TAINT_VALUE_SUSPECT
-    log = metrics.log_dict(
-        test_name="nccl",
-        did_pass=passed,
+    # Either it passed or a second pass is needed
+    terminal = second_pass or passed
+    checker_common.log_results(
+        test_name=test_name,
+        passed=passed,
         node_name=node,
+        workflow_id=os.environ.get("WORKFLOW_ID"),
         result_data={
             "avg_bus_bandwidth": avg_bandwidth,
             "num_nodes": len(nodes),
             "all_nodes": sorted(nodes),
-            "taint_applied": taint,
             "terminal_test": terminal,
         },
     )
     if terminal:
+      result = "fail"
+      if passed:
+        result = "pass"
+      elif avg_bandwidth == -1:
+        result = "crash"
+
       checker_common.add_label(
           node,
           _RESULT_LABEL_KEY,
-          "pass" if passed else "fail",
+          result,
           K_ADD_LABEL_FORMAT,
       )
-
-    print(json.dumps(log))
 
 
 def mark_failed_node(
     node: str,
-    nodes: List[str],
+    nodes: list[str],
     taint_value: str,
     taint_effect: str,
 ) -> None:
@@ -282,17 +271,17 @@ def mark_failed_node(
   )
 
 
-def deploy_second_pass(node: str) -> None:
-  print("deploying second pass...")
-  config_obj = config.get_config(INSTANCE_TYPE)
-  checker_common.add_label(
-      node, HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY, "true", K_ADD_LABEL_FORMAT
-  )
-  yaml_path = os.path.join("/scripts", config_obj.second_pass_yaml_path)
-  checker_common.create_k8s_objects(yaml_path, KUBECTL)
-
-
-def get_bandwidth(test_result: str) -> int:
+def get_bandwidth(
+    test_result: str,
+) -> int:
+  """Extract the bandwidth from the test result.
+  
+  Args:
+    test_result (str): The test result to extract the bandwidth from.
+  
+  Returns:
+    int: The bandwidth (GB/s)extracted from the test result. -1 if not found.
+  """
   # Search for the line of interest using regex
   match = re.search(r"# Avg bus bandwidth\s*:\s*(\d+)", test_result)
 
@@ -306,7 +295,9 @@ def get_bandwidth(test_result: str) -> int:
     return -1
 
 
-def get_host_name(pod_name: str) -> str:
+def get_host_name(
+    pod_name: str,
+) -> str:
   """Retrieve the host name where the specified pod is running.
 
   Args:
@@ -330,12 +321,17 @@ def get_host_name(pod_name: str) -> str:
   return ""
 
 
-def timeout_check(start_time: float, pod_name: str) -> bool:
+def timeout_check(
+    start_time: float,
+    pod_name: str,
+    timeout_minutes: int = 10,
+) -> bool:
   """Check if we exceed allocated timeout to get host name from that pod_name.
 
   Args:
     start_time (int): Time when we start checking the pod.
     pod_name (str): The name of the pod to be checked.
+    timeout_minutes (int): The timeout in minutes.
 
   Returns:
     None
@@ -344,14 +340,23 @@ def timeout_check(start_time: float, pod_name: str) -> bool:
     TimeoutError: If the pod has been running longer than the allocated timeout.
   """
   elapsed_time = time.time() - start_time
-  if elapsed_time >= 10 * 60:  # 10 minutes
-    raise TimeoutError(
-        f"10min Timeout reached while trying to ssh to pod {pod_name}"
+  if elapsed_time >= 60 * timeout_minutes:  # in seconds
+    error_message: str = (
+        f"{timeout_minutes}min Timeout reached"
+        f" while trying to ssh to pod {pod_name}"
     )
+    print(f"Timeout Error: {error_message}")
+    print(f"node calling from is: {os.environ.get('NODE_NAME')}")
+    raise TimeoutError(error_message)
   return True
 
 
-def taint_node(node_name: str, key: str, value: str, effect: str) -> None:
+def taint_node(
+    node_name: str,
+    key: str,
+    value: str,
+    effect: str,
+)-> None:
   """Apply a taint to a specified node with given key, value, and effect.
 
   Args:
@@ -367,31 +372,36 @@ def taint_node(node_name: str, key: str, value: str, effect: str) -> None:
     )
 
 
-def remove_node_taint(node_name: str, taint_key: str) -> None:
+def remove_node_taint(
+    node_name: str,
+    taint_key: str,
+) -> None:
   print("removing taint %s from node %s" % (taint_key, node_name))
   checker_common.run_command(
       K_REMOVE_TAINT_NODE_FORMAT % (node_name, taint_key)
   )
 
 
-def add_healthcheck_time_label(node_name: str) -> None:
+def add_healthcheck_time_label(
+    node_name: str,
+    node_label: str = HEALTHCHECK_TIME_LABEL_KEY,
+    time_value: int | None = None,
+) -> None:
   """Add healthcheck time label to node."""
-  # Add timestampt as number of seconds
-  # since epoch time January 1, 1970, 00:00:00 (UTC) + 5 (default) hours
-  # health validity.
-  health_validity = (
-      int(time.time())
-      + int(os.environ.get("HEALTH_VALIDITY_HOURS", "5")) * 60 * 60
-  )
+  if time_value is None:
+    time_value = int(time.time())
   checker_common.add_label(
       node_name,
-      HEALTHCHECK_TIME_LABEL_KEY,
-      f"{health_validity}",
+      node_label,
+      f"{time_value}",
       K_ADD_LABEL_FORMAT,
   )
 
 
-def mark_node_bandwidth(node: str, bandwidth: int) -> None:
+def mark_node_bandwidth(
+    node: str,
+    bandwidth: int,
+) -> None:
   """Mark the node bandwidth observed during the test.
 
   Args:
@@ -409,12 +419,17 @@ def mark_node_bandwidth(node: str, bandwidth: int) -> None:
   )
 
 
-def remove_label(node_name: str, label: str) -> None:
+def remove_label(
+    node_name: str,
+    label: str,
+) -> None:
   print("removing label %s from node %s" % (label, node_name))
   checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
 
 
-def cleanup(hosts: List[str]) -> None:
+def cleanup(
+    hosts: list[str],
+) -> None:
   """Clean up any additional resources deployed to the cluster."""
   print("Running cleanup commands.")
   if JOB_INDEX == 0:

@@ -98,6 +98,45 @@ Runs on two nodes to check networking across these nodes.
 A 'pass' is given to both nodes when they have an average bandwidth that meets
 or exceeds a given threshold.
 
+The NCCL health check will pair nodes based on the parameter `PAIRING_MODE` in
+the health runner configuration.
+By default, NCCL health check runs in `random` pairing mode which runs the
+health checks between random pairs of nodes. These are the supported topological
+aware pairing modes:
+
+* Random Pairs (default) - `PAIRING_MODE: random`
+  - Ignores topology of cluster and randomly pairs nodes together
+  - When second pass is enabled (`SECOND_PASS_ENABLED: true`), a NCCL test
+    failure will proceed with another random pairing but this time using one
+    passed node and one failed node in each pair.
+* Intra Rack - `PAIRING_MODE: intra_rack`
+  - Checks the racks communication by running NCCL tests between each node in
+    the same rack.
+  - When second pass is enabled (`SECOND_PASS_ENABLED: true`), a NCCL test
+    failure will proceed with another pairing but this time using one passed
+    node and one failed node in each pair (within the rack).
+* Inter Rack -  `PAIRING_MODE: inter_rack`
+  - Checks inter-rack communication by running NCCL tests between nodes in
+    different racks. (The racks will be in the same cluster).
+  - When second pass is enabled (`SECOND_PASS_ENABLED: true`), a rack that
+    failed the first initial NCCL test will be randomly paired with a different
+    rack that previously passed.
+  - Note the nodes will still be labeled as pass/fail but only failed nodes in
+    a failed rack will be tested again if second pass is enabled.
+* Inter Cluster - `PAIRING_MODE: inter_cluster`
+  - Checks the inter-cluster communication by running NCCL tests between nodes
+    in different clusters.
+  - When second pass is enabled (`SECOND_PASS_ENABLED: true`), a cluster that
+    failed the first initial NCCL test will be randomly paired with a different
+    cluster that previously passed.
+  - Note the nodes will still be labeled as pass/fail but only failed nodes in
+    a failed cluster will be tested again if second pass is enabled.
+
+Note that, for all pairing modes, second-pass is enabled by default which runs 
+the NCCL test for pairs of a healthy and unhealthy node. This reduces the 
+falsely tainted nodes.
+
+
 ##### GPU Health Check
 
 Runs the [NVIDIA's DCGM diagnostic tool](https://developer.nvidia.com/dcgm) to
@@ -189,11 +228,6 @@ run the health check.
 
 The value for `runner_name` will be used as the base of the name of the
 Kubernetes Job for each health check instance launched.
-
-##### `health_checks.HC_NAME.schedule`
-
-`schedule` is given as a [unix-cron string format](https://cloud.google.com/scheduler/docs/configuring/cron-job-schedules) and will specify how often a batch of these health checks
-should run.
 
 ##### `health_checks.HC_NAME.image`
 
@@ -296,51 +330,62 @@ health_checks:
   nccl_healthcheck:
     run_check: true
     runner_name: nccl-health-runner-a3plus
-    schedule: "*/5 * * * *"  # run every five minutes
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "subset"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "5"
-      YAML_FILE: "a3plus/nccl_healthcheck.yaml"
+      SLEEP_TIME_MINUTES: "30"
+      HELM_CHART: "/app/health_checks/nccl_healthcheck"
+      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$HC_IMAGE_TAG"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "subset"
+      HEALTH_APP: "nccl"
+      PAIRING_MODE: "random"
+      SECOND_PASS_ENABLED: "true"
     blast_mode:
-      blast_mode_enabled: false
+      blast_mode_enabled: true
       env:
-        BLAST_MODE_NUM_TESTS_LIMIT: "10"
-        NODES_CHECKED_PER_TEST:  "2"
+        NODES_CHECKED_PER_TEST: "2"
   gpu_healthcheck:
     run_check: false
     runner_name: gpu-health-runner
-    schedule: "0 * * * *"  # run every hour
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "subset"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "15"
-      YAML_FILE: "gpu_healthcheck.yaml"
+      SLEEP_TIME_MINUTES: "30"
+      HELM_CHART: "/app/health_checks/gpu_healthcheck"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
       R_LEVEL: "2"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "subset"
+
+    blast_mode:
+      blast_mode_enabled: true
+      env:
+        NODES_CHECKED_PER_TEST: "1"
   neper_healthcheck:
     run_check: false
     runner_name: neper-health-runner
-    schedule: "*/5 * * * *"  # run every 5 min
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v2.1.9-public"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "10"
-      YAML_FILE: "neper_healthcheck.yaml"
+      SLEEP_TIME_MINUTES: "30"
+      HELM_CHART: "/app/health_checks/neper_healthcheck"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
-      IMAGE_TAG: "v2.1.9-public"
+    blast_mode:
+      blast_mode_enabled: true
+      env:
+        NODES_CHECKED_PER_TEST: "2"
 ```
 
 
@@ -401,7 +446,7 @@ Kubernetes `kubectl` tool.
 The following command displays results for the NCCL health check for each node:
 
 ```bash
-CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,VALID_TILL:.metadata.labels.aiinfra/nccl-healthcheck-valid-till-sec"
+CUSTOM_COLS="NODE:.metadata.name,MARK:.metadata.labels.aiinfra/nccl-healthcheck-test,BANDWIDTH:.metadata.labels.aiinfra/nccl-healthcheck-bandwidth,RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result,RUNTIME:.metadata.labels.aiinfra/nccl-healthcheck-runtime-sec"
 
 kubectl get nodes -o custom-columns="${CUSTOM_COLS}"
 ```
@@ -433,23 +478,20 @@ To uninstall the Health Runner (a Helm release), use the release name
 helm uninstall RELEASE_NAME
 ```
 
-#### Removing Leftover CronJobs and Jobs
-While the Health Runner Helm chart simplifies cleanup, it's important to remove
-any lingering CronJobs and Jobs in the cluster that are not removed
-automatically.
+#### Removing Leftover and Jobs
 
-You can list these with commands such as the following:
+While the Health Runner Helm chart simplifies cleanup, it's important to remove
+any lingering Jobs in the cluster that are not removed automatically.
+
+You can list these with a command like the following:
 
 ```bash
-kubectl get cronjobs | grep healthcheck
 kubectl get jobs | grep healthcheck
 ```
 
-To remove lingering CronJobs & Jobs:
+To remove lingering Jobs:
 
 ```bash
-kubectl delete cronjobs $CRONJOB_NAME
-
 kubectl delete jobs $JOB_NAME_0 $JOB_NAME_1
 ```
 
@@ -579,12 +621,6 @@ To more thoroughly list current Helm Release installations, you can include the
 helm ls -a
 ```
 
-To view current CronJobs in Kubernetes cluster:
-
-```bash
-kubectl get cronjobs
-```
-
 To view current Jobs in Kubernetes cluster:
 
 ```bash
@@ -592,7 +628,7 @@ kubectl get jobs
 ```
 
 > NOTE:
-> Since the list of Jobs & CronJobs can be quite large, you may find it useful
+> Since the list of Jobs can be quite large, you may find it useful
 > to filter the output of the above commands by piping the results with `grep`.
 >
 > For example, the following will get the list of Jobs that have the phrase
@@ -858,24 +894,21 @@ with the same YAML file that was used in `kubectl apply`:
 kubectl delete -f my_deployment.yaml
 ```
 
-#### Cleaning up lingering CronJobs and Jobs
+#### Cleaning up lingering Jobs
 
 Using a Helm chart simplifies cleanup, but it's important to remove any
-lingering CronJobs and Jobs in your cluster that don't get cleaned up
+lingering Jobs in your cluster that don't get cleaned up
 automatically.
 
 You can list these with the commands using `grep`:
 
 ```bash
-kubectl get cronjobs | grep healthcheck
 kubectl get jobs | grep healthcheck
 ```
 
-To remove lingering CronJobs and Jobs:
+To remove lingering Jobs:
 
 ```bash
-kubectl delete cronjobs CRONJOB_NAME
-
 kubectl delete jobs JOB_NAME_0 JOB_NAME_1
 ```
 

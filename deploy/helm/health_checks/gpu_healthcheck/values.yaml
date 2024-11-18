@@ -27,9 +27,9 @@ health_check:
     value: "true"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck"
-    tag: "subset"
+    tag: "v4.1.0"
     pull_policy: "Always"
   env:
-    R_LEVEL: "3"
+    R_LEVEL: "2"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"

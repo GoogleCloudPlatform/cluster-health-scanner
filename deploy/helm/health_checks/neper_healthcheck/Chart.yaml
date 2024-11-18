@@ -16,5 +16,4 @@ apiVersion: v2
 name: neper_health_check
 description: A chart for running neper health check
 type: application
-version: 0.1.0
-appVersion: "2.0.0"
+version: 4.1.0

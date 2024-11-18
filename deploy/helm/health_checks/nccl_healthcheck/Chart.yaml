@@ -16,5 +16,4 @@ apiVersion: v2
 name: nccl_health_check
 description: A chart for running NCCL health check
 type: application
-version: 0.3.0
-appVersion: "2.0.0"
+version: 4.1.0
