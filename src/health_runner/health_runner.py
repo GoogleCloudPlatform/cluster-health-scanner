@@ -22,6 +22,7 @@ Note:
     You must have the necessary permissions to create and delete daemonsets in
     the specified Kubernetes namespace.
 """
+
 from collections.abc import Iterable
 import logging
 import os
@@ -30,7 +31,9 @@ import time
 import uuid
 
 import checker_common
+import health_results_pb2
 import nccl_runner
+from google.protobuf import timestamp_pb2
 
 
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
@@ -48,12 +51,28 @@ def main() -> None:
   # Test for NCCL health check
   health_app = os.environ.get("HEALTH_APP", "").lower()
   # Create Helm releases for each health check
-  if health_app == "nccl":
+  if health_app:
     logging.info("Running NCCL health check via `HEALTH_APP`")
-    nccl_runner.run_nccl_healthcheck()
+    run_health_app(health_app)
   else:
     logging.info("Running Helm health check")
     run_health_check()
+
+
+def run_health_app(health_app: str) -> None:
+  """Run the health check."""
+  health_results = health_results_pb2.HealthResults(
+      created_date_time=timestamp_pb2.Timestamp().GetCurrentTime(),
+  )
+  if health_app == "nccl":
+    logging.info("Running NCCL health check via `HEALTH_APP`")
+    nccl_result = nccl_runner.run_nccl_healthcheck()
+    health_results.health_results.append(nccl_result)
+  else:
+    logging.error("Unsupported health app: %s", health_app)
+    return
+
+  print("Health results: ", health_results)
 
 
 def ensure_env_variables(required_envs: Iterable[str]) -> None:
@@ -177,7 +196,7 @@ def run_health_check() -> None:
     # If Helm release name is not unique, it will not install the release
     unique_release_name = os.environ.get(
         "HELM_RELEASE_NAME",
-        f"internal-health-check-{i}-{str(uuid.uuid4())[:8]}"
+        f"internal-health-check-{i}-{str(uuid.uuid4())[:8]}",
     )
 
     cleanup_functions.extend(

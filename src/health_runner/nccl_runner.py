@@ -27,6 +27,7 @@ from kubernetes.client.api import batch_v1_api
 
 import checker_common
 import common_pb2
+import health_results_pb2
 
 
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
@@ -40,7 +41,7 @@ _DEFAULT_NCCL_TEST_LABEL_NAME = "aiinfra/nccl-healthcheck-test"
 _DEFAULT_NCCL_TEST_LABEL_VALUE = "true"
 
 
-def run_nccl_healthcheck():
+def run_nccl_healthcheck() -> health_results_pb2.HealthResult:
   """Runs NCCL health check and waits for it to complete."""
   print("cleaning up labels")
   labels_to_remove = [
@@ -79,21 +80,19 @@ def run_nccl_healthcheck():
   # Default is to use toplogy awareness when pairing nodes
   if case == "intra_rack":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_intra_rack_healthcheck(v1, capacity, second_pass_enabled)
+    return run_intra_rack_healthcheck(v1, capacity, second_pass_enabled)
   elif case == "inter_rack":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_inter_rack_healthcheck(v1, capacity, second_pass_enabled)
+    return run_inter_rack_healthcheck(v1, capacity, second_pass_enabled)
   elif case == "inter_cluster":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_inter_cluster_healthcheck(v1, capacity, second_pass_enabled)
+    return run_inter_cluster_healthcheck(v1, capacity, second_pass_enabled)
   elif case == "random":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
+    return run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
   else:
     logging.info("Unknown health check case: %s", case)
-    case = "random"
-    logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
+    return run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
 
 
 def health_check_with_node_pairs(
@@ -189,7 +188,7 @@ def run_nccl_random_pair_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Runs NCCL health checks between random nodes and waits for it to complete.
 
   Args:
@@ -201,6 +200,7 @@ def run_nccl_random_pair_healthcheck(
     A tuple containing the list of passed nodes and the list of failed nodes.
   """
 
+  health_result = health_results_pb2.HealthResult(name="random_pair")
   nodes = []
   logging.info("Finding all nodes...")
   for cluster in capacity.clusters:
@@ -240,7 +240,10 @@ def run_nccl_random_pair_healthcheck(
       label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
-    return list(passed_nodes), list(failed_nodes)
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_nodes, failed_nodes)
+    )
+    return health_result
 
   print(f"Running second pass for {len(failed_nodes)} nodes...")
 
@@ -291,16 +294,21 @@ def run_nccl_random_pair_healthcheck(
 
   print(f"found failed nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
-
-  return passed_nodes, failed_nodes
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_nodes, failed_nodes)
+  )
+  return health_result
 
 
 def run_intra_rack_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Checks the racks communication by running nccl tests between each node in the same rack."""
+  health_result = health_results_pb2.HealthResult(
+      name="intra_rack",
+  )
   # Create a dictionary of rack to nodes for easier lookup.
   rack_to_nodes = {}
   logging.info("Finding all racks...")
@@ -351,7 +359,10 @@ def run_intra_rack_healthcheck(
       label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
-    return list(passed_nodes), list(failed_nodes)
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_nodes, failed_nodes)
+    )
+    return health_result
 
   # For the second pass, pair each failed node with a passed node in the same
   # rack.
@@ -415,18 +426,23 @@ def run_intra_rack_healthcheck(
 
   print(f"found failed nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
-  return passed_nodes, failed_nodes
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_nodes, failed_nodes)
+  )
+  return health_result
 
 
 def run_inter_rack_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Checks inter-rack communication by running nccl tests between nodes in different racks (The racks will be in the same cluster)."""
+  health_result = health_results_pb2.HealthResult(
+      name="inter_rack",
+  )
   cluster_to_racks = {}
   rack_to_nodes = {}
-
   node_pairs = []
 
   # Create a dictionary of cluster to racks and a dictionary of rack to nodes
@@ -492,7 +508,10 @@ def run_inter_rack_healthcheck(
       label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
     print(f"Found failed racks: {failed_racks}")
     print(f"Found passed racks: {passed_racks}")
-    return passed_racks, failed_racks
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_racks, failed_racks)
+    )
+    return health_result
 
   # If second pass is enabled, we will run the test between the passed and
   # failed racks in the same cluster.
@@ -570,16 +589,22 @@ def run_inter_rack_healthcheck(
 
   print(f"After second pass - Failed racks: {failed_racks}")
   print(f"After second pass - Passed racks: {passed_racks}")
-  return passed_racks, failed_racks
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_racks, failed_racks)
+  )
+
+  return health_result
 
 
 def run_inter_cluster_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Checks the inter-cluster communication by running nccl tests between nodes in different clusters."""
-
+  health_result = health_results_pb2.HealthResult(
+      name="inter_cluster",
+  )
   cluster_to_nodes = {}
   for cluster in capacity.clusters:
     for rack in cluster.racks:
@@ -634,17 +659,16 @@ def run_inter_cluster_healthcheck(
     else:
       failed_clusters.append(cluster.id)
 
-  if not passed_clusters:
-    print("Found no passed clusters.")
-    return passed_clusters, failed_clusters
-
-  if not second_pass_enabled or not failed_clusters:
+  if not second_pass_enabled or not failed_clusters or not passed_nodes:
     logging.info("Second pass will not run")
     for node in failed_nodes:
       label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
     print(f"Found failed clusters: {failed_clusters}")
     print(f"Found passed clusters: {passed_clusters}")
-    return passed_clusters, failed_clusters
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_clusters, failed_clusters)
+    )
+    return health_result
 
   print(f"Running second pass for {len(failed_clusters)} clusters...")
   second_pass_node_pairs = []
@@ -708,7 +732,11 @@ def run_inter_cluster_healthcheck(
 
   print(f"After second pass - Failed racks: {failed_clusters}")
   print(f"After second pass - Passed racks: {passed_clusters}")
-  return passed_clusters, failed_clusters
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_clusters, failed_clusters)
+  )
+
+  return health_result
 
 
 # 
@@ -812,9 +840,7 @@ def cleanup_labels(
 ) -> None:
   """Removes any potential labels from previous runs."""
   logging.info("Removing label: %s", label)
-  checker_common.run_command(
-      f"{_KUBECTL} label nodes -l {label} {label}-"
-  )
+  checker_common.run_command(f"{_KUBECTL} label nodes -l {label} {label}-")
 
 
 def generate_index_pairs(length: int) -> list[tuple[int, int]]:
@@ -985,6 +1011,28 @@ def get_capacity_topology(
     rack.nodes.append(common_pb2.Node(id=node_id, host=host_id))
 
   return capacity
+
+
+def generate_nccl_health_results(
+    passed_objects: Iterable[str],
+    failed_objects: Iterable[str],
+) -> health_results_pb2.NCCLHealthResultList:
+  """Generates a list of NCCLHealthResult protos for the given nodes."""
+  health_results = health_results_pb2.NCCLHealthResultList()
+  # Sort the objects to ensure the results are deterministic
+  objects = list(passed_objects) + list(failed_objects)
+  objects.sort()
+
+  passed_objects = set(passed_objects)
+  for obj in objects:
+    if obj in passed_objects:
+      status = health_results_pb2.Status.PASS
+    else:
+      status = health_results_pb2.Status.FAIL
+    health_results.nccl_health_results.append(
+        health_results_pb2.NCCLHealthResult(id=obj, status=status)
+    )
+  return health_results
 
 
 def is_second_pass_enabled() -> bool:
