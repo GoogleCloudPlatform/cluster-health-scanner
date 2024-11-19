@@ -14,12 +14,14 @@
 # limitations under the License.
 
 set -x
+echo "Script started with args: $@"  # Debug point 1
 
 # Sample command to run the workload:
 #  /scripts/run-nccl-fastrak.sh ${collective_name}_perf "${LD_LIBRARY_PATH}" ${gpu_per_node} ${if_name_list} ${msg_min} ${msg_max} ${channel_per_gpu} ${num_node} ${num_iteration}
 #  e.g. /scripts/run-nccl-fastrak.sh all_gather_perf "${LD_LIBRARY_PATH}" 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8 1M 512M 3 2 10
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+#SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+SCRIPT_DIR="/opt/apps"
 
 run_nccl_fastrak() {
   local -r benchmark=$1
@@ -38,20 +40,70 @@ run_nccl_fastrak() {
   fi
   local -r num_channel=$((gpu_per_node*channels_per_gpu))
   local -r iter=20
+  NCCL_LIB_DIR="/var/lib/tcpxo/lib64/"
 
   echo "Sourcing ${NCCL_LIB_DIR}/nccl-env-profile.sh"
-  source "${NCCL_LIB_DIR}/nccl-env-profile.sh"
+  #source "${NCCL_LIB_DIR}/nccl-env-profile.sh"
   NCCL_FLAGS=$( env | egrep ^NCCL | awk '{ printf "-x %s ", $0; }' )
-  # shellcheck disable=SC2086
+  # shellcheck disable=SC2086i
+  echo "About to run mpirun"  # Debug point 
+
+  hostfile="/opt/apps/hostfiles${nhosts}/hostfile${gpu_per_node}"
+  echo "Hostfiel path: $hostfile"
+  if [ -f "$hostfile" ]; then
+    echo "Hostfile exists"
+    echo "Content:"
+    cat "$hostfile"
+  else
+    echo "Hostfile does not exist"
+    ls -l /tmp/hostfiles${nhosts}/ || echo "Cannot list directory"
+  fi
+  whoami
+  id
+  which mpirun
+  mpirun --version
+  dmesg | tail
+  journalctl -xe | tail
+  echo "=====ompi_info======"
+  ompi_info --param plm slurm  # If Open MPI is used
+  echo "===openmpi shared libraries are accesible========"
+  ldd $(which mpirun)
+  echo "=======check if there are any blocked ports or firewall issues======="
+  iptables -L
+  netstat -tulpn
+  echo "=======run scontrol show config, sinfo  =========="
+  scontrol show config
+  sinfo	
+  #mpirun --mca plm slurm -v --allow-run-as-root -np 1 hostname
+  echo "======== end of debuging======"
+  # Check network interfaces
+  cat /opt/apps/hostfiles${nhosts}/hostfile${gpu_per_node}
+  #mpirun -v --allow-run-as-root -np 1 hostname
+  echo "======= mpirun begin ======="
+  #mpirun --allow-run-as-root -np 1 --host localhost hostname
+  mpirun --allow-run-as-root -np 1 --mca btl self,vader hostname
+
+  echo "==== mpi run end ====="
+  # Try verbose MPI run to get more diagnostic info
+  #mpirun -v --allow-run-as-root \
+  #-np 1  \
+  #--hostfile "/opt/apps/hostfiles${nhosts}/hostfile${gpu_per_node}" \
+  #echo "test"
+
+  #mpirun --allow-run-as-root \
+  #  -np $(( gpu_per_node * nhosts )) \
+  #  --hostfile "/tmp/hostfiles${nhosts}/hostfile${gpu_per_node}" \
+  #  echo "test" 
+
   LD_LIBRARY_PATH=${ld_library_path_override} \
-  mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 --allow-run-as-root \
-    -np $(( gpu_per_node * "${nhosts}" )) \
-    --hostfile "${SCRIPT_DIR}/hostfiles${nhosts}/hostfile${gpu_per_node}" \
-    -x LD_LIBRARY_PATH -x PATH \
-    $NCCL_FLAGS \
-    taskset -c 32-63 /third_party/nccl-tests-mpi/build/"${benchmark}" \
-      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters "${iter}" 2>&1 | \
-    tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
+#  mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 --allow-run-as-root \
+#    -np $(( gpu_per_node * "${nhosts}" )) \
+#    --hostfile "/tmp/hostfiles${nhosts}/hostfile${gpu_per_node}" \
+#    -x LD_LIBRARY_PATH -x PATH \
+#    $NCCL_FLAGS \
+#    taskset -c 32-63 /third_party/nccl-tests-mpi/build/"${benchmark}" \
+#      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters "${iter}" 2>&1 | \
+#    tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
 }
 
 run_nccl_gpudirect() {
@@ -104,8 +156,10 @@ run_nccl_gpudirect() {
 plugin_name=$1
 shift
 if [[ "$plugin_name" == "fastrak" ]]; then
+  echo "Getting into the fastrak func"
   run_nccl_fastrak "$@"
 elif [[ "$plugin_name" == "gpudirect" ]]; then
+  echo "Getting into the gpudirect fun"
   run_nccl_gpudirect "$@"
 else
   echo "Error: Invalid argument. Please specify 'fastrak' or 'gpudirect'."

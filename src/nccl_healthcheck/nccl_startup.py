@@ -78,18 +78,17 @@ def ensure_env_variables() -> None:
       raise ValueError(f"Must set {env}")
 
 
-def apply_namespace_resolution() -> None:
-  """Mitigate AR timeout issue, b/318412074.
-
-  Systemd adds a route to DNS server for avery DHCP NIC even if the NIC
-  doesn't have connectivity to it. This removes the duplicate routes.
-  """
-  for eth_idx in range(9):
-    checker_common.run_command(
-        "sudo route del -net 169.254.169.254 gw 0.0.0.0"
-        " netmask 255.255.255.255 dev eth"
-        f" {eth_idx}"
-    )
+#def apply_namespace_resolution() -> None:
+#  """Mitigate AR timeout issue, b/318412074.
+#
+#  Systemd adds a route to DNS server for avery DHCP NIC even if the NIC
+#  doesn't have connectivity to it. This removes the duplicate routes.
+#  """
+#  for eth_idx in range(9):
+#    checker_common.run_command(
+#        "route del -net 169.254.169.254 netmask"
+#        f" 255.255.255.255 dev eth{eth_idx}"
+#    )
 
 
 def configure_ssh() -> None:
@@ -122,37 +121,54 @@ Port 222""")
 
 def get_host_list(nhosts: int) -> List[str]:
   """Generate a hostfile based on host names from pods."""
-    hosts = {}
-    
-    # Get all nodes from SLURM_NODELIST
-    result = checker_common.run_command(
-        "scontrol show hostnames $SLURM_NODELIST",
-        check=False
-    )
-    if result.returncode != 0:
-        return hosts
+  hosts = {}
+  # Get all nodes from SLURM_NODELIST
+  result = checker_common.run_command(
+    "scontrol show hostnames $SLURM_NODELIST",
+     check=False
+  )
+  if result.returncode != 0:
+    return hosts
 
-    # Get list of all hostnames
-    all_hosts = result.stdout.strip().split('\n')
+  # Get list of all hostnames
+  all_hosts = result.stdout.strip().split('\n')
   return all_hosts
 
 def create_hostfile(hosts: List[str], nr: str) -> None:
   nhosts = len(hosts)
-  os.makedirs(f"hostfiles{nhosts}", exist_ok=True)
+  os.makedirs(f"/opt/apps/hostfiles{nhosts}", exist_ok=True)
 
   nranks = [1, 2, 4, 8]
   for nrank in nranks:
-    hostfile = f"hostfiles{nhosts}/hostfile{nrank}"
+    hostfile = f"/opt/apps/hostfiles{nhosts}/hostfile{nrank}"
+    #hostfile = os.path.join(hostfiles_dir, f"hostfile{nrank}")
+    #hostfile = f"hostfiles{nhosts}/hostfile{nrank}"
     with open(hostfile, "w") as f:
       for host in hosts:
-        f.write(f"{host} port=222 slots={nr}\n")
+        f.write(f"{host} slots={nr}\n")
 
 
 def run_nccl_test(hosts: List[str]) -> None:
   """Run the NCCL test."""
   nhosts = len(hosts)
   config_obj = config.get_config(INSTANCE_TYPE)
-  
+
+  # Get all nodes from SLURM_NODELIST
+  result = checker_common.run_command(
+    "scontrol show hostnames $SLURM_NODELIST",
+    check=False
+  )
+  if result.returncode != 0:
+    return hosts
+
+  all_hosts = result.stdout.strip().split('\n')
+  if len(all_hosts) < 2:
+    return hosts
+
+  # pod-1 is the second node in the allocation
+  target_hostname = all_hosts[1]
+  master_hostname = all_hosts[0]
+
   rank_result = checker_common.run_command(
       "echo $SLURM_PROCID",
       check=False
@@ -182,7 +198,8 @@ def run_nccl_test(hosts: List[str]) -> None:
       bandwidths.append(get_bandwidth(test_result.stdout))
     process_test_result(bandwidths, hosts)
   else:  # secondary nodes
-    while not os.path.exists("/master.done"):
+    print(f"looking for file: /opt/apps/{master_hostname}.done")
+    while not os.path.exists(f"/opt/apps/{master_hostname}.done"):
       print("waiting for master pod...")
       time.sleep(10)
   # Create file to let tcpd daemon to terminate
@@ -266,6 +283,7 @@ def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
 
   for node in nodes:
     add_healthcheck_time_label(node)
+    print("Avg bandwidth: ", avg_bandwidth)
     mark_node_bandwidth(node, avg_bandwidth)
 
     if second_pass and node != os.environ.get("NODE_NAME"):
@@ -444,12 +462,36 @@ def remove_label(node_name: str, label: str) -> None:
 def cleanup(hosts: List[str]) -> None:
   """Clean up any additional resources deployed to the cluster."""
   print("Running cleanup commands.")
-  if JOB_INDEX == 0:
-    for i in range(len(hosts)):
-      checker_common.run_command(
-          f"ssh {JOB_NAME}-{i}.{SERVICE_NAME} -p 222 -- touch /master.done",
-      )
-    checker_common.run_command(K_DELETE_SERVICE_FORMAT % (SERVICE_NAME))
+  # Get all nodes from SLURM_NODELIST
+  result = checker_common.run_command(
+    "scontrol show hostnames $SLURM_NODELIST",
+    check=False
+  )
+  if result.returncode != 0:
+    return hosts
+
+  all_hosts = result.stdout.strip().split('\n')
+  if len(all_hosts) < 2:
+    return hosts
+
+  # pod-1 is the second node in the allocation
+  target_hostname = all_hosts[1]
+  master_hostname = all_hosts[0]
+  #if JOB_INDEX == 0:
+  # Get current node's rank
+  rank_result = checker_common.run_command(
+    "echo $SLURM_PROCID",
+    check=False
+  )
+  current_rank = int(rank_result.stdout.strip()) if rank_result.returncode == 0 else 0
+  if current_rank == 0: #master node
+    #for i in range(len(hosts)):
+    done_file = f"/opt/apps/{master_hostname}.done"
+    checker_common.run_command(f"touch {done_file}")
+      #checker_common.run_command(
+      #    f"ssh {JOB_NAME}-{i}.{SERVICE_NAME} -p 222 -- touch /master.done",
+      #)
+    #checker_common.run_command(K_DELETE_SERVICE_FORMAT % (SERVICE_NAME))
 
 
 ##########SLURM RELATED ########################
@@ -485,7 +527,7 @@ def remove_specific_label(node_name, key_to_remove):
 def main() -> None:
   """Main function."""
   ensure_env_variables()
-  apply_namespace_resolution()
+  #apply_namespace_resolution()
   configure_ssh()
 
   nhosts = int(os.environ["NHOSTS"])
