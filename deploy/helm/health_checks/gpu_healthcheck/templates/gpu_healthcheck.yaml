@@ -17,6 +17,7 @@
 {{- $health_check_uniq_str := printf "%s-%s" (toString .Values.node_match.guid) (toString $check_time) -}}
 {{- $health_check_job_name := printf "%s-%s" .Values.job.prefix $health_check_uniq_str -}}
 {{- $node_list_name := printf "%s-%s" "gpu-node-list" $health_check_uniq_str -}}
+{{- $expiry_time := int (sub  $check_time (mul .Values.health_check.env.HEALTH_VALIDITY_HOURS 60 60)) -}}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -38,12 +39,12 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-                # It will trigger if label value is older than 24 hours (default) ago
+                # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
-              - key: aiinfra/gpu-healthcheck-valid-till-sec
+              - key: aiinfra/gpu-healthcheck-runtime-sec
                 operator: Lt
                 values:
-                - {{ $check_time | quote }}
+                - {{ $expiry_time | quote }}
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
               # If label is true then it will trigger
@@ -54,7 +55,7 @@ spec:
             - matchExpressions:
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
-              - key: aiinfra/gpu-healthcheck-valid-till-sec
+              - key: aiinfra/gpu-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
                 operator: DoesNotExist
