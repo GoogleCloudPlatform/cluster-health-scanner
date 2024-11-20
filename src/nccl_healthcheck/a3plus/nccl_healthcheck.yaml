@@ -101,7 +101,8 @@ spec:
                 - "${CHECK_TIME_EPOCH_SEC}"
       initContainers:
       - name: nccl-plugin-installer
-        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
+        # image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
+        image: us-docker.pkg.dev/kernel-net-team/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
         imagePullPolicy: Always
         volumeMounts:
         - name: tcpxo-nccl-plugin-volume
@@ -116,7 +117,8 @@ spec:
             /scripts/container_entry.sh install --install-nccl
       containers:
       - name: tcpxo-daemon
-        image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
+        # image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
+        image: us-docker.pkg.dev/kernel-net-team/unified-rxdm/dev:elm_sctp_mitigation
         imagePullPolicy: Always
         command:
         - "bash"
@@ -131,15 +133,24 @@ spec:
         securityContext:
           privileged: true
         volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
+        # - name: nvidia-install-dir-host
+        #   mountPath: /usr/local/nvidia/lib64
+        - name: dmabuf
+          mountPath: /dev/dmabuf_import_helper
+        - name: cuda-lib
+          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
+        - name: cuda-lib1
+          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+        - name: cuda-lib535
+          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12  
         - name: tcpd-socket
           mountPath: /tmp
         - name: workload-terminated-volume
           mountPath: /usr/share/nemo
         env:
         - name: LD_LIBRARY_PATH
-          value: /usr/local/nvidia/lib64
+          value: /usr/local/cuda-12.2/lib64 
+          # value: /usr/local/nvidia/lib64
       - name: nccl-healthcheck
         image: us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:${IMAGE_TAG}
         imagePullPolicy: Always
@@ -164,7 +175,8 @@ spec:
         - name: SERVICE_NAME
           value: nccl-headless-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
         - name: LD_LIBRARY_PATH
-          value: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
+          # value: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
+          value: /usr/local/cuda-12.3/lib64:/usr/local/nvidia/lib64/
         - name: NCCL_LIB_DIR
           value: /usr/local/nvidia/lib64
         - name: NHOSTS
@@ -207,6 +219,14 @@ spec:
           value: "0"
         - name: NCCL_FASTRAK_NUM_FLOWS
           value: "2"
+        - name: NCCL_SOCKET_IFNAME
+          value: "enp0s12"
+        - name: NCCL_FASTRAK_CTRL_DEV
+          value: "enp0s12"
+        - name: "GLOO_SOCKET_IFNAME"
+          value: "enp0s12"
+        - name: NCCL_FASTRAK_IFNAME
+          value: "enp6s0f0,enp7s0f0,enp13s0f0,enp14s0f0,enp134s0f0,enp135s0f0,enp141s0f0,enp142s0f0"
         - name: ITERATIONS
           value: "${ITERATIONS}"
         volumeMounts:
