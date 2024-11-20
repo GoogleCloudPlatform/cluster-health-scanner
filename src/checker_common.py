@@ -29,7 +29,7 @@ K_DELETE_FORMAT = "%s delete -f %s"
 
 def add_label(
     node_name: str, label: str, value: str, label_format: str
-) -> None:
+):
   """Adds a label to a node.
 
   Args:
@@ -47,7 +47,7 @@ def add_label(
 
 def run_command(
     command: str, check: bool = False
-) -> subprocess.CompletedProcess[str]:
+):
   """Execute a shell command using subprocess.
 
   Args:
@@ -79,7 +79,7 @@ def run_command(
 
 def create_k8s_objects(
     yaml_path: str, kubectl_path: str
-) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
+):
   """Expands provided yaml file and runs `kubectl apply -f` on the contents."""
 
   cleanup_functions = []
@@ -95,7 +95,7 @@ def create_k8s_objects(
 
 def apply_yaml_file(
     yaml_path: str, kubectl_path: str
-) -> Callable[[], subprocess.CompletedProcess[str]]:
+):
   """Applies YAML file.
 
   Args:
@@ -115,7 +115,7 @@ def apply_yaml_file(
   return delete_yaml_file
 
 
-def expand_template(yaml_template: str) -> str:
+def expand_template(yaml_template: str):
   """Expands YAML template."""
   with open(yaml_template, "r") as f:
     t = string.Template(f.read())
