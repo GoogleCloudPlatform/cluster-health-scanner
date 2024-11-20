@@ -27,6 +27,24 @@ import checker_common
 import metrics
 import config
 
+import subprocess
+
+try:
+    # Using subprocess.run (recommended for Python 3.5+)
+    result = subprocess.run(['ldd', '--version'], 
+                          capture_output=True,  # captures stdout and stderr
+                          text=True)           # returns string instead of bytes
+    
+    if result.returncode == 0:
+        print("Output:", result.stdout)
+    else:
+        print("Error:", result.stderr)
+        
+except FileNotFoundError:
+    print("ldd command not found")
+except Exception as e:
+    print(f"An error occurred: {e}")
+
 JOB_NAME = os.environ.get("JOB_NAME")
 SERVICE_NAME = os.environ.get("SERVICE_NAME")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE")
@@ -76,7 +94,7 @@ def ensure_env_variables() -> None:
   for env in required_envs:
     if env not in os.environ:
       raise ValueError(f"Must set {env}")
-
+  print("ENV %s=%s" % ("LD_LIBRARY_PATH", os.environ["LD_LIBRARY_PATH"]))
 
 #def apply_namespace_resolution() -> None:
 #  """Mitigate AR timeout issue, b/318412074.
@@ -138,15 +156,30 @@ def create_hostfile(hosts: List[str], nr: str) -> None:
   nhosts = len(hosts)
   os.makedirs(f"/opt/apps/hostfiles{nhosts}", exist_ok=True)
 
+  result = checker_common.run_command(
+    "scontrol show hostnames $SLURM_NODELIST",
+     check=False
+  )
+  if result.returncode != 0:
+    return hosts
+
+  all_hosts = result.stdout.strip().split('\n')
+  if len(all_hosts) < 2:
+    return hosts
+
+  # pod-1 is the second node in the allocation
+  target_hostname = all_hosts[1]
+  master_hostname = all_hosts[0]
+
   nranks = [1, 2, 4, 8]
   for nrank in nranks:
     hostfile = f"/opt/apps/hostfiles{nhosts}/hostfile{nrank}"
     #hostfile = os.path.join(hostfiles_dir, f"hostfile{nrank}")
     #hostfile = f"hostfiles{nhosts}/hostfile{nrank}"
     with open(hostfile, "w") as f:
-      for host in hosts:
-        f.write(f"{host} slots={nr}\n")
-
+      #for host in hosts:
+        #f.write(f"{host} slots={nr}\n")
+      f.write(f"{target_hostname}")
 
 def run_nccl_test(hosts: List[str]) -> None:
   """Run the NCCL test."""

@@ -40,10 +40,10 @@ run_nccl_fastrak() {
   fi
   local -r num_channel=$((gpu_per_node*channels_per_gpu))
   local -r iter=20
-  NCCL_LIB_DIR="/var/lib/tcpxo/lib64/"
-
+  #NCCL_LIB_DIR="/var/lib/tcpxo/lib64"
+  NCCL_LIB_DIR="/usr/local/nvidia/lib64"
   echo "Sourcing ${NCCL_LIB_DIR}/nccl-env-profile.sh"
-  #source "${NCCL_LIB_DIR}/nccl-env-profile.sh"
+  source "${NCCL_LIB_DIR}/nccl-env-profile.sh"
   NCCL_FLAGS=$( env | egrep ^NCCL | awk '{ printf "-x %s ", $0; }' )
   # shellcheck disable=SC2086i
   echo "About to run mpirun"  # Debug point 
@@ -79,10 +79,35 @@ run_nccl_fastrak() {
   # Check network interfaces
   cat /opt/apps/hostfiles${nhosts}/hostfile${gpu_per_node}
   #mpirun -v --allow-run-as-root -np 1 hostname
-  echo "======= mpirun begin ======="
+  echo "=====ls -l /dev/shm ======="
+  ls -l /dev/shm
+  echo "======ompi_info --all | grep btl ===="
+  ompi_info --all | grep btl
+  echo "========ompi_info | grep pmi====="
+  ompi_info | grep pmi
+  echo "====ifconfig===="
+  ifconfig
+  echo "======ip addr======"
+  ip addr
+  echo "======= mpirun begin try explicitly enabling only TCO by using======="
   #mpirun --allow-run-as-root -np 1 --host localhost hostname
-  mpirun --allow-run-as-root -np 1 --mca btl self,vader hostname
-
+  #mpirun --allow-run-as-root -np 1 --mca btl self,vader hostname
+  #mpirun --allow-run-as-root -np 1 --mca btl tcp,self hostname
+  #mpirun --allow-run-as-root -np 1 --mca btl self,vader --mca btl_vader_single_copy_mechanism none hostname
+  #mpirun --allow-run-as-root -np 1 \
+  #  --mca btl self,vader \
+  #  --mca btl_vader_single_copy_mechanism none \
+  #  --mca opal_common_vader_mmap_enable_nfs_warning 0 \
+  #  hostname
+  #mpirun --allow-run-as-root -np 1 \
+  #  --mca btl ^vader,sm \
+  #  --mca btl_tcp_if_include eth0 \
+  #  hostname
+  #mpirun --allow-run-as-root -np 1 \
+  #  -x OMPI_MCA_btl \
+  #  -x OMPI_MCA_oob \
+  #  -x OMPI_MCA_btl_tcp_if_include \
+  #  hostname
   echo "==== mpi run end ====="
   # Try verbose MPI run to get more diagnostic info
   #mpirun -v --allow-run-as-root \
@@ -94,16 +119,40 @@ run_nccl_fastrak() {
   #  -np $(( gpu_per_node * nhosts )) \
   #  --hostfile "/tmp/hostfiles${nhosts}/hostfile${gpu_per_node}" \
   #  echo "test" 
-
+  otherhost=$(head -n 1 "/opt/apps/hostfiles${nhosts}/hostfile${gpu_per_node}")
   LD_LIBRARY_PATH=${ld_library_path_override} \
-#  mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 --allow-run-as-root \
-#    -np $(( gpu_per_node * "${nhosts}" )) \
-#    --hostfile "/tmp/hostfiles${nhosts}/hostfile${gpu_per_node}" \
-#    -x LD_LIBRARY_PATH -x PATH \
-#    $NCCL_FLAGS \
-#    taskset -c 32-63 /third_party/nccl-tests-mpi/build/"${benchmark}" \
-#      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters "${iter}" 2>&1 | \
-#    tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
+  #mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 --allow-run-as-root \
+  #  -np $(( gpu_per_node * "${nhosts}" )) \
+  #  --host localhost \
+  #  -x LD_LIBRARY_PATH -x PATH \
+  echo "=============echo LD_LIBRARY_PATH============"
+  echo $LD_LIBRARY_PATH
+  #export LD_LIBRARY_PATH=/usr/local/gib/lib64:/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
+  #echo $LD_LIBRARY_PATH
+  #echo "======ls /usr/local/gib/lib64/libnccl.so.2==="
+  #ls /usr/local/fastrak/lib64/libnccl.so.2
+  #echo "======sudo ldconfig /usr/local/gib/lib64====="
+  #sudo ldconfig /usr/local/fastrak/lib64
+
+  #echo "======ldconfig -p | grep libnccl========"
+  #ldconfig -p | grep libnccl
+  #echo "=======ldd /opt/nccl-tests/build/all_gather_perf====="
+  #ldd /opt/nccl-tests/build/all_gather_perf
+  #echo "======add config file to help ldconfig find the lib"
+  #echo "/usr/local/gib/lib64" | sudo tee /etc/ld.so.conf.d/nccl.conf
+  #sudo ldconfig
+  #echo "====verify the lib details===="
+  #file /usr/local/gib/lib64/libnccl.so.2
+  #echo "======check lib dependency and compatibility====="
+  #ldd /usr/local/gib/lib64/libnccl.so.2
+  #echo "=======readlink -f /usr/local/gib/lib64/libnccl.so.2===="
+  #readlink -f /usr/local/gib/lib64/libnccl.so.2
+  echo "=====end====="
+  echo "=======/etc/os-release======"
+  cat /etc/os-release
+  taskset -c 32-63 /third_party/nccl-tests-mpi/build/"${benchmark}" \
+    -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters "${iter}" 2>&1 | \
+  tee "/tmp/${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
 }
 
 run_nccl_gpudirect() {
