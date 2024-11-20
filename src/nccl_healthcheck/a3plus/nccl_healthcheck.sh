@@ -39,4 +39,4 @@ sudo srun  \
         --container-image=./nccl+slurm.sqsh \
         --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST,NODE_NAME=$HOSTNAME,JOB_COMPLETION_INDEX=0,BANDWIDTH_THRESHOLD="90",START_MESSAGE_SIZE="2G",END_MESSAGE_SIZE="8G",INSTANCE_TYPE="a3-megagpu-8g",ITERATIONS="1" --gpus=8 --nodes 2 --exclusive \
         --container-mounts="${CONTAINER_MOUNTS}" \
-        sh -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH;pip3 install protobuf && python3 /scripts/nccl_startup.py"
+        sh -c "export LD_PRELOAD=/lib/x86_64-linux-gnu/libc.so.6;export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH;pip3 install protobuf && python3 /scripts/nccl_startup.py"
