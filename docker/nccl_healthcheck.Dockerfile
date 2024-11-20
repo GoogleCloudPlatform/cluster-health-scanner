@@ -21,49 +21,6 @@ RUN apt-get update && apt-get install -y openssh-server python3.9 ca-certificate
   update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 &&\
   mkdir /var/run/sshd && chmod 0755 /var/run/sshd 
 
-#RUN apt-get update && \
-#    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
-#    DEBIAN_FRONTEND=noninteractive apt-get install -y glibc-source libc6-dev
-
-# Download and install glibc 2.32
-# Update and install prerequisites
-#RUN apt-get update && apt-get install -y --no-install-recommends \
-#    wget \
-#    software-properties-common \
-#    && rm -rf /var/lib/apt/lists/*
-#RUN wget http://ftp.gnu.org/gnu/libc/glibc-2.32.tar.gz && \
-#    tar -xvzf glibc-2.32.tar.gz && \
-#    cd glibc-2.32 && \
-#    mkdir build && cd build && \
-#    ../configure --prefix=/opt/glibc-2.32 && \
-#    make -j$(nproc) && make install && \
-#    cd ../../ && rm -rf glibc-2.32 glibc-2.32.tar.gz
-# Install prerequisites
-#RUN apt-get update && apt-get install -y \
-#    build-essential \
-#    manpages-dev \
-#    wget \
-#    curl \
-#    gawk \
-#    bison \
-#    && rm -rf /var/lib/apt/lists/*
-
-# Download glibc 2.32 source
-#RUN wget http://ftp.gnu.org/gnu/libc/glibc-2.32.tar.gz && \
-#    tar -xvzf glibc-2.32.tar.gz && \
-#    cd glibc-2.32 && \
-#    mkdir build && cd build && \
-#    ../configure --prefix=/usr/local/glibc-2.32 && \
-#    make -j$(nproc) && make install && \
-#    cd ../../ && rm -rf glibc-2.32 glibc-2.32.tar.gz
-
-# Update environment variables
-#ENV LD_LIBRARY_PATH=/usr/local/glibc-2.32/lib:$LD_LIBRARY_PATH
-#ENV PATH=/usr/local/glibc-2.32/bin:$PATH
-
-# Update dynamic linker to use the new glibc
-#ENV LD_LIBRARY_PATH=/opt/glibc-2.32/lib:$LD_LIBRARY_PATH
-
 RUN ssh-keygen -t rsa -f /root/.ssh/google_compute_engine -b 2048 -P "" &&\
   cp /root/.ssh/google_compute_engine.pub /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/authorized_keys &&\
@@ -86,27 +43,5 @@ RUN chmod +x /scripts/run-nccl-combined-plugins.sh
 
 RUN apt-get install -y dnsutils
 
-# Install prerequisites, including missing tools
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    manpages-dev \
-    wget \
-    curl \
-    gawk \
-    bison \
-    && rm -rf /var/lib/apt/lists/*
-
-# Download glibc 2.32 source
-RUN wget http://ftp.gnu.org/gnu/libc/glibc-2.32.tar.gz && \
-    tar -xvzf glibc-2.32.tar.gz && \
-    cd glibc-2.32 && \
-    mkdir build && cd build && \
-    ../configure --prefix=/usr/local/glibc-2.32 && \
-    make -j$(nproc) && make install && \
-    cd ../../ && rm -rf glibc-2.32 glibc-2.32.tar.gz
-
-# Update environment variables
-ENV LD_LIBRARY_PATH=/usr/local/glibc-2.32/lib:$LD_LIBRARY_PATH
-ENV PATH=/usr/local/glibc-2.32/bin:$PATH
 # ENTRYPOINT ["python3", "/scripts/nccl_startup.py"]
 # ENTRYPOINT ["bash", "/scripts/a3plus/nccl_healthcheck.sh"]
