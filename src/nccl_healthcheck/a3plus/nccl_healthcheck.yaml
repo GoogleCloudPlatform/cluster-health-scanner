@@ -40,9 +40,22 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       volumes:
-      - name: nvidia-install-dir-host
+      # - name: nvidia-install-dir-host
+      #   hostPath:
+      #     path: /home/kubernetes/bin/nvidia/lib64
+      - name: dmabuf
         hostPath:
-          path: /home/kubernetes/bin/nvidia/lib64
+          path: /dev/dmabuf_import_helper
+          type: CharDevice        
+      - name: cuda-lib
+        hostPath:
+          path: /usr/lib/x86_64-linux-gnu/libcuda.so       
+      - name: cuda-lib1
+        hostPath:
+          path: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+      - name: cuda-lib535
+        hostPath:
+          path: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12
       - name: tcpd-socket
         hostPath:
           path: /run/tcpxo
@@ -230,8 +243,16 @@ spec:
         - name: ITERATIONS
           value: "${ITERATIONS}"
         volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
+        # - name: nvidia-install-dir-host
+        #   mountPath: /usr/local/nvidia/lib64
+        - name: dmabuf
+          mountPath: /dev/dmabuf_import_helper
+        - name: cuda-lib
+          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
+        - name: cuda-lib1
+          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+        - name: cuda-lib535
+          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12 
         - name: tcpxo-nccl-plugin-volume
           mountPath: /usr/local/tcpxo
         - name: tcpd-socket
