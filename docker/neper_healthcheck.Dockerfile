@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Build Stage
-FROM ubuntu:latest
+FROM debian:10
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /scripts

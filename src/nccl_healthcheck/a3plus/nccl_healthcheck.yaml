@@ -63,8 +63,8 @@ spec:
         emptyDir: {}
       - name: workload-terminated-volume
         emptyDir: {}
-      nodeSelector:
-        node.kubernetes.io/instance-type: a3-megagpu-8g
+      # nodeSelector:
+      #   node.kubernetes.io/instance-type: a3-megagpu-8g
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
