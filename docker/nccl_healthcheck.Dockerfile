@@ -130,7 +130,8 @@
 # FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-nightly-cuda12.0:2024_03_04
 # FROM us-docker.pkg.dev/kernel-net-team/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
 # FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.4
-FROM us-docker.pkg.dev/gce-ai-infra/health-check/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
+# FROM us-docker.pkg.dev/gce-ai-infra/health-check/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
+FROM us-docker.pkg.dev/gce-ai-infra/health-check/nccl-plugin-gpudirecttcpx-dev:v1.0.4
 
 WORKDIR /scripts
 RUN apt-get update && apt-get install -y openssh-server python3.9 ca-certificates curl python3-pip &&\
@@ -150,13 +151,13 @@ RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_
 COPY src/nccl_healthcheck/nccl_startup.py /scripts/
 COPY src/nccl_healthcheck/config.py /scripts/
 COPY src/checker_common.py /scripts/
-COPY src/metrics.py /scripts/
-COPY src/nccl_healthcheck/a3/ a3/
+# COPY src/metrics.py /scripts/
+# COPY src/nccl_healthcheck/a3/ a3/
 COPY src/nccl_healthcheck/a3plus/ a3plus/
 COPY src/nccl_healthcheck/run-nccl-combined-plugins.sh .
 RUN chmod +x /scripts/run-nccl-combined-plugins.sh
 ENV PYTHONUNBUFFERED=1
 
-RUN apt-get install -y dnsutils
+# RUN apt-get install -y dnsutils
 
 ENTRYPOINT ["python3", "/scripts/nccl_startup.py"]

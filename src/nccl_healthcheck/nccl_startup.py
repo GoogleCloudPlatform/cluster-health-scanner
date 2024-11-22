@@ -24,8 +24,9 @@ import time
 from typing import List
 
 import checker_common
-import metrics
+# import metrics
 import config
+
 
 JOB_NAME = os.environ.get("JOB_NAME")
 SERVICE_NAME = os.environ.get("SERVICE_NAME")
@@ -50,6 +51,22 @@ K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
 K_REMOVE_LABEL_FORMAT = "{k} label node %s %s-".format(k=KUBECTL)
 K_REMOVE_TAINT_NODE_FORMAT = "{k} taint node %s %s-".format(k=KUBECTL)
 K_DELETE_SERVICE_FORMAT = "{k} delete svc %s".format(k=KUBECTL)
+
+from typing import Any, Dict
+
+
+def log_dict(
+    test_name: str,
+    did_pass: bool,
+    node_name: str,
+    result_data: Dict[str, Any],
+) -> Dict[str, Any]:
+  return {
+      "test_name": test_name,
+      "did_pass": did_pass,
+      "node_name": node_name,
+      "result_data": result_data,
+  }
 
 
 def ensure_env_variables() -> None:
@@ -245,7 +262,7 @@ def process_test_result(bandwidths: List[int], nodes: List[str]) -> None:
       # Do not log metric if we're testing against a known-good node
       continue
     terminal = taint != TAINT_VALUE_SUSPECT
-    log = metrics.log_dict(
+    log = log_dict(
         test_name="nccl",
         did_pass=passed,
         node_name=node,
