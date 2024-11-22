@@ -49,6 +49,9 @@ spec:
       - name: cuda
         hostPath: 
           path: /usr/local/cuda-12.2/lib64
+      - name: cuda2
+        hostPath: 
+          path: /usr/local/cuda/lib64
       # - name: dmabuf
       #   hostPath:
       #     path: /dev/dmabuf_import_helper
@@ -262,6 +265,8 @@ spec:
           mountPath: /usr/local/nvidia/lib64/
         - name: cuda
           mountPath: /usr/local/cuda-12.2/lib64
+        - name: cuda2
+          mountPath: /usr/local/cuda/lib64
         - name: aperture-devices
           mountPath: /dev/aperture_devices
         - name: workload-terminated-volume
