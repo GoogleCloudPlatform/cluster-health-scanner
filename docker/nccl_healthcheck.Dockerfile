@@ -128,8 +128,9 @@
 # limitations under the License.
 
 # FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-nightly-cuda12.0:2024_03_04
-FROM us-docker.pkg.dev/kernel-net-team/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
+# FROM us-docker.pkg.dev/kernel-net-team/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
 # FROM us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.4
+FROM us-docker.pkg.dev/gce-ai-infra/health-check/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
 
 WORKDIR /scripts
 RUN apt-get update && apt-get install -y openssh-server python3.9 ca-certificates curl python3-pip &&\
