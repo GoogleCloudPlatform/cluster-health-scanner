@@ -40,27 +40,31 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       volumes:
+      - name: aperture-devices
+        hostPath: 
+          path: /dev/aperture_devices
       # - name: nvidia-install-dir-host
       #   hostPath:
       #     path: /home/kubernetes/bin/nvidia/lib64
-      - name: dmabuf
-        hostPath:
-          path: /dev/dmabuf_import_helper
-          type: CharDevice        
-      - name: cuda-lib
-        hostPath:
-          path: /usr/lib/x86_64-linux-gnu/libcuda.so       
-      - name: cuda-lib1
-        hostPath:
-          path: /usr/lib/x86_64-linux-gnu/libcuda.so.1
-      - name: cuda-lib535
-        hostPath:
-          path: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12
-      - name: tcpd-socket
-        hostPath:
-          path: /run/tcpxo
+      - name: cuda
+        hostPath: 
+          path: /usr/local/cuda-12.2/lib64
+      # - name: dmabuf
+      #   hostPath:
+      #     path: /dev/dmabuf_import_helper
+      #     type: CharDevice        
+      # - name: cuda-lib
+      #   hostPath:
+      #     path: /usr/lib/x86_64-linux-gnu/libcuda.so       
+      # - name: cuda-lib1
+      #   hostPath:
+      #     path: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+      # - name: cuda-lib535
+      #   hostPath:
+      #     path: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12
       - name: tcpxo-nccl-plugin-volume
-        emptyDir: {}
+        hostPath:
+          path: /var/lib/tcpx/lib64
       - name: workload-terminated-volume
         emptyDir: {}
       # nodeSelector:
@@ -112,58 +116,59 @@ spec:
                 operator: Lt
                 values:
                 - "${CHECK_TIME_EPOCH_SEC}"
-      initContainers:
-      - name: nccl-plugin-installer
-        # image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
-        image: us-docker.pkg.dev/kernel-net-team/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
-        imagePullPolicy: Always
-        volumeMounts:
-        - name: tcpxo-nccl-plugin-volume
-          mountPath: /var/lib/tcpxo
-        resources:
-          requests:
-            cpu: 150m
-        command:
-          - /bin/sh
-          - -c
-          - |
-            /scripts/container_entry.sh install --install-nccl
+      # initContainers:
+      # - name: nccl-plugin-installer
+      #   # image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2
+      #   image: us-docker.pkg.dev/kernel-net-team/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-pre-test-cuda12.4:elm_sctp_mitigation
+      #   imagePullPolicy: Always
+      #   volumeMounts:
+      #   - name: tcpxo-nccl-plugin-volume
+      #     mountPath: /var/lib/tcpxo
+      #   resources:
+      #     requests:
+      #       cpu: 150m
+      #   command:
+      #     - /bin/sh
+      #     - -c
+      #     - |
+      #       /scripts/container_entry.sh install --install-nccl
       containers:
-      - name: tcpxo-daemon
-        # image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
-        image: us-docker.pkg.dev/kernel-net-team/unified-rxdm/dev:elm_sctp_mitigation
-        imagePullPolicy: Always
-        command:
-        - "bash"
-        - "-c"
-        - |
-          set -ex
-          chmod 755 /fts/entrypoint_rxdm_container.sh
-          /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8  --uid= --alsologtostderr &
-          while [ ! -e "/usr/share/nemo/workload_terminated" ]; do echo "waiting for exit signal..."; sleep 10; done
-          pkill -e "^"tcpgpudmarxd || true
-          sleep 30
-        securityContext:
-          privileged: true
-        volumeMounts:
-        # - name: nvidia-install-dir-host
-        #   mountPath: /usr/local/nvidia/lib64
-        - name: dmabuf
-          mountPath: /dev/dmabuf_import_helper
-        - name: cuda-lib
-          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
-        - name: cuda-lib1
-          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
-        - name: cuda-lib535
-          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12  
-        - name: tcpd-socket
-          mountPath: /tmp
-        - name: workload-terminated-volume
-          mountPath: /usr/share/nemo
-        env:
-        - name: LD_LIBRARY_PATH
-          value: /usr/local/cuda-12.2/lib64 
-          # value: /usr/local/nvidia/lib64
+      # - name: tcpxo-daemon
+      #   # image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.8
+      #   image: us-docker.pkg.dev/kernel-net-team/unified-rxdm/dev:elm_sctp_mitigation
+      #   imagePullPolicy: Always
+      #   command:
+      #   - "bash"
+      #   - "-c"
+      #   - |
+      #     set -ex
+      #     chmod 755 /fts/entrypoint_rxdm_container.sh
+      #     /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8  --uid= --alsologtostderr &
+      #     while [ ! -e "/usr/share/nemo/workload_terminated" ]; do echo "waiting for exit signal..."; sleep 10; done
+      #     pkill -e "^"tcpgpudmarxd || true
+      #     sleep 30
+      #   securityContext:
+      #     privileged: true
+        # volumeMounts:
+        # - name: workload-terminated-volume
+        #   mountPath: /usr/share/nemo
+      #   # - name: nvidia-install-dir-host
+      #   #   mountPath: /usr/local/nvidia/lib64
+      #   - name: dmabuf
+      #     mountPath: /dev/dmabuf_import_helper
+      #   - name: cuda-lib
+      #     mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
+      #   - name: cuda-lib1
+      #     mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+      #   - name: cuda-lib535
+      #     mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12  
+      #   - name: tcpd-socket
+      #     mountPath: /tmp
+
+      #   env:
+      #   - name: LD_LIBRARY_PATH
+      #     value: /usr/local/cuda-12.2/lib64 
+      #     # value: /usr/local/nvidia/lib64
       - name: nccl-healthcheck
         image: us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:${IMAGE_TAG}
         imagePullPolicy: Always
@@ -189,9 +194,9 @@ spec:
           value: nccl-headless-svc-${SHORT_GUID}-${CHECK_TIME_EPOCH_SEC}
         - name: LD_LIBRARY_PATH
           # value: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
-          value: /usr/local/cuda-12.3/lib64:/usr/local/nvidia/lib64/
-        - name: NCCL_LIB_DIR
-          value: /usr/local/nvidia/lib64
+          value: /usr/local/cuda-12.2/lib64:/usr/local/nvidia/lib64/ #/usr/local/cuda-12.2/lib64:/var/lib/tcpx/lib64
+        # - name: NCCL_LIB_DIR
+        #   value: /usr/local/nvidia/lib64
         - name: NHOSTS
           value: "2"
         - name: nr
@@ -218,10 +223,10 @@ spec:
           value: "nccl_secondpass_a3plus.yaml"
         - name: ENABLE_TWO_PASS_STRATEGY
           value: "true"
-        # - name: NCCL_DEBUG
-        #   value: "INFO"
-        # - name: NCCL_DEBUG_SUBSYS
-        #   value: "INIT,ENV"
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: NCCL_DEBUG_SUBSYS
+          value: "INIT,ENV"
         - name: INSTANCE_TYPE
           value: "a3-megagpu-8g"
         - name: IMAGE_TAG
@@ -245,18 +250,20 @@ spec:
         volumeMounts:
         # - name: nvidia-install-dir-host
         #   mountPath: /usr/local/nvidia/lib64
-        - name: dmabuf
-          mountPath: /dev/dmabuf_import_helper
-        - name: cuda-lib
-          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
-        - name: cuda-lib1
-          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
-        - name: cuda-lib535
-          mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12 
+        # - name: dmabuf
+        #   mountPath: /dev/dmabuf_import_helper
+        # - name: cuda-lib
+        #   mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
+        # - name: cuda-lib1
+        #   mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+        # - name: cuda-lib535
+        #   mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12 
         - name: tcpxo-nccl-plugin-volume
-          mountPath: /usr/local/tcpxo
-        - name: tcpd-socket
-          mountPath: /tmp
+          mountPath: /usr/local/nvidia/lib64/
+        - name: cuda
+          mountPath: /usr/local/cuda-12.2/lib64
+        - name: aperture-devices
+          mountPath: /dev/aperture_devices
         - name: workload-terminated-volume
           mountPath: /usr/share/nemo
         resources:
