@@ -40,7 +40,7 @@ def _create_a3plus_config():
           " {start_message_size} {end_message_size} {nhosts} 3"
       ),
       default_threshold=120,
-      ld_library_path="/usr/local/cuda-12.2/lib64:/var/lib/fastrak/lib64"
+      ld_library_path="/usr/local/cuda-12.2/lib64:/usr/local/nvidia/lib64/", #"/usr/local/cuda-12.2/lib64:/var/lib/fastrak/lib64"
       )
 
 
