@@ -32,9 +32,19 @@ health_check:
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
   volumeMounts:
-  - name: nvidia-install-dir-host
-    mountPath: /usr/local/nvidia
+  - name: cuda-lib
+    mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so
+  - name: cuda-lib1
+    mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+  - name: cuda-lib535
+    mountPath: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12
 volumes:
-- name: nvidia-install-dir-host
+- name: cuda-lib
   hostPath:
-    path: /home/kubernetes/bin/nvidia
+    path: /usr/lib/x86_64-linux-gnu/libcuda.so
+- name: cuda-lib1
+  hostPath:
+    path: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+- name: cuda-lib535
+  hostPath:
+    path: /usr/lib/x86_64-linux-gnu/libcuda.so.535.104.12
