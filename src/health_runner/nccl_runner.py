@@ -14,7 +14,9 @@
 
 """Runs NCCL health check."""
 
+import collections
 from collections.abc import Iterable
+import copy
 import itertools
 import logging
 import os
@@ -27,86 +29,67 @@ from kubernetes.client.api import batch_v1_api
 
 import checker_common
 import common_pb2
+import health_results_pb2
 
 
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
+_CHECK_INTERVAL_SECONDS = os.environ.get("CHECK_INTERVAL_SECONDS", "20")
 
-_KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
-_HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
+# If set, only run NCCL health check on nodes that have this label set to true
+_FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
+_FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
 
 NCCL_PRE_RESULT_KEY = "aiinfra/nccl-healthcheck-pre-result"
 NCCL_RESULT_KEY = "aiinfra/nccl-healthcheck-result"
-_DEFAULT_NCCL_TEST_LABEL_NAME = "aiinfra/nccl-healthcheck-test"
-_DEFAULT_NCCL_TEST_LABEL_VALUE = "true"
 
 
-def run_nccl_healthcheck():
+def run_nccl_healthcheck() -> health_results_pb2.HealthResult:
   """Runs NCCL health check and waits for it to complete."""
   print("cleaning up labels")
   labels_to_remove = [
       "aiinfra/nccl-healthcheck-runtime-sec",
       "aiinfra/nccl-healthcheck-result",
+      NCCL_PRE_RESULT_KEY,
   ]
   for label in labels_to_remove:
-    cleanup_labels(label)
+    checker_common.cleanup_labels(label)
 
-  # TODO - Only select subset of nodes
   kubernetes.config.load_incluster_config()
   v1 = kubernetes.client.CoreV1Api()
-
   case = os.environ.get("PAIRING_MODE", "random").lower()
   second_pass_enabled = is_second_pass_enabled()
 
-  # Filter node data to only include that meet label constraints
-  all_conditions: list[tuple[str, str | None, bool]] = [
-      (  # Only include nodes with GPUs
-          "cloud.google.com/gke-gpu",
-          None,
-          True,
-      ),
-      (  # Check if node is labeled to be tested
-          os.environ.get("TEST_LABEL_NAME", _DEFAULT_NCCL_TEST_LABEL_NAME),
-          os.environ.get("TEST_LABEL_VALUE", _DEFAULT_NCCL_TEST_LABEL_VALUE),
-          True,
-      ),
-  ]
-  node_data: list[dict[str, str]] = get_nodes_data(
-      v1.list_node().items,
-      conditions=all_conditions,
-  )
+  node_data: list[dict[str, str]] = get_nodes_data(v1.list_node().items)
   capacity = get_capacity_topology(node_data)
   logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
   # Default is to use toplogy awareness when pairing nodes
   if case == "intra_rack":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_intra_rack_healthcheck(v1, capacity, second_pass_enabled)
+    return run_intra_rack_healthcheck(v1, capacity, second_pass_enabled)
   elif case == "inter_rack":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_inter_rack_healthcheck(v1, capacity, second_pass_enabled)
+    return run_inter_rack_healthcheck(v1, capacity, second_pass_enabled)
   elif case == "inter_cluster":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_inter_cluster_healthcheck(v1, capacity, second_pass_enabled)
+    return run_inter_cluster_healthcheck(v1, capacity, second_pass_enabled)
   elif case == "random":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
+    return run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
   else:
     logging.info("Unknown health check case: %s", case)
-    case = "random"
-    logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
+    return run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
 
 
 def health_check_with_node_pairs(
     node_pairs: list[tuple[str, str]],
-    additional_helm_install_flags: list[str] | None = None,
+    env_mappings: dict[str, str] | None = None,
     job_name_distinctor: str = "unknown-type",
 ) -> list[str]:
   """Runs NCCL health check with a list of node pairs.
 
   Args:
     node_pairs: A list of node pairs to run the health check on.
-    additional_helm_install_flags: A list of additional flags to pass to helm
-      install.
+    env_mappings: A list of additional environment variables to pass to the job.
     job_name_distinctor: A string to distinguish the type of job.
 
   Returns:
@@ -115,44 +98,25 @@ def health_check_with_node_pairs(
   # Create a list of job names for to monitor the jobs.
   job_names = []
   tested_nodes = []
-
   cleanup_functions = []
 
-  # This must be defined in the YAML configuration
-  helm_chart_path = os.environ.get("HELM_CHART")
-  helm_chart_version = os.environ.get("HELM_CHART_VERSION")
-  helm_values = os.environ.get("HELM_VALUES")
+  if env_mappings is None:
+    env_mappings = {}
 
   # For the first pass, pair each node
   for node0, node1 in node_pairs:
-    # Reset the Helm install flags for each node pair
-    helm_install_flags = os.environ.get("HELM_INSTALL_FLAGS")
-
+    env_mappings_copy = copy.deepcopy(env_mappings)
     short_guid = str(uuid.uuid4())[:8]
-    unique_release_name = os.environ.get(
-        "HELM_RELEASE_NAME",
-        f"internal-health-check-{job_name_distinctor}-{short_guid}",
-    )
     unique_job_name = f"hc-{job_name_distinctor}-{short_guid}"
-    # Sets nodes and second pass flag for helm chart
-    helm_install_flags += (
-        f" --set job.name={unique_job_name}"
-        f" --set health_check.env.NODE0={node0}"
-        f" --set health_check.env.NODE1={node1}"
-    )
-    if additional_helm_install_flags is not None:
-      for flag in additional_helm_install_flags:
-        helm_install_flags += f" --set {flag}"
+    env_mappings_copy["NODE0"] = node0
+    env_mappings_copy["NODE1"] = node1
+    env_mappings_copy["SHORT_GUID"] = short_guid
 
     print(f"Running NCCL test between node {node0} and node {node1}...")
     cleanup_functions.extend(
-        checker_common.create_helm_release(
-            helm_path=_HELM,
-            release_name=unique_release_name,
-            chart=helm_chart_path,
-            values=helm_values,
-            chart_version=helm_chart_version,
-            helm_install_flags=helm_install_flags,
+        checker_common.create_job_k8s(
+            job_name=unique_job_name,
+            env_mappings=env_mappings_copy,
         )
     )
     # TODO - Find a better way to avoid this sleep
@@ -171,7 +135,7 @@ def health_check_with_node_pairs(
       job_api,
       job_names,
       timeout_seconds=(int(_SLEEP_TIME_MINUTES) * 60),
-      check_interval=20,
+      check_interval=int(_CHECK_INTERVAL_SECONDS),
   )
 
   # Cleanup after pods are done (uninstall releases, delete k8s objects, etc.)
@@ -189,7 +153,7 @@ def run_nccl_random_pair_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Runs NCCL health checks between random nodes and waits for it to complete.
 
   Args:
@@ -201,6 +165,7 @@ def run_nccl_random_pair_healthcheck(
     A tuple containing the list of passed nodes and the list of failed nodes.
   """
 
+  health_result = health_results_pb2.HealthResult(name="random_pair")
   nodes = []
   logging.info("Finding all nodes...")
   for cluster in capacity.clusters:
@@ -221,86 +186,124 @@ def run_nccl_random_pair_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=false"],
+      env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-random-pair",
   )
 
-  # Get the failed and passed nodes from the first pass.
-  passed_nodes, failed_nodes = get_nccl_test_results(v1, tested_nodes)
+  # Get the passed nodes and other suspect from the first pass.
+  node_results = get_nccl_test_results(v1, tested_nodes)
+  passed_nodes = node_results.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes: list[tuple[str, str]] = []
+  for result_type, nodes in node_results.items():
+    if result_type != "pass":
+      suspect_nodes.extend((node, result_type) for node in nodes)
 
   # Label nodes that passed
   for node in passed_nodes:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
 
   # If no second pass, no failed nodes, or no passed nodes for second pass,
   # then return results.
-  if (not second_pass_enabled) or (not failed_nodes) or (not passed_nodes):
+  if (not second_pass_enabled) or (not suspect_nodes) or (not passed_nodes):
     logging.info("Second pass will not run")
-    for node in failed_nodes:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
+    # Label suspect nodes based on their given result type
+    for node, result_type in suspect_nodes:
+      checker_common.label_node(
+          node, label_key=NCCL_RESULT_KEY, label_value=result_type
+      )
+    failed_nodes = node_results.get("fail", list())
+    suspect_nodes_no_fails: list[str] = [
+        node for node, result_type in suspect_nodes if result_type != "fail"
+    ]
+    print(f"Found suspect nodes: {suspect_nodes_no_fails}")
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
-    return list(passed_nodes), list(failed_nodes)
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_nodes, failed_nodes)
+    )
+    return health_result
 
-  print(f"Running second pass for {len(failed_nodes)} nodes...")
+  print(f"Running second pass for {len(suspect_nodes)} nodes...")
 
   second_pass_node_pairs = []
-  # For second pass, pair each failed node with a randomly selected passed node
-  # If there are more failed nodes than passed nodes, passed nodes will be
-  # cycled through and therefore pair with more than one failed node.
+  # For second pass, pair each suspect node with a randomly selected passed node
+  # If there are more suspect nodes than passed nodes, passed nodes will be
+  # cycled through and therefore pair with more than one suspect node.
   passed_nodes_list = list(passed_nodes)
+  # Get just the names from suspect nodes
+  suspect_nodes_list = [node for (node, _) in suspect_nodes]
   random.shuffle(passed_nodes_list)
-  for failed_node, good_node in zip(
-      list(failed_nodes), itertools.cycle(passed_nodes_list)
+  for suspect_node, good_node in zip(
+      suspect_nodes_list, itertools.cycle(passed_nodes_list)
   ):
-    node_pair = (failed_node, good_node)
+    node_pair = (suspect_node, good_node)
     second_pass_node_pairs.append(node_pair)
     print(
-        f"Will run NCCL test between good node {good_node} and failed node"
-        f" {failed_node}"
+        f"Will run NCCL test between good node {good_node} and suspect node"
+        f" {suspect_node}"
     )
 
   tested_nodes_second_pass = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
-      additional_helm_install_flags=[
-          "health_check.env.SECOND_PASS=true",
-          "health_check.env.HEALTH_VALIDITY_HOURS=0",
-      ],
+      env_mappings={"SECOND_PASS": "true", "HEALTH_VALIDITY_HOURS": "0"},
       job_name_distinctor="nccl-2nd-pass",
   )
   print(f"Second pass completed for {len(tested_nodes_second_pass)} nodes")
 
   # Only care about the results from the previous failed nodes
-  passed_nodes_second_pass, failed_nodes_second_pass = get_nccl_test_results(
-      v1,
-      list(failed_nodes),
-  )
+  node_results_second_pass = get_nccl_test_results(v1, suspect_nodes_list)
+  passed_nodes_second_pass = node_results_second_pass.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes_second_pass: list[tuple[str, str]] = []
+  for result_type, nodes in node_results_second_pass.items():
+    if result_type != "pass":
+      suspect_nodes_second_pass.extend(
+          (node, result_type)
+          for node in nodes
+          if node not in passed_nodes_second_pass
+      )
+  # Get just the names from suspect nodes for second pass
+  suspect_nodes_second_pass_list = [
+      node for (node, _) in suspect_nodes_second_pass
+  ]
 
   # Label nodes that passed second pass
   for node in passed_nodes_second_pass:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
-  for node in failed_nodes_second_pass:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
-
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
+  # Since final test, we can use this result type as final result
+  for node, result_type in suspect_nodes_second_pass:
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value=result_type
+    )
   passed_nodes, failed_nodes = determine_failed_components(
-      list(passed_nodes),
-      list(failed_nodes),
-      list(passed_nodes_second_pass),
-      list(failed_nodes_second_pass),
+      passed_nodes,
+      suspect_nodes_list,
+      passed_nodes_second_pass,
+      suspect_nodes_second_pass_list,
   )
 
-  print(f"found failed nodes: {failed_nodes}")
+  print(f"found failed/suspect nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
-
-  return passed_nodes, failed_nodes
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_nodes, failed_nodes)
+  )
+  return health_result
 
 
 def run_intra_rack_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Checks the racks communication by running nccl tests between each node in the same rack."""
+  health_result = health_results_pb2.HealthResult(
+      name="intra_rack",
+  )
   # Create a dictionary of rack to nodes for easier lookup.
   rack_to_nodes = {}
   logging.info("Finding all racks...")
@@ -332,101 +335,142 @@ def run_intra_rack_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=false"],
+      env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-intra-rack",
   )
 
-  # Get the failed and passed nodes from the first pass.
-  passed_nodes, failed_nodes = get_nccl_test_results(v1, tested_nodes)
+  # Get the suspect and passed nodes from the first pass.
+  node_results = get_nccl_test_results(v1, tested_nodes)
+  passed_nodes = node_results.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes: list[tuple[str, str]] = []
+  for result_type, nodes in node_results.items():
+    if result_type != "pass":
+      suspect_nodes.extend((node, result_type) for node in nodes)
+  suspect_nodes_list = [node for (node, _) in suspect_nodes]
 
   # Label nodes that passed
   for node in passed_nodes:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
 
   # If no second pass, no failed nodes, or no passed nodes for second pass,
   # then return results.
-  if (not second_pass_enabled) or (not failed_nodes) or (not passed_nodes):
+  if (not second_pass_enabled) or (not suspect_nodes) or (not passed_nodes):
     logging.info("Second pass will not run")
-    for node in failed_nodes:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
+    # Label suspect nodes based on their given result type
+    for node, result_type in suspect_nodes:
+      checker_common.label_node(
+          node, label_key=NCCL_RESULT_KEY, label_value=result_type
+      )
+    failed_nodes = node_results.get("fail", list())
+    suspect_nodes_no_fails: list[str] = [
+        node for node, result_type in suspect_nodes if result_type != "fail"
+    ]
+    print(f"Found suspect nodes: {suspect_nodes_no_fails}")
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
-    return list(passed_nodes), list(failed_nodes)
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_nodes, failed_nodes)
+    )
+    return health_result
 
-  # For the second pass, pair each failed node with a passed node in the same
+  # For the second pass, pair each suspect node with a passed node in the same
   # rack.
-  print(f"Running second pass for {len(failed_nodes)} nodes...")
+  print(f"Running second pass for {len(suspect_nodes)} nodes...")
   second_pass_node_pairs = []
-  all_failed_nodes = []
+  all_suspect_nodes = []
   for rack, nodes in rack_to_nodes.items():
     passed_nodes_in_rack = []
-    failed_nodes_in_rack = []
-    # Determine which nodes in the rack passed and which failed.
+    suspect_nodes_in_rack = []
+    # Determine which nodes in the rack passed and which suspect.
     for node in nodes:
       if node in passed_nodes:
         passed_nodes_in_rack.append(node)
-      elif node in failed_nodes:
-        failed_nodes_in_rack.append(node)
+      elif node in suspect_nodes_list:
+        suspect_nodes_in_rack.append(node)
 
     if not passed_nodes_in_rack:
       print(f"No passed nodes in rack: {rack}")
       continue
 
     # Shuffle the passed nodes in the rack & then cycle through them to pair
-    # with each failed node exhaustively. Repeats are fine but not ideal.
+    # with each suspect node exhaustively. Repeats are fine but not ideal.
     random.shuffle(passed_nodes_in_rack)
-    for failed_node, healthy_node in zip(
-        failed_nodes_in_rack, itertools.cycle(passed_nodes_in_rack)
+    for suspect_node, healthy_node in zip(
+        suspect_nodes_in_rack, itertools.cycle(passed_nodes_in_rack)
     ):
-      node_pair = (failed_node, healthy_node)
+      node_pair = (suspect_node, healthy_node)
       second_pass_node_pairs.append(node_pair)
       print(
           f"Will run NCCL test between good node {healthy_node} (Rack:"
-          f" {rack}) and failed node {failed_node} (Rack:"
+          f" {rack}) and suspect node {suspect_node} (Rack:"
           f" {rack})"
       )
-    # Track all failed nodes from the first pass (should have no repeats)
-    all_failed_nodes.extend(failed_nodes_in_rack)
+    # Track all suspect nodes from the first pass (should have no repeats)
+    all_suspect_nodes.extend(suspect_nodes_in_rack)
 
   tested_nodes_second_pass = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=true"],
+      env_mappings={"SECOND_PASS": "true"},
       job_name_distinctor="nccl-intra-rack-second-pass",
   )
   print(f"Second pass completed for {len(tested_nodes_second_pass)} nodes")
 
   # Only care about the results from the previous failed nodes
-  passed_nodes_second_pass, failed_nodes_second_pass = get_nccl_test_results(
-      v1, all_failed_nodes
-  )
+  node_results_second_pass = get_nccl_test_results(v1, all_suspect_nodes)
+  passed_nodes_second_pass = node_results_second_pass.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes_second_pass: list[tuple[str, str]] = []
+  for result_type, nodes in node_results_second_pass.items():
+    if result_type != "pass":
+      suspect_nodes_second_pass.extend(
+          (node, result_type)
+          for node in nodes
+          if node not in passed_nodes_second_pass
+      )
 
   # Label nodes that passed second pass
   for node in passed_nodes_second_pass:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
-  for node in failed_nodes_second_pass:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
-
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
+  # Since final test, we can use this result type as final result
+  for node, result_type in suspect_nodes_second_pass:
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value=result_type
+    )
+  # Get just the names from suspect nodes for second pass
+  suspect_nodes_second_pass_list = [
+      node for (node, _) in suspect_nodes_second_pass
+  ]
   passed_nodes, failed_nodes = determine_failed_components(
-      list(passed_nodes),
-      list(failed_nodes),
-      list(passed_nodes_second_pass),
-      list(failed_nodes_second_pass),
+      passed_nodes,
+      suspect_nodes_list,
+      passed_nodes_second_pass,
+      suspect_nodes_second_pass_list,
   )
 
-  print(f"found failed nodes: {failed_nodes}")
+  print(f"found failed/suspect nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
-  return passed_nodes, failed_nodes
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_nodes, failed_nodes)
+  )
+  return health_result
 
 
 def run_inter_rack_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Checks inter-rack communication by running nccl tests between nodes in different racks (The racks will be in the same cluster)."""
+  health_result = health_results_pb2.HealthResult(
+      name="inter_rack",
+  )
   cluster_to_racks = {}
   rack_to_nodes = {}
-
   node_pairs = []
 
   # Create a dictionary of cluster to racks and a dictionary of rack to nodes
@@ -464,16 +508,24 @@ def run_inter_rack_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=false"],
+      env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-inter-rack",
   )
 
-  # Check for failures and attempt second pass
-  passed_nodes, failed_nodes = get_nccl_test_results(v1, tested_nodes)
+  # Get the passed nodes and other suspect from the first pass.
+  node_results = get_nccl_test_results(v1, tested_nodes)
+  passed_nodes = node_results.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes: list[tuple[str, str]] = []
+  for result_type, nodes in node_results.items():
+    if result_type != "pass":
+      suspect_nodes.extend((node, result_type) for node in nodes)
 
   # Label nodes that passed
   for node in passed_nodes:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
 
   passed_racks = []
   failed_racks = []
@@ -488,11 +540,16 @@ def run_inter_rack_healthcheck(
 
   if (not second_pass_enabled) or (not failed_racks) or (not passed_nodes):
     logging.info("Second pass will not run")
-    for node in failed_nodes:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
+    for node, result_type in suspect_nodes:
+      checker_common.label_node(
+          node, label_key=NCCL_RESULT_KEY, label_value=result_type
+      )
     print(f"Found failed racks: {failed_racks}")
     print(f"Found passed racks: {passed_racks}")
-    return passed_racks, failed_racks
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_racks, failed_racks)
+    )
+    return health_result
 
   # If second pass is enabled, we will run the test between the passed and
   # failed racks in the same cluster.
@@ -536,21 +593,33 @@ def run_inter_rack_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=true"],
+      env_mappings={"SECOND_PASS": "true"},
       job_name_distinctor="nccl-inter-rack-second-pass",
   )
 
   # Get the results of the second pass and combine with the first pass results
-  passed_nodes_second_pass, failed_nodes_second_pass = get_nccl_test_results(
-      v1, tested_nodes
-  )
+  node_results_second_pass = get_nccl_test_results(v1, tested_nodes)
+  passed_nodes_second_pass = node_results_second_pass.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes_second_pass: list[tuple[str, str]] = []
+  for result_type, nodes in node_results_second_pass.items():
+    if result_type != "pass":
+      suspect_nodes_second_pass.extend(
+          (node, result_type)
+          for node in nodes
+          if node not in passed_nodes_second_pass
+      )
 
-  # Label nodes that originally failed the second pass
-  for node in all_failed_nodes:
-    if node in passed_nodes_second_pass:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
-    if node in failed_nodes_second_pass:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
+  # Label nodes that passed second pass
+  for node in passed_nodes_second_pass:
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
+  # Since final test, we can use this result type as final result
+  for node, result_type in suspect_nodes_second_pass:
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value=result_type
+    )
 
   second_passed_racks = []
   second_failed_racks = []
@@ -570,16 +639,22 @@ def run_inter_rack_healthcheck(
 
   print(f"After second pass - Failed racks: {failed_racks}")
   print(f"After second pass - Passed racks: {passed_racks}")
-  return passed_racks, failed_racks
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_racks, failed_racks)
+  )
+
+  return health_result
 
 
 def run_inter_cluster_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
     second_pass_enabled: bool,
-) -> tuple[list[str], list[str]]:
+) -> health_results_pb2.HealthResult:
   """Checks the inter-cluster communication by running nccl tests between nodes in different clusters."""
-
+  health_result = health_results_pb2.HealthResult(
+      name="inter_cluster",
+  )
   cluster_to_nodes = {}
   for cluster in capacity.clusters:
     for rack in cluster.racks:
@@ -615,16 +690,24 @@ def run_inter_cluster_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=false"],
+      env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-inter-cluster",
   )
 
   # Check for failures and attempt second pass
-  passed_nodes, failed_nodes = get_nccl_test_results(v1, tested_nodes)
+  node_results = get_nccl_test_results(v1, tested_nodes)
+  passed_nodes = node_results.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes: list[tuple[str, str]] = []
+  for result_type, nodes in node_results.items():
+    if result_type != "pass":
+      suspect_nodes.extend((node, result_type) for node in nodes)
 
   # Label nodes that passed
   for node in passed_nodes:
-    label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
+    checker_common.label_node(
+        node, label_key=NCCL_RESULT_KEY, label_value="pass"
+    )
 
   passed_clusters = []
   failed_clusters = []
@@ -634,58 +717,74 @@ def run_inter_cluster_healthcheck(
     else:
       failed_clusters.append(cluster.id)
 
-  if not passed_clusters:
-    print("Found no passed clusters.")
-    return passed_clusters, failed_clusters
-
-  if not second_pass_enabled or not failed_clusters:
+  if not second_pass_enabled or not failed_clusters or not passed_nodes:
     logging.info("Second pass will not run")
-    for node in failed_nodes:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
+    # Label suspect nodes based on their given result type
+    for node, result_type in suspect_nodes:
+      checker_common.label_node(
+          node, label_key=NCCL_RESULT_KEY, label_value=result_type
+      )
     print(f"Found failed clusters: {failed_clusters}")
     print(f"Found passed clusters: {passed_clusters}")
-    return passed_clusters, failed_clusters
+    health_result.nccl_health_result.CopyFrom(
+        generate_nccl_health_results(passed_clusters, failed_clusters)
+    )
+    return health_result
 
   print(f"Running second pass for {len(failed_clusters)} clusters...")
   second_pass_node_pairs = []
 
   # Loop through the failed clusters and pair it with a random healthy cluster
-  all_failed_nodes = []
+  all_suspect_nodes = []
   for failed_cluster in failed_clusters:
     healthy_cluster = random.choice(passed_clusters)
 
-    failed_nodes = cluster_to_nodes[failed_cluster]
+    suspect_nodes_in_cluster = cluster_to_nodes[failed_cluster]
     healthy_nodes = cluster_to_nodes[healthy_cluster]
 
     # Choose a random healthy node from a healthy cluster
     healthy_node = random.choice(healthy_nodes)
-    failed_node = random.choice(failed_nodes)
-    all_failed_nodes.append(failed_node)
-    node_pair = (failed_node, healthy_node)
+    suspect_node = random.choice(suspect_nodes_in_cluster)
+    all_suspect_nodes.append(suspect_node)
+    node_pair = (suspect_node, healthy_node)
     second_pass_node_pairs.append(node_pair)
 
     print(
         f"Will run NCCL test between good node {healthy_node} (Cluster:"
-        f" {healthy_cluster}) and failed node {failed_node} (Cluster:"
+        f" {healthy_cluster}) and suspect node {suspect_node} (Cluster:"
         f" {failed_cluster})"
     )
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
-      additional_helm_install_flags=["health_check.env.SECOND_PASS=true"],
+      env_mappings={"SECOND_PASS": "true"},
       job_name_distinctor="nccl-inter-cluster-second-pass",
   )
 
-  passed_nodes_second_pass, failed_nodes_second_pass = get_nccl_test_results(
-      v1, tested_nodes
-  )
+  node_results_second_pass = get_nccl_test_results(v1, tested_nodes)
+  passed_nodes_second_pass = node_results_second_pass.get("pass", list())
+  # Consider all other node without "pass" key as suspect
+  suspect_nodes_second_pass: list[tuple[str, str]] = []
+  for result_type, nodes in node_results_second_pass.items():
+    if result_type != "pass":
+      suspect_nodes_second_pass.extend(
+          (node, result_type)
+          for node in nodes
+          if node not in passed_nodes_second_pass
+      )
 
   # Label nodes that originally failed the second pass
-  for node in all_failed_nodes:
+  for node in all_suspect_nodes:
     if node in passed_nodes_second_pass:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="pass")
-    if node in failed_nodes_second_pass:
-      label_node(node, label_key=NCCL_RESULT_KEY, label_value="fail")
+      checker_common.label_node(
+          node, label_key=NCCL_RESULT_KEY, label_value="pass"
+      )
+  # Since final test, we can use this result type as final result
+  for node, result_type in suspect_nodes_second_pass:
+    if node in all_suspect_nodes:
+      checker_common.label_node(
+          node, label_key=NCCL_RESULT_KEY, label_value=result_type
+      )
 
   second_passed_clusters = []
   second_failed_clusters = []
@@ -708,7 +807,11 @@ def run_inter_cluster_healthcheck(
 
   print(f"After second pass - Failed racks: {failed_clusters}")
   print(f"After second pass - Passed racks: {passed_clusters}")
-  return passed_clusters, failed_clusters
+  health_result.nccl_health_result.CopyFrom(
+      generate_nccl_health_results(passed_clusters, failed_clusters)
+  )
+
+  return health_result
 
 
 # 
@@ -743,33 +846,22 @@ def determine_failed_components(
   return list(passed_set), list(failed_set)
 
 
-def label_node(
-    node: str,
-    label_key: str,
-    label_value: str,
-):
-  """Adds a label to a node.
-
-  Args:
-    node: The node to add the label to.
-    label_key: The key of the label.
-    label_value: The value of the label.
-  """
-  checker_common.add_label(
-      node,
-      label_key,
-      label_value,
-      f"{_KUBECTL} label node %s %s=%s --overwrite",
-  )
-
-
 def get_nccl_test_results(
     v1: kubernetes.client.CoreV1Api,
     nodes: list[str],
-) -> tuple[set[str], set[str]]:
-  """Gets the results of the nccl tests."""
-  passed_nodes = set()
-  failed_nodes = set()
+) -> dict[str, list[str]]:
+  """Returns the NCCL test results for the given nodes.
+
+  Args:
+    v1: The Kubernetes API client.
+    nodes: The list of nodes to get the results for.
+
+  Returns:
+    A dictionary of node results with keys as result types and values as lists
+    of node names.
+  """
+
+  node_results: dict[str, list[str]] = collections.defaultdict(list)
 
   tested_nodes = set(nodes)
 
@@ -778,43 +870,39 @@ def get_nccl_test_results(
     if node.metadata.name not in tested_nodes:
       continue
     pre_result = node.metadata.labels.get(NCCL_PRE_RESULT_KEY)
+    node_name = node.metadata.name
+    logging.info(
+        "Node %s has result: %s.",
+        node_name,
+        pre_result,
+    )
     # If bandwidth is > threshold, then it passed. Otherwise a fail
     match pre_result:
       case "pass":
-        passed_nodes.add(node.metadata.name)
+        node_results["pass"].append(node_name)
         logging.info(
-            "Node %s has result: %s.",
-            node.metadata.name,
-            pre_result,
+            "Node %s will be considered 'pass'.",
+            node_name,
         )
+      case None:
+        node_results["timeout"].append(node_name)
         logging.info(
-            "Node %s will be considered passed.",
-            node.metadata.name,
+            "Node %s will be considered 'timeout'.",
+            node_name,
+        )
+      case "crash":
+        node_results["crash"].append(node_name)
+        logging.info(
+            "Node %s will be considered 'crash'.",
+            node_name,
         )
       case _:
-        failed_nodes.add(node.metadata.name)
-        logging.info(
-            "Node %s has result: %s.",
-            node.metadata.name,
-            pre_result,
-        )
+        node_results["fail"].append(node_name)
         logging.info(
             "Node %s will be considered failed.",
-            node.metadata.name,
+            node_name,
         )
-
-  return passed_nodes, failed_nodes
-
-
-# 
-def cleanup_labels(
-    label: str,
-) -> None:
-  """Removes any potential labels from previous runs."""
-  logging.info("Removing label: %s", label)
-  checker_common.run_command(
-      f"{_KUBECTL} label nodes -l {label} {label}-"
-  )
+  return node_results
 
 
 def generate_index_pairs(length: int) -> list[tuple[int, int]]:
@@ -908,17 +996,11 @@ def get_node_data_v2(
 
 def get_nodes_data(
     kube_nodes: list[kubernetes.client.models.V1Node],
-    conditions: list[tuple[str, str | None, bool]],
 ) -> list[dict[str, str]]:
   """Returns a list of node data from the given list of nodes & conditions.
 
   Args:
     kube_nodes: List of nodes.
-    conditions: List of conditions to apply to the nodes. The conditions are
-      given as a tuple of (label_name, label_value, include). If label_value is
-      None, then the condition is met if the label exists. Otherwise, the
-      condition is met if the label value matches. The include value is whether
-      the condition should be met or excluded.
 
   Returns:
     List of node data.
@@ -926,16 +1008,19 @@ def get_nodes_data(
   # Filter set of nodes before getting data
   gpu_nodes = []
   for node in kube_nodes:
-    # Generator of whether conditions apply (True or False)
-    # If label value is None, then check whether the label exists
-    # Otheriwse check whether the label value matches
-    conditions_applied = (
-        (label_name in node.metadata.labels) == include if label_value is None
-        else (label_value == node.metadata.labels.get(label_name))
-        for (label_name, label_value, include) in conditions
-    )
-    if all(conditions_applied):
-      gpu_nodes.append(node)
+    # Must have a GPU label
+    if not has_gpu_resources(node):
+      continue
+
+    # If filter label is specified, then the node must have the label and the
+    # value must match
+    if _FILTER_LABEL_NAME and (
+        _FILTER_LABEL_NAME not in node.metadata.labels
+        or node.metadata.labels[_FILTER_LABEL_NAME] != _FILTER_LABEL_VALUE
+    ):
+      continue
+
+    gpu_nodes.append(node)
 
   # If no nodes are found then return an empty list
   if not gpu_nodes:
@@ -951,6 +1036,33 @@ def get_nodes_data(
     # single cluster and rack with the id "unknown"
     print("No topology labels found.")
     return get_node_data_v2(gpu_nodes)
+
+
+def has_gpu_resources(node):
+  """Check if the node has GPU resources in capacity or allocatable.
+
+  Args:
+      node (kubernetes.client.V1Node): Kubernetes node object
+
+  Returns:
+      bool: True if node has GPUs, False otherwise
+  """
+  # Get the node's status
+  node_status = node.status
+  # Check both capacity and allocatable for GPU resources
+  if node_status and node_status.allocatable:
+    gpu_key = "nvidia.com/gpu"  # Standard NVIDIA GPU label
+
+    if gpu_key in node_status.allocatable:
+      # Convert to int and check if > 0
+      try:
+        gpu_count = int(node_status.allocatable.get(gpu_key, 0))
+        if gpu_count > 0:
+          return True
+      except (TypeError, ValueError):
+        pass
+
+  return False
 
 
 def get_capacity_topology(
@@ -985,6 +1097,28 @@ def get_capacity_topology(
     rack.nodes.append(common_pb2.Node(id=node_id, host=host_id))
 
   return capacity
+
+
+def generate_nccl_health_results(
+    passed_objects: Iterable[str],
+    failed_objects: Iterable[str],
+) -> health_results_pb2.NCCLHealthResultList:
+  """Generates a list of NCCLHealthResult protos for the given nodes."""
+  health_results = health_results_pb2.NCCLHealthResultList()
+  # Sort the objects to ensure the results are deterministic
+  objects = list(passed_objects) + list(failed_objects)
+  objects.sort()
+
+  passed_objects = set(passed_objects)
+  for obj in objects:
+    if obj in passed_objects:
+      status = health_results_pb2.Status.PASS
+    else:
+      status = health_results_pb2.Status.FAIL
+    health_results.nccl_health_results.append(
+        health_results_pb2.NCCLHealthResult(id=obj, status=status)
+    )
+  return health_results
 
 
 def is_second_pass_enabled() -> bool:

@@ -27,6 +27,15 @@ from typing import Any, Dict
 import uuid
 from kubernetes.client.api import batch_v1_api
 
+_KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
+
+# Helm Config
+_HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
+_HELM_CHART = os.environ.get("HELM_CHART")
+_HELM_CHART_VERSION = os.environ.get("HELM_CHART_VERSION", "")
+_HELM_INSTALL_FLAGS = os.environ.get("HELM_INSTALL_FLAGS")
+_HELM_RELEASE_NAME = os.environ.get("HELM_RELEASE_NAME")
+
 
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
@@ -54,6 +63,36 @@ def log_results(
       "result_data": result_data,
   }
   print(json.dumps(log))
+
+
+# 
+def cleanup_labels(
+    label: str,
+) -> None:
+  """Removes any potential labels from previous runs."""
+  logging.info("Removing label: %s", label)
+  run_command(f"{_KUBECTL} label nodes -l {label} {label}-")
+
+
+# 
+def label_node(
+    node: str,
+    label_key: str,
+    label_value: str,
+):
+  """Adds a label to a node.
+
+  Args:
+    node: The node to add the label to.
+    label_key: The key of the label.
+    label_value: The value of the label.
+  """
+  add_label(
+      node,
+      label_key,
+      label_value,
+      f"{_KUBECTL} label node %s %s=%s --overwrite",
+  )
 
 
 def add_label(
@@ -167,6 +206,49 @@ def wait_till_jobs_complete(
   return list(remaining_jobs)
 
 
+def create_job_k8s(
+    job_name: str,
+    env_mappings: dict[str, str] | None = None,
+) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
+  """Creates a job k8s and returns a function to delete it."""
+  logging.info("Got here")
+  if not env_mappings:
+    env_mappings = {}
+
+  if _HELM_CHART:
+    # Convert the mappings to helm format
+    values = {}
+    if env_mappings:
+      for k, v in env_mappings.items():
+        # Assuming the env_mappings are all for the health_check job
+        values[f"health_check.env.{k}"] = v
+    values["job.name"] = job_name
+
+    # Use the helm release name if specified, otherwise generate a default one
+    if _HELM_RELEASE_NAME:
+      release_name = _HELM_RELEASE_NAME
+    else:
+      release_name = f"internal-health-check-{job_name}"
+
+    return create_helm_release(
+        helm_path=_HELM,
+        release_name=release_name,
+        chart=_HELM_CHART,
+        values=values,
+        chart_version=_HELM_CHART_VERSION,
+        helm_install_flags=_HELM_INSTALL_FLAGS,
+    )
+  elif os.environ.get("YAML_FILE"):
+    env_mappings["JOB_NAME"] = job_name
+    return create_k8s_objects(
+        yaml_path=os.environ.get("YAML_FILE"),
+        mappings=env_mappings,
+    )
+
+  logging.error("No k8s object or helm release specified.")
+  return []
+
+
 def generate_helm_command(
     helm_path: str,
     release_name: str,
@@ -260,11 +342,13 @@ def install_helm_release(
 
 def create_k8s_objects(
     yaml_path: str,
-    kubectl_path: str,
     mappings: dict[str, str] | None = None,
     print_output: bool = True,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Expands provided yaml file and runs `kubectl apply -f` on the contents."""
+  if not _KUBECTL:
+    logging.error("No kubectl path specified.")
+    return []
 
   cleanup_functions = []
 
@@ -273,9 +357,7 @@ def create_k8s_objects(
     file_name = f.name
     f.write(expanded_yaml_content)
 
-  cleanup_functions.append(
-      apply_yaml_file(file_name, kubectl_path, print_output)
-  )
+  cleanup_functions.append(apply_yaml_file(file_name, _KUBECTL, print_output))
   return cleanup_functions
 
 

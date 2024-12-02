@@ -45,6 +45,21 @@ def _create_a3plus_config():
   )
 
 
+def _create_a3plus_debian_config():
+  return config_pb2.ASeriesConfig(
+      instance_type="a3-megagpu-8g-debian",
+      second_pass_yaml_path="a3plus/nccl_secondpass.yaml",
+      nccl_test_command_template=(
+          "bash /scripts/run-nccl-combined-plugins.sh fastrak_debian"
+          " {benchmark} {ld_library_path} 8"
+          " enp134s0,enp135s0,enp13s0,enp14s0,enp141s0,enp142s0,enp6s0,enp7s0"
+          " {start_message_size} {end_message_size} {nhosts} 3 {iterations}"
+      ),
+      default_threshold=120,
+      ld_library_path="/usr/local/cuda-12.2/lib64:/usr/local/nvidia/lib64/",
+  )
+
+
 def _create_a3ultra_config():
   return config_pb2.ASeriesConfig(
       instance_type="a3-ultragpu-8g",
@@ -64,6 +79,8 @@ def get_config(instance_type: str) -> config_pb2.ASeriesConfig:
     return _create_a3_config()
   elif instance_type == "a3-megagpu-8g":
     return _create_a3plus_config()
+  elif instance_type == "a3-megagpu-8g-debian":
+    return _create_a3plus_debian_config()
   elif instance_type == "a3-ultragpu-8g":
     return _create_a3ultra_config()
   else:
