@@ -45,6 +45,8 @@ health_check:
     USE_TCPX: "true"
     USE_FASTRAK: "false"
     UNIX_CLIENT_PREFIX: "/run/tcpx"
+    NCCL_DEBUG: "INFO"
+    NCCL_DEBUG_SUBSYS: "INIT,NET"
     # Note A3 (a3-highgpu-8g) has no NCCL_LIB_DIR
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_USE_SNAP
     # Note A3 (a3-highgpu-8g) has no NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL
@@ -103,3 +105,12 @@ tcpd_daemon:
     while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 1; done
     cleanup
     sleep 10
+  volumeMounts:
+  - name: nvidia-install-dir-host
+    mountPath: /usr/local/nvidia/lib64
+  - name: tcpx-nccl-plugin-volume
+    mountPath: /usr/local/tcpx
+  - name: tcpd-socket
+    mountPath: /run/tcpx
+  - name: workload-terminated-volume
+    mountPath: /usr/share/nemo
