@@ -30,7 +30,7 @@ INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE")
 KUBECTL = os.environ.get("KUBECTL_PATH", "/scripts/kubectl")
 JOB_INDEX = int(os.getenv("JOB_COMPLETION_INDEX", "-1"))
 
-_RESULT_LABEL_KEY = "aiinfra/nccl-healthcheck-result"
+_NCCL_PRE_RESULT_KEY = "aiinfra/nccl-healthcheck-pre-result"
 TAINT_KEY = "aiinfra/nccl-healthcheck"
 TAINT_VALUE_SUSPECT = "suspect"
 TAINT_VALUE_FAILED = "failed"
@@ -38,10 +38,7 @@ TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
 TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
 HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-runtime-sec"
-HEALTHCHECK_SECOND_PASS_NEEDED_LABEL_KEY = (
-    "aiinfra/nccl-healthcheck-second-pass-needed"
-)
-NCCL_PRE_RESULT_KEY = "aiinfra/nccl-healthcheck-pre-result"
+_NCCL_BANDWIDTH_RESULT_KEY = "aiinfra/nccl-healthcheck-bandwidth"
 
 K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
 K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
@@ -122,7 +119,7 @@ def create_hostfile(
     nr: str,
 ) -> None:
   """Create a hostfile for the NCCL test.
-  
+
   Args:
     hosts (list[str]): The list of hosts to include in the hostfile.
     nr (str): The number of ranks to use in the hostfile.
@@ -184,7 +181,7 @@ def run_nccl_test(
       time.sleep(10)
   # Create file to let tcpxo daemon to terminate, this only applies to A3
   # and A3+ machines which use rxdm.
-  if INSTANCE_TYPE == "a3-highgpu-8g" or INSTANCE_TYPE == "a3-megagpu-8g":
+  if "a3-highgpu-8g" in INSTANCE_TYPE or  "a3-megagpu-8g" in INSTANCE_TYPE:
     with open(WORKLOAD_TERMINATE_FILE, "w") as _:
       pass
 
@@ -214,15 +211,6 @@ def process_test_result(
 
   passed: bool = has_sufficient_bandwidth and has_acceptable_failure_rate
 
-  # Pre-result label is used to determine if this run met criteria
-  for node in nodes:
-    checker_common.add_label(
-        node,
-        NCCL_PRE_RESULT_KEY,
-        "pass" if passed else "fail",
-        K_ADD_LABEL_FORMAT,
-    )
-
   test_name = os.environ.get("TEST_NAME", "nccl")
   for node in nodes:
     add_healthcheck_time_label(node)
@@ -242,6 +230,7 @@ def process_test_result(
             "terminal_test": terminal,
         },
     )
+    # After reaching end of its set of test sweeps (such as second pass)
     if terminal:
       result = "fail"
       if passed:
@@ -249,9 +238,10 @@ def process_test_result(
       elif avg_bandwidth == -1:
         result = "crash"
 
+      # Pre-result label is used to determine if this run met criteria
       checker_common.add_label(
           node,
-          _RESULT_LABEL_KEY,
+          _NCCL_PRE_RESULT_KEY,
           result,
           K_ADD_LABEL_FORMAT,
       )
@@ -275,7 +265,7 @@ def get_bandwidth(
     test_result: str,
 ) -> int:
   """Extract the bandwidth from the test result.
-  
+
   Args:
     test_result (str): The test result to extract the bandwidth from.
   
@@ -413,7 +403,7 @@ def mark_node_bandwidth(
     bandwidth = None
   checker_common.add_label(
       node,
-      "aiinfra/nccl-healthcheck-bandwidth",
+      _NCCL_BANDWIDTH_RESULT_KEY,
       f"{str(bandwidth):>02}",
       K_ADD_LABEL_FORMAT,
   )
