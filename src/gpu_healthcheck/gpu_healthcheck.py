@@ -58,7 +58,6 @@ K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
 K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
 K_UNTAINT_NODE_FORMAT = "/app/kubectl taint node %s %s-"
 
-# The two error types that require action on the node.
 # https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html
 K_DCGM_ERROR_ISOLATE = 2
 K_DCGM_ERROR_RESET = 3

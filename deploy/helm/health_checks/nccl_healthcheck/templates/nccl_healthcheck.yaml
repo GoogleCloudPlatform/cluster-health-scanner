@@ -52,15 +52,19 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       volumes: {{- toYaml .Values.volumes | nindent 8 }}
+      {{- if and (ne .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian") }}
       nodeSelector:
         node.kubernetes.io/instance-type: {{ .Values.health_check.env.INSTANCE_TYPE  | quote }}
+      {{- end }}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
+              {{- if ne .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian" }}
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
+              {{- end }}
                 # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
               - key: kubernetes.io/hostname
@@ -80,8 +84,10 @@ spec:
                 values:
                 - "true"
             - matchExpressions:
+              {{- if ne .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian" }}
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
+              {{- end }}
               - key: aiinfra/nccl-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
@@ -120,13 +126,19 @@ spec:
         - /bin/sh
         - -c
         - |
-          /scripts/container_entry.sh install --install-nccl
           {{- if eq .Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g" }}
-          cp -R /var/lib/gib/. /target/usr/local/gib
+          /scripts/container_entry.sh install --install-nccl
+          cp -R /var/lib/gib/. /usr/local/gib
+          {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian" }}
+          mkdir -p /usr/local/nvidia/lib64
+          cp -r /var/lib/fastrak/lib64/. /usr/local/nvidia/lib64
+          echo "installation finishes"
+          {{- else }}
+          /scripts/container_entry.sh install --install-nccl
           {{- end }}
       {{- /* Different tcpd-daemon container depending on accelerator type */}}
       containers:
-      {{- if or (eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g") (eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g") }}
+      {{- if or (eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g") (eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian") (eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g") }}
       - name: tcpd-daemon
         image: {{ .Values.tcpd_daemon.image | quote }}
         imagePullPolicy: {{ .Values.tcpd_daemon.imagePullPolicy | quote }}
@@ -134,20 +146,7 @@ spec:
         args: {{ .Values.tcpd_daemon.args | toJson }}
         securityContext:
           privileged: true
-        volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia/lib64
-        - name: tcpd-socket
-        {{- if eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g" }}
-          mountPath: /tmp
-        {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
-          mountPath: /run/tcpx
-        {{- end }}
-        - name: workload-terminated-volume
-          mountPath: /usr/share/nemo
-        env:
-        - name: LD_LIBRARY_PATH
-          value: /usr/local/nvidia/lib64
+        volumeMounts: {{- toYaml .Values.tcpd_daemon.volumeMounts | nindent 8 }}
       {{- end }}
       - name: nccl-healthcheck
         image: {{ printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag }}

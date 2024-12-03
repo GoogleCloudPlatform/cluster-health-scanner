@@ -14,12 +14,10 @@
 
 job:
   prefix: "nvidia-dcgm-diag"
-
 # This is used to create a unique identifer
 node_match:
   guid: "xkcd"
   # check_time: "1590303600" # Will automatically be set if not given
-
 health_check:
   name: "gpu-healthcheck"
   test_label:
@@ -33,3 +31,10 @@ health_check:
     R_LEVEL: "2"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
+  volumeMounts:
+  - name: nvidia-install-dir-host
+    mountPath: /usr/local/nvidia
+volumes:
+- name: nvidia-install-dir-host
+  hostPath:
+    path: /home/kubernetes/bin/nvidia
