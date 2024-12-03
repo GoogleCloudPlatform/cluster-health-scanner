@@ -36,11 +36,11 @@ def _create_a3plus_config():
       second_pass_yaml_path="a3plus/nccl_secondpass.yaml",
       nccl_test_command_template=(
           "/scripts/run-nccl-combined-plugins.sh fastrak all_gather_perf"
-          " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
+          " {ld_library_path} 8 enp134s0,enp135s0,enp13s0,enp14s0,enp141s0,enp142s0,enp6s0,enp7s0"
           " {start_message_size} {end_message_size} {nhosts} 3"
       ),
       default_threshold=120,
-      ld_library_path="/var/lib/tcpxo/lib64"
+      ld_library_path="/var/lib/fastrak/lib64/", #"/usr/local/tcpxo/lib64"
       )   
 
 
