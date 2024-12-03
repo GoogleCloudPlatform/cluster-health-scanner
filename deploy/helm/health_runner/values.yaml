@@ -29,6 +29,8 @@ health_checks:
       HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
+      FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
+      FILTER_LABEL_VALUE: "true"
       HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$HC_IMAGE_TAG"  # Specific to A3+
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"

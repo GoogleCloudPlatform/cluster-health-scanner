@@ -49,6 +49,8 @@ health_check:
     NCCL_FASTRAK_USE_SNAP: "1"
     NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL: "0"
     NCCL_FASTRAK_NUM_FLOWS: "2"
+    NCCL_DEBUG: "INFO"
+    NCCL_DEBUG_SUBSYS: "INIT,NET"
   volumeMounts:
   - name: nvidia-install-dir-host
     mountPath: /usr/local/nvidia/lib64
@@ -60,7 +62,6 @@ health_check:
     mountPath: /usr/share/nemo
   - name: shared-memory
     mountPath: /dev/shm
-
 # Configuration specific to a3plus
 volumes:
 - name: nvidia-install-dir-host
@@ -85,7 +86,6 @@ initContainers:
     volumeMounts:
       name: "tcpxo-nccl-plugin-volume"
       mountPath: "/var/lib/tcpxo"
-
 tcpd_daemon:
   image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.9"
   imagePullPolicy: "Always"
@@ -106,3 +106,10 @@ tcpd_daemon:
     while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 1; done
     cleanup
     sleep 30
+  volumeMounts:
+  - name: nvidia-install-dir-host
+    mountPath: /usr/local/nvidia/lib64
+  - name: tcpd-socket
+    mountPath: /tmp
+  - name: workload-terminated-volume
+    mountPath: /usr/share/nemo

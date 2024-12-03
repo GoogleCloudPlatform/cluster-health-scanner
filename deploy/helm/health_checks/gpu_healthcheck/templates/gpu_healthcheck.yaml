@@ -37,8 +37,10 @@ spec:
             nodeSelectorTerms:
             # Multiple matchExpressions ORed between each other. Statements whithin matchExpressions ANDed.
             - matchExpressions:
+              {{- if ne .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian" }}
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
+              {{- end }}
                 # It will trigger if label value is expired (default=24h).
                 # or label does not exists.
               - key: aiinfra/gpu-healthcheck-runtime-sec
@@ -53,8 +55,10 @@ spec:
                 values:
                 - {{ .Values.health_check.test_label.value | quote }}
             - matchExpressions:
+              {{- if ne .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian" }}
               - key: cloud.google.com/gke-accelerator
                 operator: Exists
+              {{- end }}
               - key: aiinfra/gpu-healthcheck-runtime-sec
                 operator: DoesNotExist
               - key: aiinfra/node-not-ready
@@ -66,10 +70,7 @@ spec:
                 - {{ .Values.health_check.test_label.value | quote }}
       tolerations:
       - operator: "Exists"
-      volumes:
-      - name: nvidia-install-dir-host
-        hostPath:
-          path: /home/kubernetes/bin/nvidia
+      volumes: {{- toYaml .Values.volumes | nindent 8 }}
       containers:
       - image: {{ printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag }}
         name: "gpu-healthcheck"
@@ -79,9 +80,7 @@ spec:
           hostPort: 5555
         securityContext:
           privileged: true
-        volumeMounts:
-        - name: nvidia-install-dir-host
-          mountPath: /usr/local/nvidia
+        volumeMounts: {{- toYaml .Values.health_check.volumeMounts | nindent 8 }}
         env:
         - name: NODE_NAME
           valueFrom:
