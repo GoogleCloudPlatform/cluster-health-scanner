@@ -82,7 +82,7 @@ steps:
   args: ["./uninstall_from_cluster.sh", "healthcheck-test", "*health-runner*", "*healthcheck*"]
 
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -90,7 +90,7 @@ steps:
   args: ['label', 'nodes', '--all', 'aiinfra/nccl-healthcheck-test=true', 'aiinfra/nccl-healthcheck-bandwidth-',
     'aiinfra/nccl-healthcheck-result-', 'aiinfra/nccl-healthcheck-runtime-sec-']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
@@ -100,7 +100,7 @@ steps:
     'health_checks.nccl_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.nccl_healthcheck.run_check=true',
     '--set', 'health_checks.nccl_healthcheck.DRY_RUN="false"', '--set', 'health_checks.nccl_healthcheck.blast_mode.blast_mode_enabled=true']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: "us-docker.pkg.dev/$PROJECT_ID/health-check/integration-tests:$SHORT_SHA"
@@ -108,7 +108,7 @@ steps:
   args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
     'aiinfra/nccl-healthcheck-runtime-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 # ================================== Neper Healthcheck Tests ===========================================================
@@ -117,7 +117,7 @@ steps:
   entrypoint: "bash"
   args: ["./uninstall_from_cluster.sh", "healthcheck-test", "*health-runner*", "*healthcheck*"]
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -125,7 +125,7 @@ steps:
   args: ['label', 'nodes', '--all', 'aiinfra/neper-healthcheck-test=true', 'aiinfra/neper-healthcheck-result-',
     'aiinfra/neper-healthcheck-runtime-sec-']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
@@ -135,7 +135,7 @@ steps:
     'health_checks.neper_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.neper_healthcheck.run_check=true',
     '--set', 'health_checks.neper_healthcheck.DRY_RUN="false"', '--set', 'health_checks.neper_healthcheck.blast_mode.blast_mode_enabled=true']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: "us-docker.pkg.dev/$PROJECT_ID/health-check/integration-tests:$SHORT_SHA"
@@ -143,7 +143,7 @@ steps:
   args: ['--check', 'aiinfra/neper-healthcheck-result=^pass$', 'aiinfra/neper-healthcheck-runtime-sec=^\d*$',
     '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 # ================================== GPU Healthcheck Tests ===========================================================
@@ -152,7 +152,7 @@ steps:
   entrypoint: "bash"
   args: ["./uninstall_from_cluster.sh", "healthcheck-test", "*health-runner*", "*healthcheck*"]
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -160,7 +160,7 @@ steps:
   args: ['label', 'nodes', '--all', 'aiinfra/gpu-healthcheck-test=true', 'aiinfra/gpu-healthcheck-result-',
     'aiinfra/gpu-healthcheck-runtime-sec-']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
@@ -170,7 +170,7 @@ steps:
     'health_checks.gpu_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.gpu_healthcheck.run_check=true',
     '--set', 'health_checks.gpu_healthcheck.DRY_RUN="false"', '--set', 'health_checks.gpu_healthcheck.blast_mode.blast_mode_enabled=true']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'GCLOUD_PROJECT=supercomputer-testing'
 - name: "us-docker.pkg.dev/$PROJECT_ID/health-check/integration-tests:$SHORT_SHA"
@@ -178,7 +178,7 @@ steps:
   args: ['--check', 'aiinfra/gpu-healthcheck-result=^pass$', 'aiinfra/gpu-healthcheck-runtime-sec=^\d*$',
     '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-central1'
+  - 'CLOUDSDK_COMPUTE_REGION=us-east5'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs-alt'  # TODO: read these from secrets
   - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
 images:  # these images will be uploaded to cloud build
