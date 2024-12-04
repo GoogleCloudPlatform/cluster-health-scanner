@@ -36,7 +36,10 @@ run_nccl_rdma() {
   if ! [[ -z "$8" ]]; then
     channels_per_gpu=$8
   fi
-  local -r iter=20
+  local iter=20
+  if [[ -n "$9" ]]; then
+    iter=$9
+  fi
 
   LD_LIBRARY_PATH=${ld_library_path_override} \
   mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 --allow-run-as-root \
@@ -72,8 +75,8 @@ run_nccl_rdma() {
     -x NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX="${UNIX_CLIENT_PREFIX}" \
     -x NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS=1000000 \
     -x NCCL_GPUDIRECTTCPX_FORCE_ACK \
-    /opt/nccl-tests/build/"${benchmark}" \
-      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5--iters "${iter}" 2>&1 | \
+    /third_party/nccl-tests/build/"${benchmark}" \
+      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 50--iters "${iter}" 2>&1 | \
     tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
 }
 
