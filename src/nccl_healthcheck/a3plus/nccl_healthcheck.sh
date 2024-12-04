@@ -33,15 +33,16 @@ echo $HOST_VARS
 
 CONTAINER_MOUNTS="/var/tmp:/var/tmp"
 
-#CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"/usr/sbin,/var/run/slurm,/etc/passwd:/etc/passwd,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh,/opt/apps:/opt/apps"
 
-#srun  \
+#CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"/usr/sbin,/var/run/slurm,/etc/passwd:/etc/passwd,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh,/opt/apps:/opt/apps"
+#CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"/usr/sbin,/var/run/slurm,/etc/passwd:/etc/passwd,/var/run/munge,/tmp,/root/.ssh:/root/.ssh,/tmp:/tmp,/etc/ssh:/etc/ssh,/opt/apps:/opt/apps,/var/tmp:/var/tmp"
+
+#sudo srun  \
 #        --container-image=./nccl+slurm.sqsh \
 #        --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST,NODE_NAME=$HOSTNAME,JOB_COMPLETION_INDEX=0,BANDWIDTH_THRESHOLD="90",START_MESSAGE_SIZE="2G",END_MESSAGE_SIZE="8G",INSTANCE_TYPE="a3-megagpu-8g",ITERATIONS="1" --gpus=8 --nodes 2 --exclusive \
-#	--mpi=pmix \
+#	--mpi=pmi2 \
 #        --container-mounts="${CONTAINER_MOUNTS}" \
-#	mpirun -np 16 sh -c "hostname && python3 -c 'from mpi4py import MPI; comm = MPI.COMM_WORLD; print(f\"Rank {comm.Get_rank()} out of {comm.Get_size()} on {MPI.Get_processor_name()}\")"
-        #sh -c "slurmd -V; python3 /scripts/nccl_startup.py"
+#        sh -c "python3 /scripts/nccl_startup.py"
 	#
 #srun  \
 #        --container-image=./nccl+slurm.sqsh \
@@ -122,14 +123,16 @@ CONTAINER_MOUNTS="/var/tmp:/var/tmp"
 
 
 # Simplify the command to isolate the issue
-srun \
+sudo srun \
     --container-image=./nccl+slurm.sqsh \
     --gres=gpu:8 \
     --nodes=2 \
     --exclusive \
     --mpi=pmi2 \
-    --container-mounts="${CONTAINER_MOUNTS},/var/run/munge:/var/run/munge" \
-    sh -c "python3 mpi_launcher.py all_gather_perf  2G 8G 20 8 2"
+    --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST,NODE_NAME=$HOSTNAME,JOB_COMPLETION_INDEX=0,BANDWIDTH_THRESHOLD="90",START_MESSAGE_SIZE="2G",END_MESSAGE_SIZE="8G",INSTANCE_TYPE="a3-megagpu-8g",ITERATIONS="1"  \
+    --container-mounts="${CONTAINER_MOUNTS},/var/run/munge:/var/run/munge,/opt/apps:/opt/apps,/usr/sbin,/var/run/slurm,/tmp:/tmp,/etc/ssh:/etc/ssh,/etc/passwd:/etc/passwd,/root/.ssh:/root/.ssh" \
+    sh -c "python3 /scripts/nccl_startup.py"
+    #sh -c "python3 mpi_launcher.py all_gather_perf  2G 8G 20 8 2"
     #sh -c "mpirun -np 2 \
     #--host a3m123-a3meganodeset-3:1,a3m123-a3meganodeset-29:1 \
     #--allow-run-as-root \

@@ -178,22 +178,12 @@ run_nccl_fastrak() {
   #source "${NCCL_LIB_DIR}/nccl-env-profile.sh"
   #NCCL_FLAGS=$( env | egrep ^NCCL | awk '{ printf "-x %s ", $0; }' )
   # shellcheck disable=SC2086
-  echo "===============ip addr show enp134s0============="
-  ip addr show enp134s0
-  echo "===================ip link show =========================="
-  ip link show
-  echo "===============ethtool enp134s0=============="
-  ethtool enp134s0
-  echo "============mpirun -np 2 --host localhost,otherhost hostname====="
-  otherhost=$(head -n 1 "/opt/apps/hostfiles${nhosts}/hostfile${gpu_per_node}")
-  echo $otherhost
-  echo "===========mpirun 2 node hostanme==========="
-  mpirun -np 2 --host localhost:1,$otherhost:1 --allow-run-as-root  hostname
-  echo "==================end ==========================="
+
   LD_LIBRARY_PATH=${ld_library_path_override} \
-  mpirun --mca btl tcp,self --mca btl_tcp_if_include enp0s12 --allow-run-as-root \
-    -np $(( gpu_per_node * "${nhosts}" )) \
-    --host localhost:8,$otherhost:8 \
+  #mpirun --mca btl tcp,self --mca btl_tcp_if_include enp0s12 --allow-run-as-root \
+  #  -np $(( gpu_per_node * "${nhosts}" )) \
+  srun --mpi=pmi2 -N ${nhosts} -n $((gpu_per_node * "${nhosts}")) --ntasks-per-node ${gpu_per_node} \
+    --hostfile "${SCRIPT_DIR}/hostfiles${nhosts}/hostfile${gpu_per_node}" \
     -x LD_LIBRARY_PATH -x PATH \
     -x NCCL_FASTRAK_CTRL_DEV=enp0s12 \
     -x NCCL_FASTRAK_IFNAME=enp134s0,enp135s0,enp13s0,enp14s0,enp141s0,enp142s0,enp6s0,enp7s0 \

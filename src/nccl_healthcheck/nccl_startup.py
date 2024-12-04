@@ -561,7 +561,7 @@ def main() -> None:
   """Main function."""
   ensure_env_variables()
   #apply_namespace_resolution()
-  configure_ssh()
+  #configure_ssh()
 
   nhosts = int(os.environ["NHOSTS"])
   nr = os.environ["nr"]
