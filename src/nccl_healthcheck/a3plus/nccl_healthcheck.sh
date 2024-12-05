@@ -124,14 +124,16 @@ CONTAINER_MOUNTS="/var/tmp:/var/tmp"
 
 # Simplify the command to isolate the issue
 sudo srun \
-    --container-image=./nccl+slurm.sqsh \
+    --container-image=./nvidia+pytorch+24.04-py3.sqsh \
     --gres=gpu:8 \
     --nodes=2 \
+    --mpi=pmix \
     --exclusive \
-    --mpi=pmi2 \
-    --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST,NODE_NAME=$HOSTNAME,JOB_COMPLETION_INDEX=0,BANDWIDTH_THRESHOLD="90",START_MESSAGE_SIZE="2G",END_MESSAGE_SIZE="8G",INSTANCE_TYPE="a3-megagpu-8g",ITERATIONS="1"  \
-    --container-mounts="${CONTAINER_MOUNTS},/var/run/munge:/var/run/munge,/opt/apps:/opt/apps,/usr/sbin,/var/run/slurm,/tmp:/tmp,/etc/ssh:/etc/ssh,/etc/passwd:/etc/passwd,/root/.ssh:/root/.ssh" \
-    sh -c "python3 /scripts/nccl_startup.py"
+    --export=HEALTH_VALIDITY_HOURS=24,DRY_RUN=true,NHOSTS=2,nr=8,JOB_NAME="neper-healthcheck-${SLURM_JOB_ID}",SERVICE_NAME="neper-headless-svc-${SLURM_JOB_ID}",GOOD_THROUGHPUT="50000000000",NODE_IP=$NODE_IP,POD_NAME=$POD_NAME,NODES=$SLURM_JOB_NODELIST,NODE_NAME=$HOSTNAME,JOB_COMPLETION_INDEX=0,BANDWIDTH_THRESHOLD="90",START_MESSAGE_SIZE="2G",END_MESSAGE_SIZE="8G",INSTANCE_TYPE="a3-megagpu-8g",ITERATIONS="1",NCCL_FASTRAK_CTRL_DEV=enp0s12,NCCL_FASTRAK_IFNAME=enp134s0,enp135s0,enp13s0,enp14s0,enp141s0,enp142s0,enp6s0,enp7s0,NCCL_DEBUG_FILE=/tmp/log/all_gather_perf-%h-%p.log,NCCL_TOPO_DUMP_FILE=/tmp/log/all_gather_perf_topo.txt,NCCL_GRAPH_DUMP_FILE=/tmp/log/all_gather_perf_graph.txt,NCCL_SOCKET_IFNAME=enp0s12,LD_LIBRARY_PATH,PATH,NCCL_CROSS_NIC=0,NCCL_ALGO=Ring,Tree,NCCL_PROTO=Simple,NCCL_MIN_NCHANNELS=4,NCCL_DYNAMIC_CHUNK_SIZE=524288,NCCL_P2P_NET_CHUNKSIZE=524288,NCCL_P2P_PCI_CHUNKSIZE=524288,NCCL_P2P_NVL_CHUNKSIZE=1048576,NCCL_FASTRAK_NUM_FLOWS=2,NCCL_BUFFSIZE=8388608,CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,NCCL_NET_GDR_LEVEL=PIX,NCCL_DEBUG=INFO,NCCL_DEBUG_SUBSYS=INIT,NET,NCCL_FASTRAK_ENABLE_HOTPATH_LOGGING=0,NCCL_FASTRAK_USE_SNAP=1,NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL=0,NCCL_FASTRAK_USE_LLCM=1,NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY=/dev/aperture_devices,NCCL_NVLS_ENABLE=0,NCCL_P2P_PXN_LEVEL=2,NCCL_TUNER_PLUGIN=libnccl-tuner.so,NCCL_TUNER_CONFIG_PATH=/var/lib/fastrak/lib64/a3plus_tuner_config.textproto,NCCL_SHIMNET_GUEST_CONFIG_CHECKER_CONFIG_FILE=/var/lib/fastrak/lib64/a3plus_guest_config.textproto,NCCL_FASTRAK_PLUGIN_ACCEPT_TIMEOUT_MS=600000,NCCL_NET_PLUGIN_TELEMETRY_MODE=1,NCCL_GPUVIZ_READ_INTERVAL_IN_MICROSECONDS=1000000,NCCL_GPUVIZ_GET_MAX_BUCKETS_LATENCY_HISTOGRAM_IN_NANOSECONDS=10000000,NCCL_GPUVIZ_GET_SCALE_LATENCY_HISTOGRAM_IN_NANOSECONDS=1,NCCL_GPUVIZ_GET_MAX_BUCKETS_SIZE_HISTOGRAM_IN_BYTES=10000000,NCCL_GPUVIZ_GET_SCALE_SIZE_HISTOGRAM_IN_BYTES=1,NCCL_FASTRAK_DUMP_COMM_STATS=0   \
+    --network=host \
+    --container-mounts="${CONTAINER_MOUNTS},/var/run/munge:/var/run/munge,/opt/apps:/opt/apps,/usr/sbin,/var/run/slurm,/tmp:/tmp,/etc/ssh:/etc/ssh,/etc/passwd:/etc/passwd,/root/.ssh:/root/.ssh,$PWD:/nccl" \
+    sh -c "mpirun --version;mpiexec --version; mpicc --version;slurmd -V; export LD_LIBRARY_PATH=/var/lib/fastrak/lib64;/nccl/nccl-tests/build/all_gather_perf -b 8M -e 8G -f 2 -g 1 -w 5 --iters 200 -c 0"
+    #sh -c "python3 /scripts/nccl_startup.py"
     #sh -c "python3 mpi_launcher.py all_gather_perf  2G 8G 20 8 2"
     #sh -c "mpirun -np 2 \
     #--host a3m123-a3meganodeset-3:1,a3m123-a3meganodeset-29:1 \
