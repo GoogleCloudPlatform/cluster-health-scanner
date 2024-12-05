@@ -1,0 +1,65 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package health_runner;
+
+import "google/protobuf/timestamp.proto";
+
+option features.field_presence = IMPLICIT;
+
+// The results of the health checks.
+message HealthResults {
+  // The name of the health check.
+  google.protobuf.Timestamp created_date_time = 1;
+
+  // The version of the health runner.
+  string version = 2;
+
+  // The results of the health checks.
+  repeated HealthResult health_results = 3;
+}
+
+// The results of a single health check.
+message HealthResult {
+  // The name of the health check.
+  string name = 1;
+
+  // The results of the health check.
+  oneof result {
+    NCCLHealthResultList nccl_health_result = 2;
+  }
+}
+
+// The results of the NCCL health check
+message NCCLHealthResultList {
+  repeated NCCLHealthResult nccl_health_results = 1;
+}
+
+// The results NCCL health check for a single object.
+message NCCLHealthResult {
+  // The ID of the object under test (NodeID, RackID, ClusterID, etc).
+  string id = 1;
+
+  // The status of the health check.
+  Status status = 2;
+}
+
+// The status of the health check.
+enum Status {
+  UNKNOWN = 0;
+  PASS = 1;
+  FAIL = 2;
+}

@@ -34,7 +34,7 @@ RUN ./get_helm.sh
 # helm installed into /usr/local/bin/helm
 
 COPY src/common.proto /app/
-
+COPY src/health_runner/health_results.proto /app/
 
 RUN python3 -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir grpcio-tools
 RUN pip install kubernetes
 RUN pip install protobuf
 RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/common.proto
-
+RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/health_results.proto
 
 # Health runner
 COPY src/checker_common.py .
