@@ -226,9 +226,11 @@ run_nccl_fastrak() {
   #  -x NCCL_GPUVIZ_GET_SCALE_SIZE_HISTOGRAM_IN_BYTES=1 \
   #  -x NCCL_FASTRAK_DUMP_COMM_STATS=0 \
     LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
-    taskset -c 32-63 /nccl/nccl-tests/build/"${benchmark}" \
-      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters "${iter}" 2>&1 | \
-    tee "/tmp/${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
+    #taskset -c 32-63 
+    #/nccl/nccl-tests/build/"${benchmark}" \
+    #  -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 5 --iters "${iter}" 2>&1 | \
+    #tee "/tmp/${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
+    /nccl/nccl-tests/build/all_gather_perf -b 8M -e 8G -f 2 -g 1 -w 5 --iters 200 -c 0
 }
 
 

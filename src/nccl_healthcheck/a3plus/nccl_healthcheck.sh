@@ -193,13 +193,12 @@ export NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY=/dev/aperture_devices
 # shellcheck disable=SC2001
 HOST_VARS=$(sed 's/ \{1,\}/,/g' <<<"${!NCCL*}")
 
-#sudo 
-srun \
+sudo srun \
     --container-image=./nccl+slurm.sqsh \
     --ntasks-per-node=8 \
     --nodes=2 \
     --mpi=pmi2 \
-    --container-mounts="${CONTAINER_MOUNTS},/var/run/munge:/var/run/munge,/opt/apps:/opt/apps,/usr/sbin,/var/run/slurm,/tmp:/tmp,/etc/ssh:/etc/ssh,/etc/passwd:/etc/passwd,/var/lib/tcpxo/lib64" \
+    --container-mounts="${CONTAINER_MOUNTS},/var/run/munge:/var/run/munge,/opt/apps:/opt/apps,/usr/sbin,/var/run/slurm,/tmp:/tmp,/etc/ssh:/etc/ssh,/etc/passwd:/etc/passwd,/var/lib/tcpxo/lib64,/usr/local/bin,/usr/local/lib,/var/spool/slurmd,/var/spool/slurm,/usr/lib64" \
     --container-env="${HOST_VARS}" \
     sh -c "export NODE_NAME=$HOSTNAME;export NHOSTS=2;export nr=8;export JOB_COMPLETION_INDEX=0; export BANDWIDTH_THRESHOLD=150;
     export START_MESSAGE_SIZE=2G; export END_MESSAGE_SIZE=8G; export JOB_NAME=JOB_NAME;export SERVICE_NAME=SERVICE_NAME; export DRY_RUN=true;
