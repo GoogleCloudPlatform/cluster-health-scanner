@@ -33,17 +33,18 @@ import checker_common
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 _IMAGE_VERSION_PATH = os.environ.get("IMAGE_VERSION_PATH", "image_version.txt")
-_K_GPU_NODES_IN_CLUSTER_COMMAND = (
-    f"{_KUBECTL} get nodes -l cloud.google.com/gke-accelerator"
-    " --no-headers | wc -l"
-)
+_K_GPU_NODES_IN_CLUSTER_COMMAND = "sinfo -h -N -r -o \"%N\" | wc -l"
+#_K_GPU_NODES_IN_CLUSTER_COMMAND = (
+#    f"{_KUBECTL} get nodes -l cloud.google.com/gke-accelerator"
+#    " --no-headers | wc -l"
+#)
 
 logging.root.setLevel(logging.INFO)
 
 
 def ensure_env_variables() -> None:
   """Ensure necessary environment variables are set."""
-  required_envs = ["YAML_FILE", "DRY_RUN"]
+  required_envs = ["BASH_FILE", "DRY_RUN"]
   for env in required_envs:
     if env not in os.environ:
       raise ValueError(f"Must set {env}")
@@ -113,7 +114,7 @@ def main() -> None:
       os.environ["IMAGE_TAG"] = tag
 
   # Step 1: Create k8s components
-  yaml_path = os.path.join("/app", os.environ.get("YAML_FILE"))
+  yaml_path = os.path.join("/app", os.environ.get("BASH_FILE"))
 
   # Determine number of tests to run
   num_tests = determine_test_iterations()
@@ -123,7 +124,7 @@ def main() -> None:
   logging.info("Creating %d tests...", num_tests)
   for i in range(num_tests):
     cleanup_functions.extend(
-        checker_common.create_k8s_objects(yaml_path, _KUBECTL)
+            checker_common.create_k8s_objects(yaml_path, _KUBECTL)
     )
     # Sleep to force a different timestamp
     time.sleep(1.5)

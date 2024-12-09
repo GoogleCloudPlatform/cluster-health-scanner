@@ -17,7 +17,7 @@ FROM ubuntu:latest
 WORKDIR /app
 
 RUN apt-get update &&\
-    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq &&\
+    apt-get install -y git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq munge libmunge-dev &&\
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
 
@@ -30,15 +30,13 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
 COPY src/health_runner/health_runner.py .
 COPY src/health_runner/health_runner.sh .
 COPY src/checker_common.py .
-COPY src/gpu_healthcheck/gpu_healthcheck.yaml .
+COPY src/gpu_healthcheck/gpu_healthcheck.sh .
 COPY src/nccl_healthcheck/a3/ a3/
 COPY src/nccl_healthcheck/a3plus/  a3plus/
-COPY src/neper_healthcheck/neper_healthcheck.yaml .
+COPY src/neper_healthcheck/neper_healthcheck.sh .
 
 
 RUN chmod -R g+rwx /app/
 RUN chgrp -R 1000 /app/
 
 ENV PYTHONUNBUFFERED=1
-
-CMD ["bash", "/app/health_runner.sh"]

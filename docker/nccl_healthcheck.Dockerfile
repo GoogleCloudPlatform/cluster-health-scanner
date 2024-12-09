@@ -9,7 +9,7 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   chmod 644 /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
-RUN apt-get update && apt-get install -y munge  libmunge-dev
+RUN apt-get update && apt-get install -y munge  libmunge-dev python3-pip
 
 WORKDIR /nccl
 RUN git clone https://github.com/NVIDIA/nccl-tests.git
