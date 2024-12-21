@@ -25,10 +25,10 @@ health_checks:
     run_check: true
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.1"
+      tag: "v4.1.0"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.1"
+      HC_IMAGE_TAG: "v4.1.0"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
