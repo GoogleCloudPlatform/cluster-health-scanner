@@ -20,11 +20,11 @@ health_check:
   name: "nccl"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck"
-    tag: "v4.1.2"
+    tag: "a3ultra"
     pull_policy: "Always"
   env:
     # A3+ instance type is a3-megagpu-8g
-    INSTANCE_TYPE: "a3-megagpu-8g"
+    INSTANCE_TYPE: "a3-ultragpu-8g"
     ENABLE_TWO_PASS_STRATEGY: "true"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
@@ -34,10 +34,10 @@ health_check:
     NHOSTS: "2"
     nr: "8"
     # Specific to A3+
-    LD_LIBRARY_PATH: /usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/
-    BANDWIDTH_THRESHOLD: "150"
+    LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/nvidia/lib64
+    BANDWIDTH_THRESHOLD: "250"
     USE_TCPX: "false"
-    USE_FASTRAK: "true"
+    USE_FASTRAK: "false"
     # Note A3+ (a3-megagpu-8g) has no UNIX_CLIENT_PREFIX
     NCCL_LIB_DIR: /usr/local/nvidia/lib64
     NCCL_FASTRAK_USE_SNAP: "1"
@@ -46,64 +46,32 @@ health_check:
     NCCL_DEBUG: "INFO"
     NCCL_DEBUG_SUBSYS: "INIT,NET"
   volumeMounts:
-  - name: nvidia-install-dir-host
-    mountPath: /usr/local/nvidia/lib64
-  - name: tcpxo-nccl-plugin-volume
-    mountPath: /usr/local/tcpxo
-  - name: tcpd-socket
-    mountPath: /tmp
-  - name: workload-terminated-volume
-    mountPath: /usr/share/nemo
+  - name: usr-local-gib
+    mountPath: /usr/local/gib
+  - name: library-dir-host
+    mountPath: /usr/local/nvidia
   - name: shared-memory
     mountPath: /dev/shm
-# Configuration specific to a3plus
+
+# Configuration specific to a3ultra
 volumes:
-- name: nvidia-install-dir-host
+- name: library-dir-host
   hostPath:
-    path: /home/kubernetes/bin/nvidia/lib64
-- name: tcpd-socket
-  hostPath:
-    path: /run/tcpxo
-- name: tcpxo-nccl-plugin-volume
-  emptyDir: {}
-- name: workload-terminated-volume
-  emptyDir: {}
+    path: /home/kubernetes/bin/nvidia
 - name: shared-memory
   emptyDir:
     medium: "Memory"
     sizeLimit: 250Gi
+- name: usr-local-gib
+  hostPath:
+    path: /home/kubernetes/bin/gib
+- name: run-sshd
+  emptyDir: {}
 initContainers:
   nccl_plugin_installer:
     name: "nccl-plugin-installer"
-    image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.2"
+    image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.2"
     imagePullPolicy: "Always"
     volumeMounts:
-      name: "tcpxo-nccl-plugin-volume"
-      mountPath: "/usr/local/tcpxo"
-tcpd_daemon:
-  image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.9"
-  imagePullPolicy: "Always"
-  command:
-  - "bash"
-  args:
-  - "-c"
-  - |
-    set -ex
-    chmod 755 /fts/entrypoint_rxdm_container.sh
-    /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8  --uid= --alsologtostderr &
-    cleanup() {
-      echo "Received SIGTERM or workload terminated, starting cleanup..."
-      pkill -e "^"tcpgpudmarxd || true
-      exit 0
-    }
-    trap cleanup SIGTERM
-    while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 1; done
-    cleanup
-    sleep 30
-  volumeMounts:
-  - name: nvidia-install-dir-host
-    mountPath: /usr/local/nvidia/lib64
-  - name: tcpd-socket
-    mountPath: /tmp
-  - name: workload-terminated-volume
-    mountPath: /usr/share/nemo
+      name: "usr-local-gib"
+      mountPath: "/usr/local/gib"

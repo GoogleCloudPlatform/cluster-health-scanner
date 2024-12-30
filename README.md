@@ -2,6 +2,31 @@
 
 ## 1. Introduction
 
+The
+[Cluster Health Scanner (CHS)](https://github.com/GoogleCloudPlatform/cluster-health-scanner)
+is a tool that checks the health of a GPU cluster. It runs various tests to
+ensure the cluster is ready for training workloads, specifically:
+
+*   **NCCL check**: Validates the network communication between GPUs using the
+    NCCL library.
+*   **GPU check**: Utilizes NVIDIA's DCGM tool to diagnose the health of
+    individual GPUs.
+*   **Neper check**: Leverages the Neper tool to assess network performance
+    within the cluster.
+*   **Straggler detection**: Runs a network traffic pattern between nodes that
+    closely resemble that encountered during LLM training workload pipeline
+    parallelism.
+
+CHS serves two main purposes:
+
+*   **Proactive health checks**: Ensures the cluster is in optimal condition for
+    running training workloads.
+*   **Debugging tool**: Helps diagnose issues when you encounter problems with a
+    training workload.
+
+__GPU Cluster availability__: A3 and A3+<br>
+__Orchestrator support__: GKE and Slurm
+
 The **Cluster Health Scanner** tool or simply **CHS** runs a series of tests
 called _health checks_ to analyze the health of a cluster of GPU nodes.
 
@@ -11,8 +36,9 @@ For instructions on how to run CHS, go directly to the
 While currently structured for Google Kubernetes Engine (GKE), CHS can
 theoretically run on clusters using other Kubernetes orchestration
 implementations.
-There are plans to enable CHS to run on additional cluster orchestrators, such
-as [Slurm](https://slurm.schedmd.com/overview.html) for HPC.
+We have enabled CHS to run on additional cluster orchestrators, such
+as [Slurm](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/main/deploy/slurm/README.md) 
+for HPC.
 
 
 ## 2. Architecture
@@ -182,7 +208,7 @@ Straggler Detection Health Check takes the following parameters:
   * `straggler_threshold_ms`: The threshold in milliseconds for a node to be
     considered a straggler. (Defaults to 8ms)
   * `interesting_event_offset`: The number of events before & after the
-    straggler threshold to be considered interesting. (Defaults to 4)
+    straggler threshold that are considered interesting. (Defaults to 4)
   * `message_sizes_mb`: The message sizes in MB to use for the SendRecv test.
     (Defaults to 16,32)
 
@@ -195,7 +221,7 @@ Viewing results is currently a manual process. First, you need to identify the
 kubectl get pods
 ```
 
-And identifying the pod with the "Straggler Detection" name that has the number '0' as it's identifier at the end of the name.
+And identifying the pod with the "Straggler Detection" name that has the number '0' as its identifier at the end of the name.
 
 From there, you can view the logs for that pod by running:
 
@@ -210,7 +236,7 @@ of PPBenchmarkResults. These results are then analyzed and reported as a
 heatmap to identify potential straggler nodes. See below for an example of
 the heatmap:
 
-![A sample annotated straggler detection heatmap](assets/straggler_heatmap_example.png)
+![A sample straggler detection heatmap with annotations.](assets/straggler_heatmap_example.png)
 
 In this example, the heatmap shows the latency results of a SendRecv test -
 every row represents a node + GPU pair, and the column represents a specific
@@ -366,8 +392,9 @@ are others that are universal to all health checks.
 ###### NCCL Health Check Settings
 
 - `health_checks.HC_NAME.env.YAML_FILE`:
-  must be set to either `"a3plus/nccl_healthcheck.yaml"` or
-  `"a3/nccl_healthcheck.yaml"`, depending on the nodes' accelerator type.
+  must be set to either `"a3ultra/nccl_healthcheck.yaml"` or
+  `"a3plus/nccl_healthcheck.yaml"` or `"a3/nccl_healthcheck.yaml"`, 
+  depending on the nodes' accelerator type.
 
 ###### GPU Health Check Settings
 

@@ -12,20 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-job:
-  base_name: "chs-hc"
-  # guid: "xckd"  # Can specify a GUID if desired. Otherwise, a random GUID will be generated.
-  # check_time: "1590303600"  # Will automatically be set if not given
-health_check:
-  name: "neper"
-  test_label:
-    name: "aiinfra/neper-healthcheck-test"
-    value: "true"
-  image:
-    repo: "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck"
-    tag: "v4.1.2"
-    pull_policy: "Always"
-  env:
-    GOOD_THROUGHPUT: "50000000000"
-    HEALTH_VALIDITY_HOURS: "24"
-    DRY_RUN: "true"
+#!/bin/bash
+
+#SBATCH --job-name=dcgmi-diag
+#SBATCH --time=1:00:00
+CONTAINER_IMAGE=./nvidia+dcgm+3.3.8-1-ubuntu22.04.sqsh
+
+# Import the pytorch container to enroot if not already present.
+if [[ ! -f ${CONTAINER_IMAGE} ]]; then
+  enroot import docker://nvidia/dcgm:3.3.8-1-ubuntu22.04
+fi
+
+# This is a Data Center GPU Manager container. This command will run GPU diagnostics.
+# This script should not be called manually. It should only be called by cluster_validation.sh
+srun --container-image=./nvidia+dcgm+3.3.8-1-ubuntu22.04.sqsh bash -c "dcgmi diag -r 3"

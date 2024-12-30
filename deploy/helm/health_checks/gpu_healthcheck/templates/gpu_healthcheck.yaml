@@ -13,23 +13,25 @@
 # limitations under the License.
 
 # yamllint disable
-{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.node_match.check_time -}}
-{{- $health_check_uniq_str := printf "%s-%s" (toString .Values.node_match.guid) (toString $check_time) -}}
-{{- $health_check_job_name := printf "%s-%s" .Values.job.prefix $health_check_uniq_str -}}
-{{- $node_list_name := printf "%s-%s" "gpu-node-list" $health_check_uniq_str -}}
+{{- $guid := default (lower (randAlphaNum 4)) .Values.job.guid -}}
+{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.job.check_time -}}
+{{- $base_name := default "chs-hc" .Values.job.base_name -}}
+{{- $unique_suffix := printf "%s-%s" $guid $check_time -}}
+{{- $extra_info := printf "%s" .Values.health_check.name }}
+{{- $unique_name := printf "%s-%s-%s" $base_name $extra_info $unique_suffix | replace "_" "-"  }}
 {{- $expiry_time := int (sub  $check_time (mul .Values.health_check.env.HEALTH_VALIDITY_HOURS 60 60)) -}}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $health_check_job_name }}
+  name: {{ $unique_name }}
 spec:
   completions: 1
   parallelism: 1
   completionMode: Indexed
   template:
     spec:
-      serviceAccountName: {{ $node_list_name }}
+      serviceAccountName: {{ $unique_name }}
       restartPolicy: Never
       affinity:
         nodeAffinity:
@@ -101,13 +103,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   namespace: default
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
 rules:
 - apiGroups: [""]
   resources: ["nodes"]
@@ -116,13 +118,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   namespace: default
 subjects:
 - kind: ServiceAccount
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   apiGroup: rbac.authorization.k8s.io
