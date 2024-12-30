@@ -41,7 +41,7 @@ def _create_a3plus_config():
           " {start_message_size} {end_message_size} {nhosts} 3 {iterations}"
       ),
       default_threshold=120,
-      ld_library_path="/usr/local/fastrak/lib64:/usr/local/nvidia/lib64/",
+      ld_library_path="/usr/local/tcpxo/lib64:/usr/local/nvidia/lib64/",
   )
 
 

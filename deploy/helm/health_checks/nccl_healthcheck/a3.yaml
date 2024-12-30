@@ -12,21 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-service:
-  prefix: "nccl-headless-svc"
 job:
-  prefix: "nccl-healthcheck"
-
-# This is used to create a unique identifer
-node_match:
-  guid: "xkcd"
-  # check_time: "1590303600" # Will automatically be set if not given
-
+  base_name: "chs-hc"
+  # guid: "xckd"  # Can specify a GUID if desired. Otherwise, a random GUID will be generated.
+  # check_time: "1590303600"  # Will automatically be set if not given
 health_check:
-  name: "nccl-healthcheck"
+  name: "nccl"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck"
-    tag: "v4.1.0"
+    tag: "v4.1.2"
     pull_policy: "Always"
   env:
     # A3 instance type is a3-highgpu-8g
@@ -86,7 +80,7 @@ initContainers:
     imagePullPolicy: "Always"
     volumeMounts:
       name: "tcpx-nccl-plugin-volume"
-      mountPath: "/var/lib/tcpx"
+      mountPath: "/usr/local/tcpx"
 tcpd_daemon:
   image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/tcpgpudmarxd-dev:v2.0.12"
   imagePullPolicy: "Always"

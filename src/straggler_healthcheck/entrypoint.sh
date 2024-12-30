@@ -66,7 +66,6 @@ export N_GPUS_PER_NODE=${N_GPUS_PER_NODE:-8}
 HOST_NAME="$(hostname)"
 export HOST_NAME
 
-# 
 # Mount GCS bucket
 chmod 664 /gcs
 export GCS_BUCKET="${GCS_BUCKET:-sd_mvp}"

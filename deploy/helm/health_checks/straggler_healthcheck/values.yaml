@@ -12,22 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-service:
-  prefix: "straggler-svc"
 job:
-  prefix: "straggler-healthcheck"
-
-# This is used to create a unique identifer
-node_match:
-  guid: "xkcd"
-  # check_time: "1590303600" # Will automatically be set if not given
-
+  base_name: "chs-hc"
+  # guid: "xckd"  # Can specify a GUID if desired. Otherwise, a random GUID will be generated.
+  # check_time: "1590303600"  # Will automatically be set if not given
 health_check:
-  name: "straggler-healthcheck"
+  name: "straggler"
   image:
-    # TODO: b/381928394: Update to external image repo once this check is approved for launch
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck"
-    tag: "v4.1.1"
+    tag: "v4.1.2"
     pull_policy: "Always"
   params:
     bm_wait_time: "60"

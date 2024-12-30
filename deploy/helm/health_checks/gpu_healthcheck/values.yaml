@@ -13,19 +13,17 @@
 # limitations under the License.
 
 job:
-  prefix: "nvidia-dcgm-diag"
-# This is used to create a unique identifer
-node_match:
-  guid: "xkcd"
-  # check_time: "1590303600" # Will automatically be set if not given
+  base_name: "chs-hc"
+  # guid: "xckd"  # Can specify a GUID if desired. Otherwise, a random GUID will be generated.
+  # check_time: "1590303600"  # Will automatically be set if not given
 health_check:
-  name: "gpu-healthcheck"
+  name: "gpu"
   test_label:
     name: "aiinfra/gpu-healthcheck-test"
     value: "true"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck"
-    tag: "v4.1.0"
+    tag: "v4.1.2"
     pull_policy: "Always"
   env:
     R_LEVEL: "2"
