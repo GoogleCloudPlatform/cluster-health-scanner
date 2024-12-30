@@ -25,7 +25,7 @@ RUN apt-get update &&\
     apt-get install -y \
         git make gcc g++ util-linux software-properties-common \
         openssh-server ca-certificates curl jq \
-        python3-kubernetes
+        python3-kubernetes python3 python3-pip python3-venv
 
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
     chmod +x kubectl
@@ -47,10 +47,17 @@ RUN mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
 # Disable ssh login grace period to prevent race condition vulnerability
 RUN echo "LoginGraceTime 0" >> /etc/ssh/sshd_config
 
+RUN python3 -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
+
+RUN pip install kubernetes
 RUN pip install google-cloud-storage
+RUN pip install --no-cache-dir grpcio-tools
+COPY src/health_runner/health_results.proto /scripts/
 
 COPY src/neper_healthcheck/neper_runner.py .
 COPY src/checker_common.py .
+RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/health_results.proto
 
 RUN chmod +x /scripts/neper_runner.py /scripts/checker_common.py
 CMD ["python3", "/scripts/neper_runner.py"]

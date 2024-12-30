@@ -13,26 +13,28 @@
 # limitations under the License.
 
 # yamllint disable
-{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.node_match.check_time -}}
-{{- $health_check_uniq_str := printf "%s-%s" (toString .Values.node_match.guid) (toString $check_time) -}}
-{{- $health_check_service_name := printf "%s-%s" .Values.service.prefix $health_check_uniq_str -}}
-{{- $health_check_job_name := default (printf "%s-%s" "nccl-healthcheck" $health_check_uniq_str) .Values.job.name -}}
-{{- $node_list_name := printf "%s-%s" "nccl-node-list" $health_check_uniq_str -}}
+{{- $guid := default (lower (randAlphaNum 4)) .Values.job.guid -}}
+{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.job.check_time -}}
+{{- $base_name := default "chs-hc" .Values.job.base_name -}}
+{{- $unique_suffix := printf "%s-%s" $guid $check_time -}}
+{{- $extra_info := printf "%s" .Values.health_check.name }}
+{{- $unique_name := printf "%s-%s-%s" $base_name $extra_info $unique_suffix | replace "_" "-"  }}
+{{- $unique_svc_name := printf "%s-%s-headless-svc-%s" $base_name $extra_info $unique_suffix | replace "_" "-"  }}
 {{- $expiry_time := int (sub  $check_time (mul .Values.health_check.env.HEALTH_VALIDITY_HOURS 60 60)) -}}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $health_check_service_name }}
+  name: {{ $unique_svc_name }}
 spec:
   clusterIP: None  #  clusterIP must be None to create a headless service
   selector:
-    job-name: {{ $health_check_job_name }}  # must match Job name
+    job-name: {{ $unique_name }}  # must match Job name
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $health_check_job_name }}
+  name: {{ $unique_name }}
   labels:
     app-name: {{ .Values.health_check.name }}
 spec:
@@ -46,8 +48,8 @@ spec:
     spec:
       tolerations:
       - operator: "Exists"
-      serviceAccountName: {{ $node_list_name }}
-      subdomain: "{{ $health_check_service_name }}"  # has to match Service name
+      serviceAccountName: {{ $unique_name }}
+      subdomain: "{{ $unique_svc_name }}"  # has to match Service name
       restartPolicy: Never
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
@@ -133,8 +135,13 @@ spec:
           mkdir -p /usr/local/nvidia/lib64
           cp -r /var/lib/fastrak/lib64/. /usr/local/nvidia/lib64
           echo "installation finishes"
-          {{- else }}
+          {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
           /scripts/container_entry.sh install --install-nccl
+          cp -R /var/lib/tcpx/. /usr/local/tcpx
+          echo "installation finishes"
+          {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g"}}
+          /scripts/container_entry.sh install --install-nccl
+          cp -R /var/lib/tcpxo/. /usr/local/tcpxo
           {{- end }}
       {{- /* Different tcpd-daemon container depending on accelerator type */}}
       containers:
@@ -169,11 +176,11 @@ spec:
             fieldRef:
               fieldPath: status.hostIP
         - name: JOB_NAME
-          value: "{{ $health_check_job_name }}"
+          value: "{{ $unique_name }}"
         - name: SERVICE_NAME
-          value: "{{ $health_check_service_name }}"
+          value: "{{ $unique_svc_name }}"
         - name: SHORT_GUID
-          value: "{{ .Values.node_match.guid }}"
+          value: "{{ $guid }}"
         - name: CHECK_TIME_EPOCH_SEC
           value: "{{ $check_time }}"
         {{- range $key, $value := .Values.health_check.env }}
@@ -188,13 +195,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   namespace: default
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
 rules:
 - apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
   resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "services"]
@@ -203,13 +210,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   namespace: default
 subjects:
 - kind: ServiceAccount
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: {{ $node_list_name }}
+  name: {{ $unique_name }}
   apiGroup: rbac.authorization.k8s.io

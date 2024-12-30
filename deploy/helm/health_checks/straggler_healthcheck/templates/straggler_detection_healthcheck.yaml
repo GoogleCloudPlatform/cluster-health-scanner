@@ -13,32 +13,37 @@
 # limitations under the License.
 
 # yamllint disable
-{{$image_version := $.Values.imageVersion}}
-{{$timestamp := now | date "2006-01-02-150405"}}
-{{- $check_time := default (printf "%s" (now | unixEpoch)) $.Values.node_match.check_time -}}
-{{- $health_check_uniq_str := printf "%s-%s" (toString $.Values.node_match.guid) (toString $check_time) -}}
-{{- $health_check_job_name := printf "%s-%s" $.Values.job.prefix $health_check_uniq_str -}}
-{{- $node_list_name := printf "%s-%s" "straggler-node-list" $health_check_uniq_str -}}
+{{- $guid := default (lower (randAlphaNum 4)) .Values.job.guid -}}
+{{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.job.check_time -}}
+{{- $base_name := default "chs-hc" .Values.job.base_name -}}
+{{- $unique_suffix := printf "%s-%s" $guid $check_time -}}
+{{- $hc_name := printf "%s" .Values.health_check.name -}}
+{{- $extra_info_leader := printf "leader" -}}
+{{- $unique_leader_name := printf "%s-%s-%s-%s" $base_name $hc_name $extra_info_leader $unique_suffix | replace "_" "-"  -}}
+{{- $unique_name := printf "%s-%s-%s" $base_name $hc_name $unique_suffix | replace "_" "-"  -}}
+{{- $unique_svc_name := printf "%s-%s-headless-svc-%s" $base_name $hc_name $unique_suffix | replace "_" "-"  -}}
 {{- $expiry_time := int (sub  $check_time (mul .Values.health_check.env.HEALTH_VALIDITY_HOURS 60 60)) -}}
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: "sd-leader-{{$.Release.Name}}-{{$timestamp}}"
+  name: {{ $unique_svc_name | quote }}
 spec:
   selector:
-    name: "sd-leader-{{$.Release.Name}}-{{$timestamp}}"
+    name: {{ $unique_leader_name | quote }}
   clusterIP: None
   ports:
   - name: sd-leader
     port: 2379
 ---
-{{$node_count := $.Values.health_check.env.N_NODES | int}}
+{{- $node_count := $.Values.health_check.env.N_NODES | int -}}
 {{- $root := . -}}
-{{range $node_index, $element := until $node_count}}
+{{- range $node_index, $element := until $node_count }}
+{{- $unique_node_name := printf "%s-%s-node%d-%s" $base_name $hc_name $node_index $unique_suffix | replace "_" "-"  }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sd-{{$.Release.Name}}-{{$timestamp}}-{{$node_index}}
+  name: {{ $unique_node_name | quote }}
   namespace: default
 spec:
   completions: 1
@@ -47,29 +52,29 @@ spec:
   template:
     metadata:
       labels:
-        {{if ne $node_index 0}}
-          name: sd-{{$.Release.Name}}-{{$timestamp}}
-        {{end}}
-        {{if eq $node_index 0}}
-          name: sd-leader-{{$.Release.Name}}-{{$timestamp}}
-        {{end}}
+        {{- if ne $node_index 0 -}}
+         name: {{ $unique_name | quote}}
+        {{- end }}
+        {{- if eq $node_index 0 }}
+         name: {{ $unique_leader_name | quote }}
+        {{- end }}
     spec:
-      serviceAccountName: {{ $node_list_name }}
+      serviceAccountName: {{ $unique_name | quote }}
       restartPolicy: Never
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      hostname: sd-{{$.Release.Name}}-{{$timestamp}}-{{$node_index}}
-      {{if ne $node_index 0}}
-      subdomain: sd-{{$.Release.Name}}-{{$timestamp}}
-      {{end}}
-      {{if eq $node_index 0}}
-      subdomain: sd-leader-{{$.Release.Name}}-{{$timestamp}}
-      {{end}}
-      {{if $.Values.health_check.params.nodesPerSuperblock}}
+      hostname: {{ $unique_node_name | quote }}
+     {{- if ne $node_index 0 }}
+      subdomain: {{ $unique_name | quote}}
+      {{- end }}
+      {{- if eq $node_index 0 }}
+      subdomain: {{ $unique_leader_name | quote }}
+      {{- end }}
+      {{- if $.Values.health_check.params.nodesPerSuperblock -}}
       {{$superblock_number :=  div $node_index $.Values.health_check.params.nodesPerSuperblock | int}}
       nodeSelector:
         superblock: "{{$superblock_number}}"
-      {{end}}
+      {{- end }}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -155,7 +160,7 @@ spec:
         - sh
         - -c
         - apt-get update && apt-get install --yes --no-install-recommends iptables && /sbin/iptables -I INPUT -p tcp -m tcp -j ACCEPT
-      {{if $.Values.health_check.params.use_fastrak}}
+      {{- if $.Values.health_check.params.use_fastrak}}
       - name: tcpxo-nccl-plugin-installer
         image: {{ $.Values.health_check.ncclPlugin.image }}:{{ $.Values.health_check.ncclPlugin.tag }}
         imagePullPolicy: Always
@@ -179,7 +184,7 @@ spec:
             echo " installation finishes"
       containers:
       - name: tcpd-daemon
-        image: {{ $.Values.health_check.rxdm.image }}:{{ $.Values.health_check.rxdm.tag }}
+        image: {{ printf "%s:%s" $.Values.health_check.rxdm.image $.Values.health_check.rxdm.tag | quote }}
         imagePullPolicy: Always
         command:
         - "bash"
@@ -210,9 +215,9 @@ spec:
         env:
         - name: LD_LIBRARY_PATH
           value: /usr/local/fastrak/lib64:/usr/local/nvidia/lib64
-      {{end}}
+      {{- end }}
       - name: straggler-detection-test
-        image: {{ $.Values.health_check.image.repo }}:{{ $.Values.health_check.image.tag }}
+        image: {{ printf "%s:%s" $.Values.health_check.image.repo $.Values.health_check.image.tag | quote }}
         imagePullPolicy: Always
         securityContext:
           privileged: true
@@ -221,9 +226,9 @@ spec:
               - SYS_ADMIN
               - SYS_PTRACE
               - IPC_LOCK
-              {{if $.Values.health_check.params.use_fastrak}}
+              {{- if $.Values.health_check.params.use_fastrak}}
               - NET_ADMIN
-              {{end}}
+              {{- end }}
         env:
           - name: NODE_NAME
             valueFrom:
@@ -233,12 +238,12 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
-          {{if $.Values.health_check.params.use_fastrak}}
+          {{- if $.Values.health_check.params.use_fastrak}}
           {{range $key, $value := $.Values.health_check.ncclPlugin.envs}}
           - name: {{ $key }}
             value: "{{ $value }}"
-          {{end}}
-          {{end}}
+          {{- end }}
+          {{- end }}
           {{- range $key, $value := $.Values.health_check.env }}
           - name: {{ $key | quote }}
             value: {{ $value | quote }}
@@ -252,17 +257,17 @@ spec:
           - name: NODE_RANK
             value: "{{ $node_index }}"
           - name: CONTROLLER_ADDR
-            value: "sd-leader-{{$.Release.Name}}-{{$timestamp}}"
+            value: {{ $unique_svc_name | quote }}
           - name: BM_WAIT_TIME
             value: "{{ $.Values.health_check.params.bm_wait_time }}"
           - name: JOB_TIMESTAMP
-            value: "{{ $timestamp }}"
+            value: {{ $check_time | quote }}
           - name: USE_FASTRAK
             value: "{{ $.Values.health_check.params.use_fastrak }}"
-          {{if $.Values.health_check.params.use_fastrak}}
+          {{- if $.Values.health_check.params.use_fastrak}}
           - name: LD_LIBRARY_PATH
             value: /usr/local/nvidia/lib64:/usr/local/fastrak/lib64
-          {{end}}
+          {{- end }}
           - name: BIDIRECTIONAL
             value: "{{$root.Values.health_check.params.bidirectional}}"
           - name: MESSAGE_SIZES_MB
@@ -271,23 +276,23 @@ spec:
             value: "{{$root.Values.health_check.params.n_batch}}"
           - name: N_MICROBATCH
             value: "{{$root.Values.health_check.params.n_microbatch}}"
-          {{if eq $node_index 0}}
+          {{- if eq $node_index 0}}
           - name: "HOSTS_CSV"
             value: {{ $.Values.health_check.params.hosts_csv | quote }}
           - name: STRAGGLER_THRESHOLD_MS
             value: "{{ $.Values.health_check.params.straggler_threshold_ms }}"
           - name: INTERESTING_EVENT_OFFSET
             value: "{{ $.Values.health_check.params.interesting_event_offset }}"
-          {{end}}
+          {{- end }}
         volumeMounts:
           - name: nvidia-install-dir-host
             mountPath: /usr/local/nvidia/lib64
-          {{if $.Values.health_check.params.use_fastrak }}
+          {{- if $.Values.health_check.params.use_fastrak }}
           - name: tcpxo-host-volume
             mountPath: /usr/local/fastrak/lib64
           - name: tcpxo-socket
             mountPath: /tmp
-          {{end}}
+          {{- end }}
           - name: shared-memory
             mountPath: /dev/shm
           - name: workload-terminated-volume
@@ -296,17 +301,17 @@ spec:
           limits:
             nvidia.com/gpu: !!int 8
 ---
-{{end}}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name | quote }}
   namespace: default
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name | quote }}
 rules:
 - apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
   resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "pods", "services"]
@@ -315,13 +320,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $node_list_name }}
+  name: {{ $unique_name | quote }}
   namespace: default
 subjects:
 - kind: ServiceAccount
-  name: {{ $node_list_name }}
+  name: {{ $unique_name | quote }}
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: {{ $node_list_name }}
+  name: {{ $unique_name | quote }}
   apiGroup: rbac.authorization.k8s.io
