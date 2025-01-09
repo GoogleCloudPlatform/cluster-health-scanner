@@ -14,7 +14,7 @@
 
 """Common functions shared between health checkers."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 import enum
 import json
 import logging
@@ -25,12 +25,20 @@ import tempfile
 import time
 from typing import Any, Dict
 import uuid
+
 from google.cloud import storage
 from google.protobuf import json_format
+import kubernetes.client
 from kubernetes.client.api import batch_v1_api
+
+import common_pb2
 import health_results_pb2
 
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
+
+# If set, only the nodes that have this label set to true will be used.
+_FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
+_FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
 
 # Helm Config
 _HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
@@ -156,7 +164,7 @@ def run_command(
 
 def wait_till_jobs_complete(
     job_v1: batch_v1_api.BatchV1Api,
-    jobs_to_monitor: list[str],
+    jobs_to_monitor: Iterable[str],
     namespace: str = "default",
     timeout_seconds: int = 900,
     check_interval: int = 30,
@@ -214,7 +222,6 @@ def create_job_k8s(
     env_mappings: dict[str, str] | None = None,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Creates a job k8s and returns a function to delete it."""
-  logging.info("Got here")
   if not env_mappings:
     env_mappings = {}
 
@@ -451,6 +458,202 @@ def upload_results_to_gcs(
     return
 
   print(f"Uploaded results to gs://{bucket_name}/{file_name}")
+
+
+def get_capacity_topology(
+    nodes: list[dict[str, str]],
+) -> common_pb2.Capacity:
+  """Creates a capacity topology from the list of nodes."""
+
+  capacity = common_pb2.Capacity()
+  cluster_dict = dict()
+  rack_dict = dict()
+
+  # If nodes don't have all topology labels then all nodes will be grouped under
+  # a single cluster and rack with the id "unknown"
+  for node_data in nodes:
+    cluster_id = node_data["cluster"]
+    rack_id = node_data["rack"]
+    node_id = node_data["node_id"]
+    host_id = node_data["host"]
+
+    if cluster_id not in cluster_dict:
+      cluster = capacity.clusters.add()
+      cluster.id = cluster_id
+      cluster_dict[cluster_id] = cluster
+    cluster = cluster_dict[cluster_id]
+
+    if rack_id not in rack_dict:
+      rack = cluster.racks.add()
+      rack.id = rack_id
+      rack_dict[rack_id] = rack
+
+    rack = rack_dict[rack_id]
+    rack.nodes.append(common_pb2.Node(id=node_id, host=host_id))
+
+  return capacity
+
+
+def _get_node_data_v1(
+    gpu_nodes: Iterable[kubernetes.client.models.V1Node],
+) -> list[dict[str, str]]:
+  """Returns a list of node data from the given list of nodes.
+
+  Works on topology information provided by the v1 instance API.
+
+  Args:
+    gpu_nodes: List of GPU nodes.
+
+  Returns:
+    List of node data.
+  """
+  nodes = []
+  for gpu_node in gpu_nodes:
+    if "topology.gke.io/cluster" not in gpu_node.metadata.labels:
+      continue
+
+    node = {}
+    node["cluster"] = gpu_node.metadata.labels.get(
+        "topology.gke.io/cluster", "unknown"
+    )
+    node["rack"] = gpu_node.metadata.labels.get(
+        "topology.gke.io/rack", "unknown"
+    )
+    node["host"] = gpu_node.metadata.labels.get(
+        "topology.gke.io/host", "unknown"
+    )
+    node["node_id"] = gpu_node.metadata.name
+    nodes.append(node)
+  return nodes
+
+
+def _get_node_data_v2(
+    gpu_nodes: Iterable[kubernetes.client.models.V1Node],
+) -> list[dict[str, str]]:
+  """Returns a list of node data from the given list of nodes.
+
+  Works on topology information provided by the v2 instance API.
+
+  Args:
+    gpu_nodes: List of GPU nodes.
+
+  Returns:
+    List of node data.
+  """
+  nodes = []
+  for gpu_node in gpu_nodes:
+    node = {}
+    node["cluster"] = gpu_node.metadata.labels.get(
+        "cloud.google.com/gce-topology-block", "unknown"
+    )
+    node["rack"] = gpu_node.metadata.labels.get(
+        "cloud.google.com/gce-topology-subblock", "unknown"
+    )
+    node["host"] = gpu_node.metadata.labels.get(
+        "cloud.google.com/gce-topology-host", "unknown"
+    )
+    node["node_id"] = gpu_node.metadata.name
+    nodes.append(node)
+  return nodes
+
+
+def get_nodes_data(
+    kube_nodes: list[kubernetes.client.models.V1Node],
+    filter_label_name: str | None = None,
+    filter_label_value: str | None = None,
+) -> list[dict[str, str]]:
+  """Returns a list of node data from the given list of nodes & conditions.
+
+  Args:
+    kube_nodes: List of nodes.
+    filter_label_name: Name of the label to filter on.
+    filter_label_value: Value of the label to filter on.
+
+  Returns:
+    List of node data.
+  """
+  gpu_nodes = _get_nodes_under_test(
+      kube_nodes, filter_label_name, filter_label_value
+  )
+
+  # If no nodes are found then return an empty list
+  if not gpu_nodes:
+    return []
+
+  # Use the first node to determine the topology version.
+  if "topology.gke.io/cluster" in gpu_nodes[0].metadata.labels:
+    return _get_node_data_v1(gpu_nodes)
+  elif "cloud.google.com/gce-topology-host" in gpu_nodes[0].metadata.labels:
+    return _get_node_data_v2(gpu_nodes)
+  else:
+    # If no topology labels are found then all nodes will be grouped under a
+    # single cluster and rack with the id "unknown"
+    print("No topology labels found.")
+    return _get_node_data_v2(gpu_nodes)
+
+
+def _get_nodes_under_test(
+    kube_nodes: list[kubernetes.client.models.V1Node],
+    filter_label_name: str | None = None,
+    filter_label_value: str | None = None,
+) -> list[kubernetes.client.models.V1Node]:
+  """Returns a list of nodes under test."""
+  # Filter set of nodes before getting data
+  gpu_nodes = []
+  for node in kube_nodes:
+    # Must have a GPU label
+    if not has_gpu_resources(node):
+      continue
+
+    # If filter label is specified, then the node must have the label and the
+    # value must match
+    if (filter_label_name and filter_label_value) and (
+        filter_label_name not in node.metadata.labels
+        or node.metadata.labels[filter_label_name] != filter_label_value
+    ):
+      continue
+
+    gpu_nodes.append(node)
+  return gpu_nodes
+
+
+def has_gpu_resources(node: kubernetes.client.models.V1Node) -> bool:
+  """Check if the node has GPU resources in capacity or allocatable.
+
+  Args:
+      node (kubernetes.client.V1Node): Kubernetes node object
+
+  Returns:
+      bool: True if node has GPUs, False otherwise
+  """
+  # Get the node's status
+  node_status = node.status
+  # Check both capacity and allocatable for GPU resources
+  if node_status and node_status.allocatable:
+    gpu_key = "nvidia.com/gpu"  # Standard NVIDIA GPU label
+
+    if gpu_key in node_status.allocatable:
+      # Convert to int and check if > 0
+      try:
+        gpu_count = int(node_status.allocatable.get(gpu_key, 0))
+        if gpu_count > 0:
+          return True
+      except (TypeError, ValueError):
+        pass
+
+  return False
+
+
+def get_node_list() -> list[str]:
+  """Returns a list of the nodes names in the cluster."""
+  kubernetes.config.load_incluster_config()
+  v1 = kubernetes.client.CoreV1Api()
+  kube_nodes = v1.list_node().items
+  gpu_nodes = _get_nodes_under_test(kube_nodes)
+  nodes = []
+  for node in gpu_nodes:
+    nodes.append(node.metadata.name)
+  return nodes
 
 
 def sigterm_handler(signum: Any, frame: Any) -> None:

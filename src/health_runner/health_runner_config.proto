@@ -1,0 +1,75 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// The configuration for the diag runner.
+edition = "2023";
+
+package health_runner;
+
+import "google/protobuf/duration.proto";
+
+option features.field_presence = IMPLICIT;
+
+// The configuration for the health runner.
+message HealthRunnerConfig {
+  string name = 1;
+  repeated HealthCheck health_checks = 2;
+}
+
+// The configuration for a single health check.
+message HealthCheck {
+  // The name of the task.
+  HealthCheckName name = 1;
+  // The type of the task.
+  HealthCheckType type = 2;
+  // The timeout of the task.
+  google.protobuf.Duration timeout = 3;
+  // The params for the health check.
+  repeated HealthCheckParam health_check_params = 4;
+
+  // The file path of the health check.
+  oneof health_check_file {
+    string yaml_file = 5;
+  }
+
+  // The place to store the results of the health check.
+  oneof result_object {
+    string result_label = 10;
+  }
+}
+
+// The type of the health check. Determines how the health check is run.
+enum HealthCheckType {
+  HEALTH_CHECK_TYPE_UNSPECIFIED = 0;
+  HEALTH_CHECK_TYPE_NODE = 1;
+  HEALTH_CHECK_TYPE_COMMUNICATION = 2;
+  HEALTH_CHECK_TYPE_PERFORMANCE = 3;
+}
+
+// The list of health checks.
+enum HealthCheckName {
+  HEALTH_CHECK_UNSPECIFIED = 0;
+  HEALTH_CHECK_DCGM = 1;
+  HEALTH_CHECK_NCCL_SINGLE_NODE = 3;
+  HEALTH_CHECK_NCCL_INTRA_RACK = 4;
+  HEALTH_CHECK_NCCL_INTER_RACK = 5;
+  HEALTH_CHECK_NCCL_INTER_CLUSTER = 6;
+  HEALTH_CHECK_NCCL_RANDOM_PAIR = 7;
+}
+
+// The parameters for a single health check.
+message HealthCheckParam {
+  string name = 1;
+  string value = 2;
+}

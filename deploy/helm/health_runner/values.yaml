@@ -25,10 +25,10 @@ health_checks:
     run_check: true
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.0"
+      tag: "v4.1.2"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.0"
+      HC_IMAGE_TAG: "v4.1.2"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
@@ -49,10 +49,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.1"
+      tag: "v4.1.2"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.1"
+      HC_IMAGE_TAG: "v4.1.2"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
@@ -68,10 +68,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.1"
+      tag: "v4.1.2"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.1"
+      HC_IMAGE_TAG: "v4.1.2"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/neper_healthcheck"  # Path to Helm chart in container
@@ -86,10 +86,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.1"
+      tag: "v4.1.2"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.1"
+      HC_IMAGE_TAG: "v4.1.2"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/straggler_healthcheck"  # Path to Helm chart in container
