@@ -214,14 +214,15 @@ Straggler Detection Health Check takes the following parameters:
 
 ###### Understanding Results
 
-Viewing results is currently a manual process. First, you need to identify the 
+Viewing results is currently a manual process. First, you need to identify the
 'ROOT_NODE' of the check - you can do this by running:
 
 ```
 kubectl get pods
 ```
 
-And identifying the pod with the "Straggler Detection" name that has the number '0' as its identifier at the end of the name.
+And identifying the pod with the "Straggler Detection" name that has the number
+'0' as its identifier at the end of the name.
 
 From there, you can view the logs for that pod by running:
 
@@ -229,11 +230,13 @@ From there, you can view the logs for that pod by running:
 kubectl logs ${ROOT_NODE} -c straggler-detection-test -f
 ```
 
-When the health check completes, it will print the link to your provided GCS bucket, which will contain the experiment results and heatmap.
+When the health check completes, it will print the link to your provided GCS
+bucket, which will contain the experiment results and heatmap.
 
-Unlike other health checks, Straggler Detection will not label nodes for you. Instead, it will report results to the provided log bucket as a textproto instance
-of PPBenchmarkResults. These results are then analyzed and reported as a
-heatmap to identify potential straggler nodes. See below for an example of
+Unlike other health checks, Straggler Detection will not label nodes for you.
+Instead, it will report results to the provided log bucket as a textproto
+instance of PPBenchmarkResults. These results are then analyzed and reported as
+a heatmap to identify potential straggler nodes. See below for an example of
 the heatmap:
 
 ![A sample straggler detection heatmap with annotations.](assets/straggler_heatmap_example.png)
@@ -247,6 +250,59 @@ begins at that row, and spreads outward to the other nodes.
 
 If this pattern repeats (as it does in the image), GPU 1 of Node 9 is likely to
 be a straggler.
+
+### GKE & Kubernetes - Resources (Jobs, Pods, etc.)
+
+CHS can be run on [GKE](https://cloud.google.com/kubernetes-engine)
+(and on Kubernetes clusters with same extra configuration tweaks)
+by first installing the Health Runner.
+
+
+The Kubernetes resources created by the Health Runner and the health checks are
+given distinct names. Below is a table of the naming conventions used for
+resource created in association with CHS (health runner and health checks):
+
+| Health Check  | Resource           | Naming Convention                     |
+| ------------- | ------------------ | ------------------------------------- |
+| **Health Runner**   |              |                                       |
+| Health Runner | Job                | `chs-hr-{HC_NAME}-{GUID}-{TIMESTAMP}` |
+| Health Runner | Pod                | `chs-hr-{HC_NAME}-{GUID}-{TIMESTAMP}` |
+| Health Runner | ServiceAccount     | `chs-hr-{HC_NAME}-{GUID}-{TIMESTAMP}` |
+| Health Runner | ClusterRole        | `chs-hr-{HC_NAME}-{GUID}-{TIMESTAMP}` |
+| Health Runner | ClusterRoleBinding | `chs-hr-{HC_NAME}-{GUID}-{TIMESTAMP}` |
+| **HC: GPU**   |                    |                                       |
+| HC: GPU       | Job                | `chs-hc-gpu-{GUID}-{TIMESTAMP}`       |
+| HC: GPU       | Pod                | `gpu-healthcheck`                     |
+| HC: GPU       | ServiceAccount     | `chs-hc-gpu-{GUID}-{TIMESTAMP}`       |
+| HC: GPU       | ClusterRole        | `chs-hc-gpu-{GUID}-{TIMESTAMP}`       |
+| HC: GPU       | ClusterRoleBinding | `chs-hc-gpu-{GUID}-{TIMESTAMP}`       |
+| **HC: NCCL**  |                    |                                       |
+| HC: NCCL      | Job                | `chs-hc-nccl-{GUID}-{TIMESTAMP}`      |
+| HC: NCCL      | Pod                | `nccl-healthcheck`                    |
+| HC: NCCL      | Service            | `chs-hc-nccl-headless-svc-{GUID}-{TIMESTAMP}` |
+| HC: NCCL      | ServiceAccount     | `chs-hc-nccl-{GUID}-{TIMESTAMP}`      |
+| HC: NCCL      | ClusterRole        | `chs-hc-nccl-{GUID}-{TIMESTAMP}`      |
+| HC: NCCL      | ClusterRoleBinding | `chs-hc-nccl-{GUID}-{TIMESTAMP}`      |
+| **HC: Neper** |                    |                                       |
+| HC: Neper     | Job                | `chs-hc-neper-{GUID}-{TIMESTAMP}`     |
+| HC: Neper     | Pod                | `neper-healthcheck`                   |
+| HC: Neper     | Service            | `chs-hc-neper-headless-svc-{GUID}-{TIMESTAMP}` |
+| HC: Neper     | ServiceAccount     | `chs-hc-neper-{GUID}-{TIMESTAMP}`     |
+| HC: Neper     | ClusterRole        | `chs-hc-neper-{GUID}-{TIMESTAMP}`     |
+| HC: Neper     | ClusterRoleBinding | `chs-hc-neper-{GUID}-{TIMESTAMP}`     |
+| **HC: Straggler** |                |                                       |
+| HC: Straggler | Job                | `chs-hc-straggler-{GUID}-{TIMESTAMP}` |
+| HC: Straggler | Pod                | `straggler-detection-test`            |
+| HC: Straggler | Service            | `chs-hc-straggler-headless-svc-{GUID}-{TIMESTAMP}` |
+| HC: Straggler | ServiceAccount     | `chs-hc-straggler-{GUID}-{TIMESTAMP}` |
+| HC: Straggler | ClusterRole        | `chs-hc-straggler-{GUID}-{TIMESTAMP}` |
+| HC: Straggler | ClusterRoleBinding | `chs-hc-straggler-{GUID}-{TIMESTAMP}` |
+
+Where:
+- `{HC_NAME}` is the name of the health check that the health runner is running,
+  such as `nccl`, `gpu`, `neper`, or `straggler`
+- `{GUID}` is a unique identifier for the health runner instance
+- `{TIMESTAMP}` is the current timestamp
 
 ## 3. Running CHS
 
@@ -490,6 +546,11 @@ health_checks:
 
 ### 3.2 Running CHS
 
+To start with, download the repository: with
+```git clone https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
+cd cluster-health-scanner/
+```
+
 Running CHS involves installing Health Runner.
 This is done on a Kubernetes orchestration by deploying the Helm chart for
 Health Runner.
@@ -571,10 +632,10 @@ After deploying and running CHS, users may wish to clean up the installation.
 #### Uninstalling Health Runner Helm Release
 
 To uninstall the Health Runner (a Helm release), use the release name
-(`RELEASE_NAME`) in the following command:
+(`MY_HEALTH_RUNNER_RELEASE_NAME`) in the following command:
 
 ```bash
-helm uninstall RELEASE_NAME
+helm uninstall "${MY_HEALTH_RUNNER_RELEASE_NAME}"
 ```
 
 #### Removing Leftover and Jobs
@@ -976,11 +1037,11 @@ installation.
 
 #### Uninstalling with Helm
 
-To uninstall a Helm release, use the release name `RELEASE_NAME` in the
+To uninstall a Helm release, use the release name `MY_HEALTH_RUNNER_RELEASE_NAME` in the
 following command:
 
 ```bash
-helm uninstall RELEASE_NAME
+helm uninstall MY_HEALTH_RUNNER_RELEASE_NAME
 ```
 
 #### Uninstalling with `kubectl`

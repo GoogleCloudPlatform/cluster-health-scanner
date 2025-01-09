@@ -59,8 +59,6 @@ def ensure_env_variables() -> None:
       "BANDWIDTH_THRESHOLD",
       "START_MESSAGE_SIZE",
       "END_MESSAGE_SIZE",
-      "JOB_NAME",
-      "SERVICE_NAME",
       "DRY_RUN",
       "INSTANCE_TYPE",
   ]
@@ -104,6 +102,11 @@ def get_host_list(
   """Generate a hostfile based on host names from pods."""
 
   hosts = []
+  # If there is only one node, assume it is the host and return it.
+  if nhosts == 1:
+    hosts.append(os.environ["NODE_NAME"])
+    return hosts
+
   for i in range(nhosts):
     pod_name = f"{JOB_NAME}-{i}.{SERVICE_NAME}"
     host_name = get_host_name(pod_name)
@@ -181,7 +184,11 @@ def run_nccl_test(
       time.sleep(10)
   # Create file to let tcpxo daemon to terminate, this only applies to A3
   # and A3+ machines which use rxdm.
-  if "a3-highgpu-8g" in INSTANCE_TYPE or  "a3-megagpu-8g" in INSTANCE_TYPE:
+  if INSTANCE_TYPE in (
+      "a3-highgpu-8g",
+      "a3-megagpu-8g",
+      "a3-megagpu-8g-debian",
+  ):
     with open(WORKLOAD_TERMINATE_FILE, "w") as _:
       pass
 
@@ -268,7 +275,7 @@ def get_bandwidth(
 
   Args:
     test_result (str): The test result to extract the bandwidth from.
-  
+
   Returns:
     int: The bandwidth (GB/s)extracted from the test result. -1 if not found.
   """
@@ -346,7 +353,7 @@ def taint_node(
     key: str,
     value: str,
     effect: str,
-)-> None:
+) -> None:
   """Apply a taint to a specified node with given key, value, and effect.
 
   Args:

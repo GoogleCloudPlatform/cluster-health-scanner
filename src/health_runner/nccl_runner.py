@@ -35,12 +35,12 @@ import health_results_pb2
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
 _CHECK_INTERVAL_SECONDS = os.environ.get("CHECK_INTERVAL_SECONDS", "20")
 
-# If set, only run NCCL health check on nodes that have this label set to true
-_FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
-_FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
-
 NCCL_PRE_RESULT_KEY = "aiinfra/nccl-healthcheck-pre-result"
 NCCL_RESULT_KEY = "aiinfra/nccl-healthcheck-result"
+
+# If set, only the nodes that have this label set to true will be used.
+_FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
+_FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
 
 
 def run_nccl_healthcheck() -> health_results_pb2.HealthResult:
@@ -59,8 +59,10 @@ def run_nccl_healthcheck() -> health_results_pb2.HealthResult:
   case = os.environ.get("PAIRING_MODE", "random").lower()
   second_pass_enabled = is_second_pass_enabled()
 
-  node_data: list[dict[str, str]] = get_nodes_data(v1.list_node().items)
-  capacity = get_capacity_topology(node_data)
+  node_data: list[dict[str, str]] = checker_common.get_nodes_data(
+      v1.list_node().items, _FILTER_LABEL_NAME, _FILTER_LABEL_VALUE
+  )
+  capacity = checker_common.get_capacity_topology(node_data)
   logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
   # Default is to use toplogy awareness when pairing nodes
   if case == "intra_rack":
@@ -221,7 +223,7 @@ def run_nccl_random_pair_healthcheck(
     print(f"Found suspect nodes: {suspect_nodes_no_fails}")
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
-    health_result.nccl_health_result.CopyFrom(
+    health_result.health_results.extend(
         generate_nccl_health_results(passed_nodes, failed_nodes)
     )
     return health_result
@@ -289,7 +291,7 @@ def run_nccl_random_pair_healthcheck(
 
   print(f"found failed/suspect nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
-  health_result.nccl_health_result.CopyFrom(
+  health_result.health_results.extend(
       generate_nccl_health_results(passed_nodes, failed_nodes)
   )
   return health_result
@@ -371,7 +373,7 @@ def run_intra_rack_healthcheck(
     print(f"Found suspect nodes: {suspect_nodes_no_fails}")
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
-    health_result.nccl_health_result.CopyFrom(
+    health_result.health_results.extend(
         generate_nccl_health_results(passed_nodes, failed_nodes)
     )
     return health_result
@@ -454,7 +456,7 @@ def run_intra_rack_healthcheck(
 
   print(f"found failed/suspect nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
-  health_result.nccl_health_result.CopyFrom(
+  health_result.health_results.extend(
       generate_nccl_health_results(passed_nodes, failed_nodes)
   )
   return health_result
@@ -546,7 +548,7 @@ def run_inter_rack_healthcheck(
       )
     print(f"Found failed racks: {failed_racks}")
     print(f"Found passed racks: {passed_racks}")
-    health_result.nccl_health_result.CopyFrom(
+    health_result.health_results.extend(
         generate_nccl_health_results(passed_racks, failed_racks)
     )
     return health_result
@@ -639,7 +641,7 @@ def run_inter_rack_healthcheck(
 
   print(f"After second pass - Failed racks: {failed_racks}")
   print(f"After second pass - Passed racks: {passed_racks}")
-  health_result.nccl_health_result.CopyFrom(
+  health_result.health_results.extend(
       generate_nccl_health_results(passed_racks, failed_racks)
   )
 
@@ -726,7 +728,7 @@ def run_inter_cluster_healthcheck(
       )
     print(f"Found failed clusters: {failed_clusters}")
     print(f"Found passed clusters: {passed_clusters}")
-    health_result.nccl_health_result.CopyFrom(
+    health_result.health_results.extend(
         generate_nccl_health_results(passed_clusters, failed_clusters)
     )
     return health_result
@@ -807,7 +809,7 @@ def run_inter_cluster_healthcheck(
 
   print(f"After second pass - Failed racks: {failed_clusters}")
   print(f"After second pass - Passed racks: {passed_clusters}")
-  health_result.nccl_health_result.CopyFrom(
+  health_result.health_results.extend(
       generate_nccl_health_results(passed_clusters, failed_clusters)
   )
 
@@ -931,180 +933,12 @@ def generate_index_pairs(length: int) -> list[tuple[int, int]]:
   return pairs
 
 
-def get_node_data_v1(
-    gpu_nodes: list[kubernetes.client.models.V1Node],
-) -> list[dict[str, str]]:
-  """Returns a list of node data from the given list of nodes.
-
-  Works on topology information provided by the v1 instance API.
-
-  Args:
-    gpu_nodes: List of GPU nodes.
-
-  Returns:
-    List of node data.
-  """
-  nodes = []
-  for gpu_node in gpu_nodes:
-    if "topology.gke.io/cluster" not in gpu_node.metadata.labels:
-      continue
-
-    node = {}
-    node["cluster"] = gpu_node.metadata.labels.get(
-        "topology.gke.io/cluster", "unknown"
-    )
-    node["rack"] = gpu_node.metadata.labels.get(
-        "topology.gke.io/rack", "unknown"
-    )
-    node["host"] = gpu_node.metadata.labels.get(
-        "topology.gke.io/host", "unknown"
-    )
-    node["node_id"] = gpu_node.metadata.name
-    nodes.append(node)
-  return nodes
-
-
-def get_node_data_v2(
-    gpu_nodes: Iterable[kubernetes.client.models.V1Node],
-) -> list[dict[str, str]]:
-  """Returns a list of node data from the given list of nodes.
-
-  Works on topology information provided by the v2 instance API.
-
-  Args:
-    gpu_nodes: List of GPU nodes.
-
-  Returns:
-    List of node data.
-  """
-  nodes = []
-  for gpu_node in gpu_nodes:
-    node = {}
-    node["cluster"] = gpu_node.metadata.labels.get(
-        "cloud.google.com/gce-topology-block", "unknown"
-    )
-    node["rack"] = gpu_node.metadata.labels.get(
-        "cloud.google.com/gce-topology-subblock", "unknown"
-    )
-    node["host"] = gpu_node.metadata.labels.get(
-        "cloud.google.com/gce-topology-host", "unknown"
-    )
-    node["node_id"] = gpu_node.metadata.name
-    nodes.append(node)
-  return nodes
-
-
-def get_nodes_data(
-    kube_nodes: list[kubernetes.client.models.V1Node],
-) -> list[dict[str, str]]:
-  """Returns a list of node data from the given list of nodes & conditions.
-
-  Args:
-    kube_nodes: List of nodes.
-
-  Returns:
-    List of node data.
-  """
-  # Filter set of nodes before getting data
-  gpu_nodes = []
-  for node in kube_nodes:
-    # Must have a GPU label
-    if not has_gpu_resources(node):
-      continue
-
-    # If filter label is specified, then the node must have the label and the
-    # value must match
-    if _FILTER_LABEL_NAME and (
-        _FILTER_LABEL_NAME not in node.metadata.labels
-        or node.metadata.labels[_FILTER_LABEL_NAME] != _FILTER_LABEL_VALUE
-    ):
-      continue
-
-    gpu_nodes.append(node)
-
-  # If no nodes are found then return an empty list
-  if not gpu_nodes:
-    return []
-
-  # Use the first node to determine the topology version.
-  if "topology.gke.io/cluster" in gpu_nodes[0].metadata.labels:
-    return get_node_data_v1(gpu_nodes)
-  elif "cloud.google.com/gce-topology-host" in gpu_nodes[0].metadata.labels:
-    return get_node_data_v2(gpu_nodes)
-  else:
-    # If no topology labels are found then all nodes will be grouped under a
-    # single cluster and rack with the id "unknown"
-    print("No topology labels found.")
-    return get_node_data_v2(gpu_nodes)
-
-
-def has_gpu_resources(node):
-  """Check if the node has GPU resources in capacity or allocatable.
-
-  Args:
-      node (kubernetes.client.V1Node): Kubernetes node object
-
-  Returns:
-      bool: True if node has GPUs, False otherwise
-  """
-  # Get the node's status
-  node_status = node.status
-  # Check both capacity and allocatable for GPU resources
-  if node_status and node_status.allocatable:
-    gpu_key = "nvidia.com/gpu"  # Standard NVIDIA GPU label
-
-    if gpu_key in node_status.allocatable:
-      # Convert to int and check if > 0
-      try:
-        gpu_count = int(node_status.allocatable.get(gpu_key, 0))
-        if gpu_count > 0:
-          return True
-      except (TypeError, ValueError):
-        pass
-
-  return False
-
-
-def get_capacity_topology(
-    nodes: list[dict[str, str]],
-) -> common_pb2.Capacity:
-  """Creates a capacity topology from the list of nodes."""
-
-  capacity = common_pb2.Capacity()
-  cluster_dict = dict()
-  rack_dict = dict()
-
-  # If nodes don't have all topology labels then all nodes will be grouped under
-  # a single cluster and rack with the id "unknown"
-  for node_data in nodes:
-    cluster_id = node_data["cluster"]
-    rack_id = node_data["rack"]
-    node_id = node_data["node_id"]
-    host_id = node_data["host"]
-
-    if cluster_id not in cluster_dict:
-      cluster = capacity.clusters.add()
-      cluster.id = cluster_id
-      cluster_dict[cluster_id] = cluster
-    cluster = cluster_dict[cluster_id]
-
-    if rack_id not in rack_dict:
-      rack = cluster.racks.add()
-      rack.id = rack_id
-      rack_dict[rack_id] = rack
-
-    rack = rack_dict[rack_id]
-    rack.nodes.append(common_pb2.Node(id=node_id, host=host_id))
-
-  return capacity
-
-
 def generate_nccl_health_results(
     passed_objects: Iterable[str],
     failed_objects: Iterable[str],
-) -> health_results_pb2.NCCLHealthResultList:
+) -> list[health_results_pb2.HealthResultList]:
   """Generates a list of NCCLHealthResult protos for the given nodes."""
-  health_results = health_results_pb2.NCCLHealthResultList()
+  health_results = []
   # Sort the objects to ensure the results are deterministic
   objects = list(passed_objects) + list(failed_objects)
   objects.sort()
@@ -1115,8 +949,8 @@ def generate_nccl_health_results(
       status = health_results_pb2.Status.PASS
     else:
       status = health_results_pb2.Status.FAIL
-    health_results.nccl_health_results.append(
-        health_results_pb2.NCCLHealthResult(id=obj, status=status)
+    health_results.append(
+        health_results_pb2.HealthResultList(id=obj, status=status)
     )
   return health_results
 

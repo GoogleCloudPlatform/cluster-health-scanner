@@ -30,6 +30,9 @@ import signal
 import time
 import uuid
 
+from kubernetes import client
+from kubernetes import config
+
 import checker_common
 import health_results_pb2
 import nccl_runner
@@ -40,6 +43,7 @@ _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
 _HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 _GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
+# 
 _K_NAME_GPU_NODES_IN_CLUSTER_COMMAND = (
     f"{_KUBECTL} get nodes -o jsonpath='{{range"
     ' .items[*]}{.metadata.name}{"\\n"}{end}\' | while read node; do'
@@ -147,35 +151,33 @@ def determine_test_iterations() -> int:
     return 1
 
 
-def is_hc_finished(
-    target_count: int = 0,
-    timeout_seconds: int = 300,
-    check_interval: int = 10,
-) -> bool:
-  """Waits for pods to reach target count."""
+def get_created_jobs(release_names: Iterable[str]) -> Iterable[str]:
+  """Get jobs created by a given helm release.
 
-  print(f"Pods to be completed: {target_count=}")
+  Args:
+    release_names: Iterable of helm release names to get jobs for.
 
-  start_time = time.time()
-  while time.time() - start_time < timeout_seconds:
-    # TODO: Add a check for the number of pods still running
-    time.sleep(check_interval)
-    logging.info(
-        "(%.2f sec) out of (%d sec)",
-        int(time.time() - start_time),
-        timeout_seconds,
-    )
+  Returns:
+    Iterable of job names created by the helm releases.
+  """
+  config.load_incluster_config()
+  batch_v1 = client.BatchV1Api()
+  try:
+    jobs = batch_v1.list_namespaced_job(namespace="default").items
 
-  message_timeout: str = (
-      "Timeout reached after %f seconds."
-      " Some pods may still not be in Error or Completed state."
-  )
-  logging.info(
-      message_timeout,
-      timeout_seconds,
-  )
-
-  return True
+    release_name_annotation_key = "meta.helm.sh/release-name"
+    matching_jobs = [
+        job.metadata.name
+        for job in jobs
+        if job.metadata.annotations
+        and release_name_annotation_key in job.metadata.annotations
+        and job.metadata.annotations[release_name_annotation_key]
+        in release_names
+    ]
+    return matching_jobs
+  except client.ApiException as e:
+    print(f"Error getting Jobs: {e}")
+    return []
 
 
 def run_health_check() -> None:
@@ -208,9 +210,11 @@ def run_health_check() -> None:
   if node_names != "nil":
     node_names = node_names.split(",")
   else:
-    node_names = checker_common.run_command(
-        _K_NAME_GPU_NODES_IN_CLUSTER_COMMAND
-    ).stdout.strip().split("\n")
+    node_names = (
+        checker_common.run_command(_K_NAME_GPU_NODES_IN_CLUSTER_COMMAND)
+        .stdout.strip()
+        .split("\n")
+    )
 
   num_nodes = os.environ.get("N_NODES", "nil")
   if num_nodes == "nil":
@@ -220,10 +224,11 @@ def run_health_check() -> None:
   node_names_csv = r"\,".join(node_names)
 
   # Pass Node Names & Number of Nodes to all health checks
-  helm_values["health_check.env.HOSTS_CSV"] = f"\"{node_names_csv}\""
+  helm_values["health_check.env.HOSTS_CSV"] = f'"{node_names_csv}"'
   helm_values["health_check.env.N_NODES"] = str(num_nodes)
 
   # RUN HC
+  release_names = []
   for i in range(num_tests):
     # If Helm release name is not unique, it will not install the release
     short_guid = str(uuid.uuid4())[:8]
@@ -231,6 +236,7 @@ def run_health_check() -> None:
         "HELM_RELEASE_NAME",
         f"internal-chs-hc-{i}-{short_guid}",
     )
+    release_names.append(unique_release_name)
     # Set the job name to a unique value following a specific pattern/format
     # 
     helm_values["job.name"] = f"chs-hc-{i}-{short_guid}"
@@ -257,9 +263,11 @@ def run_health_check() -> None:
       "Waiting for maximum of %s minutes before cleaning up...",
       _SLEEP_TIME_MINUTES,
   )
-  is_hc_finished(
-      target_count=num_tests,
-      timeout_seconds=int(_SLEEP_TIME_MINUTES) * 60,
+  release_jobs = get_created_jobs(release_names)
+  checker_common.wait_till_jobs_complete(
+      job_v1=client.BatchV1Api(),
+      jobs_to_monitor=release_jobs,
+      timeout_seconds=(int(_SLEEP_TIME_MINUTES) * 60),
       check_interval=10,
   )
 

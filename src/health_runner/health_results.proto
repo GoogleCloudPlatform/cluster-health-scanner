@@ -28,6 +28,12 @@ message HealthResults {
   // The version of the health runner.
   string version = 2;
 
+  // An ID for this run.
+  string id = 4;
+
+  // A description of the run.
+  string description = 5;
+
   // The results of the health checks.
   repeated HealthResult health_results = 3;
 }
@@ -37,24 +43,29 @@ message HealthResult {
   // The name of the health check.
   string name = 1;
 
+  // The type of the health check.
+  string type = 2;
+
   // The results of the health check.
-  oneof result {
-    NCCLHealthResultList nccl_health_result = 2;
-  }
+  repeated HealthResultList health_results = 3;
 }
 
-// The results of the NCCL health check
-message NCCLHealthResultList {
-  repeated NCCLHealthResult nccl_health_results = 1;
-}
-
-// The results NCCL health check for a single object.
-message NCCLHealthResult {
+message HealthResultList {
   // The ID of the object under test (NodeID, RackID, ClusterID, etc).
   string id = 1;
 
   // The status of the health check.
   Status status = 2;
+
+  // Additional results for specific health checks.
+  oneof result {
+    NCCLHealthResult nccl_health_result = 3;
+  }
+}
+
+// The results NCCL health check for a single object.
+message NCCLHealthResult {
+  int32 bandwidth_gbps = 1;
 }
 
 // The status of the health check.
