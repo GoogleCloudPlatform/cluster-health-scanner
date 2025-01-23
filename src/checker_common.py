@@ -15,6 +15,7 @@
 """Common functions shared between health checkers."""
 
 from collections.abc import Callable, Iterable
+import dataclasses
 import enum
 import json
 import logging
@@ -28,7 +29,8 @@ import uuid
 
 from google.cloud import storage
 from google.protobuf import json_format
-import kubernetes.client
+from kubernetes import client
+from kubernetes import config
 from kubernetes.client.api import batch_v1_api
 
 import common_pb2
@@ -40,13 +42,7 @@ _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 _FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
 _FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
 
-# Helm Config
 _HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
-_HELM_CHART = os.environ.get("HELM_CHART")
-_HELM_CHART_VERSION = os.environ.get("HELM_CHART_VERSION")
-_HELM_INSTALL_FLAGS = os.environ.get("HELM_INSTALL_FLAGS")
-_HELM_RELEASE_NAME = os.environ.get("HELM_RELEASE_NAME")
-
 
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
@@ -162,6 +158,35 @@ def run_command(
   return diag
 
 
+def get_created_jobs(release_names: Iterable[str]) -> Iterable[str]:
+  """Get jobs created by a given helm release.
+
+  Args:
+    release_names: Iterable of helm release names to get jobs for.
+
+  Returns:
+    Iterable of job names created by the helm releases.
+  """
+  config.load_incluster_config()
+  batch_v1 = batch_v1_api.BatchV1Api()
+  try:
+    jobs = batch_v1.list_namespaced_job(namespace="default").items
+
+    release_name_annotation_key = "meta.helm.sh/release-name"
+    matching_jobs = [
+        job.metadata.name
+        for job in jobs
+        if job.metadata.annotations
+        and release_name_annotation_key in job.metadata.annotations
+        and job.metadata.annotations[release_name_annotation_key]
+        in release_names
+    ]
+    return matching_jobs
+  except client.ApiException as e:
+    print(f"Error getting Jobs: {e}")
+    return []
+
+
 def wait_till_jobs_complete(
     job_v1: batch_v1_api.BatchV1Api,
     jobs_to_monitor: Iterable[str],
@@ -217,46 +242,65 @@ def wait_till_jobs_complete(
   return list(remaining_jobs)
 
 
+@dataclasses.dataclass()
+class HelmConfig:
+  """Helm configuration for NCCL health check."""
+
+  release_name: str
+  chart: str
+  chart_version: str | None
+  install_flags: str | None
+
+
+def create_job_k8s_helm(
+    helm_config: HelmConfig,
+    env_mappings: dict[str, str] | None = None,
+    helm_bin_path: str = _HELM,
+) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
+  """Creates a k8s helm release and returns a function to uninstall it.
+
+  Args:
+    helm_config: Helm configuration for the release.
+    env_mappings: Environment variables to pass to the helm chart.
+    helm_bin_path: Path to the helm binary.
+
+  Returns:
+    List of functions to uninstall the helm release.
+  """
+  if not env_mappings:
+    env_mappings = {}
+
+  # Convert the mappings to helm format
+  values = {}
+  if env_mappings:
+    for k, v in env_mappings.items():
+      # Assuming the env_mappings are all for the health_check job
+      values[f"health_check.env.{k}"] = v
+
+  return create_helm_release(
+      helm_path=helm_bin_path,
+      release_name=helm_config.release_name,
+      chart=helm_config.chart,
+      values=values,
+      chart_version=helm_config.chart_version,
+      helm_install_flags=helm_config.install_flags,
+  )
+
+
 def create_job_k8s(
     job_name: str,
+    yaml_file: str,
     env_mappings: dict[str, str] | None = None,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Creates a job k8s and returns a function to delete it."""
   if not env_mappings:
     env_mappings = {}
 
-  if _HELM_CHART:
-    # Convert the mappings to helm format
-    values = {}
-    if env_mappings:
-      for k, v in env_mappings.items():
-        # Assuming the env_mappings are all for the health_check job
-        values[f"health_check.env.{k}"] = v
-    values["job.name"] = job_name
-
-    # Use the helm release name if specified, otherwise generate a default one
-    if _HELM_RELEASE_NAME:
-      release_name = _HELM_RELEASE_NAME
-    else:
-      release_name = f"internal-{job_name}"
-
-    return create_helm_release(
-        helm_path=_HELM,
-        release_name=release_name,
-        chart=_HELM_CHART,
-        values=values,
-        chart_version=_HELM_CHART_VERSION,
-        helm_install_flags=_HELM_INSTALL_FLAGS,
-    )
-  elif os.environ.get("YAML_FILE"):
-    env_mappings["JOB_NAME"] = job_name
-    return create_k8s_objects(
-        yaml_path=os.environ.get("YAML_FILE"),
-        mappings=env_mappings,
-    )
-
-  logging.error("No k8s object or helm release specified.")
-  return []
+  env_mappings["JOB_NAME"] = job_name
+  return create_k8s_objects(
+      yaml_path=yaml_file,
+      mappings=env_mappings,
+  )
 
 
 def generate_helm_command(
@@ -416,6 +460,9 @@ def expand_template(
       "BUG_ID": os.environ.get("BUG_ID"),
       "RUNNER_NAME": os.environ.get("RUNNER_NAME"),
       "RUNNER_UID": os.environ.get("RUNNER_UID"),
+      "BANDWIDTH_THRESHOLD": os.environ.get("BANDWIDTH_THRESHOLD"),
+      "START_MESSAGE_SIZE": os.environ.get("START_MESSAGE_SIZE"),
+      "END_MESSAGE_SIZE": os.environ.get("END_MESSAGE_SIZE"),
   }
   if mappings:
     default_mappings.update(mappings)
@@ -428,25 +475,29 @@ def expand_template(
 def upload_results_to_gcs(
     bucket_name: str,
     health_results: health_results_pb2.HealthResults,
-) -> None:
+    destination_path: str | None = None,
+) -> str:
   """Uploads the health results proto to a GCS bucket."""
   if not bucket_name:
     logging.error("No GCS bucket specified.")
-    return
+    return ""
 
   # If workflow_id is set, use it as the file postfix. Otherwise, use a random
   # string.
   if os.environ.get("WORKFLOW_ID"):
-    file_postfix = os.environ.get("WORKFLOW_ID")
+    file_name = os.environ.get("WORKFLOW_ID")
   else:
-    file_postfix = str(uuid.uuid4())[:8]
-
-  file_name = f"health_results_{file_postfix}.json"
+    file_name = str(uuid.uuid4())[:8]
+  file_name = f"health_results_{file_name}.json"
 
   storage_client = storage.Client()
   bucket = storage_client.bucket(bucket_name)
-  blob = bucket.blob(file_name)
 
+  # If destination_path is set use it in the file path
+  if destination_path:
+    file_name = destination_path + "/" + file_name
+
+  blob = bucket.blob(file_name)
   json_string = json_format.MessageToJson(
       health_results, preserving_proto_field_name=True
   )
@@ -455,9 +506,11 @@ def upload_results_to_gcs(
     blob.upload_from_string(json_string, content_type="application/json")
   except Exception as error:  # pylint: disable=broad-exception-caught
     logging.exception("Failed to upload results to GCS (reason: %r).", error)
-    return
+    return ""
 
-  print(f"Uploaded results to gs://{bucket_name}/{file_name}")
+  result_path = f"gs://{bucket_name}/{file_name}"
+  print(f"Uploaded results to {result_path}")
+  return result_path
 
 
 def get_capacity_topology(
@@ -495,7 +548,7 @@ def get_capacity_topology(
 
 
 def _get_node_data_v1(
-    gpu_nodes: Iterable[kubernetes.client.models.V1Node],
+    gpu_nodes: Iterable[client.models.V1Node],
 ) -> list[dict[str, str]]:
   """Returns a list of node data from the given list of nodes.
 
@@ -528,7 +581,7 @@ def _get_node_data_v1(
 
 
 def _get_node_data_v2(
-    gpu_nodes: Iterable[kubernetes.client.models.V1Node],
+    gpu_nodes: Iterable[client.models.V1Node],
 ) -> list[dict[str, str]]:
   """Returns a list of node data from the given list of nodes.
 
@@ -558,7 +611,7 @@ def _get_node_data_v2(
 
 
 def get_nodes_data(
-    kube_nodes: list[kubernetes.client.models.V1Node],
+    kube_nodes: list[client.models.V1Node],
     filter_label_name: str | None = None,
     filter_label_value: str | None = None,
 ) -> list[dict[str, str]]:
@@ -593,10 +646,10 @@ def get_nodes_data(
 
 
 def _get_nodes_under_test(
-    kube_nodes: list[kubernetes.client.models.V1Node],
+    kube_nodes: list[client.models.V1Node],
     filter_label_name: str | None = None,
     filter_label_value: str | None = None,
-) -> list[kubernetes.client.models.V1Node]:
+) -> list[client.models.V1Node]:
   """Returns a list of nodes under test."""
   # Filter set of nodes before getting data
   gpu_nodes = []
@@ -617,7 +670,7 @@ def _get_nodes_under_test(
   return gpu_nodes
 
 
-def has_gpu_resources(node: kubernetes.client.models.V1Node) -> bool:
+def has_gpu_resources(node: client.models.V1Node) -> bool:
   """Check if the node has GPU resources in capacity or allocatable.
 
   Args:
@@ -646,8 +699,8 @@ def has_gpu_resources(node: kubernetes.client.models.V1Node) -> bool:
 
 def get_node_list() -> list[str]:
   """Returns a list of the nodes names in the cluster."""
-  kubernetes.config.load_incluster_config()
-  v1 = kubernetes.client.CoreV1Api()
+  config.load_incluster_config()
+  v1 = client.CoreV1Api()
   kube_nodes = v1.list_node().items
   gpu_nodes = _get_nodes_under_test(kube_nodes)
   nodes = []

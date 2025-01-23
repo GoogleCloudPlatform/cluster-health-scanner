@@ -17,7 +17,6 @@ health_runner:
   base_name: "chs-hr"
   # guid: "xckd"  # Can specify a GUID if desired. Otherwise, a random GUID will be generated.
   # check_time: "1590303600"  # Will automatically be set if not given
-
 # Multiple health checks can be added below
 # Note that only NCCL health check (A3+) is enabled by default
 health_checks:
@@ -25,16 +24,17 @@ health_checks:
     run_check: true
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.2"
+      tag: "4.2-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.2"
+      HC_IMAGE_TAG: "4.2-latest"
+      MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
       HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$HC_IMAGE_TAG"  # Specific to A3+
+      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"  # Specific to A3+
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
       HEALTH_APP: "nccl"
       PAIRING_MODE: "random"
@@ -49,15 +49,17 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.2"
+      tag: "4.2-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.2"
+      HC_IMAGE_TAG: "4.2-latest"
+      MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      HC_ENV_R_LEVEL: 3
     # Blast Mode
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
@@ -68,14 +70,15 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.2"
+      tag: "4.2-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.2"
+      HC_IMAGE_TAG: "4.2-latest"
+      MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/neper_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
@@ -86,17 +89,41 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "v4.1.2"
+      tag: "4.2-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "v4.1.2"
+      HC_IMAGE_TAG: "4.2-latest"
+      MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/straggler_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "--set health_check.image.tag=$HC_IMAGE_TAG"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
       HOSTS_CSV: nil  # Allow health runner to identify the nodes
       N_NODES: nil  # Default to run on all nodes in the cluster
       GCS_BUCKET_NAME: "straggler-healthcheck-logs"
     blast_mode:
       blast_mode_enabled: false  # Defaults to run multiple health checks in parallel
+  nccl_cluster_healthcheck:
+    run_check: false
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "4.2-latest"
+      pull_policy: "Always"
+    env:
+      HC_IMAGE_TAG: "4.2-latest"
+      MACHINE_TYPE: "a3-megagpu-8g"
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "30"
+      FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
+      FILTER_LABEL_VALUE: "true"
+      HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
+      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"  # Specific to A3+
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+      SECOND_PASS_ENABLED: "true"
+      HC_ENV_NHOSTS: "4"
+    # Blast Mode
+    blast_mode:
+      blast_mode_enabled: true
+      env:
+        NODES_CHECKED_PER_TEST:  "4"

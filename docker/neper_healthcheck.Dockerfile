@@ -54,10 +54,12 @@ RUN pip install kubernetes
 RUN pip install google-cloud-storage
 RUN pip install --no-cache-dir grpcio-tools
 COPY src/health_runner/health_results.proto /scripts/
+COPY src/common.proto /scripts/
 
 COPY src/neper_healthcheck/neper_runner.py .
 COPY src/checker_common.py .
 RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/health_results.proto
+RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/common.proto
 
 RUN chmod +x /scripts/neper_runner.py /scripts/checker_common.py
 CMD ["python3", "/scripts/neper_runner.py"]

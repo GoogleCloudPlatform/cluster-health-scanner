@@ -37,11 +37,13 @@ RUN apt-get update && \
 
 COPY src/health_runner/health_results.proto /scripts/
 COPY src/nccl_healthcheck/config.proto /scripts/
+COPY src/common.proto /scripts/
 RUN pip install grpcio-tools
 RUN pip install kubernetes
 RUN pip install google-cloud-storage
 RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/config.proto
 RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/health_results.proto
+RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/common.proto
 
 COPY src/nccl_healthcheck/nccl_startup.py /scripts/
 COPY src/nccl_healthcheck/config.py /scripts/

@@ -326,7 +326,7 @@ The node label keys depend on the health check,
 with expected values of `"true"`:
 
 - NCCL Health Check: `aiinfra/nccl-healthcheck-test`
-- GPU Health Check: `aiinfra/nccl-healthcheck-test`
+- GPU Health Check: `aiinfra/gpu-healthcheck-test`
 - Neper Health Check: `aiinfra/neper-healthcheck-test`
 
 These label keys & values can be set using the `kubectl` tool
@@ -340,7 +340,6 @@ kubectl label nodes \
 
 > Note:
 > This sets all nodes to be labeled for the NCCL health check.
-
 
 #### Configuration of the Health Runner & Health Checks
 
@@ -627,7 +626,9 @@ changes.
 
 ### 3.4 Cleanup
 
-After deploying and running CHS, users may wish to clean up the installation.
+After deploying and running CHS, users should ensure that the installation is
+fully cleaned up. This will prevent any potential issues of lingering
+configurations, jobs, or other resources.
 
 #### Uninstalling Health Runner Helm Release
 
