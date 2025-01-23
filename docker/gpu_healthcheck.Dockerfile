@@ -24,13 +24,14 @@ RUN mkdir -p /usr/local/gcloud \
 ENV PATH $PATH:/usr/local/gcloud/google-cloud-sdk/bin
 
 RUN pip install kubernetes
-
+COPY src/common.proto /app/
 COPY src/gpu_healthcheck/dcgm.proto /app/
 COPY src/health_runner/health_results.proto /app/
 RUN pip install grpcio-tools
 RUN pip install google-cloud-storage
 RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/dcgm.proto
 RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/health_results.proto
+RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/common.proto
 
 COPY src/gpu_healthcheck/gpu_healthcheck.py .
 COPY src/checker_common.py .

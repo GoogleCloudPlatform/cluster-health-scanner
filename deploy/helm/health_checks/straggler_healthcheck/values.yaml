@@ -20,7 +20,7 @@ health_check:
   name: "straggler"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck"
-    tag: "v4.1.2"
+    tag: "a3-megagpu-8g_4.2.0"
     pull_policy: "Always"
   params:
     bm_wait_time: "60"

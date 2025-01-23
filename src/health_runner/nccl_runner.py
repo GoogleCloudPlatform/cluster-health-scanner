@@ -43,7 +43,9 @@ _FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
 _FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
 
 
-def run_nccl_healthcheck() -> health_results_pb2.HealthResult:
+def run_nccl_healthcheck(
+    orchestrator_config: checker_common.HelmConfig | str,
+) -> health_results_pb2.HealthResult:
   """Runs NCCL health check and waits for it to complete."""
   print("cleaning up labels")
   labels_to_remove = [
@@ -67,23 +69,34 @@ def run_nccl_healthcheck() -> health_results_pb2.HealthResult:
   # Default is to use toplogy awareness when pairing nodes
   if case == "intra_rack":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    return run_intra_rack_healthcheck(v1, capacity, second_pass_enabled)
+    return run_intra_rack_healthcheck(
+        v1, capacity, orchestrator_config, second_pass_enabled
+    )
   elif case == "inter_rack":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    return run_inter_rack_healthcheck(v1, capacity, second_pass_enabled)
+    return run_inter_rack_healthcheck(
+        v1, capacity, orchestrator_config, second_pass_enabled
+    )
   elif case == "inter_cluster":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    return run_inter_cluster_healthcheck(v1, capacity, second_pass_enabled)
+    return run_inter_cluster_healthcheck(
+        v1, capacity, orchestrator_config, second_pass_enabled
+    )
   elif case == "random":
     logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-    return run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
+    return run_nccl_random_pair_healthcheck(
+        v1, capacity, orchestrator_config, second_pass_enabled
+    )
   else:
     logging.info("Unknown health check case: %s", case)
-    return run_nccl_random_pair_healthcheck(v1, capacity, second_pass_enabled)
+    return run_nccl_random_pair_healthcheck(
+        v1, capacity, orchestrator_config, second_pass_enabled
+    )
 
 
 def health_check_with_node_pairs(
     node_pairs: list[tuple[str, str]],
+    orchestrator_config: checker_common.HelmConfig | str,
     env_mappings: dict[str, str] | None = None,
     job_name_distinctor: str = "unknown-type",
 ) -> list[str]:
@@ -91,6 +104,8 @@ def health_check_with_node_pairs(
 
   Args:
     node_pairs: A list of node pairs to run the health check on.
+    orchestrator_config: A HelmConfig object or a path to a yaml file to use as
+      the orchestrator.
     env_mappings: A list of additional environment variables to pass to the job.
     job_name_distinctor: A string to distinguish the type of job.
 
@@ -98,7 +113,7 @@ def health_check_with_node_pairs(
     A list of the nodes that were tested.
   """
   # Create a list of job names for to monitor the jobs.
-  job_names = []
+  jobs = []
   tested_nodes = []
   cleanup_functions = []
 
@@ -109,33 +124,54 @@ def health_check_with_node_pairs(
   for node0, node1 in node_pairs:
     env_mappings_copy = copy.deepcopy(env_mappings)
     short_guid = str(uuid.uuid4())[:8]
-    unique_job_name = f"chs-hc-{job_name_distinctor}-{short_guid}"
+    unique_name = f"chs-hc-{job_name_distinctor}-{short_guid}"
     env_mappings_copy["NODE0"] = node0
     env_mappings_copy["NODE1"] = node1
     env_mappings_copy["SHORT_GUID"] = short_guid
 
     print(f"Running NCCL test between node {node0} and node {node1}...")
-    cleanup_functions.extend(
-        checker_common.create_job_k8s(
-            job_name=unique_job_name,
-            env_mappings=env_mappings_copy,
-        )
-    )
+    if isinstance(orchestrator_config, checker_common.HelmConfig):
+      job_orchestrator_config = copy.deepcopy(orchestrator_config)
+      if job_orchestrator_config.release_name is None:
+        job_orchestrator_config.release_name = unique_name
+      cleanup_functions.extend(
+          checker_common.create_job_k8s_helm(
+              helm_config=job_orchestrator_config,
+              env_mappings=env_mappings_copy,
+          )
+      )
+      jobs.extend(
+          checker_common.get_created_jobs(
+              [job_orchestrator_config.release_name]
+          )
+      )
+    elif isinstance(orchestrator_config, str):
+      cleanup_functions.extend(
+          checker_common.create_job_k8s(
+              job_name=unique_name,
+              yaml_file=orchestrator_config,
+              env_mappings=env_mappings_copy,
+          )
+      )
+      jobs.append(unique_name)
+    else:
+      logging.error("No k8s object or helm release specified.")
+      return []
+
     # TODO - Find a better way to avoid this sleep
     # Sleep to allow time for helm releases to create proper ServiceAccount,
     # ClusterRole, etc. Otherwise, errors will occur where resources like the
     # ServiceAccount won't exist to create a SSH connection.
     time.sleep(1)
 
-    job_names.append(unique_job_name)
     tested_nodes.append(node0)
     tested_nodes.append(node1)
 
-  print(f"Waiting for {len(job_names)} jobs to complete...")
+  print(f"Waiting for {len(jobs)} jobs to complete...")
   job_api = batch_v1_api.BatchV1Api()
   checker_common.wait_till_jobs_complete(
       job_api,
-      job_names,
+      jobs,
       timeout_seconds=(int(_SLEEP_TIME_MINUTES) * 60),
       check_interval=int(_CHECK_INTERVAL_SECONDS),
   )
@@ -154,6 +190,7 @@ def health_check_with_node_pairs(
 def run_nccl_random_pair_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
+    orchestrator_config: checker_common.HelmConfig | str,
     second_pass_enabled: bool,
 ) -> health_results_pb2.HealthResult:
   """Runs NCCL health checks between random nodes and waits for it to complete.
@@ -161,6 +198,8 @@ def run_nccl_random_pair_healthcheck(
   Args:
     v1: Kubernetes CoreV1Api object.
     capacity: Capacity topology of the cluster.
+    orchestrator_config: A HelmConfig object or a path to a yaml file to use as
+      the orchestrator.
     second_pass_enabled: Whether second pass is enabled.
 
   Returns:
@@ -188,6 +227,7 @@ def run_nccl_random_pair_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-random-pair",
   )
@@ -250,6 +290,7 @@ def run_nccl_random_pair_healthcheck(
 
   tested_nodes_second_pass = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "true", "HEALTH_VALIDITY_HOURS": "0"},
       job_name_distinctor="nccl-2nd-pass",
   )
@@ -300,6 +341,7 @@ def run_nccl_random_pair_healthcheck(
 def run_intra_rack_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
+    orchestrator_config: checker_common.HelmConfig | str,
     second_pass_enabled: bool,
 ) -> health_results_pb2.HealthResult:
   """Checks the racks communication by running nccl tests between each node in the same rack."""
@@ -337,6 +379,7 @@ def run_intra_rack_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-intra-rack",
   )
@@ -415,6 +458,7 @@ def run_intra_rack_healthcheck(
 
   tested_nodes_second_pass = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "true"},
       job_name_distinctor="nccl-intra-rack-second-pass",
   )
@@ -465,6 +509,7 @@ def run_intra_rack_healthcheck(
 def run_inter_rack_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
+    orchestrator_config: checker_common.HelmConfig | str,
     second_pass_enabled: bool,
 ) -> health_results_pb2.HealthResult:
   """Checks inter-rack communication by running nccl tests between nodes in different racks (The racks will be in the same cluster)."""
@@ -510,6 +555,7 @@ def run_inter_rack_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-inter-rack",
   )
@@ -595,6 +641,7 @@ def run_inter_rack_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "true"},
       job_name_distinctor="nccl-inter-rack-second-pass",
   )
@@ -651,6 +698,7 @@ def run_inter_rack_healthcheck(
 def run_inter_cluster_healthcheck(
     v1: kubernetes.client.CoreV1Api,
     capacity: common_pb2.Capacity,
+    orchestrator_config: checker_common.HelmConfig | str,
     second_pass_enabled: bool,
 ) -> health_results_pb2.HealthResult:
   """Checks the inter-cluster communication by running nccl tests between nodes in different clusters."""
@@ -692,6 +740,7 @@ def run_inter_cluster_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "false"},
       job_name_distinctor="nccl-inter-cluster",
   )
@@ -759,6 +808,7 @@ def run_inter_cluster_healthcheck(
 
   tested_nodes = health_check_with_node_pairs(
       node_pairs=second_pass_node_pairs,
+      orchestrator_config=orchestrator_config,
       env_mappings={"SECOND_PASS": "true"},
       job_name_distinctor="nccl-inter-cluster-second-pass",
   )

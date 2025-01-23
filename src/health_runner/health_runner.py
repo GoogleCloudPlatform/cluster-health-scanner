@@ -31,7 +31,6 @@ import time
 import uuid
 
 from kubernetes import client
-from kubernetes import config
 
 import checker_common
 import health_results_pb2
@@ -40,7 +39,16 @@ from google.protobuf import timestamp_pb2
 
 
 _SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
+
+_YAML_FILE = os.environ.get("YAML_FILE")
+
 _HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
+_HELM_CHART = os.environ.get("HELM_CHART")
+_HELM_CHART_VERSION = os.environ.get("HELM_CHART_VERSION")
+_HELM_INSTALL_FLAGS = os.environ.get("HELM_INSTALL_FLAGS")
+_HELM_RELEASE_NAME = os.environ.get("HELM_RELEASE_NAME")
+_HC_ENV_PREFIX = "HC_ENV_"
+
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 _GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
 # 
@@ -74,9 +82,22 @@ def run_health_app(health_app: str) -> None:
   health_results = health_results_pb2.HealthResults(
       created_date_time=timestamp_pb2.Timestamp().GetCurrentTime(),
   )
+  orchestrator_config = None
+  if _HELM_CHART:
+    orchestrator_config = checker_common.HelmConfig(
+        release_name=_HELM_RELEASE_NAME,
+        chart=_HELM_CHART,
+        chart_version=_HELM_CHART_VERSION,
+        install_flags=_HELM_INSTALL_FLAGS,
+    )
+  elif _YAML_FILE:
+    orchestrator_config = _YAML_FILE
+
   if health_app == "nccl":
     logging.info("Running NCCL health check via `HEALTH_APP`")
-    nccl_result = nccl_runner.run_nccl_healthcheck()
+    nccl_result = nccl_runner.run_nccl_healthcheck(
+        orchestrator_config=orchestrator_config
+    )
     health_results.health_results.append(nccl_result)
   else:
     logging.error("Unsupported health app: %s", health_app)
@@ -151,35 +172,6 @@ def determine_test_iterations() -> int:
     return 1
 
 
-def get_created_jobs(release_names: Iterable[str]) -> Iterable[str]:
-  """Get jobs created by a given helm release.
-
-  Args:
-    release_names: Iterable of helm release names to get jobs for.
-
-  Returns:
-    Iterable of job names created by the helm releases.
-  """
-  config.load_incluster_config()
-  batch_v1 = client.BatchV1Api()
-  try:
-    jobs = batch_v1.list_namespaced_job(namespace="default").items
-
-    release_name_annotation_key = "meta.helm.sh/release-name"
-    matching_jobs = [
-        job.metadata.name
-        for job in jobs
-        if job.metadata.annotations
-        and release_name_annotation_key in job.metadata.annotations
-        and job.metadata.annotations[release_name_annotation_key]
-        in release_names
-    ]
-    return matching_jobs
-  except client.ApiException as e:
-    print(f"Error getting Jobs: {e}")
-    return []
-
-
 def run_health_check() -> None:
   """Run the health check."""
 
@@ -198,11 +190,11 @@ def run_health_check() -> None:
 
   logging.info("Creating %d tests...", num_tests)
   # This must be defined in the YAML configuration
-  helm_chart_path = os.environ.get("HELM_CHART")
+  helm_chart_path = _HELM_CHART
   # 
-  helm_chart_version = os.environ.get("HELM_CHART_VERSION")
+  helm_chart_version = _HELM_CHART_VERSION
   # 
-  helm_install_flags = os.environ.get("HELM_INSTALL_FLAGS")
+  helm_install_flags = _HELM_INSTALL_FLAGS
   # 
   helm_values: dict[str, str] = dict()
 
@@ -226,16 +218,24 @@ def run_health_check() -> None:
   # Pass Node Names & Number of Nodes to all health checks
   helm_values["health_check.env.HOSTS_CSV"] = f'"{node_names_csv}"'
   helm_values["health_check.env.N_NODES"] = str(num_nodes)
+  # Pass all other environment variables to health checks
+  for key, value in os.environ.items():
+    if key.startswith(_HC_ENV_PREFIX):
+      # Strip the _HC_ENV_PREFIX prefix and convert to Helm value format
+      helm_key = f"health_check.env.{key[len(_HC_ENV_PREFIX):]}"
+      helm_values[helm_key] = f'"{value}"'
 
   # RUN HC
   release_names = []
   for i in range(num_tests):
     # If Helm release name is not unique, it will not install the release
     short_guid = str(uuid.uuid4())[:8]
-    unique_release_name = os.environ.get(
-        "HELM_RELEASE_NAME",
-        f"internal-chs-hc-{i}-{short_guid}",
-    )
+    hc_release_name_suffix = f"{i}-{short_guid}"
+    if _HELM_RELEASE_NAME:
+      unique_release_name = f"{_HELM_RELEASE_NAME}-{hc_release_name_suffix}"
+    else:
+      unique_release_name = f"chs-hc-{hc_release_name_suffix}"
+
     release_names.append(unique_release_name)
     # Set the job name to a unique value following a specific pattern/format
     # 
@@ -258,12 +258,20 @@ def run_health_check() -> None:
     # Count of tests deployed should start at 1 to make it clear
     logging.info("Deployed test %d (%d of %d total)", i, i + 1, num_tests)
 
-  # TODO - Sleep section
   logging.info(
       "Waiting for maximum of %s minutes before cleaning up...",
       _SLEEP_TIME_MINUTES,
   )
-  release_jobs = get_created_jobs(release_names)
+  # Helm releases & associated jobs are logged for reference outside of HR
+  release_jobs = checker_common.get_created_jobs(release_names)
+  jobs_and_releases: list[tuple[str, str]] = list(
+      zip(release_jobs, release_names)
+  )
+  logging.info(
+      "Helm charts and associated jobs: %s",
+      jobs_and_releases,
+  )
+  # Sleep until all jobs are complete or timeout is reached
   checker_common.wait_till_jobs_complete(
       job_v1=client.BatchV1Api(),
       jobs_to_monitor=release_jobs,

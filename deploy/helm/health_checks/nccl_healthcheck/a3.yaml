@@ -20,7 +20,7 @@ health_check:
   name: "nccl"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck"
-    tag: "v4.1.2"
+    tag: "a3-highgpu-8g_4.2.0"
     pull_policy: "Always"
   env:
     # A3 instance type is a3-highgpu-8g
