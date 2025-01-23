@@ -38,8 +38,8 @@ metadata:
   labels:
     app-name: {{ .Values.health_check.name }}
 spec:
-  completions: 2
-  parallelism: 2
+  completions: {{ .Values.health_check.env.NHOSTS }}
+  parallelism: {{ .Values.health_check.env.NHOSTS }}
   completionMode: Indexed
   template:
     metadata:

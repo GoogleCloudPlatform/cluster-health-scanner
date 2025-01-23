@@ -326,7 +326,7 @@ The node label keys depend on the health check,
 with expected values of `"true"`:
 
 - NCCL Health Check: `aiinfra/nccl-healthcheck-test`
-- GPU Health Check: `aiinfra/nccl-healthcheck-test`
+- GPU Health Check: `aiinfra/gpu-healthcheck-test`
 - Neper Health Check: `aiinfra/neper-healthcheck-test`
 
 These label keys & values can be set using the `kubectl` tool
@@ -341,6 +341,23 @@ kubectl label nodes \
 > Note:
 > This sets all nodes to be labeled for the NCCL health check.
 
+#### Troubleshooting with Google Cloud Logging (Optional)
+
+To help Google Cloud engineers diagnose and resolve any potential issues with your cluster, you can optionally configure CHS to send its logs to Google. This allows our engineers to access only the logs from CHS and not the logs from the rest of the cluster.
+
+This can be configured by the following steps:
+
+* Create a Service Account: In the Google Cloud project where your cluster is running, create a new service account specifically for sending CHS logs to Google.
+* Contact Google Support:  Reach out to Google Cloud Support and provide them with the name of the service account you created. They will grant the necessary permissions for this service account to write logs to Google Cloud Logging.
+* Create a Service Account Key: Generate a JSON key file for the service account. This key file will be used by CHS to authenticate with Google Cloud Logging.
+* Create a Kubernetes Secret:  Use the following commands to create a Kubernetes secret containing the service account key:
+
+  ```
+  kubectl delete secret fluentbit-key
+  kubectl create secret generic fluentbit-key --from-file=key.json=key.json
+  ```
+
+By following these steps, you can enable log forwarding of CHS logs to Google and help our engineers provide you with the best possible support for your cluster.
 
 #### Configuration of the Health Runner & Health Checks
 
@@ -627,7 +644,9 @@ changes.
 
 ### 3.4 Cleanup
 
-After deploying and running CHS, users may wish to clean up the installation.
+After deploying and running CHS, users should ensure that the installation is
+fully cleaned up. This will prevent any potential issues of lingering
+configurations, jobs, or other resources.
 
 #### Uninstalling Health Runner Helm Release
 

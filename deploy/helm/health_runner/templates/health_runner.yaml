@@ -22,6 +22,44 @@
 {{- $extra_info := printf "%s" $hc_name }}
 {{- $unique_name := printf "%s-%s-%s" $base_name $extra_info $unique_suffix | replace "_" "-"  }}
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        1
+        Log_Level    info
+        Daemon       off
+        Parsers_File parsers.conf
+
+    [INPUT]
+        Name           tail
+        Tag            kube.*
+        Path           /var/log/*.log
+        Mem_Buf_Limit 5MB
+        Skip_Long_Lines On
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Merge_Log           On
+        K8S-Logging.Parser On
+        Kube_Tag_Prefix     kube.var.log.*
+    [OUTPUT]
+        Name  stackdriver
+        Match *
+        google_service_credentials /var/secrets/google/key.json
+        export_to_project_id cluster-health-scanner
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fluentbit-key
+type: Opaque
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -45,11 +83,16 @@ spec:
       - name: {{ $unique_name | quote}}
         image: "{{ .image.repo }}:{{ .image.tag }}"
         imagePullPolicy: {{ .image.pull_policy }}
+        command: ["/bin/sh", "-c"]
+        args: ["python3 /app/health_runner.py 2>&1 | tee /var/log/nccl_healthrunner.log"]
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
             - ALL
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
         env:
         {{- range $key, $value := .env}}
         - name: {{ $key | quote }}
@@ -65,6 +108,25 @@ spec:
         {{- end }} # iteration over .blast_mode.env
         {{- end }} # if .blast_mode.blast_mode_enabled
         {{- end }} # if .blast_mode scope
+      - name: fluent-bit
+        image: fluent/fluent-bit:latest
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: fluent-bit-config
+          mountPath: /fluent-bit/etc/
+        - name: fluentbit-key
+          mountPath: /var/secrets/google
+          readOnly: true
+      volumes:
+      - name: varlog
+        emptyDir: {}
+      - name: fluent-bit-config
+        configMap:
+          name: fluent-bit-config
+      - name: fluentbit-key
+        secret:
+          secretName: fluentbit-key
 ---
 ## Below should be the same for all health checks
 apiVersion: v1
