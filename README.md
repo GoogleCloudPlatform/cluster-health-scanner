@@ -69,5 +69,5 @@ Options:
 ## For Developers
 
 See
-[README-developers.md](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/main/deploy/README-developers.md)
+[README-developers.md](https://github.com/GoogleCloudPlatform/cluster-health-scanner/blob/main/README-developers.md)
 for developer details.
