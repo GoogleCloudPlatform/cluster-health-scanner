@@ -19,7 +19,7 @@ from typing import Any
 
 SUPPORTED_ORCHESTRATORS = ['gke']
 
-SUPPORTED_MACHINE_TYPES = ['a3-megagpu-8g']
+SUPPORTED_MACHINE_TYPES = ['a3-highgpu-8g', 'a3-megagpu-8g']
 
 
 def run_for_orchestrator(
