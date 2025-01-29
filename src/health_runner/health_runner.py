@@ -121,7 +121,7 @@ def ensure_env_variables(required_envs: Iterable[str]) -> None:
 
 
 # 
-def determine_test_iterations() -> int:
+def determine_test_iterations(num_nodes: int | None = None) -> int:
   """Determine the number of tests to run.
 
   This function will calculate the number of tests to deploy for a given test
@@ -134,8 +134,12 @@ def determine_test_iterations() -> int:
   that will be consumed in the YAML_PATH yaml.
   Used to calculate the number of tests to deploy. (Defaults to 1)
 
+  Args:
+    num_nodes: The number of nodes in the cluster. If not provided, it will be
+      determined automatically.
+
   Returns:
-  Integer of the number of tests that will be deployed.
+    Integer of the number of tests that will be deployed.
   """
   is_blast_mode = str(os.environ.get("BLAST_MODE_ENABLED")).lower() in [
       "true",
@@ -148,7 +152,7 @@ def determine_test_iterations() -> int:
     get_nodes_output = checker_common.run_command(
         _K_NUM_GPU_NODES_IN_CLUSTER_COMMAND
     )
-    num_nodes = int(get_nodes_output.stdout)
+    num_nodes = num_nodes if num_nodes else int(get_nodes_output.stdout)
     nodes_per_test = int(os.environ.get("NODES_CHECKED_PER_TEST", "1"))
     if num_nodes % nodes_per_test != 0:
       logging.warning(
@@ -183,13 +187,9 @@ def run_health_check() -> None:
       },
   )
 
-  # Determine number of tests to run
-  num_tests: int = determine_test_iterations()
-
   cleanup_functions = []
-
-  logging.info("Creating %d tests...", num_tests)
   # This must be defined in the YAML configuration
+
   helm_chart_path = _HELM_CHART
   # 
   helm_chart_version = _HELM_CHART_VERSION
@@ -214,6 +214,10 @@ def run_health_check() -> None:
   else:
     num_nodes = int(num_nodes)
   node_names_csv = r"\,".join(node_names)
+
+  # Determine number of tests to run
+  num_tests = determine_test_iterations(num_nodes=num_nodes)
+  logging.info("Creating %d tests...", num_tests)
 
   # Pass Node Names & Number of Nodes to all health checks
   helm_values["health_check.env.HOSTS_CSV"] = f'"{node_names_csv}"'
