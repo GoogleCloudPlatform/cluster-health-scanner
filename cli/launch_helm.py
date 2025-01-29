@@ -98,6 +98,7 @@ def _generate_helm_command(
 def deploy_health_runner(
     hc_type: str,
     wait: int,
+    values_file: str | None = None,
     hc_release_name_base: str | None = None,
     additional_helm_env_vars: dict[str, str] | None = None,
 ) -> str:
@@ -106,6 +107,7 @@ def deploy_health_runner(
   Args:
     hc_type: The type of health check to deploy.
     wait: The wait time in minutes to complete.
+    values_file: The relative path to a YAML file containing values to override.
     hc_release_name_base: The unique ID to use for health check release names.
       If None, will default to the Health Runner's default.
     additional_helm_env_vars: A dictionary of additional Helm environment
@@ -129,7 +131,7 @@ def deploy_health_runner(
       chart_name='deploy/helm/health_runner',
       release_name=f'chs-hr-{hc_type}',
       namespace='default',
-      values_file=None,
+      values_file=values_file,
       set_values=specific_set_values,
   )
   _ = _run_command(helm_install_command)

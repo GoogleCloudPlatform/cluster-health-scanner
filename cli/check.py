@@ -201,6 +201,18 @@ class Check:
 
     return
 
+  def _get_values_file(self) -> str:
+    """Get the values file for the check."""
+    base_path = 'deploy/helm/health_runner/'
+    match self.machine_type:
+      case 'a3-highgpu-8g':
+        return base_path + 'a3high.yaml'
+      case 'a3-megagpu-8g':
+        # Use the default values for A3 Mega
+        return base_path + 'values.yaml'
+      case _:
+        raise ValueError(f'Unsupported machine type: {self.machine_type}')
+
   def _gke_check(self, sleep_sec: int = 300) -> str | None:
     """Run the check on a GKE cluster."""
     n_nodes = len(self.nodes)
@@ -210,6 +222,7 @@ class Check:
     pod_name = launch_helm.deploy_health_runner(
         hc_type=self.name,
         wait=math.floor(sleep_sec / 60),
+        values_file=self._get_values_file(),
         hc_release_name_base=self.hc_release_name_base,
         additional_helm_env_vars=additional_helm_env_vars,
     )
