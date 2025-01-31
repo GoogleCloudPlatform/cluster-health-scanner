@@ -104,6 +104,28 @@ health_checks:
       GCS_BUCKET_NAME: "straggler-healthcheck-logs"
     blast_mode:
       blast_mode_enabled: false  # Defaults to run multiple health checks in parallel
+  tinymax_healthcheck:
+    run_check: false
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "4.2-latest"
+      pull_policy: "Always"
+    env:
+      HC_IMAGE_TAG: "4.2-latest"
+      MACHINE_TYPE: "a3-megagpu-8g"
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "10"
+      FILTER_LABEL_NAME: "aiinfra/tinymax-healthcheck-test"
+      FILTER_LABEL_VALUE: "true"
+      HELM_CHART: "/app/health_checks/tinymax_healthcheck"  # Path to Helm chart in container
+      HELM_INSTALL_FLAGS: "-f /app/health_checks/tinymax_healthcheck/a3plus.yaml --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"  # Specific to A3+
+      ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
+    # Blast Mode
+    blast_mode:
+      blast_mode_enabled: true
+      env:
+        # BLAST_MODE_NUM_TESTS_LIMIT: "200"  # Number of health checks to run in parallel
+        NODES_CHECKED_PER_TEST:  "1"
   nccl_cluster_healthcheck:
     run_check: false
     image:

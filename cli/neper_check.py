@@ -14,10 +14,10 @@
 
 """Check for running a Network Performance test on a cluster."""
 
-import check
+import gke_check
 
 
-class NeperCheck(check.Check):
+class NeperCheck(gke_check.GkeCheck):
   """Runs a Network Performance test on a cluster."""
 
   _description = 'Runs a Network Performance test on a cluster.'
@@ -31,11 +31,10 @@ class NeperCheck(check.Check):
       'aiinfra/neper-healthcheck-result',
   ]
 
-  def __init__(self, orchestrator: str, machine_type: str, nodes: list[str]):
+  def __init__(self, machine_type: str, nodes: list[str]):
     super().__init__(
         name=self.name,
         description=self._description,
-        orchestrator=orchestrator,
         machine_type=machine_type,
         launch_label=self.launch_label,
         results_labels=self.results_labels,

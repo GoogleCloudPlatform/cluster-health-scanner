@@ -21,11 +21,10 @@ import subprocess
 
 import click
 
-import common
-import check
+import gke_check
 
 
-class Status(check.Check):
+class Status(gke_check.GkeCheck):
   """A check to provide the current healthscan result status of a cluster."""
 
   _description = (
@@ -41,18 +40,17 @@ class Status(check.Check):
 
   name = "status"
 
-  def __init__(self, orchestrator: str, machine_type: str, nodes: list[str]):
+  def __init__(self, machine_type: str, nodes: list[str]):
     super().__init__(
         name=self.name,
         description=self._description,
-        orchestrator=orchestrator,
         machine_type=machine_type,
         launch_label=None,
         results_labels=None,
         nodes=nodes,
     )
 
-  def _gke_status(self):
+  def _gke_status(self) -> str:
     """Get the current healthscan status of a GKE cluster."""
     command = (
         f"kubectl get nodes -o custom-columns={self._custom_cols} "
@@ -64,7 +62,7 @@ class Status(check.Check):
         text=True,
         check=False,
         capture_output=True,
-    )
+    ).stdout
 
   def set_up(self) -> None:
     """Set up for the status check."""
@@ -89,7 +87,4 @@ class Status(check.Check):
       The status of the cluster as a string.
     """
     click.echo("Performing status check...")
-    return common.run_for_orchestrator(
-        orchestrator=self.orchestrator,
-        gke_function=self._gke_status,
-    ).stdout
+    return self._gke_status()

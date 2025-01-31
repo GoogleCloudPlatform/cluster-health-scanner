@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright 2024 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#!/bin/bash
+
 
 #SBATCH --partition=a3ultra
 #SBATCH --mem=0
@@ -46,7 +47,6 @@ CONTAINER_MOUNTS=${CONTAINER_MOUNTS},"/usr/local/gib"
 srun --mpi=pmi2 \
   --ntasks-per-node=8 \
   --container-image="${CONTAINER_IMAGE}" \
-  --container-env="${HOST_VARS}" \
   --container-mounts="${CONTAINER_MOUNTS}" \
   sh -c "
   export LD_LIBRARY_PATH=/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH;

@@ -17,10 +17,10 @@
 This module control execution of neper test.
 """
 
+from collections.abc import Callable
 import os
 import re
 import time
-from typing import Callable, Dict, List
 
 import checker_common
 
@@ -73,7 +73,7 @@ IdentityFile /root/.ssh/google_compute_engine
 Port 222""")
 
 
-def get_host_to_ips() -> Dict[str, List[str]]:
+def get_host_to_ips() -> dict[str, list[str]]:
   """Generates a hostfile based on host names from pods."""
 
   hosts = {}
@@ -92,8 +92,8 @@ def get_host_to_ips() -> Dict[str, List[str]]:
 
 
 def run_neper_test(
-    hosts_to_ips: Dict[str, List[str]]
-) -> List[Callable[[], None]]:
+    hosts_to_ips: dict[str, list[str]],
+) -> list[Callable[[], None]]:
   """Runs the Neper test."""
 
   def cleanup_delete_temp_files(regex: str) -> Callable[[], None]:
@@ -153,7 +153,7 @@ def run_neper_test(
 
 
 def process_test_result(
-    log_files: List[str], local_host: str, remote_host: str
+    log_files: list[str], local_host: str, remote_host: str
 ) -> None:
   """Analyze the log files and add taints to the nodes that yield bad throughput."""
 
