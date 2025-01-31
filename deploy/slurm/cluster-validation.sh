@@ -13,16 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Modifications from original work:
-- add --drain-bad-nodes flag to drain nodes that fail diagnostics
-- supports both a3mega and a3ultra partitions for nccl tests
-- Added download and enroot the docker images if they are not already present
-- Change nccl test to make it work for GCP (a3mega and a3ultra), originally it was for oci
 
-Original work:
-https://github.com/NVIDIA/NeMo-Framework-Launcher/blob/main/csp_tools/oci/cluster_validation.sh
-"""
+# Modifications from original work:
+# - add --drain-bad-nodes flag to drain nodes that fail diagnostics
+# - supports a3, a3mega and a3ultra partitions for nccl tests
+# - Added download and enroot the docker images if they are not already present
+# - Change nccl test to make it work for GCP (a3, a3mega and a3ultra), originally it was for oci
+
+# Original work:
+# https://github.com/NVIDIA/NeMo-Framework-Launcher/blob/main/csp_tools/oci/cluster_validation.sh
+
 
 usage() {
 cat <<EOF
@@ -148,7 +148,7 @@ if [[ $RUN_DCGMI == 1 ]]; then
             -o $RESULTS_DIR/dcgmi-%j.out \
             -W dcgmi-diag.sh)
     JOBID=${JOBID##* } # Remove everything but the slurm job id from output of sbatch command
-    grep -i "fail" $RESULTS_DIR/dcgmi-"${JOBID}".out > /dev/null # Check log for failures
+    grep -i "fail\|error" $RESULTS_DIR/dcgmi-"${JOBID}".out > /dev/null # Check log for failures
     FOUND=$?
     if [[ $FOUND == 0 ]]; then
         # One of the diagnostics failed
@@ -182,6 +182,9 @@ if [[ $RUN_NCCL == 1 ]]; then
         echo "Building the NCCL tests..."
 
         case "$PARTITION" in
+            a3)
+                sbatch -N 1 -W build-nccl-tests-a3.sh > /dev/null 2> /dev/null
+                ;;
             a3mega)
                 sbatch -N 1 -W build-nccl-tests-a3mega.sh > /dev/null 2> /dev/null
                 ;;
@@ -213,7 +216,9 @@ if [[ $RUN_NCCL == 1 ]]; then
         j=$((i + 4))
 
         # Determine which script to run based on the partition
-        if [[ "$PARTITION" == "a3mega" ]]; then
+        if [[ "$PARTITION" == "a3" ]]; then
+            script="./nccl-a3.sh"
+        elif [[ "$PARTITION" == "a3mega" ]]; then
             script="./nccl-a3mega.sh"
         elif [[ "$PARTITION" == "a3ultra" ]]; then
             script="./nccl-a3ultra.sh"

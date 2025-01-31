@@ -14,10 +14,10 @@
 
 """Check for running a NCCL bandwidth test on a cluster."""
 
-import check
+import gke_check
 
 
-class NcclCheck(check.Check):
+class NcclCheck(gke_check.GkeCheck):
   """Runs a NCCL bandwidth test on a cluster."""
 
   _description = 'Runs a NCCL bandwidth test on a cluster.'
@@ -33,11 +33,10 @@ class NcclCheck(check.Check):
       'aiinfra/nccl-healthcheck-bandwidth',
   ]
 
-  def __init__(self, orchestrator: str, machine_type: str, nodes: list[str]):
+  def __init__(self, machine_type: str, nodes: list[str]):
     super().__init__(
         name=self.name,
         description=self._description,
-        orchestrator=orchestrator,
         machine_type=machine_type,
         launch_label=self.launch_label,
         results_labels=self.results_labels,

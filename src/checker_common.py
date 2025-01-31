@@ -24,7 +24,7 @@ import string
 import subprocess
 import tempfile
 import time
-from typing import Any, Dict
+from typing import Any
 import uuid
 
 from google.cloud import storage
@@ -58,7 +58,7 @@ def log_results(
     passed: bool,
     node_name: str,
     workflow_id: str | None = "",
-    result_data: Dict[str, Any] | None = None,
+    result_data: dict[str, Any] | None = None,
 ) -> None:
   """Logs the results of a test run."""
   log = {
@@ -210,6 +210,10 @@ def wait_till_jobs_complete(
   start_time = time.time()
 
   # Poll list jobs API until all jobs are completed or the timeout is reached.
+  print(
+      f"Polling jobs for {timeout_seconds} seconds and checking every"
+      f" {check_interval} seconds"
+  )
   while remaining_jobs:
     job_list = job_v1.list_namespaced_job(namespace)
     for job in job_list.items:
@@ -230,13 +234,12 @@ def wait_till_jobs_complete(
       print(f"Timeout ({timeout_seconds} seconds) reached.")
       break
 
-    logging.info(
-        "(%.2f sec) out of (%d sec)",
-        int(time.time() - start_time),
-        timeout_seconds,
+    print(
+        f"{int(time.time() - start_time)} secs out of"
+        f" {timeout_seconds} secs",
     )
-    logging.info("Remaining jobs: %s", remaining_jobs)
-    logging.info("Sleeping for %d seconds", check_interval)
+    print("Remaining jobs: ", remaining_jobs)
+    print(f"Sleeping for {check_interval} seconds")
     time.sleep(check_interval)
 
   return list(remaining_jobs)

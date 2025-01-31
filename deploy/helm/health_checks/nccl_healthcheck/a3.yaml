@@ -56,7 +56,6 @@ health_check:
     mountPath: /usr/share/nemo
   - name: shared-memory
     mountPath: /dev/shm
-
 # Configuration specific to a3plus
 volumes:
 - name: nvidia-install-dir-host

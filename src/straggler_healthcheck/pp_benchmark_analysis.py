@@ -37,11 +37,12 @@ Example usage:
     plot_straggler_heatmap(heatmap_data, output_file)
 """
 
+from collections.abc import Callable
 import dataclasses
 import os
 import pathlib
 # 
-from typing import Callable, List, Optional, Set
+from typing import Optional
 
 from google.protobuf import text_format
 from matplotlib import colors
@@ -104,7 +105,7 @@ def _identify_interesting_event_indices(
     send_recv_timing_results: npt.NDArray[int],
     straggler_threshold_ms: int,
     interesting_event_offset: int,
-) -> Set[int]:
+) -> set[int]:
   """Identify interesting event indices for a given experiment.
 
   Args:
@@ -135,8 +136,8 @@ class HeatmapData:
   """Data for plotting a heatmap."""
 
   experiment_name: str
-  x_vals: List[int]
-  y_labels: List[str]
+  x_vals: list[int]
+  y_labels: list[str]
   max_rank: int
   max_node_idx: int
   straggler_threshold_ms: int
@@ -149,7 +150,7 @@ class HeatmapData:
 
 def read_experiment_data(
     data_dir: str, experiment: str
-) -> List[straggler_detection_healthcheck_pb2.PPBenchmarkResults]:
+) -> list[straggler_detection_healthcheck_pb2.PPBenchmarkResults]:
   """Read all benchmark results for a given experiment.
 
   Args:
@@ -167,7 +168,7 @@ def read_experiment_data(
 
 
 def preprocess_experiment_data(
-    benchmark_results: List[
+    benchmark_results: list[
         straggler_detection_healthcheck_pb2.PPBenchmarkResults
     ],
     experiment: str,

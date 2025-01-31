@@ -29,7 +29,7 @@ Typical usage example:
 import pathlib
 import time
 # 
-from typing import List, Protocol
+from typing import Protocol
 
 from google.protobuf import text_format
 import torch
@@ -76,7 +76,7 @@ class PPBenchmarkResultsLog:
     self._data_counter = 0
 
   def record_microbatch_comm(
-      self, batch_idx: int, microbatch_idx: int, timestamps_ns: List[int]
+      self, batch_idx: int, microbatch_idx: int, timestamps_ns: list[int]
   ) -> None:
     """Record data for each microbatch communication.
 

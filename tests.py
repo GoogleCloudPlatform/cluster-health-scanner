@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import abc
 import argparse
+from collections.abc import Iterable
 import re
 import sys
 import time
-from typing import Any, Iterable
+from typing import Any
+
 import kubernetes
 from kubernetes.client.models import V1Node
 

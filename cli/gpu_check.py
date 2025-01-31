@@ -14,15 +14,13 @@
 
 """Check for running a DCGM test on a cluster."""
 
-import check
+import gke_check
 
 
-class GpuCheck(check.Check):
+class GpuCheck(gke_check.GkeCheck):
   """A check that runs a DCGM test on a cluster."""
-
-  _description = 'Runs a DCGM test on a cluster.'
-
   name = 'gpu'
+  _description = 'Runs a DCGM test on a cluster.'
 
   launch_label = 'aiinfra/gpu-healthcheck-test'
 
@@ -31,11 +29,10 @@ class GpuCheck(check.Check):
       'aiinfra/gpu-healthcheck-result',
   ]
 
-  def __init__(self, orchestrator: str, machine_type: str, nodes: list[str]):
+  def __init__(self, machine_type: str, nodes: list[str]):
     super().__init__(
         name=self.name,
         description=self._description,
-        orchestrator=orchestrator,
         machine_type=machine_type,
         launch_label=self.launch_label,
         results_labels=self.results_labels,

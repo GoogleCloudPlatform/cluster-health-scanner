@@ -52,7 +52,6 @@ health_check:
     mountPath: /usr/local/nvidia
   - name: shared-memory
     mountPath: /dev/shm
-
 # Configuration specific to a3ultra
 volumes:
 - name: library-dir-host

@@ -18,8 +18,8 @@ Produces heatmaps for SendRecv latency for each experiment in the data
 directory.
 """
 
+from collections.abc import Sequence
 import pathlib
-from typing import Sequence
 
 from absl import app
 from absl import flags
