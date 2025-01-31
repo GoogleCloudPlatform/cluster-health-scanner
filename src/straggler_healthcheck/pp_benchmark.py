@@ -38,12 +38,13 @@ The time it takes to complete this communication is recorded in batches and
 saved for later analysis.
 """
 
+from collections.abc import MutableSequence
 import contextlib
 import functools
 import gc
 import time
 # 
-from typing import List, MutableSequence, Optional
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -120,7 +121,7 @@ def _do_microbatch_comm(
     next_rank: int,
     prev_rank: int,
     bidirectional: bool,
-) -> List[int]:
+) -> list[int]:
   """Performs a single set of communication between GPUs.
 
   Args:

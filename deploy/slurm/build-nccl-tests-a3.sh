@@ -16,7 +16,7 @@
 
 
 #SBATCH --ntasks=1
-#SBATCH --partition=a3ultra
+#SBATCH --partition=a3
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 
@@ -24,18 +24,18 @@
 
 set -x
 
-CONTAINER_IMAGE=./nvidia+pytorch+24.09-py3.sqsh
+CONTAINER_IMAGE=./nvidia+pytorch+23.10-py3.sqsh
 
 # Import the pytorch container to enroot if not already present.
 if [[ ! -f ${CONTAINER_IMAGE} ]]; then
-  # This creates a file named "nvidia+pytorch+24.09-py3.sqsh", which
-  # uses ~18 GB of disk space. This should be run on a filesystem that
+  # This creates a file named "nvidia+pytorch+23.10-py3.sqsh". 
+  #This should be run on a filesystem that
   # can be seen by all worker nodes
-  enroot import docker://nvcr.io#nvidia/pytorch:24.09-py3
+  enroot import docker://nvcr.io#nvidia/pytorch:23.10-py3
 fi
 
 # Install nccl-tests using openmpi from within pytorch container
-srun --container-mounts="$PWD:/nccl" \
+srun --container-mounts="$PWD:/nccl,/var/tmp:/var/tmp" \
   --container-image=${CONTAINER_IMAGE} \
   --container-name="nccl" \
   bash -c "

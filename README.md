@@ -340,7 +340,6 @@ kubectl label nodes \
 
 > Note:
 > This sets all nodes to be labeled for the NCCL health check.
-
 #### Configuration of the Health Runner & Health Checks
 
 The user can configure the Health Runner via the command line or as part of a

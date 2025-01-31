@@ -14,10 +14,10 @@
 
 """Check for running a Pipeline Parallelism straggler detection test on a cluster."""
 
-import check
+import gke_check
 
 
-class StragglerCheck(check.Check):
+class StragglerCheck(gke_check.GkeCheck):
   """Runs a Pipeline Parallelism Straggler Detection test on a cluster."""
 
   _description = (
@@ -32,11 +32,10 @@ class StragglerCheck(check.Check):
       'aiinfra/straggler-healthcheck-runtime-sec',
   ]
 
-  def __init__(self, orchestrator: str, machine_type: str, nodes: list[str]):
+  def __init__(self, machine_type: str, nodes: list[str]):
     super().__init__(
         name=self.name,
         description=self._description,
-        orchestrator=orchestrator,
         machine_type=machine_type,
         launch_label=self.launch_label,
         results_labels=self.results_labels,

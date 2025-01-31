@@ -96,11 +96,13 @@ def _validate_gke_cluster_has_machine_type(machine_type: str) -> bool:
   """Returns all nodes with the given machine type."""
   config.load_kube_config()
   v1 = client.CoreV1Api()
-  return bool(len(
-      v1.list_node(
-          label_selector=f'node.kubernetes.io/instance-type={machine_type}'
-      ).items
-  ))
+  return bool(
+      len(
+          v1.list_node(
+              label_selector=f'node.kubernetes.io/instance-type={machine_type}'
+          ).items
+      )
+  )
 
 
 def _validate_cluster_has_machine_type(
@@ -160,7 +162,7 @@ def cli(
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
   if check == status.Status.name:
-    click.echo(status.Status(orchestrator, machine_type, nodes).run())
+    click.echo(status.Status(machine_type, nodes).run())
   else:
     if not _validate_cluster_has_machine_type(orchestrator, machine_type):
       click.echo(
@@ -202,15 +204,13 @@ def cli(
     check_runner = None
     match check:
       case nccl_check.NcclCheck.name:
-        check_runner = nccl_check.NcclCheck(orchestrator, machine_type, nodes)
+        check_runner = nccl_check.NcclCheck(machine_type, nodes)
       case gpu_check.GpuCheck.name:
-        check_runner = gpu_check.GpuCheck(orchestrator, machine_type, nodes)
+        check_runner = gpu_check.GpuCheck(machine_type, nodes)
       case straggler_check.StragglerCheck.name:
-        check_runner = straggler_check.StragglerCheck(
-            orchestrator, machine_type, nodes
-        )
+        check_runner = straggler_check.StragglerCheck(machine_type, nodes)
       case neper_check.NeperCheck.name:
-        check_runner = neper_check.NeperCheck(orchestrator, machine_type, nodes)
+        check_runner = neper_check.NeperCheck(machine_type, nodes)
 
     if check_runner:
       check_runner.set_up()
