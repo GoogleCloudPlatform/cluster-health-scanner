@@ -24,13 +24,14 @@ health_checks:
     run_check: true
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "30"
+      TIMEOUT_MINUTES: "30"
+      SLEEP_TIME_MINUTES: "10"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
       HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
@@ -49,13 +50,14 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "30"
+      TIMEOUT_MINUTES: "30"
+      SLEEP_TIME_MINUTES: "15"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
@@ -70,13 +72,14 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "30"
+      TIMEOUT_MINUTES: "30"
+      SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/neper_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
@@ -89,13 +92,14 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "30"
+      TIMEOUT_MINUTES: "30"
+      SLEEP_TIME_MINUTES: "15"
       HELM_CHART: "/app/health_checks/straggler_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
@@ -108,12 +112,13 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
+      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "10"
       FILTER_LABEL_NAME: "aiinfra/tinymax-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
@@ -130,13 +135,14 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "30"
+      TIMEOUT_MINUTES: "30"
+      SLEEP_TIME_MINUTES: "10"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
       HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container

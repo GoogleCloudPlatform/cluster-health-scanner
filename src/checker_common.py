@@ -35,6 +35,7 @@ from kubernetes.client.api import batch_v1_api
 
 import common_pb2
 import health_results_pb2
+import health_runner_config_pb2
 
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 
@@ -70,15 +71,6 @@ def log_results(
       "result_data": result_data,
   }
   print(json.dumps(log))
-
-
-# 
-def cleanup_labels(
-    label: str,
-) -> None:
-  """Removes any potential labels from previous runs."""
-  logging.info("Removing label: %s", label)
-  run_command(f"{_KUBECTL} label nodes -l {label} {label}-")
 
 
 # 
@@ -187,6 +179,16 @@ def get_created_jobs(release_names: Iterable[str]) -> Iterable[str]:
     return []
 
 
+def job_succeeded(
+    job_v1: batch_v1_api.BatchV1Api,
+    job_name: str,
+    namespace: str = "default",
+) -> bool:
+  """Get the status of a job."""
+  job = job_v1.read_namespaced_job(name=job_name, namespace=namespace)
+  return job.status.succeeded is not None and job.status.succeeded >= 1
+
+
 def wait_till_jobs_complete(
     job_v1: batch_v1_api.BatchV1Api,
     jobs_to_monitor: Iterable[str],
@@ -235,8 +237,7 @@ def wait_till_jobs_complete(
       break
 
     print(
-        f"{int(time.time() - start_time)} secs out of"
-        f" {timeout_seconds} secs",
+        f"{int(time.time() - start_time)} secs out of {timeout_seconds} secs",
     )
     print("Remaining jobs: ", remaining_jobs)
     print(f"Sleeping for {check_interval} seconds")
@@ -247,12 +248,29 @@ def wait_till_jobs_complete(
 
 @dataclasses.dataclass()
 class HelmConfig:
-  """Helm configuration for NCCL health check."""
+  """Helm configuration for NCCL health check.
 
-  release_name: str
+  Attributes:
+    chart: The name of the Helm chart.
+    chart_version: The version of the Helm chart.
+    install_flags: The flags to pass to the Helm install command.
+    release_name: The name of the Helm release (overrides release_name_base).
+    release_name_base: The base name of the Helm release.
+  """
+
   chart: str
-  chart_version: str | None
-  install_flags: str | None
+  chart_version: str | None = None
+  install_flags: str | None = None
+  release_name: str | None = None
+  release_name_base: str | None = None
+
+  # Runs after init to ensure either a release name or base is specified
+  def __post_init__(self):
+    # Fine if both are defined
+    if self.release_name is None and self.release_name_base is None:
+      raise ValueError(
+          "Either 'release_name_base' or 'release_name' must be specified."
+      )
 
 
 def create_job_k8s_helm(
@@ -280,14 +298,22 @@ def create_job_k8s_helm(
       # Assuming the env_mappings are all for the health_check job
       values[f"health_check.env.{k}"] = v
 
-  return create_helm_release(
+  # If release name is not specified, use the base name after making it unique
+  release_name = helm_config.release_name
+  if release_name is None:
+    ts = time.time()
+    identifier = str(uuid.uuid4())[:8]
+    release_name = f"{helm_config.release_name_base}-{identifier}-{ts}"
+
+  uninstall_functions = create_helm_release(
       helm_path=helm_bin_path,
-      release_name=helm_config.release_name,
+      release_name=release_name,
       chart=helm_config.chart,
       values=values,
       chart_version=helm_config.chart_version,
       helm_install_flags=helm_config.install_flags,
   )
+  return uninstall_functions
 
 
 def create_job_k8s(
@@ -446,6 +472,24 @@ def apply_yaml_file(
   return delete_yaml_file
 
 
+def delete_jobs(
+    batch_v1: batch_v1_api.BatchV1Api,
+    jobs: Iterable[str],
+    namespace: str = "default",
+) -> None:
+  """Deletes a job."""
+  for job_name in jobs:
+    try:
+      print(f"Deleting job '{job_name}' in namespace '{namespace}'...")
+      batch_v1.delete_namespaced_job(
+          name=job_name,
+          namespace=namespace,
+          propagation_policy="Background",
+      )
+    except client.ApiException as e:
+      print(f"Error deleting job '{job_name}': {e}")
+
+
 def expand_template(
     yaml_template: str,
     mappings: dict[str, str] | None,
@@ -466,6 +510,7 @@ def expand_template(
       "BANDWIDTH_THRESHOLD": os.environ.get("BANDWIDTH_THRESHOLD"),
       "START_MESSAGE_SIZE": os.environ.get("START_MESSAGE_SIZE"),
       "END_MESSAGE_SIZE": os.environ.get("END_MESSAGE_SIZE"),
+      "BENCHMARK": os.environ.get("BENCHMARK"),
   }
   if mappings:
     default_mappings.update(mappings)
@@ -710,6 +755,20 @@ def get_node_list() -> list[str]:
   for node in gpu_nodes:
     nodes.append(node.metadata.name)
   return nodes
+
+
+def parse_env_mappings(
+    health_check: health_runner_config_pb2.HealthCheck,
+) -> dict[str, str]:
+  """Parse the env mappings from the health check."""
+  env_mappings = {}
+  if not health_check.health_check_params:
+    return env_mappings
+
+  for param in health_check.health_check_params:
+    env_mappings[param.name] = param.value
+  print("Env mappings: ", env_mappings)
+  return env_mappings
 
 
 def sigterm_handler(signum: Any, frame: Any) -> None:

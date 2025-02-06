@@ -54,6 +54,12 @@ spec:
       volumes:
       - name: tmpfs
         emptyDir: {}
+      - name: varlog
+        emptyDir: {}
+      - name: fluentbit-key
+        secret:
+          secretName: fluentbit-key
+          optional: true
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -121,10 +127,13 @@ spec:
         volumeMounts:
         - name: tmpfs
           mountPath: /tmp
+      shareProcessNamespace: true
       containers:
       - name: neper-healthcheck
         image: {{printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag}}
         imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args: ["python3 /scripts/neper_runner.py 2>&1 | tee /var/log/neper_healthcheck.log"]
         securityContext:
           privileged: true
           capabilities:
@@ -156,9 +165,19 @@ spec:
         volumeMounts:
         - name: tmpfs
           mountPath: /tmp
+        - name: varlog
+          mountPath: /var/log
         resources:
           limits:
             nvidia.com/gpu: !!int 8
+      - name: google-logging
+        image: "us-docker.pkg.dev/gce-ai-infra/health-check/logging:latest"
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: fluentbit-key
+          mountPath: /var/secrets/google
+          readOnly: true
 ---
 apiVersion: v1
 kind: ServiceAccount

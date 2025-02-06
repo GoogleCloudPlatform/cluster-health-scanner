@@ -41,12 +41,20 @@ message HealthCheck {
   // The file path of the health check.
   oneof health_check_file {
     string yaml_file = 5;
+    HelmConfig helm_config = 6;
   }
 
   // The place to store the results of the health check.
   oneof result_object {
     string result_label = 10;
   }
+}
+
+// The configuration for a single helm release.
+message HelmConfig {
+  string chart = 1;
+  string chart_version = 2;
+  string install_flags = 3;
 }
 
 // The type of the health check. Determines how the health check is run.
@@ -66,6 +74,7 @@ enum HealthCheckName {
   HEALTH_CHECK_NCCL_INTER_RACK = 5;
   HEALTH_CHECK_NCCL_INTER_CLUSTER = 6;
   HEALTH_CHECK_NCCL_RANDOM_PAIR = 7;
+  HEALTH_CHECK_NCCL_PERFORMANCE = 8;
 }
 
 // The parameters for a single health check.

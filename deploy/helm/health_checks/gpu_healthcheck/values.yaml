@@ -32,7 +32,15 @@ health_check:
   volumeMounts:
   - name: nvidia-install-dir-host
     mountPath: /usr/local/nvidia
+  - name: varlog
+    mountPath: /var/log
 volumes:
 - name: nvidia-install-dir-host
   hostPath:
     path: /home/kubernetes/bin/nvidia
+- name: varlog
+  emptyDir: {}
+- name: fluentbit-key
+  secret:
+    secretName: fluentbit-key
+    optional: true

@@ -19,8 +19,6 @@ This is part of the larger cluster_diag CLI. To get the full helpstring, run
 """
 
 import click
-from kubernetes import client
-from kubernetes import config
 
 import common
 import gpu_check
@@ -28,91 +26,31 @@ import nccl_check
 import neper_check
 import status
 import straggler_check
+import tinymax_check
 
 
-_SUPPORTED_MACHINE_TYPES = common.SUPPORTED_MACHINE_TYPES
+_SUPPORTED_MACHINE_TYPES = list(common.SUPPORTED_MACHINE_TYPES)
 _SUPPORTED_HEALTHCHECKS = [
-    status.Status.name,
-    nccl_check.NcclCheck.name,
-    gpu_check.GpuCheck.name,
-    straggler_check.StragglerCheck.name,
-    neper_check.NeperCheck.name,
+    status.NAME,
+    nccl_check.NAME,
+    gpu_check.NAME,
+    straggler_check.NAME,
+    neper_check.NAME,
+    tinymax_check.NAME,
 ]
 
 
-def _get_occupied_gke_nodes() -> set[str]:
-  """Returns all nodes with containers requesting GPU resources."""
-  config.load_kube_config()
-  v1 = client.CoreV1Api()
-
-  invalid_nodes = set()
-  try:
-    pods = v1.list_pod_for_all_namespaces(
-        watch=False, field_selector='status.phase=Running'
-    )
-    for pod in pods.items:
-      for container in pod.spec.containers:
-        if container.resources.requests:
-          requested_gpus = set(
-              resource_name
-              for resource_name, _ in container.resources.requests.items()
-              if resource_name == 'nvidia.com/gpu'
-          )
-          if requested_gpus:
-            invalid_nodes.add(pod.spec.node_name)
-  except client.rest.ApiException as e:
-    click.echo(
-        click.style(
-            f'Failed to list nodes in cluster: {e}', fg='red', bold=True
-        )
-    )
-
-  return invalid_nodes
-
-
-def _find_occupied_nodes_on_cluster(
-    orchestrator: str, nodes: list[str]
-) -> set[str]:
-  """Finds any occupied nodes on the cluster.
-
-  Args:
-    orchestrator: The orchestrator type.
-    nodes: The nodes to check. If None, all nodes will be checked.
-
-  Returns:
-    A list of occupied nodes. Optionally, if nodes is provided, only the
-    occupied nodes of those provided will be returned.
-  """
-  occupied_nodes = common.run_for_orchestrator(
-      orchestrator=orchestrator,
-      gke_function=_get_occupied_gke_nodes,
-  )
-  return (
-      occupied_nodes if not nodes else set(nodes).intersection(occupied_nodes)
-  )
-
-
-def _validate_gke_cluster_has_machine_type(machine_type: str) -> bool:
-  """Returns all nodes with the given machine type."""
-  config.load_kube_config()
-  v1 = client.CoreV1Api()
-  return bool(
-      len(
-          v1.list_node(
-              label_selector=f'node.kubernetes.io/instance-type={machine_type}'
-          ).items
-      )
-  )
-
-
-def _validate_cluster_has_machine_type(
-    orchestrator: str, machine_type: str
-) -> bool:
-  """Validates that the cluster has the given machine type."""
-  return common.run_for_orchestrator(
-      orchestrator=orchestrator,
-      gke_function=lambda: _validate_gke_cluster_has_machine_type(machine_type),
-  )
+def _get_partition_for_machine(machine_type: str) -> str | None:
+  """Returns the partition for the given orchestrator."""
+  match machine_type:
+    case 'a3-highgpu-8g':
+      return 'a3'
+    case 'a3-megagpu-8g':
+      return 'a3mega'
+    case 'a3-ultragpu-8g':
+      return 'a3ultra'
+    case _:
+      raise ValueError(f'Unsupported machine type: {machine_type}')
 
 
 @click.command(name='healthscan')
@@ -134,6 +72,7 @@ def _validate_cluster_has_machine_type(
     - gpu: Runs a GPU check on the cluster.
     - straggler: Instruments a straggler check on the cluster.
     - neper: Runs a Network Performand eval on the cluster.
+    - tinymax: Runs a ml-framework TinyMax test on the cluster.
 """,
 )
 @click.option(
@@ -141,7 +80,10 @@ def _validate_cluster_has_machine_type(
     '--nodes',
     multiple=True,
     default=[],
-    help='Nodes to run checks on. Defaults to running on all nodes.',
+    help=(
+        'Nodes to run checks on. Defaults to running on all nodes. When using'
+        ' slurm, a shortened node format can be used. For example, "node-[0-1]"'
+    ),
 )
 @click.option(
     '--run_only_on_available_nodes',
@@ -151,6 +93,14 @@ def _validate_cluster_has_machine_type(
     Force running the healthcheck only on available nodes.
     Unavailable nodes will be skipped.""",
 )
+@click.option(
+    '--dry_run',
+    default=False,
+    is_flag=True,
+    help="""
+    Run the healthcheck in dry run mode.
+    This will print the commands that would be run, but not run them.""",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -158,61 +108,65 @@ def cli(
     check: str,
     nodes: list[str],
     run_only_on_available_nodes: bool,
+    dry_run: bool,
 ):
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
-  if check == status.Status.name:
-    click.echo(status.Status(machine_type, nodes).run())
-  else:
-    if not _validate_cluster_has_machine_type(orchestrator, machine_type):
-      click.echo(
-          click.style(
-              f'Active cluster does not have machine type {machine_type}.',
-              fg='red',
-              bold=True,
-          )
+  check_runner = None
+  partition = None
+  if orchestrator == 'slurm':
+    partition = _get_partition_for_machine(machine_type)
+  match check:
+    case nccl_check.NAME:
+      check_runner = nccl_check.get_check_for_orchestrator(
+          orchestrator=orchestrator,
+          machine_type=machine_type,
+          partition=partition,
+          nodes=nodes,
+          run_only_on_available_nodes=run_only_on_available_nodes,
+          dry_run=dry_run,
       )
-      raise click.Abort()
-
-    occupied_nodes = _find_occupied_nodes_on_cluster(
-        orchestrator=orchestrator, nodes=nodes
-    )
-
-    if occupied_nodes and not run_only_on_available_nodes:
-      click.echo(
-          click.style(
-              f'The following nodes are occupied: {occupied_nodes}. Please free'
-              ' up these nodes before running healthscan.\n'
-              ' Alternatively, you can run again with'
-              ' --run_only_on_available_nodes to skip these nodes.',
-              fg='red',
-              bold=True,
-          )
+    case gpu_check.NAME:
+      check_runner = gpu_check.get_check_for_orchestrator(
+          orchestrator=orchestrator,
+          machine_type=machine_type,
+          partition=partition,
+          nodes=nodes,
+          run_only_on_available_nodes=run_only_on_available_nodes,
+          dry_run=dry_run,
       )
-      raise click.Abort()
-    elif run_only_on_available_nodes:
-      click.echo(
-          click.style(
-              'WARNING: Running only on available nodes is not recommended.\n'
-              'The following nodes are occupied and will be skipped: '
-              f'{occupied_nodes}',
-              fg='red',
-              bold=True,
-          )
+    case straggler_check.NAME:
+      check_runner = straggler_check.get_check_for_orchestrator(
+          orchestrator=orchestrator,
+          machine_type=machine_type,
+          nodes=nodes,
+          run_only_on_available_nodes=run_only_on_available_nodes,
+          dry_run=dry_run,
+      )
+    case neper_check.NAME:
+      check_runner = neper_check.get_check_for_orchestrator(
+          orchestrator=orchestrator,
+          machine_type=machine_type,
+          nodes=nodes,
+          run_only_on_available_nodes=run_only_on_available_nodes,
+          dry_run=dry_run,
+      )
+    case tinymax_check.NAME:
+      check_runner = tinymax_check.get_check_for_orchestrator(
+          orchestrator=orchestrator,
+          machine_type=machine_type,
+          nodes=nodes,
+          run_only_on_available_nodes=run_only_on_available_nodes,
+          dry_run=dry_run,
+      )
+    case status.NAME:
+      check_runner = status.get_check_for_orchestrator(
+          orchestrator=orchestrator,
+          machine_type=machine_type,
+          nodes=nodes,
       )
 
-    check_runner = None
-    match check:
-      case nccl_check.NcclCheck.name:
-        check_runner = nccl_check.NcclCheck(machine_type, nodes)
-      case gpu_check.GpuCheck.name:
-        check_runner = gpu_check.GpuCheck(machine_type, nodes)
-      case straggler_check.StragglerCheck.name:
-        check_runner = straggler_check.StragglerCheck(machine_type, nodes)
-      case neper_check.NeperCheck.name:
-        check_runner = neper_check.NeperCheck(machine_type, nodes)
-
-    if check_runner:
-      check_runner.set_up()
-      check_runner.run()
-      check_runner.clean_up()
+  if check_runner:
+    check_runner.set_up()
+    check_runner.run()
+    check_runner.clean_up()

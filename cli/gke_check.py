@@ -15,15 +15,14 @@
 """A GKE implementation of the healthscan check interface."""
 
 import math
-import signal
 import subprocess
 import sys
 import time
 from typing import Any
-import uuid
 
 import click
 from kubernetes import client
+from kubernetes import config
 
 import check
 import launch_helm
@@ -62,11 +61,15 @@ class GkeCheck(check.Check):
       name: str,
       description: str,
       machine_type: str,
+      supported_machine_types: frozenset[str],
       nodes: list[str],
       results_labels: list[str] | None,
       launch_label: str | None,
       launch_label_value: str = 'true',
+      run_only_on_available_nodes: bool = False,
+      kubectl_core_api: client.CoreV1Api | None = None,
       timeout_sec: int = 15 * 60,
+      dry_run: bool = False,
   ):
     """Initialize a check to run on a GKE cluster.
 
@@ -74,41 +77,156 @@ class GkeCheck(check.Check):
       name: The name of the check.
       description: The description of the check.
       machine_type: The machine type of the cluster to run the check on.
+      supported_machine_types: The machine types supported by the check.
       nodes: The nodes to run the check on.
       results_labels: The labels to use for the results.
       launch_label: The label to use for the launch.
       launch_label_value: The value to use for the launch label.
+      run_only_on_available_nodes: Whether to run the check only on available
+        nodes.
+      kubectl_core_api: The kubectl core api to use for the check.
       timeout_sec: The timeout in seconds for the check.
+      dry_run: Whether to run the check in dry run mode.
     """
     super().__init__(
         name=name,
         description=description,
-        orchestrator='gke',
         machine_type=machine_type,
-        dry_run=False,
+        supported_machine_types=supported_machine_types,
+        dry_run=dry_run,
     )
     self.results_labels = results_labels
     self.nodes = nodes
     self.launch_label = launch_label
     self.launch_label_value = launch_label_value
+    self.run_only_on_available_nodes = run_only_on_available_nodes
     self.timeout_sec = timeout_sec
-    # Used to interface with the GKE cluster
-    self._v1 = client.CoreV1Api()
 
+    self.hr_release_name: str = f'chs-hr-{self.name}-cli'
     # Generate a unique base name for the HC Helm release
-    guid = str(uuid.uuid4())[:8]
-    ts = int(time.time())
-    # Ex: chs-hc-gpu-cli-12345678-1723456789
-    self.hc_release_name_base: str = f'chs-hc-{self.name}-cli-{guid}-{ts}'
+    # Default to HC release w/ no special base name
+    # Possible example: chs-hc-gpu-cli-12345678-1723456789
+    self.hc_release_name_base: str = f'chs-hc-{self.name}-cli'
 
-    # Handle SIGINT signal to clean up
-    signal.signal(
-        signal.SIGINT,
-        self.sigint_handler,
+    if not dry_run:
+      # Used to interface with the GKE cluster
+      if kubectl_core_api:
+        self._v1 = kubectl_core_api
+      else:
+        config.load_kube_config()
+        self._v1 = client.CoreV1Api()
+
+  def _get_occupied_nodes(self) -> set[str]:
+    """Gets all requested nodes that are currently occupied.
+
+    Returns:
+      A list of occupied nodes. Optionally, if nodes is provided, only the
+      occupied nodes of those provided will be returned.
+    """
+    occupied_nodes = set()
+    try:
+      pods = self._v1.list_pod_for_all_namespaces(
+          watch=False, field_selector='status.phase=Running'
+      )
+      for pod in pods.items:
+        for container in pod.spec.containers:
+          if container.resources.requests:
+            requested_gpus = set(
+                resource_name
+                for resource_name, _ in container.resources.requests.items()
+                if resource_name == 'nvidia.com/gpu'
+            )
+            if requested_gpus:
+              occupied_nodes.add(pod.spec.node_name)
+    except client.rest.ApiException as e:
+      click.echo(
+          click.style(
+              f'Failed to list nodes in cluster: {e}', fg='red', bold=True
+          )
+      )
+
+    return (
+        occupied_nodes
+        if not self.nodes
+        else set(self.nodes).intersection(occupied_nodes)
     )
+
+  def _get_nodes_with_machine_type(self) -> list[str]:
+    """Returns the names of all nodes with the given machine type."""
+    return [
+        node.metadata.name
+        for node in self._v1.list_node(
+            label_selector=(
+                f'node.kubernetes.io/instance-type={self.machine_type}'
+            )
+        ).items
+    ]
+
+  def _has_machine_type_on_cluster(self) -> bool:
+    """Returns all nodes with the given machine type."""
+    return bool(len(self._get_nodes_with_machine_type()))
 
   def set_up(self):
     """Set up for the check on a GKE cluster."""
+    if self.dry_run:
+      click.echo(
+          click.style(
+              'Dry run mode enabled. Skipping set_up.',
+              fg='red',
+              bold=True,
+          )
+      )
+      return
+    if not self._has_machine_type_on_cluster():
+      click.echo(
+          click.style(
+              f'Active cluster does not have machine type {self.machine_type}.',
+              fg='red',
+              bold=True,
+          )
+      )
+      raise click.Abort()
+
+    occupied_nodes = self._get_occupied_nodes()
+
+    if occupied_nodes and not self.run_only_on_available_nodes:
+      click.echo(
+          click.style(
+              f'The following nodes are occupied: {occupied_nodes}. Please free'
+              ' up these nodes before running healthscan.\n'
+              ' Alternatively, you can run again with'
+              ' --run_only_on_available_nodes to skip these nodes.',
+              fg='red',
+              bold=True,
+          )
+      )
+      raise click.Abort()
+    elif self.run_only_on_available_nodes and not self.nodes:
+      click.echo(
+          click.style(
+              'WARNING: Running only on available nodes is not recommended.\n'
+              'The following nodes are occupied and will be skipped: '
+              f'{occupied_nodes}',
+              fg='red',
+              bold=True,
+          )
+      )
+      self.nodes = [
+          node
+          for node in self._get_nodes_with_machine_type()
+          if node not in occupied_nodes
+      ]
+    elif self.run_only_on_available_nodes:
+      click.echo(
+          click.style(
+              'WARNING: Running only on available nodes is not recommended.\n'
+              'The following nodes are occupied and will be skipped: '
+              f'{occupied_nodes}',
+              fg='red',
+              bold=True,
+          )
+      )
+      self.nodes = [node for node in self.nodes if node not in occupied_nodes]
     launch_helm.setup_k8s_cluster(
         launch_label=self.launch_label,
         launch_label_value=self.launch_label_value,
@@ -178,6 +296,15 @@ class GkeCheck(check.Check):
 
   def clean_up(self) -> None:
     """Clean up after the check on a GKE cluster."""
+    if self.dry_run:
+      click.echo(
+          click.style(
+              'Dry run mode enabled. Skipping clean_up.',
+              fg='red',
+              bold=True,
+          )
+      )
+      return
     # Attempt to clean up all HC Helm releases not already uninstalled
     helm_releases = self._get_helm_releases(self.hc_release_name_base)
     # Iterate over each release and uninstall it
@@ -203,7 +330,7 @@ class GkeCheck(check.Check):
 
     # Other processes to clean up like HR Helm release, labels, etc.
     launch_helm.cleanup_k8s_cluster(
-        hc_type=self.name,
+        hr_release_name=self.hr_release_name,
         launch_label=self.launch_label,
         nodes=self.nodes,
     )
@@ -219,23 +346,33 @@ class GkeCheck(check.Check):
       case 'a3-megagpu-8g':
         # Use the default values for A3 Mega
         return base_path + 'values.yaml'
+      case 'a3-ultragpu-8g':
+        return base_path + 'a3ultra.yaml'
       case _:
         raise ValueError(f'Unsupported machine type: {self.machine_type}')
 
-  def _gke_check(self, sleep_sec: int = 300) -> str | None:
+  def _get_helm_env_vars(self):
+    # Only set N_NODES if nodes are specified (otherwise uses all nodes)
+    additional_helm_env_vars: dict[str, str] | None = None
+    # If nodes are not specified, then the health runner will use all nodes
+    if self.nodes:
+      n_nodes = len(self.nodes)
+      additional_helm_env_vars: dict[str, str] = {
+          f'health_checks.{self.name}_healthcheck.env.N_NODES': str(n_nodes),
+      }
+    return additional_helm_env_vars
+
+  def _check(self, sleep_sec: int = 300, dry_run: bool = False) -> str:
     """Run the check on a GKE cluster."""
-    n_nodes = len(self.nodes)
-    additional_helm_env_vars: dict[str, str] = {
-        f'health_checks.{self.name}_healthcheck.env.N_NODES': str(n_nodes),
-    }
-    pod_name = launch_helm.deploy_health_runner(
+    return launch_helm.deploy_health_runner(
+        hr_release_name=self.hr_release_name,
         hc_type=self.name,
         wait=math.floor(sleep_sec / 60),
         values_file=self._get_values_file(),
         hc_release_name_base=self.hc_release_name_base,
-        additional_helm_env_vars=additional_helm_env_vars,
+        additional_helm_env_vars=self._get_helm_env_vars(),
+        dry_run=dry_run,
     )
-    return pod_name
 
   def _get_pod_phase(
       self,
@@ -282,7 +419,19 @@ class GkeCheck(check.Check):
     if not timeout_sec:
       timeout_sec = self.timeout_sec
 
-    health_runner_pod_name = self._gke_check(
+    if self.dry_run:
+      click.echo(
+          click.style(
+              f'Running {self.name} check in dry run mode...',
+              fg='red',
+              bold=True,
+          )
+      )
+      dry_run_command = self._check(sleep_sec=timeout_sec, dry_run=self.dry_run)
+      click.echo(f'Skipping running command: {dry_run_command}')
+      return
+
+    health_runner_pod_name = self._check(
         sleep_sec=timeout_sec,
     )
 

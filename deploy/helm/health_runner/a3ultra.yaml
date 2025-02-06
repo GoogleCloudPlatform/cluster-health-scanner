@@ -31,6 +31,7 @@ health_checks:
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
       DRY_RUN: "true"
+      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3ultra.yaml  --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"  # Specific to A3Ultra
@@ -55,6 +56,7 @@ health_checks:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-ultragpu-8g"
       DRY_RUN: "true"
+      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "15"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
@@ -76,6 +78,7 @@ health_checks:
       HC_IMAGE_TAG: "4.2-latest"
       MACHINE_TYPE: "a3-ultragpu-8g"
       DRY_RUN: "true"
+      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/neper_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"

@@ -29,6 +29,7 @@ SERVICE_NAME = os.environ.get("SERVICE_NAME")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE")
 KUBECTL = os.environ.get("KUBECTL_PATH", "/scripts/kubectl")
 JOB_INDEX = int(os.getenv("JOB_COMPLETION_INDEX", "-1"))
+BENCHMARK = os.environ.get("BENCHMARK", "all_gather_perf")
 
 _NCCL_PRE_RESULT_KEY = "aiinfra/nccl-healthcheck-pre-result"
 TAINT_KEY = "aiinfra/nccl-healthcheck"
@@ -39,6 +40,7 @@ TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
 HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-runtime-sec"
 _NCCL_BANDWIDTH_RESULT_KEY = "aiinfra/nccl-healthcheck-bandwidth"
+_NCCL_BENCHMARK_KEY = "aiinfra/nccl-healthcheck-benchmark"
 
 K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
 K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
@@ -153,7 +155,6 @@ def run_nccl_test(
     nccl_operation_iterations = int(os.getenv("ITERATIONS", "300"))
     # Number of times the test will run (a bandwidth for each)
     test_iterations = int(os.getenv("TEST_ITERATIONS", "5"))
-    benchmark = os.environ.get("BENCHMARK", "all_gather_perf")
     ld_library_path = config_obj.ld_library_path
 
     print("Sleeping for 30 seconds to let rxdm spin up...")
@@ -169,7 +170,7 @@ def run_nccl_test(
               end_message_size=end_message_size,
               nhosts=nhosts,
               iterations=nccl_operation_iterations,
-              benchmark=benchmark,
+              benchmark=BENCHMARK,
           )
       )
       bandwidths.append(get_bandwidth(test_result.stdout))
@@ -234,6 +235,7 @@ def process_test_result(
             "avg_bus_bandwidth": avg_bandwidth,
             "num_nodes": len(nodes),
             "all_nodes": sorted(nodes),
+            "benchmark": BENCHMARK,
             "terminal_test": terminal,
         },
     )
@@ -399,7 +401,7 @@ def mark_node_bandwidth(
     node: str,
     bandwidth: int,
 ) -> None:
-  """Mark the node bandwidth observed during the test.
+  """Mark the node bandwidth achieved during the test along with the benchmark.
 
   Args:
     node (str): The name of the node to be labeled.
@@ -412,6 +414,12 @@ def mark_node_bandwidth(
       node,
       _NCCL_BANDWIDTH_RESULT_KEY,
       f"{str(bandwidth):>02}",
+      K_ADD_LABEL_FORMAT,
+  )
+  checker_common.add_label(
+      node,
+      _NCCL_BENCHMARK_KEY,
+      f"{BENCHMARK}",
       K_ADD_LABEL_FORMAT,
   )
 

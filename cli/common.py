@@ -17,19 +17,29 @@
 from collections.abc import Callable
 from typing import Any
 
-SUPPORTED_ORCHESTRATORS = ['gke']
+SUPPORTED_ORCHESTRATORS = frozenset([
+    'gke',
+    'slurm',
+])
 
-SUPPORTED_MACHINE_TYPES = ['a3-highgpu-8g', 'a3-megagpu-8g']
+SUPPORTED_MACHINE_TYPES = frozenset([
+    'a3-highgpu-8g',
+    'a3-megagpu-8g',
+    'a3-ultragpu-8g',
+])
 
 
 def run_for_orchestrator(
-    orchestrator: str, gke_function: Callable[[], Any]
+    orchestrator: str,
+    gke_function: Callable[[], Any],
+    slurm_function: Callable[[], Any],
 ) -> Any:
   """Run a function for a given orchestrator, or throw an error if unsupported.
 
   Args:
     orchestrator: The orchestrator to run the function for.
     gke_function: The function to run for a GKE orchestrator.
+    slurm_function: The function to run for a Slurm orchestrator.
 
   Returns:
     The result of the function run.
@@ -37,6 +47,8 @@ def run_for_orchestrator(
   match orchestrator:
     case 'gke':
       return gke_function()
+    case 'slurm':
+      return slurm_function()
     case _:
       raise ValueError(
           f'Unsupported orchestrator: {orchestrator}. Supported'
