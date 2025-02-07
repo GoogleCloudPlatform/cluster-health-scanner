@@ -75,7 +75,7 @@ class GkeGpuCheck(gke_check.GkeCheck):
         results_labels=self.results_labels,
         nodes=nodes,
         run_only_on_available_nodes=run_only_on_available_nodes,
-        timeout_sec=15 * 60,
+        timeout_sec=20 * 60,
         dry_run=dry_run,
         **kwargs,
     )

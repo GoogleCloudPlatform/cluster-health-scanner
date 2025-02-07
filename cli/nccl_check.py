@@ -54,7 +54,13 @@ def get_check_for_orchestrator(
 class GkeNcclCheck(gke_check.GkeCheck):
   """Runs a NCCL bandwidth test on a GKE cluster."""
 
-  _SUPPORTED_MACHINE_TYPES = common.SUPPORTED_MACHINE_TYPES
+  # Explicitly exclude not supported machine types
+  # 
+  _SUPPORTED_MACHINE_TYPES = frozenset(
+      machine_type
+      for machine_type in common.SUPPORTED_MACHINE_TYPES
+      if machine_type not in ['a3-ultragpu-8g']
+  )
 
   launch_label = 'aiinfra/nccl-healthcheck-test'
 
@@ -82,7 +88,7 @@ class GkeNcclCheck(gke_check.GkeCheck):
         results_labels=self.results_labels,
         nodes=nodes,
         run_only_on_available_nodes=run_only_on_available_nodes,
-        timeout_sec=15 * 60,
+        timeout_sec=30 * 60,
         dry_run=dry_run,
         **kwargs,
     )

@@ -67,15 +67,10 @@ def run_performance_healthcheck(
     if len(nodes) < test_node_count:
       print(f"Skipping sbrg {sbrg} with less than {test_node_count} nodes.")
       continue
-    job_name = f"diag-performance-{str(uuid.uuid4())[:8]}"
     print(f"Running test for {len(nodes)} nodes in sbrg {sbrg}")
     # Add topology value so that the job will be scoped to the sbrg
     env_mappings["TOPOLOGY_VALUE"] = sbrg
-    checker_common.create_job_k8s(
-        job_name=job_name,
-        yaml_file=health_check.yaml_file,
-        env_mappings=env_mappings,
-    )
+    job_name = run_healthcheck(health_check, env_mappings)
     job_names_to_sbrg[job_name] = sbrg
     # Instead of running a performance test per sbrg, we can run a single
     # performance test for all sbrgs.
@@ -87,7 +82,7 @@ def run_performance_healthcheck(
     health_result.health_results.append(
         health_results_pb2.HealthResultList(
             id="N/A",
-            status=health_results_pb2.Status.FAIL,
+            status=health_results_pb2.Status.SKIP,
         )
     )
     return health_result
@@ -107,6 +102,33 @@ def run_performance_healthcheck(
 
   checker_common.delete_jobs(batch_v1, job_names_to_sbrg.keys())
   return health_result
+
+
+def run_healthcheck(
+    health_check: health_runner_config_pb2.HealthCheck,
+    env_mappings: dict[str, str],
+) -> str:
+  """Runs a health check."""
+  job_name = f"diag-performance-{str(uuid.uuid4())[:8]}"
+  if health_check.yaml_file:
+    checker_common.create_job_k8s(
+        job_name=job_name,
+        yaml_file=health_check.yaml_file,
+        env_mappings=env_mappings,
+    )
+  elif health_check.helm_config:
+    env_mappings["JOB_NAME"] = job_name
+    checker_common.create_helm_release(
+        helm_path=checker_common.HELM,
+        release_name=job_name,
+        chart=health_check.helm_config.chart,
+        values=env_mappings,
+        chart_version=health_check.helm_config.chart_version,
+        helm_install_flags=health_check.helm_config.install_flags,
+    )
+  else:
+    raise ValueError("No health check file specified.")
+  return job_name
 
 
 def _fetch_results(

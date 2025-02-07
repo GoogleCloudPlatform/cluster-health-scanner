@@ -99,7 +99,7 @@ health_checks:
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
-      SLEEP_TIME_MINUTES: "15"
+      SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/straggler_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
