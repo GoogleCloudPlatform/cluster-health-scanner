@@ -89,6 +89,9 @@ def _generate_helm_command(
       '--set health_checks.straggler_healthcheck.run_check=false '
   )
   helm_install_command += (
+      '--set health_checks.tinymax_healthcheck.run_check=false '
+  )
+  helm_install_command += (
       f'--set health_checks.{hc_type}_healthcheck.run_check=true '
   )
 
@@ -96,15 +99,18 @@ def _generate_helm_command(
 
 
 def deploy_health_runner(
+    hr_release_name: str,
     hc_type: str,
     wait: int,
     values_file: str | None = None,
     hc_release_name_base: str | None = None,
     additional_helm_env_vars: dict[str, str] | None = None,
+    dry_run: bool = False,
 ) -> str:
   """Deploy health runner.
 
   Args:
+    hr_release_name: The name of the health runner release.
     hc_type: The type of health check to deploy.
     wait: The wait time in minutes to complete.
     values_file: The relative path to a YAML file containing values to override.
@@ -112,33 +118,39 @@ def deploy_health_runner(
       If None, will default to the Health Runner's default.
     additional_helm_env_vars: A dictionary of additional Helm environment
       variables to set.
+    dry_run: If True, the install command will be returned but not executed.
 
   Returns:
-    The name of the health runner pod.
+    The name of the health runner pod. If dry_run is True, this will be the
+    command that would have been run.
   """
   specific_set_values: dict[str, str] = {
-      f'health_checks.{hc_type}_healthcheck.env.SLEEP_TIME_MINUTES': str(wait),
+      f'health_checks.{hc_type}_healthcheck.env.TIMEOUT_MINUTES': str(wait),
   }
   if additional_helm_env_vars:
     specific_set_values.update(additional_helm_env_vars)
   # If hc_release_name_base is provided, set the HC helm release name to it
   if hc_release_name_base:
     specific_set_values[
-        f'health_checks.{hc_type}_healthcheck.env.HELM_RELEASE_NAME'
+        f'health_checks.{hc_type}_healthcheck.env.HELM_RELEASE_NAME_BASE'
     ] = hc_release_name_base
   helm_install_command = _generate_helm_command(
       hc_type=hc_type,
       chart_name='deploy/helm/health_runner',
-      release_name=f'chs-hr-{hc_type}',
+      release_name=hr_release_name,
       namespace='default',
       values_file=values_file,
       set_values=specific_set_values,
   )
+
+  if dry_run:
+    return helm_install_command
+
   _ = _run_command(helm_install_command)
 
   helm_resources = json.loads(
       _run_command(
-          f'helm status chs-hr-{hc_type} --show-resources -o json'
+          f'helm status {hr_release_name} --show-resources -o json'
       ).stdout
   )
   hr_job_name = helm_resources['info']['resources']['v1/Job'][0]['metadata'][
@@ -175,19 +187,14 @@ def setup_k8s_cluster(
 
   # Remove past launch labels on all nodes (only current nodes will run)
   remove_launch_labels_command = (
-      f'{kubectl_label_nodes_base_command} '
-      f'--all '
-      f'{launch_label}- '
+      f'{kubectl_label_nodes_base_command} --all {launch_label}- '
   )
   _run_command(remove_launch_labels_command.strip())
 
   # Remove past labels on all nodes (can block node affinity)
   remove_labels_command = (
       f'{kubectl_label_nodes_base_command} {nodes_to_setup} '
-      + ' '.join(
-          f'{label}-'
-          for label in results_labels
-      )
+      + ' '.join(f'{label}-' for label in results_labels)
   )
   _run_command(remove_labels_command.strip())
 
@@ -200,20 +207,20 @@ def setup_k8s_cluster(
 
 
 def cleanup_k8s_cluster(
-    hc_type: str,
+    hr_release_name: str,
     launch_label: str,
     nodes: list[str] | None = None,
 ) -> None:
   """Uninstall helm chart for health check and remove labels from nodes.
 
   Args:
-    hc_type: The type of health check to be run.
+    hr_release_name: The name of the health runner release.
     launch_label: The label a node must have for the health check to run.
     nodes: The nodes to clean up. If None, all nodes will be cleaned up.
   """
 
   # Uninistall helm chart
-  helm_uninstall_command = f'helm uninstall chs-hr-{hc_type}'
+  helm_uninstall_command = f'helm uninstall {hr_release_name}'
   _run_command(helm_uninstall_command)
 
   nodes_to_cleanup = ' '.join(nodes) if nodes else '--all'

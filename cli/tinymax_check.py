@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Check for running a Network Performance test on a cluster."""
+"""Check for running a TinyMax test on a cluster."""
 
 import common
 import check
 import gke_check
 
-NAME = 'neper'
-_DESCRIPTION = 'Runs a Network Performance test on a cluster.'
+
+NAME = 'tinymax'
+_DESCRIPTION = 'Runs a TinyMax test on a cluster.'
 
 
 def get_check_for_orchestrator(
@@ -32,7 +33,7 @@ def get_check_for_orchestrator(
   """Returns the appropriate check for the given orchestrator."""
   match orchestrator:
     case 'gke':
-      return GkeNeperCheck(
+      return GkeTinymaxCheck(
           machine_type=machine_type,
           nodes=nodes,
           run_only_on_available_nodes=run_only_on_available_nodes,
@@ -42,15 +43,24 @@ def get_check_for_orchestrator(
       raise ValueError(f'Unsupported orchestrator: {orchestrator}')
 
 
-class GkeNeperCheck(gke_check.GkeCheck):
-  """Runs a Network Performance test on a cluster."""
-  _SUPPORTED_MACHINE_TYPES = common.SUPPORTED_MACHINE_TYPES
+class GkeTinymaxCheck(gke_check.GkeCheck):
+  """A check that runs a TinyMax test on a cluster."""
 
-  launch_label = 'aiinfra/neper-healthcheck-test'
+  # Explicitly exclude not supported machine types
+  _SUPPORTED_MACHINE_TYPES = frozenset(
+      machine_type
+      for machine_type in common.SUPPORTED_MACHINE_TYPES
+      if machine_type not in [
+          'a3-highgpu-8g',
+          'a3-ultragpu-8g',
+      ]
+  )
+
+  launch_label = 'aiinfra/tinymax-healthcheck-test'
 
   results_labels = [
-      'aiinfra/neper-healthcheck-runtime-sec',
-      'aiinfra/neper-healthcheck-result',
+      'aiinfra/tinymax-healthcheck-runtime-sec',
+      'aiinfra/tinymax-healthcheck-result',
   ]
 
   def __init__(
@@ -70,7 +80,7 @@ class GkeNeperCheck(gke_check.GkeCheck):
         results_labels=self.results_labels,
         nodes=nodes,
         run_only_on_available_nodes=run_only_on_available_nodes,
-        timeout_sec=10 * 60,
+        timeout_sec=15 * 60,
         dry_run=dry_run,
         **kwargs,
     )

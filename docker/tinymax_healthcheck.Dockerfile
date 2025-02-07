@@ -29,12 +29,14 @@ RUN mkdir -p /usr/local/gcloud \
 ENV PATH $PATH:/usr/local/gcloud/google-cloud-sdk/bin
 
 COPY src/health_runner/health_results.proto /scripts/
+COPY src/health_runner/health_runner_config.proto /scripts/
 COPY src/nccl_healthcheck/config.proto /scripts/
 COPY src/common.proto /scripts/
 RUN pip install grpcio-tools
 RUN pip install kubernetes
 RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/config.proto
 RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/health_results.proto
+RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/health_runner_config.proto
 RUN python3 -m grpc_tools.protoc -I /scripts/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /scripts/common.proto
 
 COPY src/tinymax_healthcheck/run-inside-container-enhance.sh /scripts/

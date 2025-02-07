@@ -144,6 +144,7 @@ spec:
           cp -R /var/lib/tcpxo/. /usr/local/tcpxo
           {{- end }}
       {{- /* Different tcpd-daemon container depending on accelerator type */}}
+      shareProcessNamespace: true
       containers:
       {{- if or (eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g") (eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian") (eq .Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g") }}
       - name: tcpd-daemon
@@ -158,6 +159,8 @@ spec:
       - name: nccl-healthcheck
         image: {{ printf "%s:%s" .Values.health_check.image.repo .Values.health_check.image.tag }}
         imagePullPolicy: {{ .Values.health_check.image.pull_policy | quote}}
+        command: ["/bin/sh", "-c"]
+        args: ["python3 /scripts/nccl_startup.py 2>&1 | tee /var/log/nccl_healthcheck.log"]
         securityContext:
           privileged: true
           capabilities:
@@ -191,6 +194,14 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: !!int 8
+      - name: google-logging
+        image: "us-docker.pkg.dev/gce-ai-infra/health-check/logging:latest"
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: fluentbit-key
+          mountPath: /var/secrets/google
+          readOnly: true
 ---
 apiVersion: v1
 kind: ServiceAccount

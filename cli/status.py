@@ -21,36 +21,55 @@ import subprocess
 
 import click
 
+import common
+import check
 import gke_check
 
 
-class Status(gke_check.GkeCheck):
+NAME = "status"
+_DESCRIPTION = (
+    "A check to provide the current healthscan result status of a cluster."
+)
+
+
+def get_check_for_orchestrator(
+    orchestrator: str,
+    machine_type: str,
+    nodes: list[str],
+) -> check.Check:
+  """Returns the appropriate check for the given orchestrator."""
+  match orchestrator:
+    case "gke":
+      return GkeStatus(machine_type=machine_type, nodes=nodes)
+    case _:
+      raise ValueError(f"Unsupported orchestrator: {orchestrator}")
+
+
+class GkeStatus(gke_check.GkeCheck):
   """A check to provide the current healthscan result status of a cluster."""
 
-  _description = (
-      "A check to provide the current healthscan result status of a cluster."
-  )
+  _SUPPORTED_MACHINE_TYPES = common.SUPPORTED_MACHINE_TYPES
 
   _custom_cols = (
       "NODE:.metadata.name,"
+      "TINYMAX_RESULT:.metadata.labels.aiinfra/tinymax-healthcheck-result,"
       "NEPER_RESULT:.metadata.labels.aiinfra/neper-healthcheck-result,"
       "GPU_RESULT:.metadata.labels.aiinfra/gpu-healthcheck-result,"
       "NCCL_RESULT:.metadata.labels.aiinfra/nccl-healthcheck-result"
   )
 
-  name = "status"
-
   def __init__(self, machine_type: str, nodes: list[str]):
     super().__init__(
-        name=self.name,
-        description=self._description,
+        name=NAME,
+        description=_DESCRIPTION,
         machine_type=machine_type,
+        supported_machine_types=self._SUPPORTED_MACHINE_TYPES,
         launch_label=None,
         results_labels=None,
         nodes=nodes,
     )
 
-  def _gke_status(self) -> str:
+  def _status(self) -> str:
     """Get the current healthscan status of a GKE cluster."""
     command = (
         f"kubectl get nodes -o custom-columns={self._custom_cols} "
@@ -87,4 +106,6 @@ class Status(gke_check.GkeCheck):
       The status of the cluster as a string.
     """
     click.echo("Performing status check...")
-    return self._gke_status()
+    status = self._status()
+    click.echo(status)
+    return status

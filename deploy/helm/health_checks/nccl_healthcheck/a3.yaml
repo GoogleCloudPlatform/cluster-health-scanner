@@ -56,6 +56,9 @@ health_check:
     mountPath: /usr/share/nemo
   - name: shared-memory
     mountPath: /dev/shm
+  - name: varlog
+    mountPath: /var/log
+
 # Configuration specific to a3plus
 volumes:
 - name: nvidia-install-dir-host
@@ -72,6 +75,12 @@ volumes:
   emptyDir:
     medium: "Memory"
     sizeLimit: 200Gi
+- name: varlog
+  emptyDir: {}
+- name: fluentbit-key
+  secret:
+    secretName: fluentbit-key
+    optional: true
 initContainers:
   nccl_plugin_installer:
     name: "nccl-plugin-installer"

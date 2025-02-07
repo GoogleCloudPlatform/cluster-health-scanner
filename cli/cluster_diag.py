@@ -23,7 +23,7 @@ import click
 import common
 import healthscan
 
-SUPPORTED_ORCHESTRATORS = common.SUPPORTED_ORCHESTRATORS
+SUPPORTED_ORCHESTRATORS: frozenset[str] = common.SUPPORTED_ORCHESTRATORS
 
 
 @click.group()
@@ -31,14 +31,17 @@ SUPPORTED_ORCHESTRATORS = common.SUPPORTED_ORCHESTRATORS
     '-o',
     '--orchestrator',
     required=True,
-    type=click.Choice(SUPPORTED_ORCHESTRATORS, case_sensitive=False),
+    type=click.Choice(
+        list(SUPPORTED_ORCHESTRATORS),  # Must be a sequence for click.Choice
+        case_sensitive=False,
+    ),
     help='Cluster orchestrator type.',
 )
 @click.version_option(version='1.0.0')
 @click.pass_context
 def cluster_diag(ctx: click.Context, orchestrator: str):
   """A CLI for diagnosing cluster issues."""
-  if orchestrator != 'gke':
+  if orchestrator not in SUPPORTED_ORCHESTRATORS:
     raise ValueError(
         f'Unsupported orchestrator: {orchestrator}.'
         + f'Supported orchestrators are: {SUPPORTED_ORCHESTRATORS}'

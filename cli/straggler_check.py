@@ -14,31 +14,68 @@
 
 """Check for running a Pipeline Parallelism straggler detection test on a cluster."""
 
+import common
+import check
 import gke_check
 
+NAME = 'straggler'
+_DESCRIPTION = (
+    'Runs a Pipeline Parallelism straggler detection test on a cluster.'
+)
 
-class StragglerCheck(gke_check.GkeCheck):
+
+def get_check_for_orchestrator(
+    orchestrator: str,
+    machine_type: str,
+    nodes: list[str],
+    run_only_on_available_nodes: bool,
+    dry_run: bool = False,
+) -> check.Check:
+  """Returns the appropriate check for the given orchestrator."""
+  match orchestrator:
+    case 'gke':
+      return GkeStragglerCheck(
+          machine_type=machine_type,
+          nodes=nodes,
+          run_only_on_available_nodes=run_only_on_available_nodes,
+          dry_run=dry_run,
+      )
+    case _:
+      raise ValueError(f'Unsupported orchestrator: {orchestrator}')
+
+
+class GkeStragglerCheck(gke_check.GkeCheck):
   """Runs a Pipeline Parallelism Straggler Detection test on a cluster."""
-
-  _description = (
-      'Runs a Pipeline Parallelism Straggler Detection test on a cluster.'
+  # Explicitly exclude not supported machine types
+  _SUPPORTED_MACHINE_TYPES = frozenset(
+      machine_type
+      for machine_type in common.SUPPORTED_MACHINE_TYPES
+      if machine_type not in ['a3-ultragpu-8g']
   )
-
-  name = 'straggler'
-
   launch_label = 'aiinfra/straggler-healthcheck-test'
 
   results_labels = [
       'aiinfra/straggler-healthcheck-runtime-sec',
   ]
 
-  def __init__(self, machine_type: str, nodes: list[str]):
+  def __init__(
+      self,
+      machine_type: str,
+      nodes: list[str],
+      run_only_on_available_nodes: bool = False,
+      dry_run: bool = False,
+      **kwargs,
+  ):
     super().__init__(
-        name=self.name,
-        description=self._description,
+        name=NAME,
+        description=_DESCRIPTION,
         machine_type=machine_type,
+        supported_machine_types=self._SUPPORTED_MACHINE_TYPES,
         launch_label=self.launch_label,
         results_labels=self.results_labels,
         nodes=nodes,
+        run_only_on_available_nodes=run_only_on_available_nodes,
         timeout_sec=10 * 60,
+        dry_run=dry_run,
+        **kwargs,
     )

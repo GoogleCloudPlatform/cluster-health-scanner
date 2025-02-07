@@ -18,6 +18,7 @@ import abc
 import signal
 import sys
 from typing import Any
+
 import click
 
 
@@ -53,8 +54,8 @@ class Check(abc.ABC):
       self,
       name: str,
       description: str,
-      orchestrator: str,
       machine_type: str,
+      supported_machine_types: frozenset[str],
       dry_run: bool = False,
   ):
     """Initialize a check to run on a cluster.
@@ -62,14 +63,17 @@ class Check(abc.ABC):
     Args:
       name: The name of the check.
       description: The description of the check.
-      orchestrator: The orchestrator to run the check on.
       machine_type: The machine type of the cluster to run the check on.
+      supported_machine_types: The machine types supported by the check.
       dry_run: Whether to run the check in dry run mode.
+
+    Raises:
+      click.Abort: If the machine type is not supported.
     """
     self.name = name
     self.description = description
-    self.orchestrator = orchestrator
     self.machine_type = machine_type
+    self.supported_machine_types = supported_machine_types
     self.dry_run = dry_run
 
     # Handle SIGINT signal to clean up
@@ -78,11 +82,36 @@ class Check(abc.ABC):
         self.sigint_handler,
     )
 
+     # Validate machine type before running check
+    if not self._is_supported_machine_type(self.machine_type):
+      click.echo(
+          click.style(
+              text=(
+                  f'`{self.name}` check '
+                  f'does not support machine type {self.machine_type}.'
+              ),
+              fg='red',
+              bold=True,
+          )
+      )
+      raise click.Abort()
+
+  def _is_supported_machine_type(self, machine_type: str) -> bool:
+    """Returns whether Check supports given machine type.
+
+    Args:
+      machine_type: The machine type to validate.
+
+    Returns:
+      True if the Check supports the given machine type, False otherwise.
+    """
+    # Check explicitly stated supported machine types
+    return machine_type in self.supported_machine_types
+
   @abc.abstractmethod
   def set_up(self):
     """Set up for the check on a cluster."""
 
-  @abc.abstractmethod
   def clean_up(self) -> None:
     """Clean up after the check on a cluster."""
 

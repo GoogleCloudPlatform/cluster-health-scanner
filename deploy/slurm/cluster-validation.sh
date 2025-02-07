@@ -19,10 +19,11 @@
 # - supports a3, a3mega and a3ultra partitions for nccl tests
 # - Added download and enroot the docker images if they are not already present
 # - Change nccl test to make it work for GCP (a3, a3mega and a3ultra), originally it was for oci
+# - add --results-dir flag to specify the directory to store results
+# - add --relative-exec-path flag to specify the relative path to the cluster validation scripts
 
 # Original work:
 # https://github.com/NVIDIA/NeMo-Framework-Launcher/blob/main/csp_tools/oci/cluster_validation.sh
-
 
 usage() {
 cat <<EOF
@@ -43,7 +44,9 @@ Usage:
   --dcgm         Run only DCGM diagnostic
   --nccl         Run only NCCL test
   --drain-bad-nodes  Drain nodes that fail diagnostics
-
+  --relative-exec-path  Relative path to the cluster validation scripts. Use this if
+                    the scripts are not in the root directory.
+  --results-dir   Directory to store results. Default is results/cluster_validation
 EOF
 }
 
@@ -68,6 +71,9 @@ join () {
   echo "$*"
 }
 
+RELATIVE_PATH=""
+# Define where test logs should be written to and read from
+RESULTS_DIR=../../results/cluster_validation
 # Read arguments
 while [[ $# -gt 0 ]]; do
   if [[ "$1" =~ ^-.*= ]]; then
@@ -110,6 +116,14 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
+    --relative-exec-path)
+      RELATIVE_PATH="$val""/"
+      shift
+      ;;
+    --results-dir)
+      RESULTS_DIR="$val"
+      shift
+      ;;
     *)
       usage
       error_exit "Unrecognized option $key." 1
@@ -136,23 +150,21 @@ if [[ -z $RUN_DCGMI ]] && [[ -z $RUN_NCCL ]]; then
     RUN_NCCL=1
 fi
 
-# Define where test logs should be written to and read from
-RESULTS_DIR=../../results/cluster_validation
-mkdir -p $RESULTS_DIR
+mkdir -p "$RESULTS_DIR"
 
 if [[ $RUN_DCGMI == 1 ]]; then
     echo "Starting DCGM Diagnostics..."
     JOBID=$(sbatch  -N "$NUM_NODES" \
             -p "$PARTITION" \
             -w "$NODES" \
-            -o $RESULTS_DIR/dcgmi-%j.out \
-            -W dcgmi-diag.sh)
+            -o "$RESULTS_DIR"/dcgmi-%j.out \
+            -W "$RELATIVE_PATH"dcgmi-diag.sh)
     JOBID=${JOBID##* } # Remove everything but the slurm job id from output of sbatch command
-    grep -i "fail\|error" $RESULTS_DIR/dcgmi-"${JOBID}".out > /dev/null # Check log for failures
+    grep -i "fail\|error" "$RESULTS_DIR"/dcgmi-"${JOBID}".out > /dev/null # Check log for failures
     FOUND=$?
     if [[ $FOUND == 0 ]]; then
         # One of the diagnostics failed
-        FAILED=$(grep -i -P -o "srun: error: [^:]*" $RESULTS_DIR/dcgmi-"${JOBID}".out | cut -d':' -f3)
+        FAILED=$(grep -i -P -o "srun: error: [^:]*" "$RESULTS_DIR"/dcgmi-"${JOBID}".out | cut -d':' -f3)
         echo -e "DCGM failed on the following nodes: \n $FAILED"
         echo "See results/cluster_validation/dcgmi-${JOBID}.out for more details"
 
@@ -183,13 +195,13 @@ if [[ $RUN_NCCL == 1 ]]; then
 
         case "$PARTITION" in
             a3)
-                sbatch -N 1 -W build-nccl-tests-a3.sh > /dev/null 2> /dev/null
+                sbatch -N 1 -W "$RELATIVE_PATH"build-nccl-tests-a3.sh > /dev/null 2> /dev/null
                 ;;
             a3mega)
-                sbatch -N 1 -W build-nccl-tests-a3mega.sh > /dev/null 2> /dev/null
+                sbatch -N 1 -W "$RELATIVE_PATH"build-nccl-tests-a3mega.sh > /dev/null 2> /dev/null
                 ;;
             a3ultra)
-                sbatch -N 1 -W build-nccl-tests-a3ultra.sh > /dev/null 2> /dev/null
+                sbatch -N 1 -W "$RELATIVE_PATH"build-nccl-tests-a3ultra.sh > /dev/null 2> /dev/null
                 ;;
             *)
                 error_exit "Unsupported partition: $PARTITION" 2
@@ -217,11 +229,11 @@ if [[ $RUN_NCCL == 1 ]]; then
 
         # Determine which script to run based on the partition
         if [[ "$PARTITION" == "a3" ]]; then
-            script="./nccl-a3.sh"
+            script="./""$RELATIVE_PATH""nccl-a3.sh"
         elif [[ "$PARTITION" == "a3mega" ]]; then
-            script="./nccl-a3mega.sh"
+            script="./""$RELATIVE_PATH""nccl-a3mega.sh"
         elif [[ "$PARTITION" == "a3ultra" ]]; then
-            script="./nccl-a3ultra.sh"
+            script="./""$RELATIVE_PATH""nccl-a3ultra.sh"
         else
             echo "Unsupported partition: $PARTITION"
             continue
@@ -229,7 +241,7 @@ if [[ $RUN_NCCL == 1 ]]; then
         id=$(sbatch -N 2 \
                     -w "${NODES_ARR[$i]}","${NODES_ARR[$j]}" \
                     --parsable \
-                    -o $RESULTS_DIR/nccl-gcp.sh_%j.log \
+                    -o "$RESULTS_DIR"/nccl-gcp.sh_%j.log \
                     "$script")
         slurm_ids+=($id)
     done
@@ -242,9 +254,9 @@ if [[ $RUN_NCCL == 1 ]]; then
     LARGE_TEST_SIZE=10737418240
     nccl_pass=0
     for i in "${slurm_ids[@]}"; do
-        CURR_NODES=$(grep -oP ' on \K[^\s]+' $RESULTS_DIR/nccl-gcp.sh_"${i}".log | sort -u) # Get the nodes in this test
+        CURR_NODES=$(grep -oP ' on \K[^\s]+' "$RESULTS_DIR"/nccl-gcp.sh_"${i}".log | sort -u) # Get the nodes in this test
         echo "CURR_NODES:  $CURR_NODES"
-        CURR_BUSBW=$(grep "# Avg bus bandwidth" $RESULTS_DIR/nccl-gcp.sh_"${i}".log | cut -d':' -f2 | xargs | awk '{printf "%.0f", $1}')
+        CURR_BUSBW=$(grep "# Avg bus bandwidth" "$RESULTS_DIR"/nccl-gcp.sh_"${i}".log | cut -d':' -f2 | xargs | awk '{printf "%.0f", $1}')
         echo "CURR_BUSBW:  $CURR_BUSBW"
 
         # Check CURR_BUSBW is a number

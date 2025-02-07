@@ -41,15 +41,21 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: {{ $unique_name }}
+      shareProcessNamespace: true
       containers:
       - name: {{ $unique_name | quote}}
         image: "{{ .image.repo }}:{{ .image.tag }}"
         imagePullPolicy: {{ .image.pull_policy }}
+        command: ["/bin/sh", "-c"]
+        args: ["python3 /app/health_runner.py 2>&1 | tee /var/log/healthrunner.log"]
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
             - ALL
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
         env:
         {{- range $key, $value := .env}}
         - name: {{ $key | quote }}
@@ -65,6 +71,21 @@ spec:
         {{- end }} # iteration over .blast_mode.env
         {{- end }} # if .blast_mode.blast_mode_enabled
         {{- end }} # if .blast_mode scope
+      - name: google-logging
+        image: "us-docker.pkg.dev/gce-ai-infra/health-check/logging:latest"
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: fluentbit-key
+          mountPath: /var/secrets/google
+          readOnly: true
+      volumes:
+      - name: varlog
+        emptyDir: {}
+      - name: fluentbit-key
+        secret:
+          secretName: fluentbit-key
+          optional: true
 ---
 ## Below should be the same for all health checks
 apiVersion: v1

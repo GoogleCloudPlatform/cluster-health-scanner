@@ -15,7 +15,7 @@
 """GPU Health Check Daemonset runner.
 
 This application creates a GPU health check daemonset in a Kubernetes cluster,
-allows it to run for a specified duration (SLEEP_TIME_MINUTES), and then
+allows it to run for a specified duration (TIMEOUT_MINUTES), and then
 terminates it.
 
 Note:
@@ -27,7 +27,9 @@ from collections.abc import Iterable
 import logging
 import os
 import signal
+import sys
 import time
+from typing import Any
 import uuid
 
 from kubernetes import client
@@ -37,8 +39,14 @@ import health_results_pb2
 import nccl_runner
 from google.protobuf import timestamp_pb2
 
-
-_SLEEP_TIME_MINUTES = os.environ.get("SLEEP_TIME_MINUTES", "20")
+# Time to wait for HC jobs to complete
+_SLEEP_TIME_MINUTES: str = os.environ.get("SLEEP_TIME_MINUTES", "10")
+# Time to wait for full HR to complete
+# Give enough time for HC + extra time for launch & cleanup
+_TIMEOUT_MINUTES: str = os.environ.get(
+    "TIMEOUT_MINUTES",
+    f"{int(_SLEEP_TIME_MINUTES) + 5}",
+)
 
 _YAML_FILE = os.environ.get("YAML_FILE")
 
@@ -46,7 +54,7 @@ _HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 _HELM_CHART = os.environ.get("HELM_CHART")
 _HELM_CHART_VERSION = os.environ.get("HELM_CHART_VERSION")
 _HELM_INSTALL_FLAGS = os.environ.get("HELM_INSTALL_FLAGS")
-_HELM_RELEASE_NAME = os.environ.get("HELM_RELEASE_NAME")
+_HELM_RELEASE_NAME_BASE = os.environ.get("HELM_RELEASE_NAME_BASE", "chs-hc")
 _HC_ENV_PREFIX = "HC_ENV_"
 
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
@@ -65,6 +73,13 @@ _K_NUM_GPU_NODES_IN_CLUSTER_COMMAND = (
 logging.root.setLevel(logging.INFO)
 
 
+def timeout_handler(signum: Any, frame: Any) -> None:
+  print(f"Received {signum} signal on frame {frame}. Exiting...")
+  raise TimeoutError("Timed out!")
+
+signal.signal(signal.SIGALRM, timeout_handler)
+
+
 def main() -> None:
   # Test for NCCL health check
   health_app = os.environ.get("HEALTH_APP", "").lower()
@@ -73,8 +88,16 @@ def main() -> None:
     logging.info("Running NCCL health check via `HEALTH_APP`")
     run_health_app(health_app)
   else:
-    logging.info("Running Helm health check")
-    run_health_check()
+    signal.alarm(int(_TIMEOUT_MINUTES) * 60)
+    try:
+      # Set timeout
+      logging.info("Setting timeout to %s minutes", _TIMEOUT_MINUTES)
+      logging.info("Running Helm health check")
+      run_health_check()
+    except TimeoutError as e:
+      print(f"Error: {e}")
+      logging.info("System Exiting...")
+      sys.exit(0)
 
 
 def run_health_app(health_app: str) -> None:
@@ -85,7 +108,7 @@ def run_health_app(health_app: str) -> None:
   orchestrator_config = None
   if _HELM_CHART:
     orchestrator_config = checker_common.HelmConfig(
-        release_name=_HELM_RELEASE_NAME,
+        release_name_base=_HELM_RELEASE_NAME_BASE,
         chart=_HELM_CHART,
         chart_version=_HELM_CHART_VERSION,
         install_flags=_HELM_INSTALL_FLAGS,
@@ -235,8 +258,10 @@ def run_health_check() -> None:
     # If Helm release name is not unique, it will not install the release
     short_guid = str(uuid.uuid4())[:8]
     hc_release_name_suffix = f"{i}-{short_guid}"
-    if _HELM_RELEASE_NAME:
-      unique_release_name = f"{_HELM_RELEASE_NAME}-{hc_release_name_suffix}"
+    if _HELM_RELEASE_NAME_BASE:
+      unique_release_name = (
+          f"{_HELM_RELEASE_NAME_BASE}-{hc_release_name_suffix}"
+      )
     else:
       unique_release_name = f"chs-hc-{hc_release_name_suffix}"
 
