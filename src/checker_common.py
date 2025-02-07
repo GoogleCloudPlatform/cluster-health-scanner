@@ -43,7 +43,7 @@ _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 _FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
 _FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
 
-_HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
+HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
@@ -276,7 +276,7 @@ class HelmConfig:
 def create_job_k8s_helm(
     helm_config: HelmConfig,
     env_mappings: dict[str, str] | None = None,
-    helm_bin_path: str = _HELM,
+    helm_bin_path: str = HELM,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Creates a k8s helm release and returns a function to uninstall it.
 
@@ -349,7 +349,7 @@ def generate_helm_command(
     command = f"{command} install {release_name} {chart}"
     # Will default to latest version if not set
     # 
-    if chart_version is not None:
+    if chart_version:
       command = f"{command} --version {chart_version}"
     # Allows for custom values to be set in release
     # 
@@ -357,7 +357,7 @@ def generate_helm_command(
       for k, v in values.items():
         command = f"{command} --set {k}={v}"
     # 
-    if helm_install_flags is not None:
+    if helm_install_flags:
       command = f"{command} {helm_install_flags}"
   return command
 
