@@ -55,12 +55,7 @@ class GkeNcclCheck(gke_check.GkeCheck):
   """Runs a NCCL bandwidth test on a GKE cluster."""
 
   # Explicitly exclude not supported machine types
-  # 
-  _SUPPORTED_MACHINE_TYPES = frozenset(
-      machine_type
-      for machine_type in common.SUPPORTED_MACHINE_TYPES
-      if machine_type not in ['a3-ultragpu-8g']
-  )
+  _SUPPORTED_MACHINE_TYPES = common.SUPPORTED_MACHINE_TYPES
 
   launch_label = 'aiinfra/nccl-healthcheck-test'
 

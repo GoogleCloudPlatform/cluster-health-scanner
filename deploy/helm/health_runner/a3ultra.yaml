@@ -23,10 +23,10 @@ health_checks:
     runner_name: nccl-health-runner-a3ultra
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-ultragpu-8g"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
@@ -50,10 +50,10 @@ health_checks:
     runner_name: gpu-health-runner
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-ultragpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
@@ -72,10 +72,10 @@ health_checks:
     runner_name: neper-health-runner
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-ultragpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
