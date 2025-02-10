@@ -24,10 +24,10 @@ health_checks:
     run_check: true
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
@@ -50,10 +50,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
@@ -72,10 +72,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       STIMEOUT_MINUTES: "30"
@@ -92,10 +92,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
@@ -112,10 +112,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.2-latest"
+      tag: "4.3-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.3-latest"
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
