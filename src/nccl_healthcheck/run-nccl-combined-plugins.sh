@@ -42,40 +42,17 @@ run_nccl_rdma() {
     iter=$9
   fi
 
+  echo "Sourcing /usr/local/gib/scripts/set_nccl_env.sh"
+  source /usr/local/gib/scripts/set_nccl_env.sh
+  NCCL_FLAGS=$( env | egrep ^NCCL | awk '{ printf "-x %s ", $0; }' )
+
+  # shellcheck disable=SC2086
   LD_LIBRARY_PATH=${ld_library_path_override} \
   mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 --allow-run-as-root \
     -np $(( gpu_per_node * "${nhosts}" )) \
     --hostfile "${SCRIPT_DIR}/hostfiles${nhosts}/hostfile${gpu_per_node}" \
-    -x NCCL_SOCKET_IFNAME=eth0,eth1 \
     -x LD_LIBRARY_PATH -x PATH \
-    -x NCCL_CROSS_NIC=0 \
-    -x NCCL_ALGO=Ring \
-    -x NCCL_PROTO=Simple \
-    -x NCCL_NSOCKS_PERTHREAD=4 \
-    -x NCCL_SOCKET_NTHREADS=1 \
-    -x NCCL_DYNAMIC_CHUNK_SIZE=524288 \
-    -x NCCL_BUFFSIZE=4194304 \
-    -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-    -x NCCL_GPUDIRECTTCPX_SOCKET_IFNAME="${socket_ifnames}" \
-    -x NCCL_GPUDIRECTTCPX_CTRL_DEV=eth0 \
-    -x NCCL_NET_GDR_LEVEL=PIX \
-    -x NCCL_P2P_PXN_LEVEL=2 \
-    -x NCCL_IB_QPS_PER_CONNECTION=4 \
-    -x NCCL_P2P_NET_CHUNKSIZE=131072 \
-    -x NCCL_P2P_PCI_CHUNKSIZE=131072 \
-    -x NCCL_P2P_NVL_CHUNKSIZE=524288 \
-    -x NCCL_NVLS_CHUNKSIZE=524288 \
-    -x NCCL_IB_GID_INDEX=3 \
-    -x NCCL_IB_ADAPTIVE_ROUTING=1 \
-    -x NCCL_IB_TC=52 \
-    -x NCCL_IB_FIFO_TC=84 \
-    -x NCCL_SHIMNET_GUEST_CONFIG_CHECKER_CONFIG_FILE=/usr/local/gib/configs/guest_config.txtpb \
-    -x NCCL_TUNER_CONFIG_PATH=/usr/local/gib/configs/tuner_config.txtpb \
-    -x NCCL_NVLS_CHUNKSIZE=524288 \
-    -x NCCL_DEBUG=INFO -x NCCL_DEBUG_SUBSYS=ENV \
-    -x NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX="${UNIX_CLIENT_PREFIX}" \
-    -x NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS=1000000 \
-    -x NCCL_GPUDIRECTTCPX_FORCE_ACK \
+    $NCCL_FLAGS \
     /third_party/nccl-tests/build/"${benchmark}" \
       -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 50--iters "${iter}" 2>&1 | \
     tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
