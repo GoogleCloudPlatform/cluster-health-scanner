@@ -179,21 +179,24 @@ def _fetch_results(
   for node_name, sbrg in node_to_sbrg:
     node = v1.read_node(node_name)
     result_label = node.metadata.labels.get(health_check.result_label)
-    if result_label is not None and result_label == "pass":
-      results.append(
-          health_results_pb2.HealthResultList(
-              id=sbrg,
-              status=health_results_pb2.Status.PASS,
-          )
+    if result_label and result_label == "pass":
+      result = health_results_pb2.HealthResultList(
+          id=sbrg,
+          status=health_results_pb2.Status.PASS,
       )
     else:
-      results.append(
-          health_results_pb2.HealthResultList(
-              id=sbrg,
-              status=health_results_pb2.Status.FAIL,
-          )
+      result = health_results_pb2.HealthResultList(
+          id=sbrg,
+          status=health_results_pb2.Status.FAIL,
       )
-
+    if (
+        health_check.name
+        == health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_PERFORMANCE
+    ):
+      result.nccl_health_result.CopyFrom(
+          checker_common.parse_nccl_results(node)
+      )
+    results.append(result)
   return results
 
 

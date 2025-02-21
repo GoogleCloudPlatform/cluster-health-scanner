@@ -718,6 +718,22 @@ def _get_nodes_under_test(
   return gpu_nodes
 
 
+def parse_nccl_results(
+    node: client.models.V1Node,
+) -> health_results_pb2.NCCLHealthResult:
+  """Parses the NCCL results from the job output."""
+  nccl_health_result = health_results_pb2.NCCLHealthResult()
+  bandwidth_gbps = node.metadata.labels.get(
+      "aiinfra/nccl-healthcheck-bandwidth"
+  )
+  if bandwidth_gbps is not None:
+    nccl_health_result.bandwidth_gbps = int(bandwidth_gbps)
+  benchmark = node.metadata.labels.get("aiinfra/nccl-healthcheck-benchmark")
+  if benchmark is not None:
+    nccl_health_result.benchmark = benchmark
+  return nccl_health_result
+
+
 def has_gpu_resources(node: client.models.V1Node) -> bool:
   """Check if the node has GPU resources in capacity or allocatable.
 

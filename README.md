@@ -186,17 +186,20 @@ kubectl label nodes \
 
 #### Troubleshooting with Google Cloud Logging (Optional)
 
-To help Google Cloud engineers diagnose and resolve any potential issues with
-your cluster, you can optionally configure CHS to send its logs to Google.
-This allows our engineers to access only the logs from CHS and not the logs
-from the rest of the cluster.
+To assist Google Cloud engineers in diagnosing and resolving potential issues
+with your cluster, you can configure CHS to send its logs to Google Cloud
+Support. This allows our engineers to access only CHS logs, isolating them from
+the rest of the cluster's logs.
 
-This can be configured by the following steps:
+Currently, this feature is supported for Google Kubernetes Engine (GKE)
+clusters. Support for Slurm clusters will be added in the near future.
 
-* Create a Service Account: In the Google Cloud project where your cluster is running, create a new service account specifically for sending CHS logs to Google.
-* Contact Google Support: Reach out to Google Cloud Support and provide them with the name of the service account you created. They will grant the necessary permissions for this service account to write logs to Google Cloud Logging.
-* Create a Service Account Key: Generate a JSON key file for the service account. This key file will be used by CHS to authenticate with Google Cloud Logging.
-* Create a Kubernetes Secret: Use the following command to create a Kubernetes secret containing the service account key:
+To configure this, follow these steps:
+
+* Create a Service Account: In the Google Cloud project where your cluster resides, create a dedicated service account for sending CHS logs to Google.
+* Contact Cloud Google Support: Contact Google Cloud Support and provide the name of the service account you created. They will grant the necessary permissions for this service account to write logs to Google Cloud Logging. It can take upto 8-hours for permissions to take effect.
+* Generate a Service Account Key: Generate a JSON key file for the service account. CHS will use this to authenticate with Google Cloud Logging.
+* Create a Kubernetes Secret: Use the following command to create a Kubernetes secret containing the service account key generated in the previous step:
 
   `kubectl create secret generic fluentbit-key --from-file=key.json=key.json`
 

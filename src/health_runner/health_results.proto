@@ -66,6 +66,7 @@ message HealthResultList {
 // The results NCCL health check for a single object.
 message NCCLHealthResult {
   int32 bandwidth_gbps = 1;
+  string benchmark = 2;
 }
 
 // The status of the health check.
