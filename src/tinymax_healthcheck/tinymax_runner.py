@@ -107,9 +107,11 @@ def main() -> int:
       "pass" if success else "fail",
       _K_ADD_LABEL_FORMAT,
   )
-
+  if success:
+    print(f"Node {node_name} passed tinymax test")
   # If the job was not successful and not a dry run, taint the node.
   if not success:
+    print(f"Node {node_name} failed tinymax test")
     taint_node()
 
   label_node()

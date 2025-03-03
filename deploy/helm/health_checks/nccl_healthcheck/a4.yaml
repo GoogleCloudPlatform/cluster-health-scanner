@@ -20,11 +20,11 @@ health_check:
   name: "nccl"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck"
-    tag: "a3-ultragpu-8g_4.3.0"
+    tag: "a4-highgpu-8g_4.4.0"
     pull_policy: "Always"
   env:
-    # A3+ instance type is a3-megagpu-8g
-    INSTANCE_TYPE: "a3-ultragpu-8g"
+    # A4 instance type is a4-highgpu-8g
+    INSTANCE_TYPE: "a4-highgpu-8g"
     ENABLE_TWO_PASS_STRATEGY: "true"
     HEALTH_VALIDITY_HOURS: "24"
     DRY_RUN: "true"
@@ -39,7 +39,7 @@ health_check:
     USE_TCPX: "false"
     USE_FASTRAK: "false"
     # Note A3+ (a3-megagpu-8g) has no UNIX_CLIENT_PREFIX
-    NCCL_LIB_DIR: /usr/local/nvidia/lib64
+    NCCL_LIB_DIR: /usr/local/gib
     NCCL_FASTRAK_USE_SNAP: "1"
     NCCL_FASTRAK_ENABLE_CONTROL_CHANNEL: "0"
     NCCL_FASTRAK_NUM_FLOWS: "2"
@@ -54,7 +54,8 @@ health_check:
     mountPath: /dev/shm
   - name: varlog
     mountPath: /var/log
-# Configuration specific to a3ultra
+
+# Configuration specific to a4
 volumes:
 - name: library-dir-host
   hostPath:
@@ -77,8 +78,8 @@ volumes:
 initContainers:
   nccl_plugin_installer:
     name: "nccl-plugin-installer"
-    image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.2"
+    image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.4"
     imagePullPolicy: "Always"
     volumeMounts:
       name: "usr-local-gib"
-      mountPath: "/usr/local/gib"
+      mountPath: "/usr/local/home/kubernetes/bin/gib"

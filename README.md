@@ -56,7 +56,7 @@ CHS, with no prior knowledge needed of CHS implementation details.
 NOTE: The `cluster_diag` tool aims to provide a joyful experience for running
 Cluster Health Scanner; however it may not support all use cases. To run CHS
 directly, see the instructions
-[via the instructions in the developer guide](https://github.com/GoogleCloudPlatform/cluster-health-scanner/blob/main/README-developers.md#32-running-chs)
+[via the instructions in the developer guide](https://github.com/GoogleCloudPlatform/cluster-health-scanner/blob/main/README-developer.md#32-running-chs)
 .
 
 ### Installation
@@ -74,12 +74,12 @@ cluster-under-test.
    pip3 install kubernetes
    ```
 
-3. From the _root dir_ of this repository, run `python3 cli/cluster_diag.py`
+4. From the _root dir_ of this repository, run `python3 cli/cluster_diag.py`
 
     NOTE: `cluster_diag` currently __only works__ from the root dir of this
           repo. See the [Usage](#usage) section for more details.
 
-4. (Optional) Use an alias to simplify usage and store common flags.
+5. (Optional) Use an alias to simplify usage and store common flags.
     For example, if you only use clusters orchestrated by GKE, you can use:
 
     `alias cluster_diag="python3 cli/cluster_diag.py -o gke"`
@@ -87,7 +87,7 @@ cluster-under-test.
 ### Usage
 
 ```bash
-$ cluster_diag
+$ cluster_diag --help
 Usage: cluster_diag [OPTIONS] COMMAND [ARGS]...
 
   A tool for diagnosing cluster issues.
@@ -186,17 +186,20 @@ kubectl label nodes \
 
 #### Troubleshooting with Google Cloud Logging (Optional)
 
-To help Google Cloud engineers diagnose and resolve any potential issues with
-your cluster, you can optionally configure CHS to send its logs to Google.
-This allows our engineers to access only the logs from CHS and not the logs
-from the rest of the cluster.
+To assist Google Cloud engineers in diagnosing and resolving potential issues
+with your cluster, you can configure CHS to send its logs to Google Cloud
+Support. This allows our engineers to access only CHS logs, isolating them from
+the rest of the cluster's logs.
 
-This can be configured by the following steps:
+Currently, this feature is supported for Google Kubernetes Engine (GKE)
+clusters. Support for Slurm clusters will be added in the near future.
 
-* Create a Service Account: In the Google Cloud project where your cluster is running, create a new service account specifically for sending CHS logs to Google.
-* Contact Google Support: Reach out to Google Cloud Support and provide them with the name of the service account you created. They will grant the necessary permissions for this service account to write logs to Google Cloud Logging.
-* Create a Service Account Key: Generate a JSON key file for the service account. This key file will be used by CHS to authenticate with Google Cloud Logging.
-* Create a Kubernetes Secret: Use the following command to create a Kubernetes secret containing the service account key:
+To configure this, follow these steps:
+
+* Create a Service Account: In the Google Cloud project where your cluster resides, create a dedicated service account for sending CHS logs to Google.
+* Contact Cloud Google Support: Contact Google Cloud Support and provide the name of the service account you created. They will grant the necessary permissions for this service account to write logs to Google Cloud Logging. It can take upto 8-hours for permissions to take effect.
+* Generate a Service Account Key: Generate a JSON key file for the service account. CHS will use this to authenticate with Google Cloud Logging.
+* Create a Kubernetes Secret: Use the following command to create a Kubernetes secret containing the service account key generated in the previous step:
 
   `kubectl create secret generic fluentbit-key --from-file=key.json=key.json`
 
@@ -555,6 +558,16 @@ watch -n 10 -d "kubectl get nodes -o custom-columns=${CUSTOM_COLS}"
 
 `watch` reruns the table display command every 10 seconds, highlighting any
 changes.
+#### Viewing results using Cloud Monitoring:
+
+CHS integrates with Cloud Monitoring to provide a clear dashboard for tracking
+scan runs and identifying passing/failing nodes.
+
+To create the dashboard in your Cloud project:
+
+1. Navigate to `View Dashboard Templates` within the Cloud Monitoring console.
+2. Search and select the `Cluster Health Scanner` template.
+3. Click the `Copy Dashboard` button to deploy it to your project.
 
 ### 3.4 Cleanup
 

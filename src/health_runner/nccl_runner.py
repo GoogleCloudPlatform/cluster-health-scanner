@@ -268,6 +268,7 @@ def run_nccl_random_pair_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   # If no second pass, no failed nodes, or no passed nodes for second pass,
   # then return results.
@@ -278,6 +279,7 @@ def run_nccl_random_pair_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     failed_nodes = node_results.get("fail", list())
     suspect_nodes_no_fails: list[str] = [
         node for node, result_type in suspect_nodes if result_type != "fail"
@@ -340,11 +342,13 @@ def run_nccl_random_pair_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value=result_type
     )
+    logging.info("Node %s failed nccl test, result %s", node, result_type)
   passed_nodes, failed_nodes = determine_failed_components(
       passed_nodes,
       suspect_nodes_list,
@@ -421,6 +425,7 @@ def run_intra_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   # If no second pass, no failed nodes, or no passed nodes for second pass,
   # then return results.
@@ -431,6 +436,7 @@ def run_intra_rack_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     failed_nodes = node_results.get("fail", list())
     suspect_nodes_no_fails: list[str] = [
         node for node, result_type in suspect_nodes if result_type != "fail"
@@ -504,11 +510,13 @@ def run_intra_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value=result_type
     )
+    logging.info("Node %s failed nccl test, result %s", node, result_type)
   # Get just the names from suspect nodes for second pass
   suspect_nodes_second_pass_list = [
       node for (node, _) in suspect_nodes_second_pass
@@ -596,6 +604,7 @@ def run_inter_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   passed_racks = []
   failed_racks = []
@@ -614,6 +623,7 @@ def run_inter_rack_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     print(f"Found failed racks: {failed_racks}")
     print(f"Found passed racks: {passed_racks}")
     health_result.health_results.extend(
@@ -686,11 +696,13 @@ def run_inter_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value=result_type
     )
+    logging.info("Node %s failed nccl test, result %s", node, result_type)
 
   second_passed_racks = []
   second_failed_racks = []
@@ -781,6 +793,7 @@ def run_inter_cluster_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   passed_clusters = []
   failed_clusters = []
@@ -797,6 +810,7 @@ def run_inter_cluster_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     print(f"Found failed clusters: {failed_clusters}")
     print(f"Found passed clusters: {passed_clusters}")
     health_result.health_results.extend(
@@ -853,12 +867,14 @@ def run_inter_cluster_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value="pass"
       )
+      logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     if node in all_suspect_nodes:
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
 
   second_passed_clusters = []
   second_failed_clusters = []

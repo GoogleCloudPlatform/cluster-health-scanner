@@ -12,30 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# 
 health_runner:
   name: "health-runner"
 # Multiple health checks can be added below
-# Note that only NCCL health check (A3Ultra) is enabled by default
+# Note that only NCCL health check (A4) is enabled by default
 health_checks:
   nccl_healthcheck:
     run_check: true
-    runner_name: nccl-health-runner-a3ultra
+    runner_name: nccl-health-runner-a4
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.3-latest"
+      tag: "4.4-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.3-latest"
-      MACHINE_TYPE: "a3-ultragpu-8g"
+      HC_IMAGE_TAG: "4.4-latest"
+      MACHINE_TYPE: "a4-highgpu-8g"
       FILTER_LABEL_NAME: "aiinfra/nccl-healthcheck-test"
       FILTER_LABEL_VALUE: "true"
       DRY_RUN: "true"
-      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/nccl_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a3ultra.yaml  --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"  # Specific to A3Ultra
-      ACCELERATOR_TYPE: "nvidia-h200-141gb"
+      HELM_INSTALL_FLAGS: "-f /app/health_checks/nccl_healthcheck/a4.yaml  --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"  # Specific to A4
+      ACCELERATOR_TYPE: "nvidia-b200-141gb"
       HEALTH_APP: "nccl"
       PAIRING_MODE: "random"
       SECOND_PASS_ENABLED: "true"
@@ -50,17 +48,17 @@ health_checks:
     runner_name: gpu-health-runner
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.3-latest"
+      tag: "4.4-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.3-latest"
-      MACHINE_TYPE: "a3-ultragpu-8g"
+      HC_IMAGE_TAG: "4.4-latest"
+      MACHINE_TYPE: "a4-highgpu-8g"
       DRY_RUN: "true"
-      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "15"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
-      ACCELERATOR_TYPE: "nvidia-h200-141gb"
+      ACCELERATOR_TYPE: "nvidia-b200-141gb"
+      HC_ENV_R_LEVEL: 1
     # Blast Mode
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
@@ -72,36 +70,18 @@ health_checks:
     runner_name: neper-health-runner
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.3-latest"
+      tag: "4.4-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.3-latest"
-      MACHINE_TYPE: "a3-ultragpu-8g"
+      HC_IMAGE_TAG: "4.4-latest"
+      MACHINE_TYPE: "a4-highgpu-8g"
       DRY_RUN: "true"
-      TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/neper_healthcheck"  # Path to Helm chart in container
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
-      ACCELERATOR_TYPE: "nvidia-h200-141gb"
+      ACCELERATOR_TYPE: "nvidia-b200-141gb"
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
       env:
         # BLAST_MODE_NUM_TESTS_LIMIT: "200"  # Number of health checks to run in parallel
         NODES_CHECKED_PER_TEST:  "2"
-  straggler_healthcheck:
-    run_check: false
-    image:
-      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.4-latest"
-      pull_policy: "Always"
-    env:
-      HC_IMAGE_TAG: "4.4-latest"
-      MACHINE_TYPE: "a3-ultragpu-8g"
-      DRY_RUN: "true"
-      SLEEP_TIME_MINUTES: "30"
-      HELM_CHART: "/app/health_checks/straggler_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "-f /app/health_checks/straggler_healthcheck/a3ultra.yaml --set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
-      ACCELERATOR_TYPE: "nvidia-h200-141gb"
-      HOSTS_CSV: nil  # Allow health runner to identify the nodes
-      N_NODES: nil  # Default to run on all nodes in the cluster
-      GCS_BUCKET_NAME: "straggler-healthcheck-logs"

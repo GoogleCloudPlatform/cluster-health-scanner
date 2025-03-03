@@ -30,7 +30,7 @@ health_check:
     DRY_RUN: "true"
     START_MESSAGE_SIZE: "2G"
     END_MESSAGE_SIZE: "8G"
-    TEST_ITERATIONS: "5"
+    TEST_ITERATIONS: "3"
     NHOSTS: "2"
     nr: "8"
     # Specific to A3+
