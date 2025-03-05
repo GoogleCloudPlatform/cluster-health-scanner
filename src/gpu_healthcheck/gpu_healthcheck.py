@@ -184,10 +184,10 @@ def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
       K_ADD_LABEL_FORMAT,
   )
   if failed:
-    print("diagnostic on vm '%s' is 'failed'" % node_name)
+    print(f"Node {node_name} failed dcgm test")
     taint_node(node_name, TAINT_KEY, TAINT_VALUE, TAINT_EFFECT)
   else:
-    print("diagnostic on vm '%s' is 'passed'" % node_name)
+    print(f"Node {node_name} passed dcgm test")
     if not reboot_required:
       un_taint_node(node_name, TAINT_KEY)
 

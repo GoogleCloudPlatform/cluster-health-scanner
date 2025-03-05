@@ -39,8 +39,13 @@ TAINT_EFFECT_NOSCHEDULE = "NoSchedule"
 TAINT_EFFECT_PREFERNOSCHEDULE = "PreferNoSchedule"
 
 HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/nccl-healthcheck-runtime-sec"
-_NCCL_BANDWIDTH_RESULT_KEY = "aiinfra/nccl-healthcheck-bandwidth"
 _NCCL_BENCHMARK_KEY = "aiinfra/nccl-healthcheck-benchmark"
+
+_NCCL_AVG_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-bandwidth"
+_NCCL_4MIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-4MiB-bandwidth"
+_NCCL_64MIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-64MiB-bandwidth"
+_NCCL_1GIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-1G-bandwidth"
+_NCCL_8GIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-8G-bandwidth"
 
 K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
 K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
@@ -48,7 +53,20 @@ K_REMOVE_LABEL_FORMAT = "{k} label node %s %s-".format(k=KUBECTL)
 K_REMOVE_TAINT_NODE_FORMAT = "{k} taint node %s %s-".format(k=KUBECTL)
 K_DELETE_SERVICE_FORMAT = "{k} delete svc %s".format(k=KUBECTL)
 
+_NCCL_RESULT_LENGTH = 13
+_NCCL_RESULT_MESSAGE_SIZE_INDEX = 0
+_NCCL_RESULT_TYPE_INDEX = 2
+_NCCL_RESULT_IN_PLACE_BW_INDEX = 11
+_NO_BANDWIDTH_VALUE = -1
+
 WORKLOAD_TERMINATE_FILE = "/usr/share/nemo/workload_terminated"
+
+MESSAGE_SIZE_TO_LABEL = {
+    "4194304": _NCCL_4MIB_BANDWIDTH_KEY,
+    "67108864": _NCCL_64MIB_BANDWIDTH_KEY,
+    "1073741824": _NCCL_1GIB_BANDWIDTH_KEY,
+    "8589934592": _NCCL_8GIB_BANDWIDTH_KEY,
+}
 
 
 def ensure_env_variables() -> None:
@@ -173,9 +191,10 @@ def run_nccl_test(
               benchmark=BENCHMARK,
           )
       )
-      bandwidths.append(get_bandwidth(test_result.stdout))
+      # [dict[str, float]] - array of labels(message size + avg) to bandwidth
+      bandwidths.append(parse_nccl_result(test_result.stdout))
     process_test_result(
-        bandwidths=bandwidths,
+        test_results=bandwidths,
         nodes=hosts,
         bandwidth_threshold=int(os.environ["BANDWIDTH_THRESHOLD"]),
     )
@@ -195,23 +214,48 @@ def run_nccl_test(
 
 
 def process_test_result(
-    bandwidths: list[int],
+    test_results: list[dict[str, int]],
     nodes: list[str],
     bandwidth_threshold: int,
     acceptable_failure_rate: float = 0.5,
 ) -> None:
-  """Process test results. Add node taints and labels."""
+  """Process test results. Add node taints and labels.
+
+  Args:
+    test_results: list[dict[str, int]] - array of labels(message size + avg) to
+      bandwidth
+    nodes: list[str] - list of nodes to process
+    bandwidth_threshold: int - threshold for average bandwidth
+    acceptable_failure_rate: float - acceptable failure rate
+  """
   second_pass = os.environ.get("SECOND_PASS", "").lower() == "true"
 
-  # Filter for only valid bandwidths
-  valid_bandwidths: tuple[int, ...] = tuple(bw for bw in bandwidths if bw != -1)
-  iteration_failure_rate: float = 1.0 - len(valid_bandwidths) / len(bandwidths)
+  failed_tests = 0
+  avg_bandwidths: dict[str, int] = {}
+  # Average the bandwidths across all the iterations. Track the number of
+  # failed tests too.
+  for bandwidths in test_results:
+    if (
+        _NCCL_AVG_BANDWIDTH_KEY not in bandwidths
+        or bandwidths[_NCCL_AVG_BANDWIDTH_KEY] == _NO_BANDWIDTH_VALUE
+    ):
+      failed_tests += 1
+      continue
+    for label, bandwidth in bandwidths.items():
+      avg_bandwidths[label] = avg_bandwidths.get(label, 0) + bandwidth
 
+  # Divide the average bandwidths by the number of iterations to get the
+  # average bandwidth for each message size.
+  for label, bandwidth in avg_bandwidths.items():
+    avg_bandwidths[label] = int(bandwidth / len(test_results))
+
+  if _NCCL_AVG_BANDWIDTH_KEY not in avg_bandwidths:
+    avg_bandwidths[_NCCL_AVG_BANDWIDTH_KEY] = _NO_BANDWIDTH_VALUE
+
+  iteration_failure_rate = failed_tests / len(test_results)
+  avg_bandwidth = avg_bandwidths[_NCCL_AVG_BANDWIDTH_KEY]
   # Average bandwidth is -1 if there are no valid bandwidths
   # Average bandwidth is rounded up to nearest integer
-  avg_bandwidth: int = (
-      sum(valid_bandwidths) // len(valid_bandwidths) if valid_bandwidths else -1
-  )
   has_sufficient_bandwidth: bool = avg_bandwidth >= bandwidth_threshold
   has_acceptable_failure_rate: bool = (
       iteration_failure_rate <= acceptable_failure_rate
@@ -222,7 +266,7 @@ def process_test_result(
   test_name = os.environ.get("TEST_NAME", "nccl")
   for node in nodes:
     add_healthcheck_time_label(node)
-    mark_node_bandwidth(node, avg_bandwidth)
+    mark_node_bandwidth(node, avg_bandwidths)
 
     # Either it passed or a second pass is needed
     terminal = second_pass or passed
@@ -244,7 +288,7 @@ def process_test_result(
       result = "fail"
       if passed:
         result = "pass"
-      elif avg_bandwidth == -1:
+      elif avg_bandwidth == _NO_BANDWIDTH_VALUE:
         result = "crash"
 
       # Pre-result label is used to determine if this run met criteria
@@ -270,28 +314,51 @@ def mark_failed_node(
   )
 
 
-def get_bandwidth(
+def parse_nccl_result(
     test_result: str,
-) -> int:
-  """Extract the bandwidth from the test result.
+) -> dict[str, int]:
+  """Parse the NCCL test result for message size and bandwidth.
 
   Args:
-    test_result (str): The test result to extract the bandwidth from.
+    test_result (str): The test result to parse.
 
   Returns:
-    int: The bandwidth (GB/s)extracted from the test result. -1 if not found.
+    dict[str, int]: A dictionary mapping message size to bandwidth.
   """
-  # Search for the line of interest using regex
-  match = re.search(r"# Avg bus bandwidth\s*:\s*(\d+)", test_result)
+  results = {}
+  lines = test_result.splitlines()
+  # Iterate through the data lines
+  for line in lines:
+    line = line.strip()
+    if not line or line.startswith("#"):
+      # Skip empty lines and comments
+      continue
+    chunks = line.split()
+    if len(chunks) != _NCCL_RESULT_LENGTH:
+      continue
+    if chunks[_NCCL_RESULT_TYPE_INDEX] != "float":
+      # If the type isn't float then this is not a valid line
+      continue
+    size = chunks[_NCCL_RESULT_MESSAGE_SIZE_INDEX]
+    # In-place bandwidth is in float format, convert it to int since our logic
+    # currently assumes ints
+    in_place_bw = int(float(chunks[_NCCL_RESULT_IN_PLACE_BW_INDEX]))
+    label = MESSAGE_SIZE_TO_LABEL.get(size, None)
+    if label is None:
+      continue
+    results[label] = in_place_bw
 
-  # Extract the number if the pattern was found
+  # Extract the average bus bandwidth from the test result
+  match = re.search(r"# Avg bus bandwidth\s*:\s*(\d+)", test_result)
   if match:
     bandwidth = int(match.group(1))
     print(f"Found bandwidth: {bandwidth}")
-    return bandwidth
+    results[_NCCL_AVG_BANDWIDTH_KEY] = bandwidth
   else:
-    print("Bandwidth not found in log.")
-    return -1
+    results[_NCCL_AVG_BANDWIDTH_KEY] = _NO_BANDWIDTH_VALUE
+
+  print(f"results: {results}")
+  return results
 
 
 def get_host_name(
@@ -399,23 +466,25 @@ def add_healthcheck_time_label(
 
 def mark_node_bandwidth(
     node: str,
-    bandwidth: int,
+    bandwidths: dict[str, int],
 ) -> None:
   """Mark the node bandwidth achieved during the test along with the benchmark.
 
   Args:
     node (str): The name of the node to be labeled.
-    bandwidth (int): The bandwidth seen in the test to use as the label value.
-      Bandwidth will be set to 'None' if the test fails.
+    bandwidths (dict[str, int]): The bandwidths achieved during the test.
   """
-  if bandwidth == -1:
-    bandwidth = None
-  checker_common.add_label(
-      node,
-      _NCCL_BANDWIDTH_RESULT_KEY,
-      f"{str(bandwidth):>02}",
-      K_ADD_LABEL_FORMAT,
-  )
+  for label, bandwidth in bandwidths.items():
+    if bandwidth == _NO_BANDWIDTH_VALUE:
+      bandwidth = None
+    checker_common.add_label(
+        node,
+        label,
+        f"{str(bandwidth):>02}",
+        K_ADD_LABEL_FORMAT,
+    )
+
+  # Add benchmark label
   checker_common.add_label(
       node,
       _NCCL_BENCHMARK_KEY,

@@ -49,6 +49,8 @@ def _get_partition_for_machine(machine_type: str) -> str | None:
       return 'a3mega'
     case 'a3-ultragpu-8g':
       return 'a3ultra'
+    case 'a4-highgpu-8g':
+      return 'a4'
     case _:
       raise ValueError(f'Unsupported machine type: {machine_type}')
 

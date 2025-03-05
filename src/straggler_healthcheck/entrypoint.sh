@@ -41,8 +41,8 @@ export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-ENV}" # set "INIT,GRAPH,ENV,TUNIN
 export CUDA_VISIBLE_DEVICES='0,1,2,3,4,5,6,7'
 export ACCELERATORS_PER_POD=8
 
-export NCCL_FASTRAK_USE_SNAP=1
-export NCCL_FASTRAK_USE_LLCM=1
+export NCCL_FASTRAK_USE_SNAP="${NCCL_FASTRAK_USE_SNAP:-0}"
+export NCCL_FASTRAK_USE_LLCM="${NCCL_FASTRAK_USE_LLCM:-0}"
 export NCCL_FASTRAK_CTRL_DEV="${NCCL_FASTRAK_CTRL_DEV:-eth0}"
 export NCCL_FASTRAK_ENABLE_HOTPATH_LOGGING="${NCCL_FASTRAK_ENABLE_HOTPATH_LOGGING:-0}"
 export NCCL_FASTRAK_IFNAME="${NCCL_FASTRAK_IFNAME:-eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8}"
@@ -93,6 +93,8 @@ mkdir /usr/local/fastrak_exec
 mount --bind /usr/local/fastrak_exec /usr/local/fastrak_exec
 mount -o remount,exec /usr/local/fastrak_exec
 cp -r /usr/local/fastrak/lib64 /usr/local/fastrak_exec
+cp -r /usr/local/gib/lib64 /usr/local/fastrak_exec
+cp -r /usr/local/nvidia/lib64 /usr/local/fastrak_exec
 
 MPI_ENV_VAR="LD_LIBRARY_PATH=/usr/local/fastrak_exec/lib64:${LD_LIBRARY_PATH}"
 

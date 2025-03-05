@@ -23,7 +23,7 @@ health_check:
     value: "true"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck"
-    tag: "a3-megagpu-8g_4.2.0"
+    tag: "a3-megagpu-8g_4.4.0"
     pull_policy: "Always"
   env:
     GOOD_THROUGHPUT: "50000000000"

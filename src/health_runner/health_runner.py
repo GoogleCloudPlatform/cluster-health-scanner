@@ -27,6 +27,7 @@ from collections.abc import Iterable
 import logging
 import os
 import signal
+import socket
 import sys
 import time
 from typing import Any
@@ -72,15 +73,31 @@ _K_NUM_GPU_NODES_IN_CLUSTER_COMMAND = (
 )
 logging.root.setLevel(logging.INFO)
 
+cleanup_functions = []
+
+
+def post_run_cleanup() -> None:
+  """Clean up after the health check."""
+  for func in cleanup_functions:
+    try:
+      func()
+    except Exception:  # pylint: disable=broad-exception-caught
+      logging.exception("Cleanup failed.")
+
 
 def timeout_handler(signum: Any, frame: Any) -> None:
   print(f"Received {signum} signal on frame {frame}. Exiting...")
-  raise TimeoutError("Timed out!")
+  # Force a cleanup
+  post_run_cleanup()
+  # Exit the process
+  logging.info("System Exiting...")
+  sys.exit(0)
 
 signal.signal(signal.SIGALRM, timeout_handler)
 
 
 def main() -> None:
+  logging.info("%s health runner started", socket.gethostname())
   # Test for NCCL health check
   health_app = os.environ.get("HEALTH_APP", "").lower()
   # Create Helm releases for each health check
@@ -89,15 +106,11 @@ def main() -> None:
     run_health_app(health_app)
   else:
     signal.alarm(int(_TIMEOUT_MINUTES) * 60)
-    try:
-      # Set timeout
-      logging.info("Setting timeout to %s minutes", _TIMEOUT_MINUTES)
-      logging.info("Running Helm health check")
-      run_health_check()
-    except TimeoutError as e:
-      print(f"Error: {e}")
-      logging.info("System Exiting...")
-      sys.exit(0)
+    # Set timeout
+    logging.info("Set timeout to %s minutes", _TIMEOUT_MINUTES)
+
+    logging.info("Running Helm health check")
+    run_health_check()
 
 
 def run_health_app(health_app: str) -> None:
@@ -210,9 +223,7 @@ def run_health_check() -> None:
       },
   )
 
-  cleanup_functions = []
   # This must be defined in the YAML configuration
-
   helm_chart_path = _HELM_CHART
   # 
   helm_chart_version = _HELM_CHART_VERSION
@@ -308,13 +319,7 @@ def run_health_check() -> None:
       check_interval=10,
   )
 
-  # Cleanup cluster (uninstall helm releases, delete k8s objects, etc.)
-  for func in cleanup_functions:
-    try:
-      func()
-    except Exception:  # pylint: disable=broad-exception-caught
-      logging.exception("Cleanup failed.")
-
+  post_run_cleanup()
 
 if __name__ == "__main__":
   signal.signal(signal.SIGTERM, checker_common.sigterm_handler)

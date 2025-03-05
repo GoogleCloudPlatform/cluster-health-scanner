@@ -20,7 +20,7 @@ health_check:
   name: "nccl"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck"
-    tag: "a3-highgpu-8g_4.3.0"
+    tag: "a3-highgpu-8g_4.4.0"
     pull_policy: "Always"
   env:
     # A3 instance type is a3-highgpu-8g
@@ -30,7 +30,7 @@ health_check:
     DRY_RUN: "true"
     START_MESSAGE_SIZE: "2G"
     END_MESSAGE_SIZE: "8G"
-    TEST_ITERATIONS: "5"
+    TEST_ITERATIONS: "3"
     NHOSTS: "2"
     nr: "8"
     # Specific to A3
