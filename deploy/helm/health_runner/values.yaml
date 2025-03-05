@@ -92,10 +92,10 @@ health_checks:
     run_check: false
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.3-latest"
+      tag: "4.4-latest"
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.2-latest"
+      HC_IMAGE_TAG: "4.4-latest"
       MACHINE_TYPE: "a3-megagpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"

@@ -48,6 +48,29 @@ message HealthCheck {
   oneof result_object {
     string result_label = 10;
   }
+
+  oneof health_check_config {
+    PerformanceHealthCheckConfig performance_health_check_config = 9;
+  }
+}
+
+// The configuration for a single performance health check.
+message PerformanceHealthCheckConfig {
+  // The topology level of the test.
+  TopologyLevel topology_level = 1;
+
+  // Optional. The number of hosts to run the test on. If not specified, the
+  // test will run on all hosts in the topology.
+  int32 num_hosts = 2;
+
+  oneof performance_health_check_config {
+    NCCLPerformanceHealthCheckConfig nccl_performance_health_check_config = 3;
+  }
+
+  message NCCLPerformanceHealthCheckConfig {
+    // The number of nodes to run the test on.
+    repeated string benchmarks = 1;
+  }
 }
 
 // The configuration for a single helm release.
@@ -75,6 +98,14 @@ enum HealthCheckName {
   HEALTH_CHECK_NCCL_INTER_CLUSTER = 6;
   HEALTH_CHECK_NCCL_RANDOM_PAIR = 7;
   HEALTH_CHECK_NCCL_PERFORMANCE = 8;
+}
+
+// The topology level of the test.
+enum TopologyLevel {
+  TOPOLOGY_LEVEL_UNSPECIFIED = 0;
+  TOPOLOGY_LEVEL_SUBBLOCK = 1;
+  TOPOLOGY_LEVEL_BLOCK = 2;
+  TOPOLOGY_LEVEL_CLUSTER = 3;
 }
 
 // The parameters for a single health check.

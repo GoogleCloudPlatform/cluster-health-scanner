@@ -38,15 +38,18 @@ import health_results_pb2
 import health_runner_config_pb2
 
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
-
-# If set, only the nodes that have this label set to true will be used.
-_FILTER_LABEL_NAME = os.environ.get("FILTER_LABEL_NAME", "")
-_FILTER_LABEL_VALUE = os.environ.get("FILTER_LABEL_VALUE", "true")
-
 HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
+
+
+K_LABEL_TO_MESSAGE_SIZE = {
+    "aiinfra/nccl-healthcheck-8G-bandwidth": 8 * 1024 * 1024 * 1024,
+    "aiinfra/nccl-healthcheck-1G-bandwidth": 1024 * 1024 * 1024,
+    "aiinfra/nccl-healthcheck-64MiB-bandwidth": 64 * 1024 * 1024,
+    "aiinfra/nccl-healthcheck-4MiB-bandwidth": 4 * 1024 * 1024,
+}
 
 
 class HelmCommand(enum.Enum):
@@ -330,6 +333,33 @@ def create_job_k8s(
       yaml_path=yaml_file,
       mappings=env_mappings,
   )
+
+
+def run_healthcheck(
+    health_check: health_runner_config_pb2.HealthCheck,
+    env_mappings: dict[str, str],
+) -> str:
+  """Runs a health check."""
+  job_name = f"diag-performance-{str(uuid.uuid4())[:8]}"
+  if health_check.yaml_file:
+    create_job_k8s(
+        job_name=job_name,
+        yaml_file=health_check.yaml_file,
+        env_mappings=env_mappings,
+    )
+  elif health_check.helm_config:
+    env_mappings["JOB_NAME"] = job_name
+    create_helm_release(
+        helm_path=HELM,
+        release_name=job_name,
+        chart=health_check.helm_config.chart,
+        values=env_mappings,
+        chart_version=health_check.helm_config.chart_version,
+        helm_install_flags=health_check.helm_config.install_flags,
+    )
+  else:
+    raise ValueError("No health check file specified.")
+  return job_name
 
 
 def generate_helm_command(
@@ -716,6 +746,100 @@ def _get_nodes_under_test(
 
     gpu_nodes.append(node)
   return gpu_nodes
+
+
+def topology_key(
+    topology_level: health_runner_config_pb2.TopologyLevel,
+) -> str:
+  """Get the topology key for the health check."""
+  if (
+      topology_level
+      == health_runner_config_pb2.TopologyLevel.TOPOLOGY_LEVEL_SUBBLOCK
+  ):
+    return "cloud.google.com/gce-topology-subblock"
+  elif (
+      topology_level
+      == health_runner_config_pb2.TopologyLevel.TOPOLOGY_LEVEL_BLOCK
+  ):
+    return "cloud.google.com/gce-topology-block"
+  elif (
+      topology_level
+      == health_runner_config_pb2.TopologyLevel.TOPOLOGY_LEVEL_CLUSTER
+  ):
+    return "cloud.google.com/gce-topology-cluster"
+
+  raise ValueError(f"Unsupported topology level {topology_level}.")
+
+
+def create_topology_to_nodes_mapping(
+    capacity: common_pb2.Capacity,
+    topology_level: health_runner_config_pb2.TopologyLevel,
+) -> dict[str, list[str]]:
+  """Get the topology to nodes mapping for the health check."""
+  if (
+      topology_level
+      == health_runner_config_pb2.TopologyLevel.TOPOLOGY_LEVEL_SUBBLOCK
+  ):
+    return generate_subblock_topology(capacity)
+  elif (
+      topology_level
+      == health_runner_config_pb2.TopologyLevel.TOPOLOGY_LEVEL_BLOCK
+  ):
+    return generate_block_topology(capacity)
+  raise ValueError(f"Unsupported topology level {topology_level}.")
+
+
+def generate_block_topology(
+    capacity: common_pb2.Capacity,
+) -> dict[str, list[str]]:
+  """Generates a mapping from block (SBRG) topology to nodes in the block."""
+  # TODO: Add sbrg support to the capacity proto.
+  block_to_nodes = {}
+  for cluster in capacity.clusters:
+    for rack in cluster.racks:
+      for node in rack.nodes:
+        block_to_nodes.setdefault(cluster.id, []).append(node.id)
+  return block_to_nodes
+
+
+def generate_subblock_topology(
+    capacity: common_pb2.Capacity,
+) -> dict[str, list[str]]:
+  """Generates a mapping from subblock (rack) topology to nodes in the subblock."""
+  subblock_to_nodes = {}
+  for cluster in capacity.clusters:
+    for rack in cluster.racks:
+      for node in rack.nodes:
+        subblock_to_nodes.setdefault(rack.id, []).append(node.id)
+  return subblock_to_nodes
+
+
+def parse_nccl_results(
+    node: client.models.V1Node,
+) -> health_results_pb2.NCCLHealthResult:
+  """Parses the NCCL results from the job output."""
+  nccl_health_result = health_results_pb2.NCCLHealthResult(
+      benchmark=node.metadata.labels.get("aiinfra/nccl-healthcheck-benchmark"),
+  )
+  average_bandwidth_gbps = node.metadata.labels.get(
+      "aiinfra/nccl-healthcheck-bandwidth"
+  )
+  if average_bandwidth_gbps and average_bandwidth_gbps != "None":
+    nccl_health_result.average_bandwidth_gbps = int(average_bandwidth_gbps)
+
+  # TODO: Update labels units
+  # Attempt to parse the supported bandwidth labels.
+  for label, message_size in K_LABEL_TO_MESSAGE_SIZE.items():
+    if label not in node.metadata.labels:
+      continue
+    nccl_health_result.bandwidth_measurements.append(
+        health_results_pb2.NCCLHealthResult.NCCLBandwidthResult(
+            value_gbps=float(node.metadata.labels[label]),
+            message_size_bytes=int(message_size),
+        )
+    )
+
+  return nccl_health_result
 
 
 def has_gpu_resources(node: client.models.V1Node) -> bool:

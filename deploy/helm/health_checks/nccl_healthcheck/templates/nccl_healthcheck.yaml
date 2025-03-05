@@ -131,6 +131,11 @@ spec:
           {{- if eq .Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g" }}
           /scripts/container_entry.sh install --install-nccl
           cp -R /var/lib/gib/. /usr/local/gib
+          echo "installation finishes"
+          {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a4-highgpu-8g" }}
+          /scripts/container_entry.sh install --install-nccl
+          cp -R /var/lib/gib/. /usr/local/home/kubernetes/bin/gib
+          echo "installation finishes"
           {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g-debian" }}
           mkdir -p /usr/local/nvidia/lib64
           cp -r /var/lib/fastrak/lib64/. /usr/local/nvidia/lib64
@@ -142,6 +147,7 @@ spec:
           {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g"}}
           /scripts/container_entry.sh install --install-nccl
           cp -R /var/lib/tcpxo/. /usr/local/tcpxo
+          echo "installation finishes"
           {{- end }}
       {{- /* Different tcpd-daemon container depending on accelerator type */}}
       shareProcessNamespace: true
