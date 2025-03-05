@@ -26,6 +26,7 @@ SUPPORTED_MACHINE_TYPES = frozenset([
     'a3-highgpu-8g',
     'a3-megagpu-8g',
     'a3-ultragpu-8g',
+    'a4-highgpu-8g',
 ])
 
 

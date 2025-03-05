@@ -7,10 +7,13 @@ Steps to do before running the scripts:
 *   Run `git clone
     https://github.com/GoogleCloudPlatform/cluster-health-scanner.git` to
     download code to your login node.
+
 *   Run `cd cluster-health-scanner/deploy/slurm` to access to the available
     scripts.
-*   Note that `cluster-validation.sh` is the scheduler and uses other scripts
-    internally. This is the only script you need to run. Example commands are shown below.
+
+*   Run `chmod +x cluster-validation.sh` to give execute permission. Note that
+    `cluster-validation.sh` is the scheduler and uses other scripts internally.
+    This is the only script you need to run. Example commands are shown below.
 
 The examples in this directory are used to show how to test Slurm cluster node
 health.

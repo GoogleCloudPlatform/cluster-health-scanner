@@ -139,7 +139,7 @@ spec:
           path: /var/lib
       - name: library-dir-host
         hostPath:
-          path: /home/kubernetes/bin
+          path: /home/kubernetes/bin/nvidia
       - name: tcpxo-host-volume
         emptyDir: {}
       - name: tcpxo-var-volume
@@ -147,6 +147,9 @@ spec:
           path: /var/lib/tcpxo/lib64
       - name: workload-terminated-volume
         emptyDir: {}
+      - name: usr-local-gib
+        hostPath:
+          path: /home/kubernetes/bin/gib
       initContainers:
       - image: "ubuntu"
         name: pre-installation
@@ -160,7 +163,6 @@ spec:
         - sh
         - -c
         - apt-get update && apt-get install --yes --no-install-recommends iptables && /sbin/iptables -I INPUT -p tcp -m tcp -j ACCEPT
-      {{- if $.Values.health_check.params.use_fastrak}}
       - name: tcpxo-nccl-plugin-installer
         image: {{ $.Values.health_check.ncclPlugin.image }}:{{ $.Values.health_check.ncclPlugin.tag }}
         imagePullPolicy: Always
@@ -168,7 +170,9 @@ spec:
         - name: var-lib
           mountPath: /var/lib
         - name: library-dir-host
-          mountPath: /usr/local
+          mountPath: /usr/local/nvidia
+        - name: usr-local-gib
+          mountPath: /usr/local/gib
         resources:
           requests:
             cpu: 150m
@@ -179,10 +183,16 @@ spec:
             set -ex
             chmod 755 /scripts/container_entry.sh
             /scripts/container_entry.sh install --install-nccl
+            {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g" }}
+            cp -R /var/lib/gib/. /usr/local/gib
+            echo " installation finishes"
+            {{- else if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g"}}
             mkdir -p /usr/local/nvidia/lib64
             cp -r /var/lib/tcpxo/lib64/. /usr/local/nvidia/lib64
             echo " installation finishes"
+            {{- end }}
       containers:
+      {{- if $.Values.health_check.params.use_fastrak}}
       - name: tcpd-daemon
         image: {{ printf "%s:%s" $.Values.health_check.rxdm.image $.Values.health_check.rxdm.tag | quote }}
         imagePullPolicy: Always
@@ -264,9 +274,12 @@ spec:
             value: {{ $check_time | quote }}
           - name: USE_FASTRAK
             value: "{{ $.Values.health_check.params.use_fastrak }}"
-          {{- if $.Values.health_check.params.use_fastrak}}
+          {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g" }}
           - name: LD_LIBRARY_PATH
             value: /usr/local/nvidia/lib64:/usr/local/fastrak/lib64
+          {{- else if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g"}}
+          - name: LD_LIBRARY_PATH
+            value: /usr/local/gib/lib64:/usr/local/nvidia/lib64/
           {{- end }}
           - name: BIDIRECTIONAL
             value: "{{$root.Values.health_check.params.bidirectional}}"
@@ -297,6 +310,12 @@ spec:
             mountPath: /dev/shm
           - name: workload-terminated-volume
             mountPath: /usr/share/nemo
+          {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g" }}
+          - name: usr-local-gib
+            mountPath: /usr/local/gib
+          - name: library-dir-host
+            mountPath: /usr/local/nvidia
+          {{- end }}
         resources:
           limits:
             nvidia.com/gpu: !!int 8

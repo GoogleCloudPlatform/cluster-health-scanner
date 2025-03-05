@@ -20,7 +20,7 @@ health_check:
   name: "tinymax"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/tinymax-healthcheck"
-    tag: "a3-megagpu-8g_4.2.0"
+    tag: "a3-megagpu-8g_4.4.0"
     pull_policy: "Always"
   test_label:
     name: "aiinfra/tinymax-healthcheck-test"
@@ -85,6 +85,8 @@ health_check:
     mountPath: /usr/share/nemo
   - name: shared-memory
     mountPath: /dev/shm
+  - name: varlog
+    mountPath: /var/log
 # Configuration specific to a3plus
 volumes:
 - name: nvidia-install-dir-host
@@ -101,6 +103,12 @@ volumes:
   emptyDir:
     medium: "Memory"
     sizeLimit: 250Gi
+- name: varlog
+  emptyDir: {}
+- name: fluentbit-key
+  secret:
+    secretName: fluentbit-key
+    optional: true
 initContainers:
   nccl_plugin_installer:
     name: "nccl-plugin-installer"

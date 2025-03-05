@@ -33,7 +33,7 @@ esac
 vstart=$((cstart+104))
 vend=$((cend+104))
 
-GPU_SERIAL=$(nvidia-smi --query-gpu serial --format csv,noheader -i "$OMPI_COMM_WORLD_LOCAL_RANK")
+GPU_SERIAL=$(/usr/local/nvidia/bin/nvidia-smi --query-gpu serial --format csv,noheader -i "$OMPI_COMM_WORLD_LOCAL_RANK")
 VM_ID=$(curl "http://metadata.google.internal/computeMetadata/v1/instance/id?alt=text" -H "Metadata-Flavor: Google")
 export GPU_SERIAL
 export VM_ID

@@ -53,6 +53,7 @@ class GkeTinymaxCheck(gke_check.GkeCheck):
       if machine_type not in [
           'a3-highgpu-8g',
           'a3-ultragpu-8g',
+          'a4-highgpu-8g',
       ]
   )
 
