@@ -99,7 +99,7 @@ steps:
     'health_checks.nccl_healthcheck.image.tag=$SHORT_SHA', '--set',
     'health_checks.nccl_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.nccl_healthcheck.run_check=true',
     '--set', 'health_checks.nccl_healthcheck.DRY_RUN="false"', '--set', 'health_checks.nccl_healthcheck.blast_mode.blast_mode_enabled=true', '--set',
-    'health_checks.nccl_healthcheck.env.HELM_INSTALL_FLAGS=-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$HC_IMAGE_TAG']
+    'health_checks.nccl_healthcheck.env.HELM_INSTALL_FLAGS=-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$SHORT_SHA']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
