@@ -57,15 +57,29 @@ message HealthResultList {
   // The status of the health check.
   Status status = 2;
 
+  // The number of nodes in the topology under test.
+  int32 num_nodes = 4;
+
   // Additional results for specific health checks.
-  oneof result {
-    NCCLHealthResult nccl_health_result = 3;
-  }
+  repeated NCCLHealthResult nccl_health_result = 3;
 }
 
-// The results NCCL health check for a single object.
 message NCCLHealthResult {
-  int32 bandwidth_gbps = 1;
+  message NCCLBandwidthResult {
+    // The bandwidth value in GBps.
+    double value_gbps = 1;
+    // The message size in bytes.
+    int64 message_size_bytes = 2;
+  }
+
+  // The benchmark of the NCCL test (all_reduce, all_gather, etc).
+  string benchmark = 1;
+
+  // The average bandwidth of the NCCL test in GBps.
+  double average_bandwidth_gbps = 2;
+
+  // The bandwidth measurements of the NCCL test for different message sizes.
+  repeated NCCLBandwidthResult bandwidth_measurements = 3;
 }
 
 // The status of the health check.

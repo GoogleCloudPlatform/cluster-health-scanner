@@ -348,6 +348,8 @@ class GkeCheck(check.Check):
         return base_path + 'values.yaml'
       case 'a3-ultragpu-8g':
         return base_path + 'a3ultra.yaml'
+      case 'a4-highgpu-8g':
+        return base_path + 'a4.yaml'
       case _:
         raise ValueError(f'Unsupported machine type: {self.machine_type}')
 

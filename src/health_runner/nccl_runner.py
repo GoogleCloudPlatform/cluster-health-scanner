@@ -39,6 +39,7 @@ def timeout_handler(signum: Any, frame: Any) -> None:
   print(f"Received {signum} signal on frame {frame}. Exiting...")
   raise TimeoutError("Timed out!")
 
+
 signal.signal(signal.SIGALRM, timeout_handler)
 
 # Time to wait for jobs to complete (timeout for 1st & 2nd pass separately)
@@ -237,6 +238,15 @@ def run_nccl_random_pair_healthcheck(
         nodes.append(node.id)
   logging.info("Found %d nodes", len(nodes))
 
+  if len(nodes) == 1:
+    print("Skipping random pair health check with less than 2 nodes.")
+    health_result.health_results.append(
+        health_results_pb2.HealthResultList(
+            id=nodes[0], status=health_results_pb2.Status.SKIP
+        )
+    )
+    return health_result
+
   # For the first pass, pair each node
   node_pairs = []
   logging.info("Creating node pairs...")
@@ -268,6 +278,7 @@ def run_nccl_random_pair_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   # If no second pass, no failed nodes, or no passed nodes for second pass,
   # then return results.
@@ -278,6 +289,7 @@ def run_nccl_random_pair_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     failed_nodes = node_results.get("fail", list())
     suspect_nodes_no_fails: list[str] = [
         node for node, result_type in suspect_nodes if result_type != "fail"
@@ -286,7 +298,7 @@ def run_nccl_random_pair_healthcheck(
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
     health_result.health_results.extend(
-        generate_nccl_health_results(passed_nodes, failed_nodes)
+        generate_nccl_health_results(passed_nodes, failed_nodes, [])
     )
     return health_result
 
@@ -340,11 +352,13 @@ def run_nccl_random_pair_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value=result_type
     )
+    logging.info("Node %s failed nccl test, result %s", node, result_type)
   passed_nodes, failed_nodes = determine_failed_components(
       passed_nodes,
       suspect_nodes_list,
@@ -355,7 +369,7 @@ def run_nccl_random_pair_healthcheck(
   print(f"found failed/suspect nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
   health_result.health_results.extend(
-      generate_nccl_health_results(passed_nodes, failed_nodes)
+      generate_nccl_health_results(passed_nodes, failed_nodes, [])
   )
   return health_result
 
@@ -381,11 +395,15 @@ def run_intra_rack_healthcheck(
   # Contains all node pairs created by rack
   node_pairs = []
 
+  # Contains all nodes that were skipped due to not having a pair node.
+  skipped_nodes = []
+
   # For the first pass, pair each node in the rack
   for rack, nodes_in_rack in rack_to_nodes.items():
     logging.info("%d nodes in rack %s", len(nodes_in_rack), rack)
-    if len(nodes_in_rack) < 2:
+    if len(nodes_in_rack) == 1:
       print(f"Skipping rack {rack} with less than 2 nodes.")
+      skipped_nodes.extend(nodes_in_rack)
       continue
     # Add the specific node pairs to the overall list
     for i, j in generate_index_pairs(len(nodes_in_rack)):
@@ -421,6 +439,7 @@ def run_intra_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   # If no second pass, no failed nodes, or no passed nodes for second pass,
   # then return results.
@@ -431,6 +450,7 @@ def run_intra_rack_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     failed_nodes = node_results.get("fail", list())
     suspect_nodes_no_fails: list[str] = [
         node for node, result_type in suspect_nodes if result_type != "fail"
@@ -439,7 +459,7 @@ def run_intra_rack_healthcheck(
     print(f"Found failed nodes: {failed_nodes}")
     print(f"Found passed nodes: {passed_nodes}")
     health_result.health_results.extend(
-        generate_nccl_health_results(passed_nodes, failed_nodes)
+        generate_nccl_health_results(passed_nodes, failed_nodes, skipped_nodes)
     )
     return health_result
 
@@ -504,11 +524,13 @@ def run_intra_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value=result_type
     )
+    logging.info("Node %s failed nccl test, result %s", node, result_type)
   # Get just the names from suspect nodes for second pass
   suspect_nodes_second_pass_list = [
       node for (node, _) in suspect_nodes_second_pass
@@ -523,7 +545,7 @@ def run_intra_rack_healthcheck(
   print(f"found failed/suspect nodes: {failed_nodes}")
   print(f"found passed nodes: {passed_nodes}")
   health_result.health_results.extend(
-      generate_nccl_health_results(passed_nodes, failed_nodes)
+      generate_nccl_health_results(passed_nodes, failed_nodes, skipped_nodes)
   )
   return health_result
 
@@ -552,7 +574,18 @@ def run_inter_rack_healthcheck(
       rack_to_nodes[rack.id] = [node.id for node in rack.nodes]
   logging.info("Found %d racks", len(rack_to_nodes))
 
+  passed_racks = []
+  failed_racks = []
+  skipped_racks = []
+
   for _, racks in cluster_to_racks.items():
+    # If there is only one rack in the cluster, then we can't run
+    # inter-rack tests.
+    if len(racks) == 1:
+      # Remove the rack since logic below assumes fail if not passed
+      del rack_to_nodes[racks[0]]
+      skipped_racks.append(racks[0])
+      continue
     # Pair each rack with another rack in the same cluster
     rack_pairs = generate_index_pairs(len(racks))
     for i, j in rack_pairs:
@@ -575,6 +608,13 @@ def run_inter_rack_healthcheck(
           f" {rack1})"
       )
 
+  if not node_pairs:
+    # There were not rack pairs in any cluster.
+    health_result.health_results.extend(
+        generate_nccl_health_results(passed_racks, failed_racks, skipped_racks)
+    )
+    return health_result
+
   tested_nodes = health_check_with_node_pairs(
       node_pairs=node_pairs,
       orchestrator_config=orchestrator_config,
@@ -596,9 +636,7 @@ def run_inter_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
-
-  passed_racks = []
-  failed_racks = []
+    logging.info("Node %s passed nccl test", node)
 
   # Determine which racks passed and which failed by checking if any of the
   # nodes in the rack passed.
@@ -614,10 +652,11 @@ def run_inter_rack_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     print(f"Found failed racks: {failed_racks}")
     print(f"Found passed racks: {passed_racks}")
     health_result.health_results.extend(
-        generate_nccl_health_results(passed_racks, failed_racks)
+        generate_nccl_health_results(passed_racks, failed_racks, skipped_racks)
     )
     return health_result
 
@@ -686,11 +725,13 @@ def run_inter_rack_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value=result_type
     )
+    logging.info("Node %s failed nccl test, result %s", node, result_type)
 
   second_passed_racks = []
   second_failed_racks = []
@@ -711,7 +752,7 @@ def run_inter_rack_healthcheck(
   print(f"After second pass - Failed racks: {failed_racks}")
   print(f"After second pass - Passed racks: {passed_racks}")
   health_result.health_results.extend(
-      generate_nccl_health_results(passed_racks, failed_racks)
+      generate_nccl_health_results(passed_racks, failed_racks, skipped_racks)
   )
 
   return health_result
@@ -734,6 +775,19 @@ def run_inter_cluster_healthcheck(
         cluster_to_nodes[cluster.id] = [node.id for node in rack.nodes]
       else:
         cluster_to_nodes[cluster.id].extend([node.id for node in rack.nodes])
+
+  # If there is only one cluster, then we can't run inter-cluster tests.
+  if len(cluster_to_nodes) == 1:
+    logging.info(
+        "Skipping inter-cluster test because there is only one cluster"
+    )
+    health_result.health_results.append(
+        health_results_pb2.HealthResultList(
+            id=list(cluster_to_nodes.keys())[0],
+            status=health_results_pb2.Status.SKIP,
+        )
+    )
+    return health_result
 
   node_pairs = []
 
@@ -781,6 +835,7 @@ def run_inter_cluster_healthcheck(
     checker_common.label_node(
         node, label_key=NCCL_RESULT_KEY, label_value="pass"
     )
+    logging.info("Node %s passed nccl test", node)
 
   passed_clusters = []
   failed_clusters = []
@@ -797,10 +852,11 @@ def run_inter_cluster_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
     print(f"Found failed clusters: {failed_clusters}")
     print(f"Found passed clusters: {passed_clusters}")
     health_result.health_results.extend(
-        generate_nccl_health_results(passed_clusters, failed_clusters)
+        generate_nccl_health_results(passed_clusters, failed_clusters, [])
     )
     return health_result
 
@@ -853,12 +909,14 @@ def run_inter_cluster_healthcheck(
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value="pass"
       )
+      logging.info("Node %s passed nccl test", node)
   # Since final test, we can use this result type as final result
   for node, result_type in suspect_nodes_second_pass:
     if node in all_suspect_nodes:
       checker_common.label_node(
           node, label_key=NCCL_RESULT_KEY, label_value=result_type
       )
+      logging.info("Node %s failed nccl test, result %s", node, result_type)
 
   second_passed_clusters = []
   second_failed_clusters = []
@@ -882,7 +940,7 @@ def run_inter_cluster_healthcheck(
   print(f"After second pass - Failed racks: {failed_clusters}")
   print(f"After second pass - Passed racks: {passed_clusters}")
   health_result.health_results.extend(
-      generate_nccl_health_results(passed_clusters, failed_clusters)
+      generate_nccl_health_results(passed_clusters, failed_clusters, [])
   )
 
   return health_result
@@ -1008,19 +1066,24 @@ def generate_index_pairs(length: int) -> list[tuple[int, int]]:
 def generate_nccl_health_results(
     passed_objects: Iterable[str],
     failed_objects: Iterable[str],
+    skipped_objects: Iterable[str],
 ) -> list[health_results_pb2.HealthResultList]:
   """Generates a list of NCCLHealthResult protos for the given nodes."""
   health_results = []
   # Sort the objects to ensure the results are deterministic
-  objects = list(passed_objects) + list(failed_objects)
+  objects = list(passed_objects) + list(failed_objects) + list(skipped_objects)
   objects.sort()
 
   passed_objects = set(passed_objects)
+  skip_objects = set(skipped_objects)
   for obj in objects:
     if obj in passed_objects:
       status = health_results_pb2.Status.PASS
+    elif obj in skip_objects:
+      status = health_results_pb2.Status.SKIP
     else:
       status = health_results_pb2.Status.FAIL
+
     health_results.append(
         health_results_pb2.HealthResultList(id=obj, status=status)
     )

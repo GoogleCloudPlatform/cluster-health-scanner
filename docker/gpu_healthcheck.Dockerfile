@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM nvidia/dcgm:3.3.5-1-ubuntu22.04
+FROM nvidia/dcgm:4.1.1-1-ubuntu22.04
 RUN apt-get update && apt-get install -y ca-certificates curl python3 python3-pip
 WORKDIR /app
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl
