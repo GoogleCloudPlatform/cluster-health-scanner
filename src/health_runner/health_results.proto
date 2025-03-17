@@ -62,6 +62,9 @@ message HealthResultList {
 
   // Additional results for specific health checks.
   repeated NCCLHealthResult nccl_health_result = 3;
+
+  // Additional results for NEMO health checks.
+  repeated NEMOHealthResult nemo_health_result = 5;
 }
 
 message NCCLHealthResult {
@@ -80,6 +83,17 @@ message NCCLHealthResult {
 
   // The bandwidth measurements of the NCCL test for different message sizes.
   repeated NCCLBandwidthResult bandwidth_measurements = 3;
+}
+
+message NEMOHealthResult {
+  // The step time of the NEMO test in seconds.
+  double step_time_seconds = 1;
+
+  // The TFLOPS per accelerator of the NEMO test.
+  double tflops_per_accelerator = 2;
+
+  // The MFU of the NEMO test.
+  double mfu = 3;
 }
 
 // The status of the health check.

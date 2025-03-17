@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # yamllint disable
-{{- $guid := default (lower (randAlphaNum 4)) .Values.job.guid -}}
+{{- $guid := default (lower (randAlphaNum 8)) .Values.job.guid -}}
 {{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.job.check_time -}}
 {{- $base_name := default "chs-hc" .Values.job.base_name -}}
 {{- $unique_suffix := printf "%s-%s" $guid $check_time -}}
@@ -150,6 +150,15 @@ spec:
       - name: usr-local-gib
         hostPath:
           path: /home/kubernetes/bin/gib
+      {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
+      - name: tcpd-socket
+        hostPath:
+          path: /run/tcpx
+      - name: tcpx-nccl-plugin-volume
+        emptyDir: {}
+      - name: varlog
+        emptyDir: {}
+      {{- end }}
       initContainers:
       - image: "ubuntu"
         name: pre-installation
@@ -173,6 +182,12 @@ spec:
           mountPath: /usr/local/nvidia
         - name: usr-local-gib
           mountPath: /usr/local/gib
+        {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
+        - name: "tcpx-nccl-plugin-volume"
+          mountPath: "/usr/local/tcpx"
+        - name: varlog
+          mountPath: /var/log
+        {{- end }}
         resources:
           requests:
             cpu: 150m
@@ -189,6 +204,9 @@ spec:
             {{- else if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-megagpu-8g"}}
             mkdir -p /usr/local/nvidia/lib64
             cp -r /var/lib/tcpxo/lib64/. /usr/local/nvidia/lib64
+            echo " installation finishes"
+            {{- else if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g"}}
+            cp -R /var/lib/tcpx/. /usr/local/tcpx
             echo " installation finishes"
             {{- end }}
       containers:
@@ -226,6 +244,40 @@ spec:
         - name: LD_LIBRARY_PATH
           value: /usr/local/fastrak/lib64:/usr/local/nvidia/lib64
       {{- end }}
+      {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
+      - name: tcpd-daemon
+        image: {{ printf "%s:%s" $.Values.health_check.rxdm.image $.Values.health_check.rxdm.tag | quote }}
+        imagePullPolicy: Always
+        command:
+        - "bash"
+        args:
+        - "-c"
+        - |
+          /tcpgpudmarxd/build/app/tcpgpudmarxd --gpu_nic_preset a3vm --gpu_shmem_type fd --setup_param "--verbose 128 2 0" --uds_path /run/tcpx &
+          cleanup() {
+            echo "Received SIGTERM or workload terminated, starting cleanup..."
+            pkill -e "^"tcpgpudmarxd || true
+            exit 0
+          }
+          trap cleanup SIGTERM
+          while [ ! -e "/usr/share/nemo/workload_terminated" ]; do sleep 1; done
+          cleanup
+          sleep 10
+        volumeMounts:
+        - name: nvidia-install-dir-host
+          mountPath: /usr/local/nvidia/lib64
+        - name: tcpx-nccl-plugin-volume
+          mountPath: /usr/local/tcpx
+        - name: tcpd-socket
+          mountPath: /run/tcpx
+        - name: workload-terminated-volume
+          mountPath: /usr/share/nemo
+        env:
+        - name: LD_LIBRARY_PATH
+          value: usr/local/nvidia/lib64
+        securityContext:
+          privileged: true
+      {{- end }}
       - name: straggler-detection-test
         image: {{ printf "%s:%s" $.Values.health_check.image.repo $.Values.health_check.image.tag | quote }}
         imagePullPolicy: Always
@@ -248,11 +300,9 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
-          {{- if $.Values.health_check.params.use_fastrak}}
           {{range $key, $value := $.Values.health_check.ncclPlugin.envs}}
           - name: {{ $key }}
             value: "{{ $value }}"
-          {{- end }}
           {{- end }}
           {{- range $key, $value := $.Values.health_check.env }}
           - name: {{ $key | quote }}
@@ -280,6 +330,9 @@ spec:
           {{- else if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-ultragpu-8g"}}
           - name: LD_LIBRARY_PATH
             value: /usr/local/gib/lib64:/usr/local/nvidia/lib64/
+          {{- else if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g"}}
+          - name: LD_LIBRARY_PATH
+            value: /usr/local/nvidia/lib64
           {{- end }}
           - name: BIDIRECTIONAL
             value: "{{$root.Values.health_check.params.bidirectional}}"
@@ -316,6 +369,14 @@ spec:
           - name: library-dir-host
             mountPath: /usr/local/nvidia
           {{- end }}
+          {{- if eq $root.Values.health_check.env.INSTANCE_TYPE "a3-highgpu-8g" }}
+          - name: tcpx-nccl-plugin-volume
+            mountPath: /usr/local/tcpx
+          - name: tcpd-socket
+            mountPath: /run/tcpx
+          - name: varlog
+            mountPath: /var/log
+          {{- end }}  
         resources:
           limits:
             nvidia.com/gpu: !!int 8

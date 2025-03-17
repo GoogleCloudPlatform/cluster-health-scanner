@@ -29,7 +29,6 @@ import os
 import signal
 import socket
 import sys
-import time
 from typing import Any
 import uuid
 
@@ -291,10 +290,6 @@ def run_health_check() -> None:
             helm_install_flags=helm_install_flags,
         )
     )
-    # TODO - Find a better way to avoid this sleep
-    # Sleep to allow time for helm releases to create proper ServiceAccount,
-    # ClusterRole, etc.
-    time.sleep(1)
     # Count of tests deployed should start at 1 to make it clear
     logging.info("Deployed test %d (%d of %d total)", i, i + 1, num_tests)
 
