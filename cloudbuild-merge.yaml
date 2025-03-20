@@ -1,1 +1,10 @@
 
+steps:
+# Read current version
+- name: 'alpine'
+  entrypoint: sh
+  args:
+    - -c
+    - |
+      VERSION=$(cat depoy/helm/health_runner/version.txt)
+      echo "Current version: $VERSION"
