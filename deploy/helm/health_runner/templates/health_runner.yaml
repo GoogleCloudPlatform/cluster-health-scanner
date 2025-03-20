@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # yamllint disable
-{{ $guid := default (lower (randAlphaNum 4)) .Values.health_runner.guid }}
+{{ $guid := default (lower (randAlphaNum 8)) .Values.health_runner.guid }}
 {{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.health_runner.check_time -}}
 {{- $base_name := default "chs-hr" .Values.health_runner.base_name -}}
 {{- $unique_suffix := printf "%s-%s" $guid $check_time -}}

@@ -54,6 +54,4 @@ COPY src/checker_common.py /scripts/
 RUN chmod +x /scripts/run-nccl-combined-plugins.sh
 ENV PYTHONUNBUFFERED=1
 
-RUN apt-get install -y dnsutils
-
 ENTRYPOINT ["python3", "/scripts/nccl_startup.py"]

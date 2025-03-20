@@ -12,9 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v2
-name: health_runner
-description: A chart for running health runner to kick off Cluster Health Scanner health checks/tests.
-type: application
-version: 0.3.0
-appVersion: "2.0.0"
+health_runner:
+  name: "health-runner"
+# Note that sleep health check (E2) is enabled by default
+health_checks:
+  sleep_healthcheck:
+    run_check: true
+    runner_name: sleep-health-runner
+    image:
+      repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      tag: "4.4-latest"
+      pull_policy: "Always"
+    env:
+      DRY_RUN: "true"
+      SLEEP_TIME_MINUTES: "10"
+      HELM_CHART: "/app/health_checks/sleep_healthcheck"  # Path to Helm chart in container
+      HELM_INSTALL_FLAGS: ""

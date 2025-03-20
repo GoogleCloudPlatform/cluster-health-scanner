@@ -43,6 +43,7 @@ HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
 
+K_GSUTIL_COPY_FILE_FORMAT = "gsutil cp %s %s"
 
 K_LABEL_TO_MESSAGE_SIZE = {
     "aiinfra/nccl-healthcheck-8G-bandwidth": 8 * 1024 * 1024 * 1024,
@@ -531,7 +532,7 @@ def expand_template(
       "ORIG_CHECK_TIME_EPOCH_SEC": os.environ.get("CHECK_TIME_EPOCH_SEC"),
       "R_LEVEL": os.environ.get("R_LEVEL"),
       "IMAGE_TAG": os.environ.get("IMAGE_TAG", "latest"),
-      "SHORT_GUID": os.environ.get("SHORT_GUID", str(uuid.uuid4())[:4]),
+      "SHORT_GUID": os.environ.get("SHORT_GUID", str(uuid.uuid4())[:8]),
       "ITERATIONS": os.environ.get("ITERATIONS", 5),
       "WORKFLOW_ID": os.environ.get("WORKFLOW_ID"),
       "BUG_ID": os.environ.get("BUG_ID"),
