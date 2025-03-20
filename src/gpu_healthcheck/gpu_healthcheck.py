@@ -46,8 +46,8 @@ REBOOT_REQUIRED_LABEL_KEY = "aiinfra/reboot-required"
 HEALTHCHECK_TIME_LABEL_KEY = "aiinfra/gpu-healthcheck-runtime-sec"
 # for r level see:
 # https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html
-R_LEVEL = os.environ.get("R_LEVEL") or "1"
-DCGM_COMMAND = "dcgmi diag -g 0 -r %s -j --verbose" % R_LEVEL
+R_LEVEL = os.environ.get("R_LEVEL")
+DCGM_COMMAND = "dcgmi diag -g 0 -r %s -j --verbose"
 NVIDIA_SMI_COMMAND = (
     "/usr/local/nvidia/bin/nvidia-smi"
     " --query-gpu=ecc.errors.uncorrected.volatile.total"
@@ -158,9 +158,20 @@ def run_reboot_required_check(node_name: str) -> bool:
     return False
 
 
+def generate_dcgm_command() -> str:
+  """Generates the command to run DCGM diagnostic tool."""
+  r_level = os.environ.get("R_LEVEL", "1")
+  command = DCGM_COMMAND % r_level
+  dcgm_params = os.environ.get("DCGM_PARAMS")
+  if dcgm_params is not None and dcgm_params:
+    command += " -p " + dcgm_params
+  return command
+
+
 def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
   """run dcgm diag."""
-  diag_output = checker_common.run_command(DCGM_COMMAND)
+  command = generate_dcgm_command()
+  diag_output = checker_common.run_command(command)
 
   try:
     print("Converting from json output to proto")

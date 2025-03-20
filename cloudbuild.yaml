@@ -47,11 +47,6 @@ steps:
   args: ['build', '-t', "us-docker.pkg.dev/$PROJECT_ID/health-check/nccl-healthcheck:$SHORT_SHA",
     "-f", "docker/nccl_healthcheck.Dockerfile", '.']
   waitFor: ['-']
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'neper_healthcheck_build'
-  args: ['build', '-t', "us-docker.pkg.dev/$PROJECT_ID/health-check/neper-healthcheck:$SHORT_SHA",
-    "-f", "docker/neper_healthcheck.Dockerfile", '.']
-  waitFor: ['-']
 # NOTE: all subsequent steps will be run sequentially & only start after all of the images are built
 # ================================ DOCKER IMAGE UPLOADS ==============================================================
 # 
@@ -71,10 +66,6 @@ steps:
   id: 'nccl_healthcheck_push'
   args: ['push', "us-docker.pkg.dev/$PROJECT_ID/health-check/nccl-healthcheck:$SHORT_SHA"]
   waitFor: ['nccl_healthcheck_build']
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'neper_healthcheck_push'
-  args: ['push', "us-docker.pkg.dev/$PROJECT_ID/health-check/neper-healthcheck:$SHORT_SHA"]
-  waitFor: ['neper_healthcheck_build']
 # ================================== NCCL Healthcheck Tests ===========================================================
 - name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
   id: 'nccl_healthcheck_uninstall'
@@ -97,8 +88,11 @@ steps:
   id: 'nccl_healthcheck_run'
   args: ['upgrade', '-i', 'healthcheck-test', 'deploy/helm/health_runner', '--set',
     'health_checks.nccl_healthcheck.image.tag=$SHORT_SHA', '--set',
-    'health_checks.nccl_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.nccl_healthcheck.run_check=true',
-    '--set', 'health_checks.nccl_healthcheck.DRY_RUN="false"', '--set', 'health_checks.nccl_healthcheck.blast_mode.blast_mode_enabled=true']
+    'health_checks.nccl_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set',
+    'health_checks.nccl_healthcheck.run_check=true', '--set',
+    'health_checks.nccl_healthcheck.DRY_RUN="false"', '--set',
+    'health_checks.nccl_healthcheck.blast_mode.blast_mode_enabled=true', '--set',
+    'health_checks.nccl_healthcheck.env.HELM_INSTALL_FLAGS=-f /app/health_checks/nccl_healthcheck/a3plus.yaml --set health_check.image.tag=$SHORT_SHA']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
@@ -107,41 +101,6 @@ steps:
   id: 'nccl_healthcheck_check'
   args: ['--check', 'aiinfra/nccl-healthcheck-bandwidth=^\d*$', 'aiinfra/nccl-healthcheck-result=^pass$',
     'aiinfra/nccl-healthcheck-runtime-sec=^\d*$', '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
-  env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
-  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
-  - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
-# ================================== Neper Healthcheck Tests ===========================================================
-- name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
-  id: 'neper_healthcheck_uninstall'
-  entrypoint: "bash"
-  args: ["./uninstall_from_cluster.sh", "healthcheck-test", "*health-runner*", "*healthcheck*"]
-  env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
-  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
-  - 'GCLOUD_PROJECT=supercomputer-testing'
-- name: 'gcr.io/cloud-builders/kubectl'
-  id: 'neper_healthcheck_clean'
-  args: ['label', 'nodes', '--all', 'aiinfra/neper-healthcheck-test=true', 'aiinfra/neper-healthcheck-result-',
-    'aiinfra/neper-healthcheck-runtime-sec-']
-  env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
-  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
-  - 'CLOUDSDK_CORE_PROJECT=supercomputer-testing'
-- name: 'gcr.io/$PROJECT_ID/helm'  # community image, built manually from instructions at https://github.com/GoogleCloudPlatform/cloud-builders-community/tree/master
-  id: 'neper_healthcheck_run'
-  args: ['upgrade', '-i', 'healthcheck-test', 'deploy/helm/health_runner', '--set',
-    'health_checks.neper_healthcheck.image.tag=$SHORT_SHA', '--set',
-    'health_checks.neper_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.neper_healthcheck.run_check=true',
-    '--set', 'health_checks.neper_healthcheck.DRY_RUN="false"', '--set', 'health_checks.neper_healthcheck.blast_mode.blast_mode_enabled=true']
-  env:
-  - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
-  - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
-  - 'GCLOUD_PROJECT=supercomputer-testing'
-- name: "us-docker.pkg.dev/$PROJECT_ID/health-check/integration-tests:$SHORT_SHA"
-  id: 'neper_healthcheck_check'
-  args: ['--check', 'aiinfra/neper-healthcheck-result=^pass$', 'aiinfra/neper-healthcheck-runtime-sec=^\d*$',
-    '--filter', 'node.kubernetes.io/instance-type=a3-megagpu']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
@@ -167,8 +126,11 @@ steps:
   id: 'gpu_healthcheck_run'
   args: ['upgrade', '-i', 'healthcheck-test', 'deploy/helm/health_runner', '--set',
     'health_checks.gpu_healthcheck.image.tag=$SHORT_SHA', '--set',
-    'health_checks.gpu_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set', 'health_checks.gpu_healthcheck.run_check=true',
-    '--set', 'health_checks.gpu_healthcheck.DRY_RUN="false"', '--set', 'health_checks.gpu_healthcheck.blast_mode.blast_mode_enabled=true']
+    'health_checks.gpu_healthcheck.env.HC_IMAGE_TAG=$SHORT_SHA', '--set',
+    'health_checks.gpu_healthcheck.run_check=true', '--set',
+    'health_checks.gpu_healthcheck.DRY_RUN="false"', '--set',
+    'health_checks.gpu_healthcheck.blast_mode.blast_mode_enabled=true', '--set',
+    'health_checks.nccl_healthcheck.env.HELM_INSTALL_FLAGS=--set health_check.image.tag=$SHORT_SHA']
   env:
   - 'CLOUDSDK_COMPUTE_REGION=us-east5-a'
   - 'CLOUDSDK_CONTAINER_CLUSTER=a3plus-chs'  # TODO: read these from secrets
@@ -186,4 +148,3 @@ images:  # these images will be uploaded to cloud build
 - "us-docker.pkg.dev/$PROJECT_ID/health-check/health-runner:$SHORT_SHA"
 - "us-docker.pkg.dev/$PROJECT_ID/health-check/gpu-healthcheck:$SHORT_SHA"
 - "us-docker.pkg.dev/$PROJECT_ID/health-check/nccl-healthcheck:$SHORT_SHA"
-- "us-docker.pkg.dev/$PROJECT_ID/health-check/neper-healthcheck:$SHORT_SHA"

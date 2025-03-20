@@ -21,6 +21,7 @@ For more information, run:
 import click
 
 import common
+import configcheck
 import healthscan
 
 SUPPORTED_ORCHESTRATORS: frozenset[str] = common.SUPPORTED_ORCHESTRATORS
@@ -50,6 +51,7 @@ def cluster_diag(ctx: click.Context, orchestrator: str):
 
 
 cluster_diag.add_command(healthscan.cli)
+cluster_diag.add_command(configcheck.cli)
 
 if __name__ == '__main__':
   cluster_diag()

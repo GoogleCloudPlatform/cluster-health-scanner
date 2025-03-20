@@ -23,7 +23,6 @@ import os
 import random
 import signal
 import sys
-import time
 from typing import Any
 import uuid
 
@@ -33,6 +32,7 @@ from kubernetes.client.api import batch_v1_api
 import checker_common
 import common_pb2
 import health_results_pb2
+import health_runner_config_pb2
 
 
 def timeout_handler(signum: Any, frame: Any) -> None:
@@ -64,7 +64,6 @@ def run_nccl_healthcheck(
     orchestrator_config: checker_common.HelmConfig | str,
 ) -> health_results_pb2.HealthResult:
   """Runs NCCL health check and waits for it to complete."""
-  # Set timeout
   logging.info("Setting timeout to %s minutes", _TIMEOUT_MINUTES)
   signal.alarm(int(_TIMEOUT_MINUTES) * 60)
   try:
@@ -72,7 +71,6 @@ def run_nccl_healthcheck(
     v1 = kubernetes.client.CoreV1Api()
     case = os.environ.get("PAIRING_MODE", "random").lower()
     second_pass_enabled = is_second_pass_enabled()
-
     node_data: list[dict[str, str]] = checker_common.get_nodes_data(
         v1.list_node().items, _FILTER_LABEL_NAME, _FILTER_LABEL_VALUE
     )
@@ -81,27 +79,27 @@ def run_nccl_healthcheck(
     # Default is to use toplogy awareness when pairing nodes
     if case == "intra_rack":
       logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-      return run_intra_rack_healthcheck(
+      result = run_intra_rack_healthcheck(
           v1, capacity, orchestrator_config, second_pass_enabled
       )
     elif case == "inter_rack":
       logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-      return run_inter_rack_healthcheck(
+      result = run_inter_rack_healthcheck(
           v1, capacity, orchestrator_config, second_pass_enabled
       )
     elif case == "inter_cluster":
       logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-      return run_inter_cluster_healthcheck(
+      result = run_inter_cluster_healthcheck(
           v1, capacity, orchestrator_config, second_pass_enabled
       )
     elif case == "random":
       logging.info("Running %s w/ pairing mode `%s`", "NCCL", case)
-      return run_nccl_random_pair_healthcheck(
+      result = run_nccl_random_pair_healthcheck(
           v1, capacity, orchestrator_config, second_pass_enabled
       )
     else:
       logging.info("Unknown health check case: %s", case)
-      return run_nccl_random_pair_healthcheck(
+      result = run_nccl_random_pair_healthcheck(
           v1, capacity, orchestrator_config, second_pass_enabled
       )
   except TimeoutError as e:
@@ -109,6 +107,9 @@ def run_nccl_healthcheck(
     # Stops proceeding with what the process was doing to exit
     logging.info("System Exiting...")
     sys.exit(0)
+  # Cancel the timeout since the test completed.
+  signal.alarm(0)
+  return result
 
 
 def health_check_with_node_pairs(
@@ -140,7 +141,7 @@ def health_check_with_node_pairs(
   # For the first pass, pair each node
   for node0, node1 in node_pairs:
     env_mappings_copy = copy.deepcopy(env_mappings)
-    short_guid = str(uuid.uuid4())[:4]
+    short_guid = str(uuid.uuid4())[:8]
     # Defined a default unique name for the non-HelmConfig orchestrator case
     base_name = "chs-hc"
     suffix_name = f"{job_name_distinctor}-{short_guid}"
@@ -180,12 +181,6 @@ def health_check_with_node_pairs(
     else:
       logging.error("No k8s object or helm release specified.")
       return []
-
-    # TODO - Find a better way to avoid this sleep
-    # Sleep to allow time for helm releases to create proper ServiceAccount,
-    # ClusterRole, etc. Otherwise, errors will occur where resources like the
-    # ServiceAccount won't exist to create a SSH connection.
-    time.sleep(1)
 
     tested_nodes.append(node0)
     tested_nodes.append(node1)
@@ -229,7 +224,14 @@ def run_nccl_random_pair_healthcheck(
     A tuple containing the list of passed nodes and the list of failed nodes.
   """
 
-  health_result = health_results_pb2.HealthResult(name="random_pair")
+  health_result = health_results_pb2.HealthResult(
+      name=health_runner_config_pb2.HealthCheckName.Name(
+          health_runner_config_pb2.HEALTH_CHECK_NCCL_RANDOM_PAIR
+      ),
+      type=health_runner_config_pb2.HealthCheckType.Name(
+          health_runner_config_pb2.HealthCheckType.HEALTH_CHECK_TYPE_COMMUNICATION
+      ),
+  )
   nodes = []
   logging.info("Finding all nodes...")
   for cluster in capacity.clusters:
@@ -382,7 +384,12 @@ def run_intra_rack_healthcheck(
 ) -> health_results_pb2.HealthResult:
   """Checks the racks communication by running nccl tests between each node in the same rack."""
   health_result = health_results_pb2.HealthResult(
-      name="intra_rack",
+      name=health_runner_config_pb2.HealthCheckName.Name(
+          health_runner_config_pb2.HEALTH_CHECK_NCCL_INTRA_RACK
+      ),
+      type=health_runner_config_pb2.HealthCheckType.Name(
+          health_runner_config_pb2.HealthCheckType.HEALTH_CHECK_TYPE_COMMUNICATION
+      ),
   )
   # Create a dictionary of rack to nodes for easier lookup.
   rack_to_nodes = {}
@@ -558,7 +565,12 @@ def run_inter_rack_healthcheck(
 ) -> health_results_pb2.HealthResult:
   """Checks inter-rack communication by running nccl tests between nodes in different racks (The racks will be in the same cluster)."""
   health_result = health_results_pb2.HealthResult(
-      name="inter_rack",
+      name=health_runner_config_pb2.HealthCheckName.Name(
+          health_runner_config_pb2.HEALTH_CHECK_NCCL_INTER_RACK
+      ),
+      type=health_runner_config_pb2.HealthCheckType.Name(
+          health_runner_config_pb2.HealthCheckType.HEALTH_CHECK_TYPE_COMMUNICATION
+      ),
   )
   cluster_to_racks = {}
   rack_to_nodes = {}
@@ -766,7 +778,12 @@ def run_inter_cluster_healthcheck(
 ) -> health_results_pb2.HealthResult:
   """Checks the inter-cluster communication by running nccl tests between nodes in different clusters."""
   health_result = health_results_pb2.HealthResult(
-      name="inter_cluster",
+      name=health_runner_config_pb2.HealthCheckName.Name(
+          health_runner_config_pb2.HEALTH_CHECK_NCCL_INTER_CLUSTER
+      ),
+      type=health_runner_config_pb2.HealthCheckType.Name(
+          health_runner_config_pb2.HealthCheckType.HEALTH_CHECK_TYPE_COMMUNICATION
+      ),
   )
   cluster_to_nodes = {}
   for cluster in capacity.clusters:

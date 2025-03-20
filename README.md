@@ -70,9 +70,17 @@ cluster-under-test.
 2. If you don't already have them, install dependencies for the CLI:
    
    ```
-   pip3 install click
-   pip3 install kubernetes
+   pip3 install -r cli/requirements.txt
    ```
+
+3. (Optional) Add your GCloud SSH key to your local SSH Agent:
+
+```bash
+ssh-add ~/.ssh/google_compute_engine
+```
+
+This will allow the configcheck command to fetch configuration values from
+your cluster without needing to reauthenticate for each machine.
 
 4. From the _root dir_ of this repository, run `python3 cli/cluster_diag.py`
 
@@ -98,6 +106,7 @@ Options:
   --help                    Show this message and exit.
 
 Commands:
+  configcheck  Run a configcheck on a cluster.
   healthscan  Run a healthscan on a cluster.
 ```
 
@@ -142,6 +151,51 @@ Options:
 |Running a DCGM/GPU check _only on available nodes_|`$ cluster_diag -o gke healthscan a3-megagpu-8g -c gpu --run_only_on_available_nodes`|
 |Running a DCGM/GPU check on two Slurm Nodes       |`$ cluster_diag -o slurm healthscan a3-megagpu-8g -c gpu -n node-[0-1]`|
 |Dry run of a DCGM/GPU check                       |`$ cluster_diag -o slurm healthscan a3-megagpu-8g -c gpu -n node-[0-1] --dry_run`|
+
+### configcheck
+Check the configuration of your cluster and workload container.
+
+```bash
+$ cluster_diag -o gke configcheck --help
+Usage: cluster_diag.py configcheck [OPTIONS] {a3-megagpu-8g}
+
+  Run a configcheck on a cluster.
+
+Options:
+  -n, --nodes TEXT                A comma-separated list of nodes to run
+                                  checks on. Defaults to running on all nodes.
+  --skip_diff, --nodiff           If true, only print the node configs without
+                                  diffing against the golden config.
+  --run_async, --async            [Experimental] If true, run the configcheck
+                                  in async mode. This will reset your terminal
+                                  as part of the process.
+  --project TEXT                  The project of the workload to be checked.
+                                  If not specified, the project will be
+                                  inferred from `gcloud config get project`
+  --zone TEXT                     The zone of the workload to be checked. If
+                                  not specified, the zone will be inferred per
+                                  node from the `topology.kubernetes.io/zone`
+                                  label.
+  --workload_container TEXT       The name of the workload container to fetch
+                                  workload configs from. If not specified, the
+                                  workload container will be inferred from the
+                                  node.
+  --output_format [markdown|json]
+                                  The format to print the output in. Defaults
+                                  to markdown. Other supported formats are
+                                  `csv` and `json`.
+  --help                          Show this message and exit.
+
+```
+
+#### Sample Usage
+
+|Action                                                                                                                                |Command to Run                                                                         |
+|--------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+|Check the configuration of the current cluster and diff against a qualified source of truth.                                          |`$ cluster_diag -o gke configcheck a3-megagpu-8g`                                      |
+|Pull the configuration of the current cluster, and simply print it without diffing.                                                   |`$ cluster_diag -o gke configcheck a3-megagpu-8g --skip_diff`                          |
+|Pull the configuration of the current cluster, including workload specific information for the 'sample-container' cluster.            |`$ cluster_diag -o gke configcheck a3-megagpu-8g --workload_container sample-container`|
+|[Experimental, will reset cluster] Asynchronously pull the configuration information for a cluster and diff against a source of truth.|`$ cluster_diag -o gke configcheck a3-megagpu-8g --async`                              |
 
 ## 3. (Advanced) Running via 'helm'
 
