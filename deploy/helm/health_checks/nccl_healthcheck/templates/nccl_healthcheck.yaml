@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # yamllint disable
-{{- $guid := default (lower (randAlphaNum 4)) .Values.job.guid -}}
+{{- $guid := default (lower (randAlphaNum 8)) .Values.job.guid -}}
 {{- $check_time := default (printf "%s" (now | unixEpoch)) .Values.job.check_time -}}
 {{- $base_name := default "chs-hc" .Values.job.base_name -}}
 {{- $unique_suffix := printf "%s-%s" $guid $check_time -}}

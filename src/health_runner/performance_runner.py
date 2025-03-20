@@ -19,6 +19,7 @@ will span multiple nodes but the results will be interpreted at a block level.
 """
 
 import copy
+import logging
 import os
 
 import kubernetes.client
@@ -65,6 +66,24 @@ def run_performance_healthcheck(
           status=health_results_pb2.Status.SKIP,
       )
       continue
+    if (
+        health_check.performance_health_check_config.min_node_count > 0
+        and len(nodes)
+        < health_check.performance_health_check_config.min_node_count
+    ):
+      print(
+          f"Skipping test for {topology} with only {len(nodes)} nodes. Need at"
+          " least"
+          f" {health_check.performance_health_check_config.min_node_count} nodes."
+      )
+      topology_to_results[topology] = health_results_pb2.HealthResultList(
+          id=topology,
+          num_nodes=len(nodes),
+          status=health_results_pb2.Status.SKIP,
+      )
+      continue
+
+    # Topology has sufficient nodes to run the test.
     topology_to_testable_nodes[topology] = nodes
     topology_to_results[topology] = health_results_pb2.HealthResultList(
         id=topology,
@@ -107,7 +126,9 @@ def run_performance_healthchecks(
       to its nodes.
     topology_to_results: Mapping of topology entity to health results.
   """
-  health_check_tests = _generate_healthcheck_tests(health_check)
+  health_check_tests = _generate_healthcheck_tests(
+      health_check.performance_health_check_config
+  )
   env_mappings = copy.deepcopy(checker_common.parse_env_mappings(health_check))
   # Run tests on all the topologies for each test configuration
   for test in health_check_tests:
@@ -117,11 +138,19 @@ def run_performance_healthchecks(
       print(f"Running test for {len(nodes)} nodes in {topology}")
       test_env_mappings = copy.deepcopy(env_mappings)
       # Add topology value so that the job will be scoped to the topology
+      # NOTE: Does not affect NEMO tests.
       test_env_mappings["TOPOLOGY_KEY"] = checker_common.topology_key(
           health_check.performance_health_check_config.topology_level
       )
       test_env_mappings["TOPOLOGY_VALUE"] = topology
-      test_env_mappings["NHOSTS"] = len(nodes)
+
+      # Set the node count for the test and update the health results.
+      _set_node_count(
+          health_check,
+          topology_to_results[topology],
+          len(nodes),
+          test_env_mappings,
+      )
       test_env_mappings.update(test)
       job_name = checker_common.run_healthcheck(health_check, test_env_mappings)
       job_names_to_topology[job_name] = topology
@@ -147,6 +176,45 @@ def run_performance_healthchecks(
     checker_common.delete_jobs(batch_v1, job_names_to_topology.keys())
 
 
+def _set_node_count(
+    health_check: health_runner_config_pb2.HealthCheck,
+    health_result: health_results_pb2.HealthResultList,
+    node_count: int,
+    env_mappings: dict[str, str],
+) -> None:
+  """Sets the node count for the health check."""
+  if health_check.performance_health_check_config.max_node_count > 0:
+    hr_node_count = min(
+        node_count,
+        health_check.performance_health_check_config.max_node_count,
+    )
+  else:
+    hr_node_count = node_count
+
+  if health_check.name in {
+      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_PERFORMANCE,
+      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_INTER_RACK,
+      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_INTER_CLUSTER,
+      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_INTRA_RACK,
+  }:
+    env_mappings["NHOSTS"] = str(hr_node_count)
+    health_result.num_nodes = hr_node_count
+    logging.info("Setting NCCL node count to %s", hr_node_count)
+  elif (
+      health_check.name
+      == health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NEMO_PERFORMANCE
+  ):
+    # Round down to the highest power of two since NEMO tests must be a power of
+    # two.
+    hr_node_count = _highest_power_of_two(hr_node_count)
+    # NEMO tests use gpu count instead of node count. Hardcoded for (A3-A4).
+    env_mappings["workload.gpus"] = str(hr_node_count * 8)  # 8 GPUs per node
+    health_result.num_nodes = hr_node_count
+    logging.info("Setting NEMO gpu count to %s", hr_node_count * 8)
+  else:
+    raise ValueError(f"Unsupported health check: {health_check.name}")
+
+
 def _update_health_results(
     v1: kubernetes.client.CoreV1Api,
     batch_v1: batch_v1_api.BatchV1Api,
@@ -167,9 +235,18 @@ def _update_health_results(
   successful_jobs = set()
   for job_name, topology in jobs_to_topology.items():
     if checker_common.job_succeeded(batch_v1, job_name):
+      topology_to_results[topology].status = health_results_pb2.Status.PASS
       successful_jobs.add(job_name)
     else:
       topology_to_results[topology].status = health_results_pb2.Status.FAIL
+
+  # If no result label, just use the jobs status as the result
+  if health_check.result_label is None or not health_check.result_label:
+    print(
+        "No result label found for health check: %s",
+        health_runner_config_pb2.HealthCheckName.Name(health_check.name),
+    )
+    return
 
   # Collect results from master node for successful jobs
   node_to_topology = []
@@ -178,10 +255,6 @@ def _update_health_results(
     if master_node is None:
       raise ValueError(f"Failed to find master node for job: {job_name}")
     node_to_topology.append((master_node, jobs_to_topology[job_name]))
-
-  # Perform test only support result label for now
-  if health_check.result_label is None or not health_check.result_label:
-    raise ValueError("No result label specified.")
 
   # Check the results label on the master node to determine pass/fail
   for node_name, topology in node_to_topology:
@@ -205,17 +278,17 @@ def _update_health_results(
 # Generates the tests for the health check. Performance health checks can have
 # multiple tests per health check do to parameter variations.
 def _generate_healthcheck_tests(
-    health_check: health_runner_config_pb2.HealthCheck,
+    perf_config: health_runner_config_pb2.PerformanceHealthCheckConfig,
 ) -> list[dict[str, str]]:
   """Generates the tests for the health check."""
-  if health_check.name in {
-      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_PERFORMANCE,
-      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_INTER_RACK,
-      health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NCCL_INTER_CLUSTER,
-  }:
+  if perf_config is None:
+    return [{}]
+
+  perf_config_type = perf_config.WhichOneof("performance_health_check_config")
+  if perf_config_type == "nccl_performance_health_check_config":
     tests = [
         {"BENCHMARK": benchmark}
-        for benchmark in health_check.performance_health_check_config.nccl_performance_health_check_config.benchmarks
+        for benchmark in perf_config.nccl_performance_health_check_config.benchmarks
     ]
   else:
     # Runs only with the default configuration.
@@ -241,3 +314,18 @@ def _get_master_node(v1: kubernetes.client.CoreV1Api, job_name: str) -> str:
     raise ValueError(f"Failed to find master pod for job: {job_name}")
 
   return master_pod.spec.node_name
+
+
+def _highest_power_of_two(count: int) -> int:
+  """Returns the highest power of 2 less than or equal to the given count."""
+  if count <= 0:
+    raise ValueError("Count must be greater than 0.")
+  # Doesn't account for int overflow.
+  highest_power = 1
+  while highest_power <= count:
+    # Equivalent to highest_power *= 2
+    highest_power <<= 1
+
+  # Undo the last shift to get the power of 2 <= max_val
+  highest_power >>= 1
+  return highest_power
