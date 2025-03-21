@@ -51,9 +51,6 @@ steps:
           echo "Successfully pushed image: ${latest_tag}"
         done
       done
-  env:
-    - CLOUD_BUILD_VERSION
-    - HEALTH_CHECK_REPOSITORY_BASE
   id: build-tag-push-healthchecks
 
 # Build, tag, and push health-runner
@@ -79,7 +76,4 @@ steps:
       docker tag "${image_tag}" "${latest_tag}"
       docker push "${latest_tag}"
       echo "Successfully pushed image: ${latest_tag}"
-  env:
-    - CLOUD_BUILD_VERSION
-    - HEALTH_RUNNER_REPOSITORY
   id: build-tag-push-health-runner
