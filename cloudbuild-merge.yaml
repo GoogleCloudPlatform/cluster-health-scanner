@@ -22,24 +22,25 @@ steps:
       set -e
 
       HEALTH_CHECK_REPOSITORY_BASE="$$HEALTH_CHECK_REPOSITORY_BASE"
+      CLOUD_BUILD_VERSION="$$CLOUD_BUILD_VERSION"
 
       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
       machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
 
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $$CLOUD_BUILD_VERSION..."
+          echo "Building ${health_check_name} for ${machine_type} with version ${CLOUD_BUILD_VERSION}..."
 
-          if [[ "$${machine_type}" == "a3-ultragpu-8g" && "$${health_check_name}" == "nccl-healthcheck" ]]; then
+          if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
-          elif [[ "$${machine_type}" == "a4-highgpu-8g" && "$${health_check_name}" == "nccl-healthcheck" ]]; then
+          elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
           else
-            dockerfile="docker/$${health_check_name}.Dockerfile"
+            dockerfile="docker/${health_check_name}.Dockerfile"
           fi
 
-          image_tag="$$HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$CLOUD_BUILD_VERSION"
-          latest_tag="$$HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$CLOUD_BUILD_VERSION-latest"
+          image_tag="${HEALTH_CHECK_REPOSITORY_BASE}/${health_check_name}/${machine_type}_${CLOUD_BUILD_VERSION}"
+          latest_tag="${HEALTH_CHECK_REPOSITORY_BASE}/${health_check_name}/${machine_type}_${CLOUD_BUILD_VERSION}-latest"
 
           echo "Building with tag: ${image_tag} and Dockerfile: ${dockerfile}"
           docker build -t "${image_tag}" -f "${dockerfile}" . && docker push "${image_tag}"
@@ -65,10 +66,11 @@ steps:
 
       BUILD_TARGET="health-runner"
       HEALTH_RUNNER_REPOSITORY="$$HEALTH_RUNNER_REPOSITORY"
-      image_tag="$$HEALTH_RUNNER_REPOSITORY:$$CLOUD_BUILD_VERSION"
-      latest_tag="$$HEALTH_RUNNER_REPOSITORY:$$CLOUD_BUILD_VERSION-latest"
+      CLOUD_BUILD_VERSION="$$CLOUD_BUILD_VERSION"
+      image_tag="${HEALTH_RUNNER_REPOSITORY}:${CLOUD_BUILD_VERSION}"
+      latest_tag="${HEALTH_RUNNER_REPOSITORY}:${CLOUD_BUILD_VERSION}-latest"
 
-      echo "Building and pushing $$BUILD_TARGET with version $$CLOUD_BUILD_VERSION..."
+      echo "Building and pushing $$BUILD_TARGET with version ${CLOUD_BUILD_VERSION}..."
       docker build -t "${image_tag}" -f "docker/$$BUILD_TARGET.Dockerfile" . && docker push "${image_tag}"
       echo "Successfully pushed image: ${image_tag}"
 
