@@ -29,16 +29,10 @@ steps:
             dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
           fi
 
-          image_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION"
-          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION-latest"
+          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION-latest"
 
-          echo "Building with tag: ${image_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${image_tag}" -f "${dockerfile}" . && docker push "${image_tag}"
-          echo "Successfully pushed image: ${image_tag}"
-
-          echo "Tagging ${image_tag} as ${latest_tag}"
-          docker tag "${image_tag}" "${latest_tag}"
-          docker push "${latest_tag}"
+          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
+          docker build -t "${latest_tag}" -f "${dockerfile}" . && docker push "${latest_tag}"
           echo "Successfully pushed image: ${latest_tag}"
         done
       done
@@ -59,15 +53,9 @@ steps:
 
       _BUILD_TARGET="health-runner"
       _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      image_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION"
       latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION-latest"
 
       echo "Building and pushing $$_BUILD_TARGET with version $$_VERSION..."
-      docker build -t "${image_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${image_tag}"
-      echo "Successfully pushed image: ${image_tag}"
-
-      echo "Tagging ${image_tag} as ${latest_tag}"
-      docker tag "${image_tag}" "${latest_tag}"
-      docker push "${tag}" # Typo correction from before
+      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
       echo "Successfully pushed image: ${latest_tag}"
   id: build-tag-push-health-runner
