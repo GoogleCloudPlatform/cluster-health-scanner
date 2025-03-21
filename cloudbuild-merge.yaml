@@ -6,5 +6,4 @@ steps:
   args:
     - -c
     - |
-      VERSION=$(cat deploy/helm/health_runner/version.txt)
-      echo '$VERSION'
+      cat deploy/helm/health_runner/version.txt
