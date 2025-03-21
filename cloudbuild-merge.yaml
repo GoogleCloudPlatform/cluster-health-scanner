@@ -7,4 +7,4 @@ steps:
     - -c
     - |
       VERSION=$(cat deploy/helm/health_runner/version.txt)
-      echo 'Current version: $VERSION'
+      ls
