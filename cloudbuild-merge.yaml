@@ -3,8 +3,8 @@ steps:
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
-    - -c
-    - |
+  - -c
+  - |
       #!/bin/bash
       set -e
 
@@ -42,8 +42,8 @@ steps:
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
-    - -c
-    - |
+  - -c
+  - |
       #!/bin/bash
       set -e
 
