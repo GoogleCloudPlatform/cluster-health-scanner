@@ -1,27 +1,17 @@
 steps:
-# Read current version
-- name: 'alpine'
-  entrypoint: sh
-  args:
-    - -c
-    - |
-      _VERSION=$(cat deploy/helm/health_runner/version.txt)
-      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
-      echo "Version found to be: $$_VERSION"
-      export _CLOUD_BUILD_VERSION="$$_VERSION"
-      echo "ol: $$_CLOUD_BUILD_VERSION"
-  id: read-version
-
 # Build, tag, and push healthchecks
 - name: 'gcr.io/cloud-builders/docker'
-  waitFor: ['read-version']
   entrypoint: bash
   args:
     - -c
     - |
       #!/bin/bash
       set -e
-      echo "ol: $$_CLOUD_BUILD_VERSION"
+
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+
       _HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
 
       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
@@ -29,7 +19,7 @@ steps:
 
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $$_CLOUD_BUILD_VERSION..."
+          echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
 
           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
@@ -39,8 +29,8 @@ steps:
             dockerfile="docker/$${health_check_name}.Dockerfile"
           fi
 
-          image_tag="${_HEALTH_CHECK_REPOSITORY_BASE}/${health_check_name}/${machine_type}_${_CLOUD_BUILD_VERSION}"
-          latest_tag="${_HEALTH_CHECK_REPOSITORY_BASE}/${health_check_name}/${machine_type}_${_CLOUD_BUILD_VERSION}-latest"
+          image_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION"
+          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION-latest"
 
           echo "Building with tag: ${image_tag} and Dockerfile: ${dockerfile}"
           docker build -t "${image_tag}" -f "${dockerfile}" . && docker push "${image_tag}"
@@ -48,7 +38,7 @@ steps:
 
           echo "Tagging ${image_tag} as ${latest_tag}"
           docker tag "${image_tag}" "${latest_tag}"
-          docker push "${latest_tag}"
+          docker push "${tag}"
           echo "Successfully pushed image: ${latest_tag}"
         done
       done
@@ -56,7 +46,6 @@ steps:
 
 # Build, tag, and push health-runner
 - name: 'gcr.io/cloud-builders/docker'
-  waitFor: ['read-version']
   entrypoint: bash
   args:
     - -c
@@ -64,17 +53,21 @@ steps:
       #!/bin/bash
       set -e
 
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+
       _BUILD_TARGET="health-runner"
       _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      image_tag="${_HEALTH_RUNNER_REPOSITORY}:${_CLOUD_BUILD_VERSION}"
-      latest_tag="${_HEALTH_RUNNER_REPOSITORY}:${_CLOUD_BUILD_VERSION}-latest"
+      image_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION"
+      latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION-latest"
 
-      echo "Building and pushing $_BUILD_TARGET with version $_CLOUD_BUILD_VERSION..."
-      docker build -t "${image_tag}" -f "docker/$_BUILD_TARGET.Dockerfile" . && docker push "${image_tag}"
+      echo "Building and pushing $$_BUILD_TARGET with version $$_VERSION..."
+      docker build -t "${image_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${image_tag}"
       echo "Successfully pushed image: ${image_tag}"
 
       echo "Tagging ${image_tag} as ${latest_tag}"
       docker tag "${image_tag}" "${latest_tag}"
-      docker push "${latest_tag}"
+      docker push "${tag}"
       echo "Successfully pushed image: ${latest_tag}"
   id: build-tag-push-health-runner
