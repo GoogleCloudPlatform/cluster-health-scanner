@@ -21,26 +21,24 @@ steps:
         for machine_type in "${machine_types[@]}"; do
           echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
 
-          local dockerfile_name
           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-            dockerfile_name="nccl_healthcheck_a3ultra.Dockerfile"
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
           elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-            dockerfile_name="nccl_healthcheck_a3ultra.Dockerfile"
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
           else
-            dockerfile_name="${health_check_name//-/}_${machine_type}.Dockerfile"
+            dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
           fi
-          dockerfile="docker/${dockerfile_name}"
 
           image_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION"
           latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION-latest"
 
           echo "Building with tag: ${image_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${image_tag}" -f "${dockerfile}" . && docker push "${tag}" # Corrected typo here
+          docker build -t "${image_tag}" -f "${dockerfile}" . && docker push "${image_tag}"
           echo "Successfully pushed image: ${image_tag}"
 
           echo "Tagging ${image_tag} as ${latest_tag}"
           docker tag "${image_tag}" "${latest_tag}"
-          docker push "${tag}" # Corrected typo here
+          docker push "${latest_tag}"
           echo "Successfully pushed image: ${latest_tag}"
         done
       done
@@ -70,6 +68,6 @@ steps:
 
       echo "Tagging ${image_tag} as ${latest_tag}"
       docker tag "${image_tag}" "${latest_tag}"
-      docker push "${tag}" # Corrected typo here
+      docker push "${tag}" # Typo correction from before
       echo "Successfully pushed image: ${latest_tag}"
   id: build-tag-push-health-runner
