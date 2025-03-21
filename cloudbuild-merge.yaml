@@ -8,4 +8,5 @@ steps:
     - |
       _VERSION=$(cat deploy/helm/health_runner/version.txt)
       [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
-      echo "$$_VERSION"
+      echo "Version found to be: $$_VERSION"
+      
