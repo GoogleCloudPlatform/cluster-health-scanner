@@ -12,7 +12,7 @@ steps:
   id: read-version
 
 # Build, tag, and push healthchecks
-- name: 'alpine'
+- name: 'gcr.io/cloud-builders/docker'
   waitFor: ['read-version']
   entrypoint: bash
   args:
@@ -56,7 +56,7 @@ steps:
 # Build, tag, and push health-runner
 - name: 'gcr.io/cloud-builders/docker'
   waitFor: ['read-version']
-  entrypoint: bash # Optional, but good practice for consistency
+  entrypoint: bash
   args:
     - -c
     - |
