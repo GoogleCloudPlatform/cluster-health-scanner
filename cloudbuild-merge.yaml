@@ -6,5 +6,5 @@ steps:
   args:
     - -c
     - |
-      VERSION=$(cat depoy/helm/health_runner/version.txt)
-      echo "Hello world"
+      VERSION=$(cat deploy/helm/health_runner/version.txt)
+      echo "Current version: $VERSION"
