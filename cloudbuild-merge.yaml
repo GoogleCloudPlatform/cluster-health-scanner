@@ -21,7 +21,7 @@ steps:
     - |
       #!/bin/bash
       set -e
-
+      echo "ol: $$_CLOUD_BUILD_VERSION"
       _HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
 
       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
@@ -29,7 +29,7 @@ steps:
 
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $_CLOUD_BUILD_VERSION..."
+          echo "Building ${health_check_name} for ${machine_type} with version $$_CLOUD_BUILD_VERSION..."
 
           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
