@@ -23,7 +23,7 @@ steps:
       #!/bin/bash
       set -e
 
-      CLOUD_BUILD_VERSION="$CLOUD_BUILD_VERSION"
+      CLOUD_BUILD_VERSION="$$CLOUD_BUILD_VERSION"
       HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
 
       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
@@ -68,7 +68,7 @@ steps:
       #!/bin/bash
       set -e
 
-      CLOUD_BUILD_VERSION="$CLOUD_BUILD_VERSION"
+      CLOUD_BUILD_VERSION="$$CLOUD_BUILD_VERSION"
       BUILD_TARGET="health-runner"
       HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       image_tag="${HEALTH_RUNNER_REPOSITORY}:${CLOUD_BUILD_VERSION}"
