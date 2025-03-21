@@ -10,5 +10,3 @@ steps:
       echo "Version found to be: $$_VERSION"
       export CLOUD_BUILD_VERSION="$_VERSION"
   id: read-version
-  env:
-    - CLOUD_BUILD_VERSION
