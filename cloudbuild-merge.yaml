@@ -8,7 +8,7 @@ steps:
       _VERSION=$(cat deploy/helm/health_runner/version.txt)
       [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
       echo "Version found to be: $$_VERSION"
-      export _CLOUD_BUILD_VERSION="$_VERSION"
+      export _CLOUD_BUILD_VERSION="$$_VERSION"
       echo "ol: $$_CLOUD_BUILD_VERSION"
   id: read-version
 
