@@ -8,15 +8,6 @@ steps:
       #!/bin/bash
       set -e
 
-      ls 
-      echo "--"
-      ls deploy/
-      echo "--"
-      ls docker/
-      echo "--"
-      pwd
-      echo "--"
- 
       _VERSION=$(cat deploy/helm/health_runner/version.txt)
       [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
       echo "Version found to be: $$_VERSION"
@@ -30,13 +21,15 @@ steps:
         for machine_type in "${machine_types[@]}"; do
           echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
 
+          local dockerfile_name
           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+            dockerfile_name="nccl_healthcheck_a3ultra.Dockerfile"
           elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+            dockerfile_name="nccl_healthcheck_a3ultra.Dockerfile"
           else
-            dockerfile="docker/$${health_check_name}.Dockerfile"
+            dockerfile_name="${health_check_name//-/}_${machine_type}.Dockerfile"
           fi
+          dockerfile="docker/${dockerfile_name}"
 
           image_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION"
           latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}/$${machine_type}_$$_VERSION-latest"
@@ -72,11 +65,6 @@ steps:
       latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION-latest"
 
       echo "Building and pushing $$_BUILD_TARGET with version $$_VERSION..."
-      docker build -t "${image_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${image_tag}"
-      echo "Successfully pushed image: ${image_tag}"
-
-      echo "Tagging ${image_tag} as ${latest_tag}"
-      docker tag "${image_tag}" "${latest_tag}"
-      docker push "${tag}"
+      docker build -t "${image_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${tag}"
       echo "Successfully pushed image: ${latest_tag}"
-  id: build-tag-push-health-runner
+  id: build-tag-push-healthchecks
