@@ -8,6 +8,15 @@ steps:
       #!/bin/bash
       set -e
 
+      ls 
+      echo "--"
+      ls deploy/
+      echo "--"
+      ls docker/
+      echo "--"
+      pwd
+      echo "--"
+ 
       _VERSION=$(cat deploy/helm/health_runner/version.txt)
       [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
       echo "Version found to be: $$_VERSION"
