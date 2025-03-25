@@ -142,6 +142,7 @@ def _parse_nccl_plugin_version(name, file_path: str) -> config.DependencyConfig:
 def get_dynamic_dependency_parsers(
     node_name: str,
     zone: str,
+    pod_name: str | None = None,
     workload_container: str | None = None,
 ) -> list[dependency_version_parser.DependencyVersionParser]:
   """Returns the dynamic dependency parsers for a given node.
@@ -153,6 +154,7 @@ def get_dynamic_dependency_parsers(
   Args:
     node_name: The name of the node.
     zone: The zone of the node.
+    pod_name: The name of the pod.
     workload_container: The name of the workload container to fetch configs
       from. If not specified, NCCL configs will not be fetched.
 
@@ -178,17 +180,14 @@ def get_dynamic_dependency_parsers(
           ]),
       ),
   ]
-  if workload_container:
+  if workload_container and pod_name:
     parsers.extend([
         dependency_version_parser.DependencyVersionParser(
             name='ncclConfigs',
             cmd=([
-                'crictl',
-                'pods',
-                '--latest',
-                '|',
-                'awk',
-                "'NR>1 {print $6}'",
+                'echo',
+                '-n',
+                pod_name,
                 '|',
                 'xargs',
                 '-I',

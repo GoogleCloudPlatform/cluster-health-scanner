@@ -1,0 +1,75 @@
+# Copyright 2024 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+steps:
+# Build, tag, and push healthchecks
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: bash
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
+
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+
+      _HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
+
+      health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
+      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
+
+      for health_check_name in "${health_check_names[@]}"; do
+        for machine_type in "${machine_types[@]}"; do
+          echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
+
+          if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+          elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+          else
+            dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
+          fi
+
+          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION-latest"
+
+          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
+          docker build -t "${latest_tag}" -f "${dockerfile}" . && docker push "${latest_tag}"
+          echo "Successfully pushed image: ${latest_tag}"
+        done
+      done
+  id: build-tag-push-healthchecks
+
+# Build, tag, and push health-runner
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: bash
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
+
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+
+      _BUILD_TARGET="health-runner"
+      _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION-latest"
+
+      echo "Building and pushing $$_BUILD_TARGET with version $$_VERSION..."
+      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
+      echo "Successfully pushed image: ${latest_tag}"
+  id: build-tag-push-health-runner

@@ -14,6 +14,8 @@
 
 """Check for running a Pipeline Parallelism straggler detection test on a cluster."""
 
+import click
+
 import common
 import check
 import gke_check
@@ -46,6 +48,7 @@ def get_check_for_orchestrator(
 
 class GkeStragglerCheck(gke_check.GkeCheck):
   """Runs a Pipeline Parallelism Straggler Detection test on a cluster."""
+
   # Explicitly exclude not supported machine types
   _SUPPORTED_MACHINE_TYPES = frozenset(
       machine_type
@@ -78,5 +81,25 @@ class GkeStragglerCheck(gke_check.GkeCheck):
         run_only_on_available_nodes=run_only_on_available_nodes,
         timeout_sec=15 * 60,
         dry_run=dry_run,
+        container_name='straggler-detection-test',
         **kwargs,
     )
+
+  def get_check_pod(self) -> str | None:
+    """Get the name of the canonical pod for the check."""
+    pod_names = [
+        pod.metadata.name
+        for pod in self._v1.list_pod_for_all_namespaces().items
+        if 'chs-hc-straggler-node0' in pod.metadata.name
+    ]
+    pod = None
+    if pod_names:
+      pod = pod_names[0]
+    return pod
+
+  def clean_up(self):
+    if self.check_logs:
+      last_line = self.check_logs.splitlines()[-1]
+      if 'Results at' in last_line:
+        click.echo(last_line)
+    super().clean_up()

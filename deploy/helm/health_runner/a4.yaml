@@ -22,7 +22,7 @@ health_checks:
     runner_name: nccl-health-runner-a4
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.4-latest"
+      tag: ""  # This will be populated by the version in the version.txt file
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.4-latest"
@@ -48,7 +48,7 @@ health_checks:
     runner_name: gpu-health-runner
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.4-latest"
+      tag: ""  # This will be populated by the version in the version.txt file
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.4-latest"
@@ -59,6 +59,8 @@ health_checks:
       HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
       ACCELERATOR_TYPE: "nvidia-b200-141gb"
       HC_ENV_R_LEVEL: 1
+      # HC_ENV_DCGM_PARAMS: "pcie.dont_bind_numa=1" # Add this for HC_ENV_R_LEVEL: 2/3/4
+      ADJUST_SLEEP_TIME: "true"
     # Blast Mode
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
@@ -70,7 +72,7 @@ health_checks:
     runner_name: neper-health-runner
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      tag: "4.4-latest"
+      tag: ""  # This will be populated by the version in the version.txt file
       pull_policy: "Always"
     env:
       HC_IMAGE_TAG: "4.4-latest"

@@ -70,6 +70,7 @@ class GkeCheck(check.Check):
       kubectl_core_api: client.CoreV1Api | None = None,
       timeout_sec: int = 15 * 60,
       dry_run: bool = False,
+      container_name: str | None = None,
   ):
     """Initialize a check to run on a GKE cluster.
 
@@ -87,6 +88,7 @@ class GkeCheck(check.Check):
       kubectl_core_api: The kubectl core api to use for the check.
       timeout_sec: The timeout in seconds for the check.
       dry_run: Whether to run the check in dry run mode.
+      container_name: The name of the main container used by the check.
     """
     super().__init__(
         name=name,
@@ -101,6 +103,8 @@ class GkeCheck(check.Check):
     self.launch_label_value = launch_label_value
     self.run_only_on_available_nodes = run_only_on_available_nodes
     self.timeout_sec = timeout_sec
+    self.check_logs = None
+    self.check_container_name = container_name
 
     self.hr_release_name: str = f'chs-hr-{self.name}-cli'
     # Generate a unique base name for the HC Helm release
@@ -402,6 +406,29 @@ class GkeCheck(check.Check):
       )
       return pod_status
 
+  def get_check_pod(self) -> str | None:
+    """Get the name of the canonical pod for the check."""
+    return None
+
+  def update_check_logs(self, pod_name: str | None = None):
+    """Updates the check logs for the given pod name.
+
+    Args:
+      pod_name: The name of the pod to get the logs for.
+    """
+    if pod_name is None:
+      self.check_logs = f'Fetching logs is not defined for check: {self.name}'
+      return
+    try:
+      self.check_logs = self._v1.read_namespaced_pod_log(
+          name=pod_name,
+          namespace='default',
+          container=self.check_container_name,
+      )
+    except client.rest.ApiException:
+      # This error is expected if the pod is not found, and should fail quietly.
+      pass
+
   def run(
       self,
       timeout_sec: int | None = None,
@@ -465,7 +492,8 @@ class GkeCheck(check.Check):
 
     # Resets the time for progress bar since given HR startup time above
     start_time = time.time()
-    update_interval_sec = 10
+    update_interval_sec = 5
+    check_pod = self.get_check_pod()
     with click.progressbar(
         label=f'{self.name} Health Runner',
         length=timeout_sec,
@@ -480,6 +508,9 @@ class GkeCheck(check.Check):
             n_steps=update_interval_sec,
             current_item=health_runner_pod_name,
         )
+        if not check_pod:
+          check_pod = self.get_check_pod()
+        self.update_check_logs(pod_name=check_pod)
         time.sleep(update_interval_sec)
       progress_bar.update(
           update_interval_sec,
