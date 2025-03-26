@@ -1,6 +1,6 @@
 steps:
 - name: 'alpine'
-  entrypoint: bash
+  entrypoint: sh
   args:
   - -c
   - |
