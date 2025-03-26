@@ -1,42 +1,53 @@
 steps:
+- name: 'alpine'
+  entrypoint: bash
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
+
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+
+      REF_NAME="$$_VERSION"
+  id: get-version
+
 # Build, tag, and push healthchecks
-# - name: 'gcr.io/cloud-builders/docker'
-#   entrypoint: bash
-#   args:
-#   - -c
-#   - |
-#       #!/bin/bash
-#       set -e
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: bash
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
 
-#       _VERSION=$(cat deploy/helm/health_runner/version.txt)
-#       [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
-#       echo "Version found to be: $$_VERSION"
+      _HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
 
-#       _HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
+      health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
+      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
 
-#       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
-#       machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
+      for health_check_name in "${health_check_names[@]}"; do
+        for machine_type in "${machine_types[@]}"; do
+          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
 
-#       for health_check_name in "${health_check_names[@]}"; do
-#         for machine_type in "${machine_types[@]}"; do
-#           echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
+          if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+          elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+          else
+            dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
+          fi
 
-#           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-#             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
-#           elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-#             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
-#           else
-#             dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
-#           fi
+          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME-latest"
 
-#           latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION-latest"
-
-#           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-#           docker build -t "${latest_tag}" -f "${dockerfile}" . && docker push "${latest_tag}"
-#           echo "Successfully pushed image: ${latest_tag}"
-#         done
-#       done
-#   id: build-tag-push-healthchecks
+          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
+          docker build -t "${latest_tag}" -f "${dockerfile}" . && docker push "${latest_tag}"
+          echo "Successfully pushed image: ${latest_tag}"
+        done
+      done
+  id: build-tag-push-healthchecks
 
 # Build, tag, and push health-runner
 - name: 'gcr.io/cloud-builders/docker'
@@ -46,21 +57,12 @@ steps:
   - |
       #!/bin/bash
       set -e
-      echo "hello $REF_NAME $BRANCH_NAME"
-      _VERSION=$(cat deploy/helm/health_runner/version.txt)
-      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
-      echo "Version found to be: $$_VERSION"
-
-      REF_NAME=$$_VERSION
-      echo "wowzie $REF_NAME"
 
       _BUILD_TARGET="health-runner"
       _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION-latest"
+      latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$REF_NAME-latest"
 
-      echo "Building and pushing $$_BUILD_TARGET with version $$_VERSION..."
+      echo "Building and pushing $$_BUILD_TARGET with version $REF_NAME..."
       docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
       echo "Successfully pushed image: ${latest_tag}"
-      echo -n "${latest_tag}" > /workspace/image_tag.txt
-      echo "Image tag ${latest_tag} written to /workspace/image_tag.txt"
   id: build-tag-push-health-runner
