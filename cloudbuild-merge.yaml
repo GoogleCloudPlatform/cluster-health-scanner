@@ -59,7 +59,7 @@ steps:
 
       _BUILD_TARGET="health_runner"
 
-      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE:$REF_NAME"
+      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME"
 
       echo "Building $$_BUILD_TARGET with version $REF_NAME..."
       docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" .
