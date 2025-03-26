@@ -68,3 +68,6 @@ steps:
       echo "Successfully pushed image: ${latest_tag}"
   id: build-tag-push-health-runner
   waitFor: ['get-version']
+
+- name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
+  args: ['--image=us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:$REF_NAME']
