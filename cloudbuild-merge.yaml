@@ -58,7 +58,30 @@ steps:
       echo "Building and pushing $$_BUILD_TARGET with version $$_VERSION..."
       docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
       echo "Successfully pushed image: ${latest_tag}"
+      echo -n "${latest_tag}" > /workspace/image_tag.txt
+      echo "Image tag ${latest_tag} written to /workspace/image_tag.txt"
   id: build-tag-push-health-runner
-# Run the Scaevola Builder integration.
 - name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
-  args: ['--image=us-docker.pkg.dev/gce-ai-infra/health-check/health-runner']
+  # --- Modified ---
+  entrypoint: bash
+  args:
+    - -c
+    - |
+      #!/bin/bash
+      set -e
+      # Read the image tag from the file created in the previous step
+      IMAGE_TAG=$(cat /workspace/image_tag.txt)
+
+      # Check if the tag was read successfully
+      if [ -z "$IMAGE_TAG" ]; then
+        echo "ERROR: Could not read image tag from /workspace/image_tag.txt"
+        exit 1
+      fi
+
+      echo "Running scanvola on image: $IMAGE_TAG"
+      # Execute the original command, passing the dynamically read image tag
+      # Assuming 'scanvola' is the actual executable or entrypoint command within the image
+      scanvola --image="$IMAGE_TAG"
+  # --------------
+  # Make sure this step runs after the first one
+  waitFor: ['build-tag-push-health-runner'] # Optional but good practice if IDs are used
