@@ -47,7 +47,7 @@ _FORMAT_MARKDOWN = 'markdown'
 _FORMAT_JSON = 'json'
 
 
-def _get_k8s_nodes() -> list[str]:
+def _get_k8s_nodes(machine_type: str) -> list[str]:
   """Returns all nodes with containers requesting GPU resources."""
   config.load_kube_config()
   v1 = client.CoreV1Api()
@@ -55,7 +55,7 @@ def _get_k8s_nodes() -> list[str]:
   return [
       node.metadata.name
       for node in v1.list_node(
-          label_selector='beta.kubernetes.io/instance-type=a3-megagpu-8g'
+          label_selector=f'beta.kubernetes.io/instance-type={machine_type}'
       ).items
   ]
 
@@ -86,7 +86,7 @@ def _get_diff_matrix(data: list[configcheck_config.NodeDiff]) -> pd.DataFrame:
   )
 
 
-def _get_workload_containers_on_node(node_name: str) -> set[str]:
+def _get_workload_containers_on_node(node_name: str) -> dict[str, str]:
   """Returns containers actively running on a node which request GPUs."""
   config.load_kube_config()
   v1 = client.CoreV1Api()
@@ -95,8 +95,9 @@ def _get_workload_containers_on_node(node_name: str) -> set[str]:
       field_selector=f'spec.nodeName={node_name}'
   ).items
 
-  container_names = set()
+  pod_to_container_names = dict()
   for pod in pods:
+    pod_name = pod.metadata.name
     for container_status in pod.status.container_statuses:
       if container_status.state.running:
         # Get the container spec to access the resource requests
@@ -109,24 +110,25 @@ def _get_workload_containers_on_node(node_name: str) -> set[str]:
               )
               > 0
           ):
-            container_names.add(container_spec.name)
+            pod_to_container_names[pod_name] = container_spec.name
             break
 
-  return container_names
+  return pod_to_container_names
 
 
-def _get_workload_container_on_node(node_name: str) -> str | None:
+def _get_workload_container_on_node(node_name: str) -> tuple[str, str] | None:
   """Returns the workload container actively running on a node which requests GPUs."""
-  container_names = _get_workload_containers_on_node(node_name)
-  if not container_names:
+  pod_to_container_names = _get_workload_containers_on_node(node_name)
+  if not pod_to_container_names:
     return None
-  elif len(container_names) > 1:
+  elif len(pod_to_container_names.items()) > 1:
     raise click.Abort(
         f'Multiple workload containers found on node {node_name}:'
-        f' {container_names}. Please limit to running a single'
+        f' {pod_to_container_names.values()}. Please limit to running a single'
         ' workload container per node.'
     )
-  return container_names.pop()
+  pod_name, workload_container = pod_to_container_names.popitem()
+  return (pod_name, workload_container)
 
 
 def _get_zone_from_k8s_topology_label(node_name: str) -> str:
@@ -170,12 +172,16 @@ def _fetch_node_configs(
   ) as progress_bar:
     node_data = []
     for node in node_list:
+      pod_name = None
       if workload_container is None:
-        workload_container = _get_workload_container_on_node(node)
+        pod_name_to_container_name = _get_workload_container_on_node(node)
+        if pod_name_to_container_name:
+          pod_name = pod_name_to_container_name[0]
+          workload_container = pod_name_to_container_name[1]
       if zone is None:
         zone = _get_zone_from_k8s_topology_label(node)
       dynamic_dependency_parsers = dependencies.get_dynamic_dependency_parsers(
-          node, zone, workload_container=workload_container
+          node, zone, pod_name=pod_name, workload_container=workload_container
       )
       fetcher = node_config_fetcher.NodeConfigFetcher(
           name=node,
@@ -258,11 +264,15 @@ async def _fetch_node_configs_async(
       length=len(node_list),
   ) as progress_bar:
     for node in node_list:
+      pod_name = None
       if workload_container is None:
-        workload_container = _get_workload_container_on_node(node)
+        pod_name_to_container_name = _get_workload_container_on_node(node)
+        if pod_name_to_container_name:
+          pod_name = pod_name_to_container_name[0]
+          workload_container = pod_name_to_container_name[1]
 
       dynamic_dependency_parsers = dependencies.get_dynamic_dependency_parsers(
-          node, zone, workload_container=workload_container
+          node, zone, pod_name=pod_name, workload_container=workload_container
       )
       fetcher = node_config_fetcher.NodeConfigFetcher(
           name=node,
@@ -365,9 +375,7 @@ async def _fetch_node_configs_async(
     '-v',
     default=False,
     is_flag=True,
-    help=(
-        'Enable verbose logging.'
-    ),
+    help='Enable verbose logging.',
 )
 @click.pass_context
 def cli(
@@ -392,7 +400,7 @@ def cli(
   else:
     node_list = common.run_for_orchestrator(
         orchestrator=orchestrator,
-        gke_function=_get_k8s_nodes,
+        gke_function=lambda: _get_k8s_nodes(machine_type),
         slurm_function=lambda: click.Abort(
             'configcheck is not yet supported for Slurm clusters'
         ),

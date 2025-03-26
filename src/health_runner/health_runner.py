@@ -39,14 +39,37 @@ import health_results_pb2
 import nccl_runner
 from google.protobuf import timestamp_pb2
 
-# Time to wait for HC jobs to complete
-_SLEEP_TIME_MINUTES: str = os.environ.get("SLEEP_TIME_MINUTES", "10")
-# Time to wait for full HR to complete
-# Give enough time for HC + extra time for launch & cleanup
-_TIMEOUT_MINUTES: str = os.environ.get(
-    "TIMEOUT_MINUTES",
-    f"{int(_SLEEP_TIME_MINUTES) + 5}",
-)
+_SLEEP_TIME_MINUTES_BY_R_LEVEL = {
+    "2": 5,
+    "3": 30,
+    "4": 90,
+}
+
+
+def setup_sleep_and_timeout() -> tuple[int, int]:
+  """Returns the sleep time and timeout in minutes based on environment variables."""
+  # Time to poll for HC jobs to complete
+  sleep_time: int = int(os.environ.get("SLEEP_TIME_MINUTES", 10))
+  # Time to wait for full HR to complete
+  # Give enough time for HC + extra time for launch & cleanup
+  timeout_time: int = int(os.environ.get("TIMEOUT_MINUTES", sleep_time + 5))
+  rlevel: str = os.environ.get("HC_ENV_R_LEVEL", "1")
+
+  adjust_sleep_time: str = os.environ.get("ADJUST_SLEEP_TIME", "false")
+  if adjust_sleep_time == "false":
+    return sleep_time, timeout_time
+  # Adjusting sleep time and timeout time based on R-level
+  if rlevel in _SLEEP_TIME_MINUTES_BY_R_LEVEL:
+    sleep_time = _SLEEP_TIME_MINUTES_BY_R_LEVEL[rlevel]
+    timeout_time = max(timeout_time, sleep_time + 5)
+    logging.info(
+        "Due to R-level, Sleep time is updated to %s minutes and Timeout time"
+        " is updated to %s minutes",
+        sleep_time,
+        timeout_time,
+    )
+  return sleep_time, timeout_time
+
 
 _YAML_FILE = os.environ.get("YAML_FILE")
 
@@ -97,6 +120,7 @@ signal.signal(signal.SIGALRM, timeout_handler)
 
 def main() -> None:
   logging.info("%s health runner started", socket.gethostname())
+  sleep_time, timeout = setup_sleep_and_timeout()
   # Test for NCCL health check
   health_app = os.environ.get("HEALTH_APP", "").lower()
   # Create Helm releases for each health check
@@ -104,12 +128,12 @@ def main() -> None:
     logging.info("Running NCCL health check via `HEALTH_APP`")
     run_health_app(health_app)
   else:
-    signal.alarm(int(_TIMEOUT_MINUTES) * 60)
+    signal.alarm(timeout * 60)
     # Set timeout
-    logging.info("Set timeout to %s minutes", _TIMEOUT_MINUTES)
+    logging.info("Set timeout to %s minutes", timeout)
 
     logging.info("Running Helm health check")
-    run_health_check()
+    run_health_check(sleep_time)
 
 
 def run_health_app(health_app: str) -> None:
@@ -211,7 +235,7 @@ def determine_test_iterations(num_nodes: int | None = None) -> int:
     return 1
 
 
-def run_health_check() -> None:
+def run_health_check(sleep_time: int) -> None:
   """Run the health check."""
 
   # PREPARATION
@@ -293,7 +317,7 @@ def run_health_check() -> None:
 
   logging.info(
       "Waiting for maximum of %s minutes before cleaning up...",
-      _SLEEP_TIME_MINUTES,
+      sleep_time,
   )
   # Helm releases & associated jobs are logged for reference outside of HR
   release_jobs = checker_common.get_created_jobs(release_names)
@@ -308,11 +332,12 @@ def run_health_check() -> None:
   checker_common.wait_till_jobs_complete(
       job_v1=client.BatchV1Api(),
       jobs_to_monitor=release_jobs,
-      timeout_seconds=(int(_SLEEP_TIME_MINUTES) * 60),
+      timeout_seconds=(sleep_time * 60),
       check_interval=10,
   )
 
   post_run_cleanup()
+
 
 if __name__ == "__main__":
   signal.signal(signal.SIGTERM, checker_common.sigterm_handler)

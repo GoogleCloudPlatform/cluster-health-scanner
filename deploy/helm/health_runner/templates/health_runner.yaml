@@ -21,6 +21,7 @@
 {{- if .run_check}}
 {{- $extra_info := printf "%s" $hc_name }}
 {{- $unique_name := printf "%s-%s-%s" $base_name $extra_info $unique_suffix | replace "_" "-"  }}
+{{- $version := $.Files.Get "version.txt" | trim }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -44,7 +45,7 @@ spec:
       shareProcessNamespace: true
       containers:
       - name: {{ $unique_name | quote}}
-        image: "{{ .image.repo }}:{{ .image.tag }}"
+        image: "{{ .image.repo }}:{{ .image.tag | default $version }}"
         imagePullPolicy: {{ .image.pull_policy }}
         command: ["/bin/sh", "-c"]
         args: ["python3 /app/health_runner.py 2>&1 | tee /var/log/healthrunner.log"]

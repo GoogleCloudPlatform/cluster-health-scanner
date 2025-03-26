@@ -20,14 +20,13 @@ health_check:
   name: "straggler"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck"
-    tag: "a3-highgpu-8g_4.5.0"
+    tag: "a3-highgpu-8g_4.6.2"
     pull_policy: "Always"
   params:
     bm_wait_time: "60"
     max_run_time: "900"
     n_batch: 50
     n_microbatch: 100
-    straggler_threshold_ms: 4
     interesting_event_offset: 4
     use_fastrak: false
     debug: "INFO"  # set "INFO" when debugging
@@ -78,3 +77,4 @@ health_check:
     USE_FASTRAK: "false"
     NCCL_DEBUG_SUBSYS: "INIT,NET"
     NCCL_SOCKET_IFNAME: "eth0"
+    STRAGGLER_THRESHOLD_MS: NIL

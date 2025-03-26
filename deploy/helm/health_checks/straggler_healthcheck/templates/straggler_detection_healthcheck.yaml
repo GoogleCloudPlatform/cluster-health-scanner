@@ -345,8 +345,6 @@ spec:
           {{- if eq $node_index 0}}
           - name: "HOSTS_CSV"
             value: {{ $.Values.health_check.params.hosts_csv | quote }}
-          - name: STRAGGLER_THRESHOLD_MS
-            value: "{{ $.Values.health_check.params.straggler_threshold_ms }}"
           - name: INTERESTING_EVENT_OFFSET
             value: "{{ $.Values.health_check.params.interesting_event_offset }}"
           {{- end }}

@@ -20,14 +20,13 @@ health_check:
   name: "straggler"
   image:
     repo: "us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck"
-    tag: "a3-ultragpu-8g_4.4.0"
+    tag: "a3-ultragpu-8g_4.6.2"
     pull_policy: "Always"
   params:
     bm_wait_time: "60"
     max_run_time: "900"
     n_batch: 50
     n_microbatch: 100
-    straggler_threshold_ms: 4
     interesting_event_offset: 4
     use_fastrak: false
     debug: ""  # set "INFO" when debugging
@@ -62,3 +61,4 @@ health_check:
     N_NODES: nil  # Set by Health Runner
     GCS_BUCKET_NAME: ""  # Set by Health Runner
     LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/nvidia/lib64/
+    STRAGGLER_THRESHOLD_MS: NIL
