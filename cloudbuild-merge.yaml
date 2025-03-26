@@ -59,3 +59,6 @@ steps:
       docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
       echo "Successfully pushed image: ${latest_tag}"
   id: build-tag-push-health-runner
+# Run the Scaevola Builder integration.
+- name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
+  args: ['--image=us-docker.pkg.dev/gce-ai-infra/health-check/health-runner']
