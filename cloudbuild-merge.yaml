@@ -1,5 +1,3 @@
-substitutions:
-  _REPO_NAME: us-docker.pkg.dev
 steps:
 - name: 'alpine'
   entrypoint: sh
@@ -16,7 +14,7 @@ steps:
       REF_NAME="$$_VERSION"
   id: get-version
 
-# Build and tag healthchecks
+# Build, tag, and push healthchecks
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
@@ -25,7 +23,7 @@ steps:
       #!/bin/bash
       set -e
 
-      _HEALTH_CHECK_REPOSITORY_BASE="$_REPO_NAME/gce-ai-infra/health-check"
+      _HEALTH_CHECK_REPOSITORY_BASE="us-docker.pkg.dev/gce-ai-infra/health-check"
 
       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
       machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
@@ -37,22 +35,22 @@ steps:
           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
           elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-            dockerfile="docker/nccl_healthcheck_a4.Dockerfile"
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
           else
-            dockerfile="docker/${health_check_name//-/_}.Dockerfile"
+            dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
           fi
 
-          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
+          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME-latest"
 
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${latest_tag}" -f "${dockerfile}" .
-          echo "Successfully built image: ${latest_tag}"
+          docker build -t "${latest_tag}" -f "${dockerfile}" . && docker push "${latest_tag}"
+          echo "Successfully pushed image: ${latest_tag}"
         done
       done
-  id: build-healthchecks
+  id: build-tag-push-healthchecks
   waitFor: ['get-version']
 
-# Build health-runner
+# Build, tag, and push health-runner
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
@@ -62,41 +60,11 @@ steps:
       set -e
 
       _BUILD_TARGET="health-runner"
-      _HEALTH_RUNNER_REPOSITORY="$_REPO_NAME/gce-ai-infra/health-check/health-runner"
-      latest_tag="$${_HEALTH_RUNNER_REPOSITORY}:$REF_NAME"
+      _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
+      latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$REF_NAME-latest"
 
-      echo "Building $$_BUILD_TARGET with version $REF_NAME..."
-      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" .
-      echo "Successfully built image: ${latest_tag}"
-  id: build-health-runner
+      echo "Building and pushing $$_BUILD_TARGET with version $REF_NAME..."
+      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
+      echo "Successfully pushed image: ${latest_tag}"
+  id: build-tag-push-health-runner
   waitFor: ['get-version']
-
-options:
-  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
-  requestedVerifyOption: VERIFIED
-
-# List ALL images to be pushed by Cloud Build after successful builds
-images:
-# Healthchecks (5 checks * 4 machine types = 20 images)
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
-# Health-runner (1 image)
-- '$_REPO_NAME/gce-ai-infra/health-check/health-runner:$REF_NAME-'
