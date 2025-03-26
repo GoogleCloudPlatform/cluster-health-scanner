@@ -17,36 +17,36 @@ steps:
   id: get-version
 
 # Build and tag healthchecks
-- name: 'gcr.io/cloud-builders/docker'
-  entrypoint: bash
-  args:
-  - -c
-  - |
-      #!/bin/bash
-      set -e
+# - name: 'gcr.io/cloud-builders/docker'
+#   entrypoint: bash
+#   args:
+#   - -c
+#   - |
+#       #!/bin/bash
+#       set -e
 
-      health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
-      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
+#       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
+#       machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
 
-      for health_check_name in "${health_check_names[@]}"; do
-        for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
+#       for health_check_name in "${health_check_names[@]}"; do
+#         for machine_type in "${machine_types[@]}"; do
+#           echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
 
-          if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
-            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
-          else
-            dockerfile="docker/${health_check_name//-/_}.Dockerfile"
-          fi
+#           if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
+#             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+#           else
+#             dockerfile="docker/${health_check_name//-/_}.Dockerfile"
+#           fi
 
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
+#           latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
 
-          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${latest_tag}" -f "${dockerfile}" .
-          echo "Successfully built image: ${latest_tag}"
-        done
-      done
-  id: build-healthchecks
-  waitFor: ['get-version']
+#           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
+#           docker build -t "${latest_tag}" -f "${dockerfile}" .
+#           echo "Successfully built image: ${latest_tag}"
+#         done
+#       done
+#   id: build-healthchecks
+#   waitFor: ['get-version']
 
 # Build health-runner
 - name: 'gcr.io/cloud-builders/docker'
@@ -74,25 +74,25 @@ options:
 # List ALL images to be pushed by Cloud Build after successful builds
 images:
 # Healthchecks (5 checks * 4 machine types = 20 images)
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
+# - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
 # Health-runner (1 image)
-- '$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME-'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME'
