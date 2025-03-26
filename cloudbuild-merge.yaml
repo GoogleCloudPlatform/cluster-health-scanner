@@ -51,6 +51,9 @@ steps:
       [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
       echo "Version found to be: $$_VERSION"
 
+      $REF_NAME=$$_VERSION
+      echo "wowzie $REF_NAME"
+
       _BUILD_TARGET="health-runner"
       _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$$_VERSION-latest"
