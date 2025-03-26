@@ -14,7 +14,7 @@ steps:
       REF_NAME="$$_VERSION"
   id: get-version
 
-# Build, tag, and push healthchecks
+# Build and tag healthchecks
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
@@ -43,14 +43,14 @@ steps:
           latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME-latest"
 
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${latest_tag}" -f "${dockerfile}" . && docker push "${latest_tag}"
-          echo "Successfully pushed image: ${latest_tag}"
+          docker build -t "${latest_tag}" -f "${dockerfile}" .
+          echo "Successfully built image: ${latest_tag}"
         done
       done
-  id: build-tag-push-healthchecks
+  id: build-healthchecks
   waitFor: ['get-version']
 
-# Build, tag, and push health-runner
+# Build health-runner
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
@@ -61,13 +61,40 @@ steps:
 
       _BUILD_TARGET="health-runner"
       _HEALTH_RUNNER_REPOSITORY="us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
-      latest_tag="$$_HEALTH_RUNNER_REPOSITORY:$REF_NAME-latest"
+      latest_tag="$${_HEALTH_RUNNER_REPOSITORY}:$REF_NAME-latest"
 
-      echo "Building and pushing $$_BUILD_TARGET with version $REF_NAME..."
-      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
-      echo "Successfully pushed image: ${latest_tag}"
-  id: build-tag-push-health-runner
+      echo "Building $$_BUILD_TARGET with version $REF_NAME..."
+      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" .
+      echo "Successfully built image: ${latest_tag}"
+  id: build-health-runner
   waitFor: ['get-version']
 
-- name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
-  args: ['--image=us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:$REF_NAME']
+options:
+  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
+  requestedVerifyOption: VERIFIED
+
+# List ALL images to be pushed by Cloud Build after successful builds
+images:
+# Healthchecks (5 checks * 4 machine types = 20 images)
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:a3-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:a3-megagpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:a3-ultragpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/gpu-healthcheck:a4-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:a3-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:a3-megagpu-8g_${REF_NAME }-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:a3-ultragpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck:a4-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:a3-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:a3-megagpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:a3-ultragpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/neper-healthcheck:a4-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck:a3-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck:a3-megagpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck:a3-ultragpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/straggler-healthcheck:a4-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/tinymax-healthcheck:a3-highgpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/tinymax-healthcheck:a3-megagpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/tinymax-healthcheck:a3-ultragpu-8g_${REF_NAME}-latest'
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/tinymax-healthcheck:a4-highgpu-8g_${REF_NAME}-latest'
+# Health-runner (1 image)
+- 'us-docker.pkg.dev/gce-ai-infra/health-check/health-runner:${REF_NAME}-latest'
