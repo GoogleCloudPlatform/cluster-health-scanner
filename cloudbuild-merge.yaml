@@ -68,11 +68,12 @@ steps:
   waitFor: ['get-version']
 
 options:
-  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
-  requestedVerifyOption: VERIFIED
   provenance:
     enabled: OPTIMISTIC
     region: GLOBAL
+  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
+  requestedVerifyOption: VERIFIED
+
 
 # List ALL images to be pushed by Cloud Build after successful builds
 images:
