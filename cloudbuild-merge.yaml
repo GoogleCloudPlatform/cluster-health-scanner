@@ -1,5 +1,5 @@
 substitutions:
-  _HEALTH_CHECK_REPOSITORY_BASE: us-docker.pkg.dev/$PROJECT_ID/health-check
+  _HEALTH_CHECK_REPOSITORY_BASE: us-docker.pkg.dev/gce-ai-infra/health-check
 steps:
 - name: 'alpine'
   entrypoint: sh
@@ -58,6 +58,7 @@ steps:
       set -e
 
       _BUILD_TARGET="health_runner"
+
       latest_tag="$${_HEALTH_CHECK_REPOSITORY_BASE}:$REF_NAME"
 
       echo "Building $$_BUILD_TARGET with version $REF_NAME..."
