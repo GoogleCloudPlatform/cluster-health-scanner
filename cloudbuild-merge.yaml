@@ -39,7 +39,7 @@ steps:
           elif [[ "$machine_type" == "a4-highgpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
             dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
           else
-            dockerfile="docker/${health_check_name//-/}_${machine_type}.Dockerfile"
+            dockerfile="docker/${health_check_name//-/}.Dockerfile"
           fi
 
           latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
