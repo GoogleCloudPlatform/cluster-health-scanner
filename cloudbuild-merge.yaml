@@ -1,5 +1,5 @@
 substitutions:
-  _REPO_NAME: us-docker.pkg.dev
+  _HEALTH_CHECK_REPOSITORY_BASE: us-docker.pkg.dev/$PROJECT_ID/health-check
 steps:
 - name: 'alpine'
   entrypoint: sh
@@ -24,8 +24,6 @@ steps:
   - |
       #!/bin/bash
       set -e
-      ls docker/
-      _HEALTH_CHECK_REPOSITORY_BASE="$_REPO_NAME/gce-ai-infra/health-check"
 
       health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
       machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
@@ -40,7 +38,7 @@ steps:
             dockerfile="docker/${health_check_name//-/_}.Dockerfile"
           fi
 
-          latest_tag="$$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
+          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
 
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
           docker build -t "${latest_tag}" -f "${dockerfile}" .
@@ -60,8 +58,7 @@ steps:
       set -e
 
       _BUILD_TARGET="health_runner"
-      _HEALTH_RUNNER_REPOSITORY="$_REPO_NAME/gce-ai-infra/health-check/health-runner"
-      latest_tag="$${_HEALTH_RUNNER_REPOSITORY}:$REF_NAME"
+      latest_tag="$${_HEALTH_CHECK_REPOSITORY_BASE}:$REF_NAME"
 
       echo "Building $$_BUILD_TARGET with version $REF_NAME..."
       docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" .
@@ -76,25 +73,25 @@ options:
 # List ALL images to be pushed by Cloud Build after successful builds
 images:
 # Healthchecks (5 checks * 4 machine types = 20 images)
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_REPO_NAME/gce-ai-infra/health-check/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
 # Health-runner (1 image)
-- '$_REPO_NAME/gce-ai-infra/health-check/health-runner:$REF_NAME-'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME-'
