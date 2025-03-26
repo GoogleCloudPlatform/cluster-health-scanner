@@ -1,0 +1,112 @@
+# Copyright 2024 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+substitutions:
+  _HEALTH_CHECK_REPOSITORY_BASE: us-docker.pkg.dev/gce-ai-infra/health-check
+steps:
+- name: 'alpine'
+  entrypoint: sh
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
+
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+
+      REF_NAME="$$_VERSION"
+  id: get-version
+
+# Build and tag healthchecks
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: bash
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
+
+      health_check_names=("gpu-healthcheck" "nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
+      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
+
+      for health_check_name in "${health_check_names[@]}"; do
+        for machine_type in "${machine_types[@]}"; do
+          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
+
+          if [[ "$machine_type" == "a3-ultragpu-8g" && "$health_check_name" == "nccl-healthcheck" ]]; then
+            dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+          else
+            dockerfile="docker/${health_check_name//-/_}.Dockerfile"
+          fi
+
+          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
+
+          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
+          docker build -t "${latest_tag}" -f "${dockerfile}" .
+          echo "Successfully built image: ${latest_tag}"
+        done
+      done
+  id: build-healthchecks
+  waitFor: ['get-version']
+
+# Build health-runner
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: bash
+  args:
+  - -c
+  - |
+      #!/bin/bash
+      set -e
+
+      _BUILD_TARGET="health_runner"
+
+      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME"
+
+      echo "Building $$_BUILD_TARGET with version $REF_NAME..."
+      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" .
+      echo "Successfully built image: ${latest_tag}"
+  id: build-health-runner
+  waitFor: ['get-version']
+
+options:
+  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
+  requestedVerifyOption: VERIFIED
+
+# List ALL images to be pushed by Cloud Build after successful builds
+images:
+# Healthchecks (5 checks * 4 machine types = 20 images)
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
+# Health-runner (1 image)
+- '$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME'

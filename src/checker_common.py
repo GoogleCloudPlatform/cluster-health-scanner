@@ -99,7 +99,11 @@ def label_node(
 
 
 def add_label(
-    node_name: str, label: str, value: str, label_format: str
+    node_name: str,
+    label: str,
+    value: str,
+    label_format: str,
+    print_output: bool = True,
 ) -> None:
   """Adds a label to a node.
 
@@ -108,12 +112,17 @@ def add_label(
     label (str): label being set.
     value (str): value being set.
     label_format (str): Interpolation format accepting node_name, label, value.
+    print_output (bool): If True, prints the output of the command. Defaults to
+      True.
 
   Returns:
     None.
   """
-  print("adding label %s=%s to node %s" % (label, value, node_name))
-  run_command(label_format % (node_name, label, value))
+  if print_output:
+    print("adding label %s=%s to node %s" % (label, value, node_name))
+  run_command(
+      label_format % (node_name, label, value), print_output=print_output
+  )
 
 
 def run_command(
