@@ -59,7 +59,7 @@ steps:
       #!/bin/bash
       set -e
 
-      _BUILD_TARGET="health-runner"
+      _BUILD_TARGET="health_runner"
       _HEALTH_RUNNER_REPOSITORY="$_REPO_NAME/gce-ai-infra/health-check/health-runner"
       latest_tag="$${_HEALTH_RUNNER_REPOSITORY}:$REF_NAME"
 
