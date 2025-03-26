@@ -14,7 +14,7 @@ steps:
       REF_NAME="$$_VERSION"
   id: get-version
 
-  # Build, tag, and push healthchecks
+# Build, tag, and push healthchecks
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
@@ -48,6 +48,7 @@ steps:
         done
       done
   id: build-tag-push-healthchecks
+  waitFor: ['get-version']
 
 # Build, tag, and push health-runner
 - name: 'gcr.io/cloud-builders/docker'
@@ -66,3 +67,4 @@ steps:
       docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" . && docker push "${latest_tag}"
       echo "Successfully pushed image: ${latest_tag}"
   id: build-tag-push-health-runner
+  waitFor: ['get-version']
