@@ -14,7 +14,7 @@ steps:
       REF_NAME="$$_VERSION"
   id: get-version
 
-# Build, tag, and push healthchecks
+  # Build, tag, and push healthchecks
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
