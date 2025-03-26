@@ -16,7 +16,7 @@ steps:
       REF_NAME="$$_VERSION"
   id: get-version
 
-# # Build and tag healthchecks
+# Build and tag healthchecks
 # - name: 'gcr.io/cloud-builders/docker'
 #   entrypoint: bash
 #   args:
@@ -67,12 +67,12 @@ steps:
   id: build-health-runner
   waitFor: ['get-version']
 
+- name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
+  args: ['--image=$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME']
+
 options:
-  provenance:
-    enabled: REQUIRED
   # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
   requestedVerifyOption: VERIFIED
-
 
 # List ALL images to be pushed by Cloud Build after successful builds
 images:
