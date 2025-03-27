@@ -14,7 +14,7 @@ ensure the cluster is ready for training workloads, specifically:
 *   **Neper check**: Leverages the Neper tool to assess network performance
     within the cluster.
 *   **Straggler detection**: Runs a network traffic pattern between nodes that
-    closely resemble that encountered during LLM training workload pipeline
+    closely resemble patterns seen during LLM training workload pipeline
     parallelism.
 *   **Tinymax check**: Uses Maxtext open source LLM framework to assess ml
     training within the cluster.

@@ -70,9 +70,11 @@ message HealthResultList {
 message NCCLHealthResult {
   message NCCLBandwidthResult {
     // The bandwidth value in GBps.
-    double value_gbps = 1;
+    double bandwidth_gbps = 1;
     // The message size in bytes.
     int64 message_size_bytes = 2;
+    // The latency value in ms.
+    int64 latency_ms = 3;
   }
 
   // The benchmark of the NCCL test (all_reduce, all_gather, etc).
