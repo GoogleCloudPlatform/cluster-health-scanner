@@ -45,11 +45,30 @@ K_DELETE_FORMAT = "%s delete -f %s"
 
 K_GSUTIL_COPY_FILE_FORMAT = "gsutil cp %s %s"
 
-K_LABEL_TO_MESSAGE_SIZE = {
-    "aiinfra/nccl-healthcheck-8G-bandwidth": 8 * 1024 * 1024 * 1024,
-    "aiinfra/nccl-healthcheck-1G-bandwidth": 1024 * 1024 * 1024,
-    "aiinfra/nccl-healthcheck-64MiB-bandwidth": 64 * 1024 * 1024,
-    "aiinfra/nccl-healthcheck-4MiB-bandwidth": 4 * 1024 * 1024,
+K_8GIB_MESSAGE_SIZE = 8 * 1024 * 1024 * 1024
+K_1GIB_MESSAGE_SIZE = 1024 * 1024 * 1024
+K_64MIB_MESSAGE_SIZE = 64 * 1024 * 1024
+K_4MIB_MESSAGE_SIZE = 4 * 1024 * 1024
+
+K_SUPPORT_MESSAGE_SIZES = [
+    K_8GIB_MESSAGE_SIZE,
+    K_1GIB_MESSAGE_SIZE,
+    K_64MIB_MESSAGE_SIZE,
+    K_4MIB_MESSAGE_SIZE,
+]
+
+K_MESSAGE_SIZE_TO_BANDWIDTH_LABEL = {
+    K_8GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-8G-bandwidth",
+    K_1GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-1G-bandwidth",
+    K_64MIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-64MiB-bandwidth",
+    K_4MIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-4MiB-bandwidth",
+}
+
+K_MESSAGE_SIZE_TO_LATENCY_LABEL = {
+    K_8GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-8G-latency-ms",
+    K_1GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-1G-latency-ms",
+    K_64MIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-64MiB-latency-ms",
+    K_4MIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-4MiB-latency-ms",
 }
 
 
@@ -75,6 +94,19 @@ def log_results(
       "result_data": result_data,
   }
   print(json.dumps(log))
+
+
+def remove_label(
+    node: str,
+    label_key: str,
+    kubectl_path: str = _KUBECTL,
+) -> None:
+  """Removes a label from a node."""
+  print(f"removing label {label_key} from node {node}")
+  run_command(
+      f"{kubectl_path} label node {node} {label_key}-",
+      print_output=False,
+  )
 
 
 # 
@@ -333,6 +365,7 @@ def create_job_k8s(
     job_name: str,
     yaml_file: str,
     env_mappings: dict[str, str] | None = None,
+    print_output: bool = True,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Creates a job k8s and returns a function to delete it."""
   if not env_mappings:
@@ -342,20 +375,23 @@ def create_job_k8s(
   return create_k8s_objects(
       yaml_path=yaml_file,
       mappings=env_mappings,
+      print_output=print_output,
   )
 
 
 def run_healthcheck(
     health_check: health_runner_config_pb2.HealthCheck,
     env_mappings: dict[str, str],
+    print_output: bool = False,
 ) -> str:
   """Runs a health check."""
-  job_name = f"diag-performance-{str(uuid.uuid4())[:8]}"
+  job_name = f"diag-healthcheck-{str(uuid.uuid4())[:8]}"
   if health_check.yaml_file:
     create_job_k8s(
         job_name=job_name,
         yaml_file=health_check.yaml_file,
         env_mappings=env_mappings,
+        print_output=print_output,
     )
   elif health_check.helm_config:
     env_mappings["JOB_NAME"] = job_name
@@ -826,7 +862,7 @@ def generate_subblock_topology(
 
 def parse_nccl_results(
     node: client.models.V1Node,
-) -> health_results_pb2.NCCLHealthResult:
+) -> health_results_pb2.NCCLHealthResult | None:
   """Parses the NCCL results from the job output."""
   nccl_health_result = health_results_pb2.NCCLHealthResult(
       benchmark=node.metadata.labels.get("aiinfra/nccl-healthcheck-benchmark"),
@@ -836,16 +872,26 @@ def parse_nccl_results(
   )
   if average_bandwidth_gbps and average_bandwidth_gbps != "None":
     nccl_health_result.average_bandwidth_gbps = int(average_bandwidth_gbps)
+  else:
+    return None
 
   # TODO: Update labels units
-  # Attempt to parse the supported bandwidth labels.
-  for label, message_size in K_LABEL_TO_MESSAGE_SIZE.items():
-    if label not in node.metadata.labels:
+  # Attempt to parse the bandwidths and latencies for each message size.
+  for msg_size in K_SUPPORT_MESSAGE_SIZES:
+    bandwidth_label = K_MESSAGE_SIZE_TO_BANDWIDTH_LABEL.get(msg_size, None)
+    latency_label = K_MESSAGE_SIZE_TO_LATENCY_LABEL.get(msg_size, None)
+    # If the message size is not supported, skip it.
+    if (bandwidth_label is None and latency_label is None) or (
+        bandwidth_label not in node.metadata.labels
+        and latency_label not in node.metadata.labels
+    ):
       continue
+
     nccl_health_result.bandwidth_measurements.append(
         health_results_pb2.NCCLHealthResult.NCCLBandwidthResult(
-            value_gbps=float(node.metadata.labels[label]),
-            message_size_bytes=int(message_size),
+            bandwidth_gbps=float(node.metadata.labels.get(bandwidth_label, 0)),
+            latency_ms=int(node.metadata.labels.get(latency_label, 0)),
+            message_size_bytes=int(msg_size),
         )
     )
 

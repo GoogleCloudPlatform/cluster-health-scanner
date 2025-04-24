@@ -56,7 +56,6 @@ _NCCL_8GIB_LATENCY_MS_KEY = "aiinfra/nccl-healthcheck-8G-latency-ms"
 
 K_ADD_LABEL_FORMAT = "{k} label node %s %s=%s --overwrite".format(k=KUBECTL)
 K_TAINT_NODE_FORMAT = "{k} taint node %s %s=%s:%s".format(k=KUBECTL)
-K_REMOVE_LABEL_FORMAT = "{k} label node %s %s-".format(k=KUBECTL)
 K_REMOVE_TAINT_NODE_FORMAT = "{k} taint node %s %s-".format(k=KUBECTL)
 K_DELETE_SERVICE_FORMAT = "{k} delete svc %s".format(k=KUBECTL)
 
@@ -68,6 +67,21 @@ _NCCL_RESULTS_IN_PLACE_TIME_INDEX = 9
 _NO_BANDWIDTH_VALUE = -1
 
 WORKLOAD_TERMINATE_FILE = "/usr/share/nemo/workload_terminated"
+
+_NCCL_LABELS_TO_REMOVE = [
+    # Time label is not removed since if the test fails then the time remains.
+    _NCCL_BENCHMARK_KEY,
+    _NCCL_PRE_RESULT_KEY,
+    _NCCL_AVG_BANDWIDTH_KEY,
+    _NCCL_4MIB_BANDWIDTH_KEY,
+    _NCCL_64MIB_BANDWIDTH_KEY,
+    _NCCL_1GIB_BANDWIDTH_KEY,
+    _NCCL_8GIB_BANDWIDTH_KEY,
+    _NCCL_4MIB_LATENCY_MS_KEY,
+    _NCCL_64MIB_LATENCY_MS_KEY,
+    _NCCL_1GIB_LATENCY_MS_KEY,
+    _NCCL_8GIB_LATENCY_MS_KEY,
+]
 
 MESSAGE_SIZE_TO_BANDWIDTH_LABEL = {
     "4194304": _NCCL_4MIB_BANDWIDTH_KEY,
@@ -209,9 +223,6 @@ def run_nccl_test(
     test_iterations = int(os.getenv("TEST_ITERATIONS", "5"))
     ld_library_path = config_obj.ld_library_path
 
-    print("Sleeping for 30 seconds to let rxdm spin up...")
-    time.sleep(30)
-
     bandwidths = []
     # Run the test 'iter' amount of times and average the performance.
     for _ in range(test_iterations):
@@ -235,7 +246,7 @@ def run_nccl_test(
   else:  # secondary nodes
     while not os.path.exists("/master.done"):
       print("waiting for master pod...")
-      time.sleep(10)
+      time.sleep(5)
   # Create file to let tcpxo daemon to terminate, this only applies to A3
   # and A3+ machines which use rxdm.
   if INSTANCE_TYPE in (
@@ -569,12 +580,12 @@ def mark_node_bandwidth(
   )
 
 
-def remove_label(
+def remove_nccl_labels(
     node_name: str,
-    label: str,
 ) -> None:
-  print("removing label %s from node %s" % (label, node_name))
-  checker_common.run_command(K_REMOVE_LABEL_FORMAT % (node_name, label))
+  """Remove all nccl labels from a the node to ensure no previous labels are mistaken for the current test."""
+  for label in _NCCL_LABELS_TO_REMOVE:
+    checker_common.remove_label(node_name, label, KUBECTL)
 
 
 def cleanup(
@@ -593,12 +604,13 @@ def cleanup(
 def main() -> None:
   """Main function."""
   ensure_env_variables()
+  node_name = os.environ["NODE_NAME"]
+  remove_nccl_labels(node_name)
   apply_namespace_resolution()
   configure_ssh()
 
   nhosts = int(os.environ["NHOSTS"])
   nr = os.environ["nr"]
-  node_name = os.environ["NODE_NAME"]
   with open("/host.name", "w") as f:
     f.write(node_name)
   hosts = get_host_list(nhosts)

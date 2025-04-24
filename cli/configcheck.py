@@ -36,12 +36,13 @@ import node_config_fetcher
 
 
 _SUPPORTED_MACHINE_TYPES = list(common.SUPPORTED_MACHINE_TYPES)
-_SUPPORTED_MACHINE_TYPES.remove('a3-highgpu-8g')
-_SUPPORTED_MACHINE_TYPES.remove('a3-ultragpu-8g')
 _SUPPORTED_MACHINE_TYPES.remove('a4-highgpu-8g')
+
+_A3_ULTRAGPU_8G_DEPENDENCY_PARSERS = dependencies.DEPENDENCY_PARSERS
 
 _A3_MEGAGPU_8G_DEPENDENCY_PARSERS = dependencies.DEPENDENCY_PARSERS
 
+_A3_HIGHGPU_8G_DEPENDENCY_PARSERS = dependencies.DEPENDENCY_PARSERS
 
 _FORMAT_MARKDOWN = 'markdown'
 _FORMAT_JSON = 'json'
@@ -406,8 +407,12 @@ def cli(
         ),
     )
   match machine_type:
+    case 'a3-ultragpu-8g':
+      dependency_parsers = _A3_ULTRAGPU_8G_DEPENDENCY_PARSERS
     case 'a3-megagpu-8g':
       dependency_parsers = _A3_MEGAGPU_8G_DEPENDENCY_PARSERS
+    case 'a3-highgpu-8g':
+      dependency_parsers = _A3_HIGHGPU_8G_DEPENDENCY_PARSERS
     case _:
       raise click.Abort(
           f'Unsupported machine type: {machine_type}. Supported machine types:'

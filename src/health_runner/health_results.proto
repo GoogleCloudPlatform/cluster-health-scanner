@@ -65,14 +65,23 @@ message HealthResultList {
 
   // Additional results for NEMO health checks.
   repeated NEMOHealthResult nemo_health_result = 5;
+
+  oneof result {
+    HPCNCCLHealthResult hpc_nccl_health_result = 6;
+    HPLHealthResult hpl_health_result = 7;
+  }
 }
 
 message NCCLHealthResult {
   message NCCLBandwidthResult {
     // The bandwidth value in GBps.
-    double value_gbps = 1;
+    double bandwidth_gbps = 1;
+    // The bandwidth baseline in GBps.
+    double bandwidth_baseline_gbps = 4;
     // The message size in bytes.
     int64 message_size_bytes = 2;
+    // The latency value in ms.
+    int64 latency_ms = 3;
   }
 
   // The benchmark of the NCCL test (all_reduce, all_gather, etc).
@@ -94,6 +103,19 @@ message NEMOHealthResult {
 
   // The MFU of the NEMO test.
   double mfu = 3;
+}
+
+// The results NCCL health check for a single object.
+message HPCNCCLHealthResult {
+  int32 bandwidth_gbps = 1;
+  string benchmark = 2;
+}
+
+message HPLHealthResult {
+  // The throughput of the HPL test in GFlops.
+  double throughput_gflops = 1;
+  // The benchmark of the HPL test (HPL, HPL_2, etc).
+  string benchmark = 2;
 }
 
 // The status of the health check.

@@ -71,6 +71,7 @@ class NodeConfigFetcher:
         '--project',
         f'{self.project}',
         f'{self.name}',
+        '--tunnel-through-iap',
         '--',
     ]
     if sudo:

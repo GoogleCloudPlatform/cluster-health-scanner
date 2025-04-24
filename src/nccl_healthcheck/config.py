@@ -65,7 +65,7 @@ def _create_a3ultra_config():
       instance_type="a3-ultragpu-8g",
       second_pass_yaml_path="a3ultra/nccl_secondpass.yaml",
       nccl_test_command_template=(
-          "bash /scripts/run-nccl-combined-plugins.sh rdma all_gather_perf"
+          "bash /scripts/run-nccl-combined-plugins.sh rdma {benchmark}"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
           " {start_message_size} {end_message_size} {nhosts} 3"
       ),
@@ -79,7 +79,7 @@ def _create_a4_config():
       instance_type="a4-highgpu-8g",
       second_pass_yaml_path="a4/nccl_secondpass.yaml",
       nccl_test_command_template=(
-          "bash /scripts/run-nccl-combined-plugins.sh rdma all_gather_perf"
+          "bash /scripts/run-nccl-combined-plugins.sh rdma {benchmark}"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
           " {start_message_size} {end_message_size} {nhosts} 3"
       ),
