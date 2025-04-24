@@ -73,6 +73,7 @@ def _get_scp_cmd(
       'gcloud',
       'compute',
       'scp',
+      '--tunnel-through-iap',
       f'{node_name}:{remote_file_path}',
       local_file_path,
       f'--zone={zone}',

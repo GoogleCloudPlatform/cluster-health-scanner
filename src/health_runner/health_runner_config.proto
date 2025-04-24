@@ -65,6 +65,9 @@ message PerformanceHealthCheckConfig {
   // Optional. The minimum number of nodes to run the test on.
   int32 min_node_count = 6;
 
+  // The baseline file path for the health check.
+  string baseline_file = 7;
+
   oneof performance_health_check_config {
     NCCLPerformanceHealthCheckConfig nccl_performance_health_check_config = 3;
     NEMOPerformanceHealthCheckConfig nemo_performance_health_check_config = 4;
