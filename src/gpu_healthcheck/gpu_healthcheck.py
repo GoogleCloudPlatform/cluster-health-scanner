@@ -53,6 +53,7 @@ NVIDIA_SMI_COMMAND = (
     " --query-gpu=ecc.errors.uncorrected.volatile.total"
     " --format=csv,noheader,nounits"
 )
+K_ENABLE_PERSISTENCE_MODE = "/usr/local/nvidia/bin/nvidia-smi -pm 1"
 K_ADD_LABEL_FORMAT = "/app/kubectl label node %s %s=%s --overwrite"
 K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
 K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
@@ -70,6 +71,7 @@ def main() -> None:
   print("diagnostic on vm '%s' is 'initiated'" % node_name)
 
   reboot_required = run_reboot_required_check(node_name)
+  enable_persistence_mode(node_name)
   run_dcgm_diag(node_name, reboot_required)
   checker_common.add_label(
       node_name,
@@ -77,6 +79,12 @@ def main() -> None:
       f"{int(time.time())}",
       K_ADD_LABEL_FORMAT,
   )
+
+
+def enable_persistence_mode(node_name: str) -> None:
+  """Enables persistence mode for the node."""
+  print(f"enabling persistence mode for node '{node_name}'")
+  checker_common.run_command(K_ENABLE_PERSISTENCE_MODE)
 
 
 def convert_output_to_proto(output: str) -> dcgm_pb2.DiagnosticReport:
@@ -90,11 +98,12 @@ def convert_output_to_proto(output: str) -> dcgm_pb2.DiagnosticReport:
   for gpu_index, serial in json_data.get("GPU Device Serials", {}).items():
     report.gpu_device_serials[gpu_index] = serial
 
-  for category_data in json_data.get("DCGM GPU Diagnostic", {}).get(
+  for category_data in json_data.get("DCGM Diagnostic", {}).get(
       "test_categories", []
   ):
     category = report.dcgm_gpu_diagnostic.test_categories.add()
     category.category = category_data["category"]
+    print(f"Processing category: {category.category}")
 
     for test_data in category_data.get("tests", []):
       test = category.tests.add()
@@ -107,7 +116,11 @@ def convert_output_to_proto(output: str) -> dcgm_pb2.DiagnosticReport:
           result.gpu_id = result_data["gpu_id"]
 
         if "info" in result_data:
-          result.info = result_data["info"]
+          info = result_data["info"]
+          if isinstance(info, str):
+            result.infos.append(info)
+          elif isinstance(info, list):
+            result.infos.extend(info)
         if "warnings" in result_data:
           for warning_data in result_data["warnings"]:
             warning = result.warnings.add()
@@ -172,7 +185,6 @@ def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
   """run dcgm diag."""
   command = generate_dcgm_command()
   diag_output = checker_common.run_command(command)
-
   try:
     print("Converting from json output to proto")
     output = convert_output_to_proto(diag_output.stdout)
@@ -225,6 +237,11 @@ def is_bad_node_from_proto(report: dcgm_pb2.DiagnosticReport) -> bool:
   """Returns True if the node is bad based on the DCGM diagnostic report."""
   bad_node = False
   strict_mode = os.environ.get("STRICT_MODE", "true")
+  # If no test categories, then something went wrong with the test.
+  if not report.dcgm_gpu_diagnostic.test_categories:
+    print("No test categories in DCGM diagnostic report")
+    return True
+
   for category in report.dcgm_gpu_diagnostic.test_categories:
     for test in category.tests:
       for result in test.results:
@@ -234,7 +251,7 @@ def is_bad_node_from_proto(report: dcgm_pb2.DiagnosticReport) -> bool:
           )  # Add GPU ID if available
           print(
               f"Test '{test.name}' in category '{category.category}'"
-              f" {gpu_info}: {result.status} - {result.info}",
+              f" {gpu_info}: {result.status}",
           )
           # If in strict mode, fail on any error.
           if strict_mode == "true":

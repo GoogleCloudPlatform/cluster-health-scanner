@@ -22,7 +22,6 @@ import dataclasses
 import os
 import re
 import time
-from typing import List, Tuple
 import checker_common
 import config
 
@@ -113,7 +112,7 @@ class NcclResults:
 
   avg_bandwidth: int
   # List of NcclResult objects, one for each message size.
-  results: List[NcclResult]
+  results: list[NcclResult]
   success: bool
 
 
@@ -406,7 +405,7 @@ def compute_metrics(
   """Compute the metrics for each message size."""
   # Compute the metrics for each message size.
   # The metrics is a tuple of iterations and total value (Bandwidth or Latency)
-  metrics: dict[str, Tuple[int, int]] = collections.defaultdict(lambda: (0, 0))
+  metrics: dict[str, tuple[int, int]] = collections.defaultdict(lambda: (0, 0))
   for nccl_results in test_results:
     # If the tests was not success don't include in bandwidth calculation
     if not nccl_results.success:
@@ -435,7 +434,7 @@ def compute_metrics(
 
 
 def update_metrics(
-    metrics: dict[str, Tuple[int, int]],
+    metrics: dict[str, tuple[int, int]],
     label: str,
     value: int,
 ) -> None:

@@ -26,7 +26,7 @@ CHS serves two main purposes:
 *   **Debugging tool**: Helps diagnose issues when you encounter problems with a
     training workload.
 
-__GPU Cluster availability__: A3 and A3+<br>
+__GPU Cluster availability__: A3, A3+, A3U and A4<br>
 __Orchestrator support__: GKE and Slurm
 
 The **Cluster Health Scanner** tool or simply **CHS** runs a series of tests
@@ -49,9 +49,11 @@ A tool for diagnosing cluster issues.
 The `cluster_diag` tool is a helpful wrapper around the CHS diagnostic tool for
 the
 [Accelerator-optimized machine family](https://cloud.google.com/compute/docs/accelerator-optimized-machines)
-(currently only a3-highgpu-g8 and a3-megagpu-8g). It is exposed via the
+. It is exposed via the
 `healthscan` command and aims to provide a _single line_ command that can run
-CHS, with no prior knowledge needed of CHS implementation details.
+CHS, with no prior knowledge needed of CHS implementation details. See the
+documentation for `healthscan` below for more details on supported machines and
+tests.
 
 NOTE: The `cluster_diag` tool aims to provide a joyful experience for running
 Cluster Health Scanner; however it may not support all use cases. To run CHS
@@ -61,10 +63,11 @@ directly, see the instructions
 
 ### Installation
 
-NOTE: `cluster_diag` expects that you have already authenticated the `gcloud`
-cli to access the Google Cloud Platform with Google user credentials.
-Additionally, `gcloud` should already have credentials for the
-cluster-under-test.
+Note the following:
+
+* `cluster_diag` expects that you have already authenticated the `gcloud` cli to access the Google Cloud Platform with Google user credentials.
+* `gcloud` should already have credentials for the cluster-under-test.
+* Python >= 3.9 version is required on the host machine to run the `cluster_diag` CLI.
 
 1. Clone this repository
 2. If you don't already have them, install dependencies for the CLI:
@@ -115,7 +118,7 @@ Runs a CHS healthscan on a cluster.
 
 ```bash
 $ cluster_diag -o gke healthscan a3-megagpu-8g --help
-Usage: cluster_diag healthscan [OPTIONS] {a3-highgpu-8g | a3-megagpu-8g | a3-ultragpu-8g}
+Usage: cluster_diag healthscan [OPTIONS] {a3-highgpu-8g | a3-megagpu-8g | a3-ultragpu-8g | a4-highgpu-8g}
 
 Run a healthscan on a cluster.
 
@@ -187,6 +190,16 @@ Options:
   --help                          Show this message and exit.
 
 ```
+
+NOTE: `configcheck` for Slurm is supported in the following scenarios:
+
+*   Running from a Slurm login node.
+*   Providing a list of nodes using the `--nodes` flag.
+If `sinfo` is not
+found (e.g., you are not on a Slurm login node), the `configcheck` CLI will:
+
+*   Print an error message to the user, indicating that `sinfo` was not found.
+*   Exit with a success code (0).
 
 #### Sample Usage
 
@@ -366,7 +379,8 @@ are others that are universal to all health checks.
 
 - `health_checks.HC_NAME.env.YAML_FILE`:
   must be set to either `"a3ultra/nccl_healthcheck.yaml"` or
-  `"a3plus/nccl_healthcheck.yaml"` or `"a3/nccl_healthcheck.yaml"`,
+  `"a3plus/nccl_healthcheck.yaml"` or `"a3/nccl_healthcheck.yaml"` or
+  `"a4/nccl_healthcheck.yaml"`,
   depending on the nodes' accelerator type.
 
 ###### GPU Health Check Settings

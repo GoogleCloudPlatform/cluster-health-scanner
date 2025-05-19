@@ -25,10 +25,12 @@ Note:
 
 from collections.abc import Iterable
 import logging
+import multiprocessing
 import os
 import signal
 import socket
 import sys
+import time
 from typing import Any
 import uuid
 
@@ -235,9 +237,33 @@ def determine_test_iterations(num_nodes: int | None = None) -> int:
     return 1
 
 
+def create_and_cleanup(
+    unique_release_name: str, helm_values: dict[str, str]
+) -> None:
+  """Creates a helm release and adds a cleanup function."""
+  # This must be defined in the YAML configuration
+  helm_chart_path = _HELM_CHART
+  # 
+  helm_chart_version = _HELM_CHART_VERSION
+  # 
+  helm_install_flags = _HELM_INSTALL_FLAGS
+  # Call the function to create the helm release
+  result = checker_common.create_helm_release(
+      helm_path=_HELM,
+      release_name=unique_release_name,
+      chart=helm_chart_path,
+      values=helm_values,
+      chart_version=helm_chart_version,
+      helm_install_flags=helm_install_flags,
+  )
+  # Extend the cleanup functions with the result
+  cleanup_functions.extend(result)
+
+
 def run_health_check(sleep_time: int) -> None:
   """Run the health check."""
 
+  start_time = time.time()
   # PREPARATION
   ensure_env_variables(
       required_envs={
@@ -246,12 +272,6 @@ def run_health_check(sleep_time: int) -> None:
       },
   )
 
-  # This must be defined in the YAML configuration
-  helm_chart_path = _HELM_CHART
-  # 
-  helm_chart_version = _HELM_CHART_VERSION
-  # 
-  helm_install_flags = _HELM_INSTALL_FLAGS
   # 
   helm_values: dict[str, str] = dict()
 
@@ -288,6 +308,10 @@ def run_health_check(sleep_time: int) -> None:
 
   # RUN HC
   release_names = []
+  pool = None
+  if os.environ.get("USE_MULTIPROCESSING", "true") == "true":
+    pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
+    logging.info("Created pool with %d processes", multiprocessing.cpu_count())
   for i in range(num_tests):
     # If Helm release name is not unique, it will not install the release
     short_guid = str(uuid.uuid4())[:8]
@@ -298,26 +322,27 @@ def run_health_check(sleep_time: int) -> None:
       )
     else:
       unique_release_name = f"chs-hc-{hc_release_name_suffix}"
-
     release_names.append(unique_release_name)
     helm_values["job.name"] = f"chs-hc-{i}-{short_guid}"
-
-    cleanup_functions.extend(
-        checker_common.create_helm_release(
-            helm_path=_HELM,
-            release_name=unique_release_name,
-            chart=helm_chart_path,
-            values=helm_values,
-            chart_version=helm_chart_version,
-            helm_install_flags=helm_install_flags,
-        )
-    )
+    if pool:
+      pool.apply_async(
+          create_and_cleanup, args=(unique_release_name, helm_values)
+      )
+    else:
+      create_and_cleanup(unique_release_name, helm_values)
     # Count of tests deployed should start at 1 to make it clear
     logging.info("Deployed test %d (%d of %d total)", i, i + 1, num_tests)
 
   logging.info(
       "Waiting for maximum of %s minutes before cleaning up...",
       sleep_time,
+  )
+  if pool:
+    pool.close()
+    pool.join()
+  logging.info(
+      "Time elapsed to install all health checks: %s seconds",
+      time.time() - start_time,
   )
   # Helm releases & associated jobs are logged for reference outside of HR
   release_jobs = checker_common.get_created_jobs(release_names)

@@ -256,9 +256,15 @@ class GkeCheck(check.Check):
         'ls',
         '-a',
         '--no-headers',
-        '--filter',
-        release_name_base,
     ]
+    if release_name_base:
+      helm_ls_command.extend([
+          '--filter',
+          release_name_base,
+      ])
+    else:
+      # If no release name base is provided, assume no helm releases to return
+      return []
     try:
       helm_ls_output = subprocess.run(
           helm_ls_command,
@@ -310,7 +316,11 @@ class GkeCheck(check.Check):
       )
       return
     # Attempt to clean up all HC Helm releases not already uninstalled
-    helm_releases = self._get_helm_releases(self.hc_release_name_base)
+    helm_releases = self._get_helm_releases(
+        release_name_base=(
+            getattr(self, 'hc_release_name_base', None)
+        ),
+    )
     # Iterate over each release and uninstall it
     for release_name in helm_releases:
       helm_uninstall_command = [
@@ -333,11 +343,12 @@ class GkeCheck(check.Check):
         click.echo(f'Uninstall result: {uninstall_result.stdout.strip()}')
 
     # Other processes to clean up like HR Helm release, labels, etc.
-    launch_helm.cleanup_k8s_cluster(
-        hr_release_name=self.hr_release_name,
-        launch_label=self.launch_label,
-        nodes=self.nodes,
-    )
+    if getattr(self, 'hc_release_name_base', None):
+      launch_helm.cleanup_k8s_cluster(
+          hr_release_name=self.hr_release_name,
+          launch_label=self.launch_label,
+          nodes=self.nodes,
+      )
 
     return
 
