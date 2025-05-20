@@ -32,11 +32,13 @@ from google.protobuf import json_format
 from kubernetes import client
 from kubernetes import config
 from kubernetes.client.api import batch_v1_api
+from urllib3 import exceptions
 
 import common_pb2
 import health_results_pb2
 import health_runner_config_pb2
 
+ConnectTimeoutError = exceptions.ConnectTimeoutError
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 
@@ -157,6 +159,28 @@ def add_label(
   )
 
 
+def run_command_with_retry(
+    command: str,
+    print_output: bool = True,
+    retry_attempts: int = 3,
+    retry_interval_seconds: int = 5,
+) -> subprocess.CompletedProcess[str]:
+  """Execute a shell command with retries."""
+  print(f"running: {command}")
+  attempt = 0
+  while True:
+    try:
+      return run_command(command, print_output=print_output, check=True)
+    except subprocess.CalledProcessError as e:
+      print("command failed: %s" % e)
+      if attempt >= retry_attempts:
+        # If we've reached the retry limit, raise the error
+        raise e
+      print("retrying in %s seconds" % retry_interval_seconds)
+      time.sleep(retry_interval_seconds)
+      attempt += 1
+
+
 def run_command(
     command: str,
     check: bool = False,
@@ -230,8 +254,19 @@ def job_succeeded(
     namespace: str = "default",
 ) -> bool:
   """Get the status of a job."""
-  job = job_v1.read_namespaced_job(name=job_name, namespace=namespace)
-  return job.status.succeeded is not None and job.status.succeeded >= 1
+  attempt = 1
+  while attempt <= 3:
+    try:
+      job = job_v1.read_namespaced_job(name=job_name, namespace=namespace)
+      return job.status.succeeded is not None and job.status.succeeded >= 1
+    except client.ApiException as e:
+      print(f"Unknown error when attempting to list jobs: {e}")
+      if attempt >= 3:
+        raise e
+    print("Sleeping for 1 seconds before retrying")
+    time.sleep(1)
+    attempt += 1
+  return False
 
 
 def wait_till_jobs_complete(
@@ -262,15 +297,25 @@ def wait_till_jobs_complete(
       f" {check_interval} seconds"
   )
   while remaining_jobs:
-    job_list = job_v1.list_namespaced_job(namespace)
-    for job in job_list.items:
-      if job.metadata.name in remaining_jobs:
-        if job.status.succeeded is not None and job.status.succeeded >= 1:
-          remaining_jobs.remove(job.metadata.name)
-          print(f"Job {job.metadata.name} completed successfully.")
-        elif job.status.failed is not None and job.status.failed >= 1:
-          remaining_jobs.remove(job.metadata.name)
-          print(f"Job {job.metadata.name} failed.")
+    job_list = []
+    try:
+      job_list = job_v1.list_namespaced_job(namespace)
+    except exceptions.ConnectTimeoutError as e:
+      print(f"Connect Timeout Error when attempting to list jobs: {e}")
+    except exceptions.MaxRetryError as e:
+      print(f"Max retry error when attempting to list jobs: {e}")
+    except client.ApiException as e:
+      print(f"Unknown error when attempting to list jobs: {e}")
+
+    if job_list:
+      for job in job_list.items:
+        if job.metadata.name in remaining_jobs:
+          if job.status.succeeded is not None and job.status.succeeded >= 1:
+            remaining_jobs.remove(job.metadata.name)
+            print(f"Job {job.metadata.name} completed successfully.")
+          elif job.status.failed is not None and job.status.failed >= 1:
+            remaining_jobs.remove(job.metadata.name)
+            print(f"Job {job.metadata.name} failed.")
 
     if not remaining_jobs:
       print("All jobs completed.")
@@ -357,6 +402,7 @@ def create_job_k8s_helm(
       values=values,
       chart_version=helm_config.chart_version,
       helm_install_flags=helm_config.install_flags,
+      retry=True,
   )
   return uninstall_functions
 
@@ -376,6 +422,7 @@ def create_job_k8s(
       yaml_path=yaml_file,
       mappings=env_mappings,
       print_output=print_output,
+      retry=True,
   )
 
 
@@ -402,6 +449,7 @@ def run_healthcheck(
         values=env_mappings,
         chart_version=health_check.helm_config.chart_version,
         helm_install_flags=health_check.helm_config.install_flags,
+        retry=True,
     )
   else:
     raise ValueError("No health check file specified.")
@@ -445,6 +493,7 @@ def create_helm_release(
     values: dict[str, str] | None = None,
     chart_version: str | None = None,
     helm_install_flags: str | None = None,
+    retry: bool = False,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Creates a helm release and returns a function to uninstall it."""
 
@@ -458,6 +507,7 @@ def create_helm_release(
           values=values,
           chart_version=chart_version,
           helm_install_flags=helm_install_flags,
+          retry=retry,
       )
   )
   return cleanup_functions
@@ -470,6 +520,7 @@ def install_helm_release(
     values: dict[str, str] | None = None,
     chart_version: str | None = None,
     helm_install_flags: str | None = None,
+    retry: bool = False,
 ) -> Callable[[], subprocess.CompletedProcess[str]]:
   """Applies a helm chart and returns a function to uninstall it."""
 
@@ -485,7 +536,10 @@ def install_helm_release(
   )
   # Will do the specific release installation
   logging.info("Helm command:\n%s", helm_install_command)
-  run_command(helm_install_command)
+  if retry:
+    run_command_with_retry(helm_install_command)
+  else:
+    run_command(helm_install_command)
 
   # Will give a function to later uninstall the release
   helm_uninstall_command = generate_helm_command(
@@ -503,20 +557,26 @@ def create_k8s_objects(
     yaml_path: str,
     mappings: dict[str, str] | None = None,
     print_output: bool = True,
+    retry: bool = False,
 ) -> list[Callable[[], subprocess.CompletedProcess[str]]]:
   """Expands provided yaml file and runs `kubectl apply -f` on the contents."""
   if not _KUBECTL:
     logging.error("No kubectl path specified.")
     return []
 
-  cleanup_functions = []
-
   expanded_yaml_content = expand_template(yaml_path, mappings)
   with tempfile.NamedTemporaryFile(delete=False, mode="w") as f:
     file_name = f.name
     f.write(expanded_yaml_content)
 
-  cleanup_functions.append(apply_yaml_file(file_name, _KUBECTL, print_output))
+  cleanup_functions = []
+  try:
+    cleanup_functions.append(
+        apply_yaml_file(file_name, _KUBECTL, print_output, retry)
+    )
+  except subprocess.CalledProcessError as e:
+    logging.exception("Failed to apply yaml file (reason: %r).", e)
+
   return cleanup_functions
 
 
@@ -524,6 +584,7 @@ def apply_yaml_file(
     yaml_path: str,
     kubectl_path: str,
     print_output: bool = True,
+    retry: bool = False,
 ) -> Callable[[], subprocess.CompletedProcess[str]]:
   """Applies YAML file.
 
@@ -532,15 +593,18 @@ def apply_yaml_file(
     kubectl_path (str): Relative filesystem path to the kubectl binary.
     print_output (bool): If True, prints the output of the command. Defaults to
       True.
+    retry (bool): If True, retries the command if it fails. Defaults to False.
 
   Returns:
     Callable((), subprocess.CompletedProcess(str)): A function that will run
     `kubectl delete -f` on the yaml_path provided for easy cleanup of temporary
     resources.
   """
-  run_command(
-      K_APPLY_FORMAT % (kubectl_path, yaml_path), print_output=print_output
-  )
+  command = K_APPLY_FORMAT % (kubectl_path, yaml_path)
+  if retry:
+    run_command_with_retry(command, print_output)
+  else:
+    run_command(command, print_output=print_output)
 
   def delete_yaml_file():
     return run_command(K_DELETE_FORMAT % (kubectl_path, yaml_path))
