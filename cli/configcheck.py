@@ -38,14 +38,35 @@ import node_config_fetcher
 _SUPPORTED_MACHINE_TYPES = list(common.SUPPORTED_MACHINE_TYPES)
 _SUPPORTED_MACHINE_TYPES.remove('a4-highgpu-8g')
 
-_A3_ULTRAGPU_8G_DEPENDENCY_PARSERS = dependencies.DEPENDENCY_PARSERS
+GKE_DEPENDENCIES_BY_MACHINE = {
+    'a3-ultragpu-8g': dependencies.GKE_DEPENDENCY_PARSERS,
+    'a3-megagpu-8g': dependencies.GKE_DEPENDENCY_PARSERS,
+    'a3-highgpu-8g': dependencies.GKE_DEPENDENCY_PARSERS,
+}
 
-_A3_MEGAGPU_8G_DEPENDENCY_PARSERS = dependencies.DEPENDENCY_PARSERS
-
-_A3_HIGHGPU_8G_DEPENDENCY_PARSERS = dependencies.DEPENDENCY_PARSERS
+SLURM_DEPENDENCIES_BY_MACHINE = {
+    'a3-ultragpu-8g': dependencies.SLURM_DEPENDENCY_PARSERS,
+    'a3-megagpu-8g': dependencies.SLURM_DEPENDENCY_PARSERS,
+    'a3-highgpu-8g': dependencies.SLURM_DEPENDENCY_PARSERS,
+}
 
 _FORMAT_MARKDOWN = 'markdown'
 _FORMAT_JSON = 'json'
+
+
+def _get_dependency_parsers(
+    dependency_map: dict[
+        str, list[dependency_version_parser.DependencyVersionParser]
+    ],
+    machine_type: str,
+) -> list[dependency_version_parser.DependencyVersionParser]:
+  """Returns the dependency parsers for a given machine type and map."""
+  if machine_type not in dependency_map:
+    raise click.Abort(
+        f'Unsupported machine type: {machine_type}. Supported machine'
+        f' types: {list(dependency_map.keys())}'
+    )
+  return dependency_map[machine_type]
 
 
 def _get_k8s_nodes(machine_type: str) -> list[str]:
@@ -59,6 +80,76 @@ def _get_k8s_nodes(machine_type: str) -> list[str]:
           label_selector=f'beta.kubernetes.io/instance-type={machine_type}'
       ).items
   ]
+
+
+def _get_slurm_nodes(
+    partition: str | None = None,
+    features: str | None = None,
+    state: str | None = None,
+) -> list[str]:
+  """Returns all nodes from a slurm cluster, filtering by criteria.
+
+  Args:
+      partition: The partition to filter by.
+      features: The features to filter by.
+      state: The state to filter by.
+
+  Returns:
+      A list of node names.
+  """
+  cmd = ['sinfo', '-o', '%N']
+  if partition:
+    cmd.extend(['-p', partition])
+  if features:
+    cmd.extend(['-F', features])
+  if state:
+    cmd.extend(['-T', state])
+
+  all_nodes = []
+  try:
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True
+    )
+    nodes = result.stdout.strip().split('\n')
+    all_nodes.extend(nodes)
+  except FileNotFoundError:
+    click.echo(
+        click.style(
+            'Error: `sinfo` command not found. Please run this command from a'
+            ' Slurm login node or provide a list of nodes using the `--nodes`'
+            ' flag.',
+            fg='red',
+            bold=True,
+        )
+    )
+    return []
+  except subprocess.CalledProcessError as e:
+    raise click.Abort(f'Failed to get slurm nodes: {e}')
+  return all_nodes
+
+
+def _get_zone_from_slurm_node(slurm_node: str) -> str:
+  """Returns the zone of a given slurm node.
+
+  Args:
+      slurm_node: The slurm node to get the zone.
+
+  Returns:
+      The zone of the slurm node.
+  """
+  cmd = [
+      'gcloud',
+      'compute',
+      'instances',
+      'describe',
+      slurm_node,
+      '--format=value(zone.basename())',
+  ]
+  try:
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+  except subprocess.CalledProcessError as e:
+    raise click.Abort(f'Failed to get zone for {slurm_node}: {e}')
 
 
 def _get_config_matrix(
@@ -85,6 +176,29 @@ def _get_diff_matrix(data: list[configcheck_config.NodeDiff]) -> pd.DataFrame:
       data=data_rows,
       columns=columns,
   )
+
+
+def _get_dynamic_dependency_parsers_for_orchestrator(
+    orchestrator: str,
+    node_name: str,
+    zone: str,
+    pod_name: str | None = None,
+    workload_container: str | None = None,
+) -> list[dependency_version_parser.DependencyVersionParser]:
+  """Returns the dynamic dependency parsers for a given orchestrator."""
+
+  dynamic_dependency_parsers = common.run_for_orchestrator(
+      orchestrator=orchestrator,
+      gke_function=(
+          lambda node=node_name, pod_name=pod_name, workload_container=workload_container: dependencies.get_dynamic_dependency_parsers(
+              node, zone, pod_name, workload_container=workload_container
+          )
+      ),
+      slurm_function=lambda node=node_name: dependencies.get_slurm_dynamic_dependency_parsers(
+          node, zone
+      ),
+  )
+  return dynamic_dependency_parsers
 
 
 def _get_workload_containers_on_node(node_name: str) -> dict[str, str]:
@@ -148,6 +262,7 @@ def _fetch_node_configs(
     ],
     zone: str | None,
     workload_container: str | None,
+    orchestrator: str,
     sudo: bool = False,
     verbose: bool = False,
 ) -> list[configcheck_config.NodeConfig]:
@@ -161,6 +276,7 @@ def _fetch_node_configs(
     zone: The zone of the workload to be checked.
     workload_container: The name of the workload container to fetch NCCL configs
       from. If not specified, NCCL configs will not be fetched.
+    orchestrator: The orchestrator used to run the workload.
     sudo: Whether to run remote commands with sudo. Defaults to False.
     verbose: Whether to enable verbose logging. Defaults to False.
 
@@ -174,15 +290,25 @@ def _fetch_node_configs(
     node_data = []
     for node in node_list:
       pod_name = None
-      if workload_container is None:
-        pod_name_to_container_name = _get_workload_container_on_node(node)
-        if pod_name_to_container_name:
-          pod_name = pod_name_to_container_name[0]
-          workload_container = pod_name_to_container_name[1]
-      if zone is None:
-        zone = _get_zone_from_k8s_topology_label(node)
-      dynamic_dependency_parsers = dependencies.get_dynamic_dependency_parsers(
-          node, zone, pod_name=pod_name, workload_container=workload_container
+      if orchestrator == 'gke':
+        if workload_container is None:
+          pod_name_to_container_name = _get_workload_container_on_node(node)
+          if pod_name_to_container_name:
+            pod_name = pod_name_to_container_name[0]
+            workload_container = pod_name_to_container_name[1]
+        if zone is None:
+          zone = _get_zone_from_k8s_topology_label(node)
+      elif orchestrator == 'slurm':
+        if zone is None:
+          zone = _get_zone_from_slurm_node(node)
+      dynamic_dependency_parsers = (
+          _get_dynamic_dependency_parsers_for_orchestrator(
+              orchestrator,
+              node,
+              zone,
+              pod_name=pod_name,
+              workload_container=workload_container,
+          )
       )
       fetcher = node_config_fetcher.NodeConfigFetcher(
           name=node,
@@ -240,6 +366,7 @@ async def _fetch_node_configs_async(
     ],
     zone: str | None,
     workload_container: str | None,
+    orchestrator: str,
     sudo: bool = False,
     verbose: bool = False,
 ) -> list[configcheck_config.NodeConfig]:
@@ -253,6 +380,7 @@ async def _fetch_node_configs_async(
     zone: The zone of the workload to be checked.
     workload_container: The name of the workload container to fetch NCCL configs
       from. If not specified, NCCL configs will not be fetched.
+    orchestrator: The orchestrator used to run the workload.
     sudo: Whether to run remote commands with sudo. Defaults to False.
     verbose: Whether to enable verbose logging. Defaults to False.
 
@@ -266,14 +394,20 @@ async def _fetch_node_configs_async(
   ) as progress_bar:
     for node in node_list:
       pod_name = None
-      if workload_container is None:
-        pod_name_to_container_name = _get_workload_container_on_node(node)
-        if pod_name_to_container_name:
-          pod_name = pod_name_to_container_name[0]
-          workload_container = pod_name_to_container_name[1]
-
-      dynamic_dependency_parsers = dependencies.get_dynamic_dependency_parsers(
-          node, zone, pod_name=pod_name, workload_container=workload_container
+      if orchestrator == 'gke':
+        if workload_container is None:
+          pod_name_to_container_name = _get_workload_container_on_node(node)
+          if pod_name_to_container_name:
+            pod_name = pod_name_to_container_name[0]
+            workload_container = pod_name_to_container_name[1]
+      dynamic_dependency_parsers = (
+          _get_dynamic_dependency_parsers_for_orchestrator(
+              orchestrator,
+              node,
+              zone,
+              pod_name=pod_name,
+              workload_container=workload_container,
+          )
       )
       fetcher = node_config_fetcher.NodeConfigFetcher(
           name=node,
@@ -402,23 +536,16 @@ def cli(
     node_list = common.run_for_orchestrator(
         orchestrator=orchestrator,
         gke_function=lambda: _get_k8s_nodes(machine_type),
-        slurm_function=lambda: click.Abort(
-            'configcheck is not yet supported for Slurm clusters'
-        ),
+        slurm_function=_get_slurm_nodes,
     )
-  match machine_type:
-    case 'a3-ultragpu-8g':
-      dependency_parsers = _A3_ULTRAGPU_8G_DEPENDENCY_PARSERS
-    case 'a3-megagpu-8g':
-      dependency_parsers = _A3_MEGAGPU_8G_DEPENDENCY_PARSERS
-    case 'a3-highgpu-8g':
-      dependency_parsers = _A3_HIGHGPU_8G_DEPENDENCY_PARSERS
-    case _:
-      raise click.Abort(
-          f'Unsupported machine type: {machine_type}. Supported machine types:'
-          f' {_SUPPORTED_MACHINE_TYPES}'
-      )
-
+  if orchestrator == 'slurm':
+    dependency_parsers = _get_dependency_parsers(
+        SLURM_DEPENDENCIES_BY_MACHINE, machine_type
+    )
+  else:
+    dependency_parsers = _get_dependency_parsers(
+        GKE_DEPENDENCIES_BY_MACHINE, machine_type
+    )
   if run_async:
     click.echo(
         click.style(
@@ -435,6 +562,7 @@ def cli(
             node_list=node_list,
             static_dependency_parsers=dependency_parsers,
             workload_container=workload_container,
+            orchestrator=orchestrator,
             sudo=sudo,
             verbose=verbose,
         )
@@ -446,16 +574,30 @@ def cli(
         node_list=node_list,
         static_dependency_parsers=dependency_parsers,
         workload_container=workload_container,
+        orchestrator=orchestrator,
         sudo=sudo,
         verbose=verbose,
     )
+  if not node_data:
+    click.echo(
+        click.style(
+            'No nodes found to check. Please check your configuration or'
+            ' provide a list of nodes using the `--nodes` flag.',
+            fg='yellow',
+            bold=True,
+        )
+    )
+    return
   if skip_diff:
     df = _get_config_matrix(node_data)
   else:
     golden_config = golden_config_parser.get_golden_configs(
         dependency_parsers=dependency_parsers
-        + dependencies.get_dynamic_dependency_parsers(
-            node_name='golden', zone=zone, workload_container='golden'
+        + _get_dynamic_dependency_parsers_for_orchestrator(
+            orchestrator,
+            node_name='golden',
+            zone=zone,
+            workload_container='golden',
         ),
         machine_type=machine_type,
     )[0]

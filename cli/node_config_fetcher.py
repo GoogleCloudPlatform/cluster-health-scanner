@@ -15,8 +15,8 @@
 """For a given node, fetches the current configuration settings."""
 
 import asyncio
+from collections.abc import Callable
 import subprocess
-from typing import Callable
 
 import click
 

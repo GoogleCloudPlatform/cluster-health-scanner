@@ -42,6 +42,9 @@ run_nccl_rdma() {
     iter=$9
   fi
 
+  echo "Setting ulimit to 1048576"
+  ulimit -n 1048576
+
   echo "Sourcing /usr/local/gib/scripts/set_nccl_env.sh"
   source /usr/local/gib/scripts/set_nccl_env.sh
   NCCL_FLAGS=$( env | egrep ^NCCL | awk '{ printf "-x %s ", $0; }' )

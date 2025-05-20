@@ -55,46 +55,100 @@ def _parse_nccl_configs(name, cmd_result: str) -> config.DependencyConfig:
   )
 
 
-_NVIDIA_SMI_PATH = '../.././home/kubernetes/bin/nvidia/bin/nvidia-smi'
+def _parse_nccl_version(name, cmd_result: str) -> config.DependencyConfig:
+  """Parses the nccl version from the command result."""
+  match = re.search(r'libnccl\.so\.([0-9\.]+)', cmd_result)
+  if match:
+    return config.DependencyConfig(name=name, version=match.group(1))
+  raise ValueError(f'Failed to parse nccl version from: {cmd_result}')
 
-DEPENDENCY_PARSERS = [
+
+def _build_nvidia_smi_command(
+    args: list[str], nvidia_smi_path: str
+) -> list[str]:
+  """Builds the nvidia-smi command with the given arguments and path."""
+  return [nvidia_smi_path] + args
+
+
+def _build_cos_version_command(grep_value: str) -> list[str]:
+  """Builds the cos version command with the given grep value."""
+  return [
+      'cat',
+      _OS_RELEASE_FILE,
+      '|',
+      'grep',
+      grep_value,
+      '|',
+      'egrep',
+      '-o',
+      r"'[0-9\\.]+'",
+  ]
+
+
+def _build_base_dependency_parsers(
+    nvidia_smi_path: str,
+    cos_build_id_grep: str,
+) -> list[dependency_version_parser.DependencyVersionParser]:
+  return [
+      dependency_version_parser.DependencyVersionParser(
+          name='cosVersion',
+          cmd=_build_cos_version_command(cos_build_id_grep),
+          parse_version_fn=_parse_generic_version,
+      ),
+      dependency_version_parser.DependencyVersionParser(
+          name='cudaVersion',
+          cmd=_build_nvidia_smi_command(
+              _CUDA_VERSION_SED_ARGS,
+              nvidia_smi_path,
+          ),
+          parse_version_fn=_parse_generic_version,
+      ),
+  ]
+
+
+_OS_RELEASE_FILE = '/etc/os-release'
+_COS_BUILD_ID_GREP = 'BUILD_ID'
+_COS_VERSION_ID_GREP = '"VERSION_ID"'
+_NVIDIA_SMI_PATH_GKE = '../.././home/kubernetes/bin/nvidia/bin/nvidia-smi'
+_NVIDIA_SMI_PATH_SLURM = 'nvidia-smi'
+_CUDA_VERSION_SED_ARGS = [
+    '|',
+    'sed',
+    '-n',
+    '"3p"',
+    '|',
+    'sed',
+    r'"s/.*CUDA Version: \+\(.*\)|.*/\1/"',
+]
+
+
+BASE_DEPENDENCY_PARSERS = [
     dependency_version_parser.DependencyVersionParser(
         name='cosVersion',
-        cmd=([
-            'cat',
-            '/etc/os-release',
-            '|',
-            'grep',
-            'BUILD_ID',
-            '|',
-            'egrep',
-            '-o',
-            r"'[0-9\\.]+'",
-        ]),
+        cmd=_build_cos_version_command(_COS_BUILD_ID_GREP),
         parse_version_fn=_parse_generic_version,
-    ),
-    dependency_version_parser.DependencyVersionParser(
-        name='gpuDriverVersion',
-        cmd=([
-            _NVIDIA_SMI_PATH,
-            '--query-gpu=driver_version',
-            '--format=csv,noheader',
-        ]),
-        parse_version_fn=_parse_driver_version,
     ),
     dependency_version_parser.DependencyVersionParser(
         name='cudaVersion',
-        cmd=([
-            _NVIDIA_SMI_PATH,
-            '|',
-            'sed',
-            '-n',
-            '"3p"',
-            '|',
-            'sed',
-            r'"s/.*CUDA Version: \+\(.*\)|.*/\1/"',
-        ]),
+        cmd=_build_nvidia_smi_command(
+            _CUDA_VERSION_SED_ARGS,
+            '{nvidia_smi_path}',
+        ),
         parse_version_fn=_parse_generic_version,
+    ),
+]
+
+
+GKE_DEPENDENCY_PARSERS = _build_base_dependency_parsers(
+    _NVIDIA_SMI_PATH_GKE, _COS_BUILD_ID_GREP
+) + [
+    dependency_version_parser.DependencyVersionParser(
+        name='gpuDriverVersion',
+        cmd=_build_nvidia_smi_command(
+            ['--query-gpu=driver_version', '--format=csv,noheader'],
+            _NVIDIA_SMI_PATH_GKE,
+        ),
+        parse_version_fn=_parse_driver_version,
     ),
     dependency_version_parser.DependencyVersionParser(
         name='ncclVersion',
@@ -113,6 +167,29 @@ DEPENDENCY_PARSERS = [
             r'"s/^.*\.so\.//"',
         ]),
         parse_version_fn=_parse_generic_version,
+    ),
+]
+
+
+SLURM_DEPENDENCY_PARSERS = _build_base_dependency_parsers(
+    _NVIDIA_SMI_PATH_SLURM, _COS_VERSION_ID_GREP
+) + [
+    dependency_version_parser.DependencyVersionParser(
+        name='gpuDriverVersion',
+        cmd=_build_nvidia_smi_command(
+            ['--query-gpu=driver_version', '--format=csv,noheader'],
+            _NVIDIA_SMI_PATH_SLURM,
+        ),
+        parse_version_fn=_parse_driver_version,
+    ),
+    dependency_version_parser.DependencyVersionParser(
+        name='ncclVersion',
+        cmd=([
+            'readlink',
+            '-f',
+            '/var/lib/tcpx/lib64/libnccl.so',
+        ]),
+        parse_version_fn=_parse_nccl_version,
     ),
 ]
 
@@ -218,4 +295,34 @@ def get_dynamic_dependency_parsers(
             ]),
         )
     )
+  return parsers
+
+
+def get_slurm_dynamic_dependency_parsers(
+    node_name: str,
+    zone: str,
+) -> list[dependency_version_parser.DependencyVersionParser]:
+  """Returns the dynamic dependency parsers for a given slurm node.
+
+  Args:
+    node_name: The name of the node.
+    zone: The zone of the node.
+
+  Returns:
+    A list of dynamic dependency parsers.
+  """
+  # 
+  parsers = [
+      local_dependency_version_parser.LocalDependencyVersionParser(
+          dep_name='ncclPluginVersion',
+          node_name=node_name,
+          zone=zone,
+          remote_file_path='/var/lib/tcpx/lib64/libnccl-net.so',
+          parse_version_fn=lambda name, file_path: _parse_nccl_plugin_version(
+              name,
+              f'{local_dependency_version_parser.LOCAL_FILE_PATH}/{node_name}/libnccl-net.so',
+          ),
+      ),
+      # 
+  ]
   return parsers
