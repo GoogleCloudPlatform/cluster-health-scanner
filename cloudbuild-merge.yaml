@@ -93,7 +93,7 @@ steps:
       for machine_type in "${machine_types[@]}"; do
         echo "Building nccl-healthcheck for ${machine_type} with version $REF_NAME..."
         latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$REF_NAME"
-        dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+        dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
         echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
         docker buildx build \
           --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_AMD}" \
@@ -165,15 +165,8 @@ options:
 
 # List ALL images to be pushed by Cloud Build after successful builds
 images:
-# Healthchecks (5 checks * 4 machine types = 20 images)
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/gpu-healthcheck:a4-highgpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4-highgpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
