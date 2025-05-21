@@ -93,7 +93,7 @@ steps:
       for machine_type in "${machine_types[@]}"; do
         echo "Building nccl-healthcheck for ${machine_type} with version $REF_NAME..."
         latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$REF_NAME"
-        dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
+        dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
         echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
         docker buildx build \
           --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_AMD}" \
