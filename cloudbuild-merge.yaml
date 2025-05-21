@@ -93,7 +93,7 @@ steps:
       for machine_type in "${machine_types[@]}"; do
         echo "Building nccl-healthcheck for ${machine_type} with version $REF_NAME..."
         latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$REF_NAME"
-        dockerfile="docker/nccl_healthcheck_a3ultra.Dockerfile"
+        dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
         echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
         docker buildx build \
           --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_AMD}" \
@@ -151,7 +151,12 @@ steps:
       latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME"
 
       echo "Building $$_BUILD_TARGET with version $REF_NAME..."
-      docker build -t "${latest_tag}" -f "docker/$$_BUILD_TARGET.Dockerfile" .
+      docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      -t "${latest_tag}" \
+      -f "docker/$$_BUILD_TARGET.Dockerfile" \
+      . \
+      --push
       echo "Successfully built image: ${latest_tag}"
   id: build-health-runner
   waitFor: ['Get Version']
@@ -179,5 +184,3 @@ images:
 - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
 - '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
-# Health-runner (1 image)
-- '$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME'
