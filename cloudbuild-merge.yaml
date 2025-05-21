@@ -105,6 +105,7 @@ steps:
         echo "Successfully built image: ${latest_tag}"
       done
 
+
 # Build and tag healthchecks
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
@@ -159,7 +160,7 @@ steps:
       --push
       echo "Successfully built image: ${latest_tag}"
   id: build-health-runner
-  waitFor: ['Get Version']
+  waitFor: ['Get Version', 'Setup Buildx Driver']
 
 - name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
   args: ['--image=$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME']
