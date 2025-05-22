@@ -17,7 +17,6 @@ substitutions:
   _HEALTH_CHECK_REPOSITORY_BASE: us-docker.pkg.dev/gce-ai-infra/health-check
   _BASE_IMAGE_GIB_AMD: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.2
   _BASE_IMAGE_GIB_ARM: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.0.4
-  _REF_NAME: $(cat deploy/helm/health_runner/version.txt)
 steps:
 - name: 'alpine'
   entrypoint: sh
@@ -26,8 +25,13 @@ steps:
   - |
       #!/bin/bash
       set -e
-      echo "Version found to be: $_REF_NAME"
-  id: Print Version
+
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      [ -n "$$_VERSION" ] || { echo "ERROR: _VERSION is empty or not set"; exit 1; };
+      echo "Version found to be: $$_VERSION"
+      echo "HEAD: $_HEAD_BRANCH"
+      REF_NAME="$$_VERSION"
+  id: Get Version
 
 # Enable QEMU emulation for cross-platform builds
 # Allows the AMD64 Cloud Build worker to execute ARM64 instructions
@@ -65,8 +69,8 @@ steps:
 
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $_REF_NAME..."
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$_REF_NAME"
+          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
+          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
           dockerfile="docker/${health_check_name//-/_}.Dockerfile"
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
           docker buildx build  --platform linux/amd64,linux/arm64 -t "${latest_tag}" -f "${dockerfile}" . --push
@@ -74,7 +78,7 @@ steps:
         done
       done
   id: 'Build and Push Multi-Arch Image'
-  waitFor: ['Setup Buildx Driver']
+  waitFor: ['Setup Buildx Driver', 'Get Version']
 
 # Build and Push NCCL AMD64 GIB variant
 - name: 'gcr.io/cloud-builders/docker'
@@ -89,8 +93,8 @@ steps:
       echo "Building NCCL AMD64 GIB Variant..."
       machine_types=("a3-ultragpu-8g" "a4-highgpu-8g")
       for machine_type in "${machine_types[@]}"; do
-        echo "Building nccl-healthcheck for ${machine_type} with version $_REF_NAME..."
-        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$_REF_NAME"
+        echo "Building nccl-healthcheck for ${machine_type} with version $REF_NAME..."
+        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$REF_NAME"
         dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
         echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
         docker buildx build \
@@ -115,7 +119,7 @@ steps:
     #!/bin/bash
     set -e
     echo "Building NCCL ARM64 GIB Variant..."
-    latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4x-highgpu-4g_$_REF_NAME"
+    latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4x-highgpu-4g_$REF_NAME"
     dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
     echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
     docker buildx build \
@@ -141,7 +145,7 @@ steps:
 
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $_REF_NAME..."
+          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
 
           if [[ ("$machine_type" == "a3-ultragpu-8g" || "$machine_type" == "a4-highgpu-8g") && "$health_check_name" == "nccl-healthcheck" ]]; then
             continue
@@ -149,7 +153,7 @@ steps:
             dockerfile="docker/${health_check_name//-/_}.Dockerfile"
           fi
 
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$_REF_NAME"
+          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
 
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
           docker build -t "${latest_tag}" -f "${dockerfile}" .
@@ -157,7 +161,7 @@ steps:
         done
       done
   id: build-healthchecks
-  waitFor: []
+  waitFor: ['Get Version']
 
 # Build health-runner
 - name: 'gcr.io/cloud-builders/docker'
@@ -170,9 +174,9 @@ steps:
 
       _BUILD_TARGET="health_runner"
 
-      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$_REF_NAME"
+      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME"
 
-      echo "Building $$_BUILD_TARGET with version $_REF_NAME..."
+      echo "Building $$_BUILD_TARGET with version $REF_NAME..."
       docker buildx build \
       --platform linux/amd64,linux/arm64 \
       -t "${latest_tag}" \
@@ -181,10 +185,10 @@ steps:
       --push
       echo "Successfully built image: ${latest_tag}"
   id: build-health-runner
-  waitFor: ['Setup Buildx Driver']
+  waitFor: ['Get Version', 'Setup Buildx Driver']
 
 - name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
-  args: ['--image=$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$_REF_NAME']
+  args: ['--image=$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME']
 
 options:
   # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
@@ -192,17 +196,17 @@ options:
 
 # List ALL images to be pushed by Cloud Build after successful builds
 images:
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$_REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$_REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
+- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
