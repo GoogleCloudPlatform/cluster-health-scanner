@@ -56,58 +56,6 @@ steps:
   waitFor: ['Setup QEMU']
 
 
-# Execute the multi-platform build and push using Docker Buildx
-- name: 'gcr.io/cloud-builders/docker'
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    #!/bin/bash
-      set -e
-      echo "Starting multi-arch build"
-      health_check_names=("gpu-healthcheck")
-      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
-
-      for health_check_name in "${health_check_names[@]}"; do
-        for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
-          dockerfile="docker/${health_check_name//-/_}.Dockerfile"
-          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker buildx build  --platform linux/amd64,linux/arm64 -t "${latest_tag}" -f "${dockerfile}" . --push
-          echo "Successfully built image: ${latest_tag}"
-        done
-      done
-  id: 'Build and Push Multi-Arch Image'
-  waitFor: ['Setup Buildx Driver', 'Get Version']
-
-# Build and Push NCCL AMD64 GIB variant
-- name: 'gcr.io/cloud-builders/docker'
-  entrypoint: 'bash'
-  id: 'Build AMD64 GIB'
-  waitFor: ['Setup Buildx Driver']
-  args:
-  - '-c'
-  - |
-   #!/bin/bash
-      set -e
-      echo "Building NCCL AMD64 GIB Variant..."
-      machine_types=("a3-ultragpu-8g" "a4-highgpu-8g")
-      for machine_type in "${machine_types[@]}"; do
-        echo "Building nccl-healthcheck for ${machine_type} with version $REF_NAME..."
-        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$REF_NAME"
-        dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
-        echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-        docker buildx build \
-          --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_AMD}" \
-          --platform linux/amd64 \
-          -t "${latest_tag}" \
-          -f "${dockerfile}" \
-          . \
-          --push
-        echo "Successfully built image: ${latest_tag}"
-      done
-
 # Build and tag healthchecks
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
