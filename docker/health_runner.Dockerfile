@@ -60,7 +60,7 @@ COPY health_runner/nccl_runner.py .
 
 # Health checks
 # Helm charts
-COPY health_checks/helm/ health_checks/
+COPY helm/health_checks/ health_checks/
 
 RUN chmod -R g+rwx /app/
 RUN chgrp -R 1000 /app/
