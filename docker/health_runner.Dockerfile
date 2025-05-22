@@ -38,9 +38,9 @@ RUN mv "linux-${TARGETARCH}/helm" /usr/local/bin/helm \
   && rm helm.tar.gz \
   && helm version
 
-COPY common.proto /app/
-COPY health_runner/health_results.proto /app/
-COPY health_runner/health_runner_config.proto /app/
+COPY src/common.proto /app/
+COPY src/health_runner/health_results.proto /app/
+COPY src/health_runner/health_runner_config.proto /app/
 
 RUN python3 -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
@@ -54,13 +54,13 @@ RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_pyth
 RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/health_runner_config.proto
 
 # Health runner
-COPY checker_common.py .
-COPY health_runner/health_runner.py .
-COPY health_runner/nccl_runner.py .
+COPY src/checker_common.py .
+COPY src/health_runner/health_runner.py .
+COPY src/health_runner/nccl_runner.py .
 
 # Health checks
 # Helm charts
-COPY helm/health_checks/ health_checks/
+COPY deploy/helm/health_checks/ health_checks/
 
 RUN chmod -R g+rwx /app/
 RUN chgrp -R 1000 /app/
