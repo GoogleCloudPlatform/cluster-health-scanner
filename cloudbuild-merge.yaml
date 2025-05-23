@@ -56,38 +56,6 @@ steps:
   waitFor: ['Setup QEMU']
 
 
-# Build and tag healthchecks
-- name: 'gcr.io/cloud-builders/docker'
-  entrypoint: bash
-  args:
-  - -c
-  - |
-      #!/bin/bash
-      set -e
-
-      health_check_names=("nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
-      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
-
-      for health_check_name in "${health_check_names[@]}"; do
-        for machine_type in "${machine_types[@]}"; do
-          echo "Building ${health_check_name} for ${machine_type} with version $REF_NAME..."
-
-          if [[ ("$machine_type" == "a3-ultragpu-8g" || "$machine_type" == "a4-highgpu-8g") && "$health_check_name" == "nccl-healthcheck" ]]; then
-            continue
-          else
-            dockerfile="docker/${health_check_name//-/_}.Dockerfile"
-          fi
-
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$REF_NAME"
-
-          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${latest_tag}" -f "${dockerfile}" .
-          echo "Successfully built image: ${latest_tag}"
-        done
-      done
-  id: build-healthchecks
-  waitFor: ['Get Version']
-
 # Build health-runner
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
@@ -111,27 +79,3 @@ steps:
       echo "Successfully built image: ${latest_tag}"
   id: build-health-runner
   waitFor: ['Get Version', 'Setup Buildx Driver']
-
-- name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
-  args: ['--image=$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME']
-
-options:
-  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
-  requestedVerifyOption: VERIFIED
-
-# List ALL images to be pushed by Cloud Build after successful builds
-images:
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/neper-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/straggler-healthcheck:a4-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-highgpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-megagpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a3-ultragpu-8g_$REF_NAME'
-- '$_HEALTH_CHECK_REPOSITORY_BASE/tinymax-healthcheck:a4-highgpu-8g_$REF_NAME'
