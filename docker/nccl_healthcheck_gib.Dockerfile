@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM  us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.2
+# Dockerfile for building the nccl-pairwise image.
+ARG BASE_IMAGE=us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.2
+
+FROM ${BASE_IMAGE}
 
 WORKDIR /scripts
 RUN apt-get update && apt-get install -y net-tools openssh-server python3.10 ca-certificates curl python3-pip &&\
@@ -23,7 +26,8 @@ RUN apt-get update && apt-get install -y net-tools openssh-server python3.10 ca-
   chmod 644 /root/.ssh/authorized_keys &&\
   chmod 644 /root/.ssh/google_compute_engine.pub
 
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl
+ARG TARGETARCH
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl" && chmod +x kubectl
 
 COPY src/health_runner/health_results.proto /scripts/
 COPY src/health_runner/health_runner_config.proto /scripts/
