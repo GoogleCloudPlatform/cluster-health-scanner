@@ -12,16 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM nvidia/dcgm:4.1.1-1-ubuntu22.04
+ARG TARGETARCH
+FROM nvcr.io/nvidia/cloud-native/dcgm:4.1.1-1-ubuntu22.04
 RUN apt-get update && apt-get install -y ca-certificates curl python3 python3-pip
 WORKDIR /app
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl
+ARG TARGETARCH
+RUN echo "Installing kubectl for architecture: ${TARGETARCH}" && \
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl" && \
+    chmod +x kubectl
 RUN curl https://dl.google.com/dl/cloudsdk/release/google-cloud-sdk.tar.gz > /tmp/google-cloud-sdk.tar.gz
 
 RUN mkdir -p /usr/local/gcloud \
   && tar -C /usr/local/gcloud -xvf /tmp/google-cloud-sdk.tar.gz \
   && /usr/local/gcloud/google-cloud-sdk/install.sh
-ENV PATH $PATH:/usr/local/gcloud/google-cloud-sdk/bin
+ENV PATH=$PATH:/usr/local/gcloud/google-cloud-sdk/bin
 
 RUN pip install kubernetes
 COPY src/common.proto /app/

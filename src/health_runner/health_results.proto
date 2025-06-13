@@ -18,6 +18,8 @@ package health_runner;
 
 import "google/protobuf/timestamp.proto";
 
+
+
 option features.field_presence = IMPLICIT;
 
 // The results of the health checks.
@@ -72,6 +74,7 @@ message HealthResultList {
     HPCNCCLHealthResult hpc_nccl_health_result = 6;
     HPLHealthResult hpl_health_result = 7;
   }
+
   HPCHealthResult hpc_health_result = 8;
 }
 
@@ -80,6 +83,7 @@ message HPCHealthResult {
     string name = 1;
     string value = 2;
   }
+
   // The benchmark of the HPL test (HPL, HPL_2, etc).
   string benchmark = 1;
   repeated Metrics metrics = 2;
@@ -89,10 +93,13 @@ message NCCLHealthResult {
   message NCCLBandwidthResult {
     // The bandwidth value in GBps.
     double bandwidth_gbps = 1;
+
     // The bandwidth baseline in GBps.
     double bandwidth_baseline_gbps = 4;
+
     // The message size in bytes.
     int64 message_size_bytes = 2;
+
     // The latency value in ms.
     int64 latency_ms = 3;
   }
@@ -127,6 +134,7 @@ message HPCNCCLHealthResult {
 message HPLHealthResult {
   // The throughput of the HPL test in GFlops.
   double throughput_gflops = 1;
+
   // The benchmark of the HPL test (HPL, HPL_2, etc).
   string benchmark = 2;
 }
@@ -136,6 +144,7 @@ enum Status {
   UNKNOWN = 0;
   PASS = 1;
   FAIL = 2;
+
   // The health check was skipped. Could be skipped do to machine taint or in
   // the case of performance and communication health checks, not enough nodes
   // to run the test.

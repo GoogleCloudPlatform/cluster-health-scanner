@@ -1,4 +1,4 @@
-This folder provides dcgm and nccl test for slurm A3, A3Mega and A3Ultra.
+This folder provides dcgm and nccl test for slurm A3, A3Mega, A3Ultra and A4.
 
 Steps to do before running the scripts:
 
@@ -26,7 +26,7 @@ Contents:
     `all_gather_perf` benchmark.
 *   `build-nccl-tests-a3mega.sh`: A Slurm batch script for building the
     nccl-tests for a3mega.
-*   `build-nccl-tests-a3ultra.sh`: A Slurm batch script for building the
+*   `build-nccl-tests-gib.sh`: A Slurm batch script for building the
     nccl-tests for a3ultra.
 *   `cluster-validation.sh`: A Slurm batch script for running the gpu tests and
     nccl-tests `all_gather_perf` benchmark on the entire cluster or a subset of
@@ -36,23 +36,23 @@ Contents:
 
 * To run nccl test only on a3mega cluster:
 `
- ./cluster-validation.sh --nccl --partition a3mega --nodes 10 \
-  --nodelist a3m123-a3meganodeset-[1-10]
+ ./cluster-validation.sh --nccl --partition a3mega --machine-type a3mega \
+  --nodes 10 --nodelist a3m123-a3meganodeset-[1-10]
 `
 * To run nccl test only on a3ultra cluster:
 `
-./cluster-validation.sh --nccl --partition a3ultra --nodes 10 \
-  --nodelist a3m123-a3ultranodeset-[1-10]
+./cluster-validation.sh --nccl --partition a3ultra --machine-type a3ultra \
+  --nodes 10 --nodelist a3m123-a3ultranodeset-[1-10]
 `
 * To run gpu test only on cluster:
 `
- ./cluster-validation.sh --dcgm --partition a3mega --nodes 10 \
-  --nodelist a3m123-a3meganodeset-[1-10]
+ ./cluster-validation.sh --dcgm --partition a3mega --machine-type a3mega \
+  --nodes 10 --nodelist a3m123-a3meganodeset-[1-10]
 `
 * To run both nccl test and gpu test on a3mega cluster:
 `
- ./cluster-validation.sh --partition a3mega --nodes 10 \
-  --nodelist a3m123-a3meganodeset-[1-10]
+ ./cluster-validation.sh --partition a3mega --machine-type a3mega \
+  --nodes 10 --nodelist a3m123-a3meganodeset-[1-10]
 `
 
 If you would like to drain the bad nodes, add `--drain-bad-node` to the command.
@@ -75,8 +75,8 @@ For any nodes that fail the first round of nccl test, run the following command
 to drain them:
 `
 <!-- mdlint off(LINE_OVER_80) -->
- ./cluster-validation.sh --nccl --partition a3mega --nodes 4 \
-  --nodelist a3m123-a3meganodeset-[1,5,7,8]
+ ./cluster-validation.sh --nccl --partition a3mega ---machine-type a3mega \
+  --nodes 4 --nodelist a3m123-a3meganodeset-[1,5,7,8]
 `
 
 Detailed logs are stored under
