@@ -22,6 +22,11 @@ health_runner:
 health_checks:
   nccl_healthcheck:
     run_check: true
+    tolerations:
+    - key: "components.gke.io/gke-managed-components"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       tag: ""  # This will be populated by the version in the version.txt file
@@ -48,6 +53,11 @@ health_checks:
         NODES_CHECKED_PER_TEST:  "2"
   gpu_healthcheck:
     run_check: false
+    tolerations:
+    - key: "components.gke.io/gke-managed-components"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       tag: ""  # This will be populated by the version in the version.txt file
@@ -72,6 +82,11 @@ health_checks:
         NODES_CHECKED_PER_TEST:  "1"
   neper_healthcheck:
     run_check: false
+    tolerations:
+    - key: "components.gke.io/gke-managed-components"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       tag: ""  # This will be populated by the version in the version.txt file
@@ -92,6 +107,11 @@ health_checks:
         NODES_CHECKED_PER_TEST:  "2"
   straggler_healthcheck:
     run_check: false
+    tolerations:
+    - key: "components.gke.io/gke-managed-components"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       tag: ""  # This will be populated by the version in the version.txt file
@@ -113,6 +133,11 @@ health_checks:
       blast_mode_enabled: false  # Defaults to run multiple health checks in parallel
   tinymax_healthcheck:
     run_check: false
+    tolerations:
+    - key: "components.gke.io/gke-managed-components"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       tag: ""  # This will be populated by the version in the version.txt file
@@ -136,6 +161,11 @@ health_checks:
         NODES_CHECKED_PER_TEST:  "1"
   nccl_cluster_healthcheck:
     run_check: false
+    tolerations:
+    - key: "components.gke.io/gke-managed-components"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
     image:
       repo: "us-docker.pkg.dev/gce-ai-infra/health-check/health-runner"
       tag: ""  # This will be populated by the version in the version.txt file

@@ -68,6 +68,8 @@ class SlurmCheck(check.Check):
         f'--{self.check_flag}',
         '--partition',
         self.partition,
+        '--machine-type',
+        self.machine_type,
         '--nodes',
         f'{len(self.nodes)}',
         f'--relative-exec-path={relative_path}',

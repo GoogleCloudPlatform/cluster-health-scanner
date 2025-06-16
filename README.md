@@ -68,10 +68,11 @@ Note the following:
 * `cluster_diag` expects that you have already authenticated the `gcloud` cli to access the Google Cloud Platform with Google user credentials.
 * `gcloud` should already have credentials for the cluster-under-test.
 * Python >= 3.9 version is required on the host machine to run the `cluster_diag` CLI.
+* To run `healthscan` command on GKE, helm must be installed. You can install it by following the instructions at https://helm.sh/docs/intro/install/.
 
 1. Clone this repository
 2. If you don't already have them, install dependencies for the CLI:
-   
+
    ```
    pip3 install -r cli/requirements.txt
    ```

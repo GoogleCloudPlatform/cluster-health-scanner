@@ -71,6 +71,10 @@ spec:
                 values:
                 - {{ .Values.health_check.test_label.value | quote }}
       tolerations:
+      - key: "components.gke.io/gke-managed-component"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
       - operator: "Exists"
       volumes: {{- toYaml .Values.volumes | nindent 8 }}
       shareProcessNamespace: true
