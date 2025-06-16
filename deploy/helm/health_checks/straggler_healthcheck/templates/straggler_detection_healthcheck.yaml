@@ -123,6 +123,10 @@ spec:
                 - "{{ $expiry_time }}"
       tolerations:
       - operator: "Exists"
+      - key: "components.gke.io/gke-managed-component"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
       volumes:
       - name: nvidia-install-dir-host
         hostPath:

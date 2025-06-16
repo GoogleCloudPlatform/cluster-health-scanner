@@ -16,9 +16,9 @@
 
 # Modifications from original work:
 # - add --drain-bad-nodes flag to drain nodes that fail diagnostics
-# - supports a3, a3mega and a3ultra partitions for nccl tests
+# - supports a3, a3mega, a3ultra and a4 machine types for NCCL tests
 # - Added download and enroot the docker images if they are not already present
-# - Change nccl test to make it work for GCP (a3, a3mega and a3ultra), originally it was for oci
+# - Change NCCL test to make it work for GCP (a3, a3mega, a3ultra and a4), originally it was for oci
 # - add --results-dir flag to specify the directory to store results
 # - add --relative-exec-path flag to specify the relative path to the cluster validation scripts
 
@@ -43,6 +43,8 @@ Usage:
                     valid partitions.
   --dcgm         Run only DCGM diagnostic
   --nccl         Run only NCCL test
+  --machine-type  Machine type of the nodes. Supported values are a3-highgpu-8g,
+                    a3-megagpu-8g, a3-ultragpu-8g and a4-highgpu-8g.
   --drain-bad-nodes  Drain nodes that fail diagnostics
   --relative-exec-path  Relative path to the cluster validation scripts. Use this if
                     the scripts are not in the root directory.
@@ -57,6 +59,7 @@ Input error. Required Flags:
   --nodelist
   --nodes
   --partition
+  --machine-type
 EOF
 }
 
@@ -72,8 +75,12 @@ join () {
 }
 
 RELATIVE_PATH=""
+
 # Define where test logs should be written to and read from
-RESULTS_DIR=../../results/cluster_validation
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+# Define the full path for the output file in that target directory
+RESULTS_DIR="$SCRIPT_DIR/../../results/cluster_validation"
+
 # Read arguments
 while [[ $# -gt 0 ]]; do
   if [[ "$1" =~ ^-.*= ]]; then
@@ -98,6 +105,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --partition)
       PARTITION="$val"
+      shift $((val_separate+1))
+      ;;
+    --machine-type)
+      MACHINE_TYPE="$val"
       shift $((val_separate+1))
       ;;
     --dcgm)
@@ -132,7 +143,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # These arguments are required for sbatch commands
-if [[ -z "$NODES" ]] || [[ -z "$NUM_NODES" ]] || [[ -z "$PARTITION" ]]; then
+if [[ -z "$NODES" ]] || [[ -z "$NUM_NODES" ]] || [[ -z "$PARTITION" ]] || [[ -z "$MACHINE_TYPE" ]]; then
     required
     exit 1
 fi
@@ -193,18 +204,22 @@ if [[ $RUN_NCCL == 1 ]]; then
     if [[ ! -f $NCCL_TEST_PATH ]]; then
         echo "Building the NCCL tests..."
 
-        case "$PARTITION" in
-            a3)
-                sbatch -N 1 -W "$RELATIVE_PATH"build-nccl-tests-a3.sh > /dev/null 2> /dev/null
+        # Determine which script to run based on the machine type
+        case "$MACHINE_TYPE" in
+            a3-highgpu-8g)
+                sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-a3.sh > /dev/null 2> /dev/null
                 ;;
-            a3mega)
-                sbatch -N 1 -W "$RELATIVE_PATH"build-nccl-tests-a3mega.sh > /dev/null 2> /dev/null
+            a3-megagpu-8g)
+                sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-a3mega.sh > /dev/null 2> /dev/null
                 ;;
-            a3ultra)
-                sbatch -N 1 -W "$RELATIVE_PATH"build-nccl-tests-a3ultra.sh > /dev/null 2> /dev/null
+            a3-ultragpu-8g)
+                sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-gib.sh > /dev/null 2> /dev/null
+                ;;
+            a4-highgpu-8g)
+                sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-gib.sh > /dev/null 2> /dev/null
                 ;;
             *)
-                error_exit "Unsupported partition: $PARTITION" 2
+                error_exit "Unsupported machine type: $MACHINE_TYPE" 2
                 ;;
         esac
 
@@ -222,24 +237,26 @@ if [[ $RUN_NCCL == 1 ]]; then
     NODES_ARR=($NODES)
     ARR_LEN=${#NODES_ARR[@]}
 
-    declare -a slurm_ids # ids for all the jobs launched, should be $NODES / 2
-    for (( i = 0; i < $ARR_LEN - 1; i+=8 ))
-    do
-        j=$((i + 4))
+    # Determine which script to run based on the machine type
+    if [[ "$MACHINE_TYPE" == "a3-highgpu-8g" ]]; then
+        script="./""$RELATIVE_PATH""nccl-a3.sh"
+    elif [[ "$MACHINE_TYPE" == "a3-megagpu-8g" ]]; then
+        script="./""$RELATIVE_PATH""nccl-a3mega.sh"
+    elif [[ "$MACHINE_TYPE" == "a3-ultragpu-8g" ]]; then
+        script="./""$RELATIVE_PATH""nccl-gib.sh"
+    elif [[ "$MACHINE_TYPE" == "a4-highgpu-8g" ]]; then
+        script="./""$RELATIVE_PATH""nccl-gib.sh"
+    else
+        echo "Unsupported MACHINE_TYPE: $MACHINE_TYPE"
+        continue
+    fi
 
-        # Determine which script to run based on the partition
-        if [[ "$PARTITION" == "a3" ]]; then
-            script="./""$RELATIVE_PATH""nccl-a3.sh"
-        elif [[ "$PARTITION" == "a3mega" ]]; then
-            script="./""$RELATIVE_PATH""nccl-a3mega.sh"
-        elif [[ "$PARTITION" == "a3ultra" ]]; then
-            script="./""$RELATIVE_PATH""nccl-a3ultra.sh"
-        else
-            echo "Unsupported partition: $PARTITION"
-            continue
-        fi
+    declare -a slurm_ids # ids for all the jobs launched, should be $NODES / 2
+    for (( i = 0; i < $ARR_LEN - 1; i+=8 )); do
+        j=$((i + 4))
         id=$(sbatch -N 2 \
                     -w "${NODES_ARR[$i]}","${NODES_ARR[$j]}" \
+                    -p "$PARTITION" \
                     --parsable \
                     -o "$RESULTS_DIR"/nccl-gcp.sh_%j.log \
                     "$script")

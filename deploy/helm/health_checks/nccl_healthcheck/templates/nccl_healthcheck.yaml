@@ -47,6 +47,10 @@ spec:
         app-name: {{ .Values.health_check.name }}
     spec:
       tolerations:
+      - key: "components.gke.io/gke-managed-component"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
       - operator: "Exists"
       serviceAccountName: {{ $unique_name }}
       subdomain: "{{ $unique_svc_name }}"  # has to match Service name

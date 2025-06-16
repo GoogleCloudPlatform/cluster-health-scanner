@@ -18,6 +18,7 @@ This is part of the larger cluster_diag CLI. To get the full helpstring, run
 `cluster_diag healthscan --help`.
 """
 
+import subprocess
 import click
 
 import common
@@ -40,19 +41,20 @@ _SUPPORTED_HEALTHCHECKS = [
 ]
 
 
-def _get_partition_for_machine(machine_type: str) -> str | None:
-  """Returns the partition for the given orchestrator."""
-  match machine_type:
-    case 'a3-highgpu-8g':
-      return 'a3'
-    case 'a3-megagpu-8g':
-      return 'a3mega'
-    case 'a3-ultragpu-8g':
-      return 'a3ultra'
-    case 'a4-highgpu-8g':
-      return 'a4'
-    case _:
-      raise ValueError(f'Unsupported machine type: {machine_type}')
+def is_helm_installed() -> bool:
+  """Checks if Helm is installed and available in the system's PATH."""
+  try:
+    subprocess.run(
+        ['helm', 'version'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+    return True
+  except (subprocess.CalledProcessError, FileNotFoundError):
+    # If the command fails (e.g., helm not found or returns an error),
+    # or if the helm executable is not found, it means Helm is not installed.
+    return False
 
 
 @click.command(name='healthscan')
@@ -103,6 +105,13 @@ def _get_partition_for_machine(machine_type: str) -> str | None:
     Run the healthcheck in dry run mode.
     This will print the commands that would be run, but not run them.""",
 )
+@click.option(
+    '--partition',
+    default=None,
+    help="""
+    Partition to run the healthcheck on.
+    This is only used for Slurm clusters.""",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -111,13 +120,23 @@ def cli(
     nodes: list[str],
     run_only_on_available_nodes: bool,
     dry_run: bool,
+    partition: str,
 ):
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
   check_runner = None
-  partition = None
   if orchestrator == 'slurm':
-    partition = _get_partition_for_machine(machine_type)
+    if partition is None:
+      raise click.MissingParameter(
+          'Partition is required for Slurm clusters. Please specify a partition'
+          ' using the --partition flag.'
+      )
+
+  else:
+    if not is_helm_installed():
+      print('Helm is not installed. Please install Helm before running '
+            'healthscan: https://helm.sh/docs/intro/install/')
+      return
   match check:
     case nccl_check.NAME:
       check_runner = nccl_check.get_check_for_orchestrator(
