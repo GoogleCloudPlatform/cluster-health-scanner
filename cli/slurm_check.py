@@ -62,6 +62,10 @@ class SlurmCheck(check.Check):
     """Builds the command to run the slurm check."""
     relative_path = 'deploy/slurm'
     command = [
+        'chmod',
+        '+x',
+        f'{relative_path}/cluster-validation.sh',
+        '&&',
         f'{relative_path}/cluster-validation.sh',
         '--nodelist',
         ','.join(self.nodes),

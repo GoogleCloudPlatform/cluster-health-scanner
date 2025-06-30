@@ -106,7 +106,7 @@ metadata:
   name: {{ $unique_name }}
 rules:
 - apiGroups: ["", "apps", "rbac.authorization.k8s.io", "batch"]
-  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "pods", "services", "secrets", "jobs/status"]
+  resources: ["daemonsets", "serviceaccounts", "clusterrolebindings", "clusterroles", "nodes", "jobs", "pods", "services", "secrets", "jobs/status", "configmaps"]
   verbs: ["list", "get", "create", "delete", "watch", "patch"]
 ---
 kind: ClusterRoleBinding

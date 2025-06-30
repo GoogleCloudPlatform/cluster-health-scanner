@@ -47,6 +47,8 @@ _NCCL_4MIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-4MiB-bandwidth"
 _NCCL_64MIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-64MiB-bandwidth"
 _NCCL_1GIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-1G-bandwidth"
 _NCCL_8GIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-8G-bandwidth"
+_NCCL_16GIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-16G-bandwidth"
+_NCCL_32GIB_BANDWIDTH_KEY = "aiinfra/nccl-healthcheck-32G-bandwidth"
 
 _NCCL_4MIB_LATENCY_MS_KEY = "aiinfra/nccl-healthcheck-4MiB-latency-ms"
 _NCCL_64MIB_LATENCY_MS_KEY = "aiinfra/nccl-healthcheck-64MiB-latency-ms"
@@ -80,6 +82,8 @@ _NCCL_LABELS_TO_REMOVE = [
     _NCCL_64MIB_LATENCY_MS_KEY,
     _NCCL_1GIB_LATENCY_MS_KEY,
     _NCCL_8GIB_LATENCY_MS_KEY,
+    _NCCL_16GIB_BANDWIDTH_KEY,
+    _NCCL_32GIB_BANDWIDTH_KEY,
 ]
 
 MESSAGE_SIZE_TO_BANDWIDTH_LABEL = {
@@ -87,6 +91,8 @@ MESSAGE_SIZE_TO_BANDWIDTH_LABEL = {
     "67108864": _NCCL_64MIB_BANDWIDTH_KEY,
     "1073741824": _NCCL_1GIB_BANDWIDTH_KEY,
     "8589934592": _NCCL_8GIB_BANDWIDTH_KEY,
+    "17179869184": _NCCL_16GIB_BANDWIDTH_KEY,
+    "34359738368": _NCCL_32GIB_BANDWIDTH_KEY,
 }
 
 MESSAGE_SIZE_TO_LATENCY_LABEL = {
@@ -292,41 +298,58 @@ def process_test_result(
   has_sufficient_bandwidth: bool = avg_bandwidth >= bandwidth_threshold
   passed: bool = has_sufficient_bandwidth and has_acceptable_failure_rate
 
-  test_name = os.environ.get("TEST_NAME", "nccl")
-  for node in nodes:
-    add_healthcheck_time_label(node)
-    mark_node_bandwidth(node, averaged_metrics)
+  checker_common.log_results(
+      test_name=os.environ.get("TEST_NAME", "nccl"),
+      passed=passed,
+      node_name=os.environ.get("NODE_NAME", ""),
+      workflow_id=os.environ.get("WORKFLOW_ID"),
+      result_data={
+          "avg_bus_bandwidth": avg_bandwidth,
+          "num_nodes": len(nodes),
+          "all_nodes": sorted(nodes),
+          "benchmark": BENCHMARK,
+      },
+  )
+  mark_all_nodes = os.environ.get("MARK_ALL_NODES", "true").lower()
+  if mark_all_nodes == "true":
+    # Adds the labels for all nodes.
+    for node in nodes:
+      add_nccl_result_labels(node, averaged_metrics, passed, second_pass)
+  else:
+    # Only adds the labels for the node that is running the test.
+    node_name = os.environ.get("NODE_NAME", "")
+    add_nccl_result_labels(node_name, averaged_metrics, passed, second_pass)
 
-    # Either it passed or a second pass is needed
-    terminal = second_pass or passed
-    checker_common.log_results(
-        test_name=test_name,
-        passed=passed,
-        node_name=node,
-        workflow_id=os.environ.get("WORKFLOW_ID"),
-        result_data={
-            "avg_bus_bandwidth": avg_bandwidth,
-            "num_nodes": len(nodes),
-            "all_nodes": sorted(nodes),
-            "benchmark": BENCHMARK,
-            "terminal_test": terminal,
-        },
+
+def add_nccl_result_labels(
+    node: str,
+    metrics: dict[str, int],
+    passed: bool,
+    second_pass: bool,
+) -> None:
+  """Add NCCL result labels to nodes."""
+  add_healthcheck_time_label(node)
+  mark_node_bandwidth(node, metrics)
+
+  # Either it passed or a second pass is needed
+  terminal = second_pass or passed
+
+  avg_bandwidth = metrics[_NCCL_AVG_BANDWIDTH_KEY]
+  # After reaching end of its set of test sweeps (such as second pass)
+  if terminal:
+    result = "fail"
+    if passed:
+      result = "pass"
+    elif avg_bandwidth == _NO_BANDWIDTH_VALUE:
+      result = "crash"
+
+    # Pre-result label is used to determine if this run met criteria
+    checker_common.add_label(
+        node,
+        _NCCL_PRE_RESULT_KEY,
+        result,
+        K_ADD_LABEL_FORMAT,
     )
-    # After reaching end of its set of test sweeps (such as second pass)
-    if terminal:
-      result = "fail"
-      if passed:
-        result = "pass"
-      elif avg_bandwidth == _NO_BANDWIDTH_VALUE:
-        result = "crash"
-
-      # Pre-result label is used to determine if this run met criteria
-      checker_common.add_label(
-          node,
-          _NCCL_PRE_RESULT_KEY,
-          result,
-          K_ADD_LABEL_FORMAT,
-      )
 
 
 def mark_failed_node(
