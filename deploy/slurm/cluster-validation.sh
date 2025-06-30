@@ -183,10 +183,7 @@ if [[ $RUN_DCGMI == 1 ]]; then
         if [[ $DRAIN_BAD_NODES == 1 ]]; then
             echo "Draining failed nodes..."
             IFS=' ' read -ra FAILED_NODES <<< "$FAILED"
-            for node in "${FAILED_NODES[@]}"; do
-                echo "Draining node: $node"
-                sudo scontrol update nodename="$node" state=drain reason="Failed DCGM"
-            done
+            echo "${FAILED_NODES[@]}" | xargs -n 1 -P 0 bash -c 'echo "Draining node: $0"; sudo scontrol update nodename="$0" state=drain reason="Failed DCGM"'
         fi
 
         exit 2
@@ -268,8 +265,7 @@ if [[ $RUN_NCCL == 1 ]]; then
     # Wait for NCCL jobs to finish
     srun -p "${PARTITION}" -N 1 --dependency="$all_ids" true > /dev/null 2> /dev/null
 
-    LARGE_TEST_SIZE=10737418240
-    nccl_pass=0
+    nccl_pass=1
     for i in "${slurm_ids[@]}"; do
         CURR_NODES=$(grep -oP ' on \K[^\s]+' "$RESULTS_DIR"/nccl-gcp.sh_"${i}".log | sort -u) # Get the nodes in this test
         echo "CURR_NODES:  $CURR_NODES"
@@ -301,8 +297,6 @@ if [[ $RUN_NCCL == 1 ]]; then
             echo "Insufficient bus bandwidth on nodes on $CURR_NODES"
             echo "See results/cluster_validation/nccl-gcp.sh_${i}.log for more details"
             nccl_pass=0
-        else
-            nccl_pass=1
         fi
     done
     if [[ $nccl_pass == 0 ]]; then

@@ -125,7 +125,7 @@ Run a healthscan on a cluster.
 
 Options:
   -c, --check [status|nccl|gpu|straggler|neper|tinymax]
-                                  Check to run. Available checks:
+                                  Checks to run. Available checks:
 
                                   - status: (Default) Checks the current healthscan status of the cluster.
                                   - nccl: Runs a pairwise NCCL bandwidth test on the cluster.
@@ -133,6 +133,7 @@ Options:
                                   - straggler: Instruments a straggler check on the cluster.
                                   - neper: Runs a Network Performance eval on the cluster.
                                   - tinymax: Runs a LLM small training workload on the cluster.
+
   -n, --nodes TEXT                Nodes to run checks on. Defaults to running
                                   on all nodes. When using slurm, a shortened
                                   node format can be used. For example,

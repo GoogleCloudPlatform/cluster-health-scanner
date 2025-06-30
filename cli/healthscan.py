@@ -65,10 +65,11 @@ def is_helm_installed() -> bool:
 @click.option(
     '-c',
     '--check',
+    multiple=True,
     type=click.Choice(_SUPPORTED_HEALTHCHECKS),
-    default=_SUPPORTED_HEALTHCHECKS[0],
+    default=[_SUPPORTED_HEALTHCHECKS[0]],
     help="""
-    Check to run. Available checks:
+    Checks to run. Available checks:
 
     \b
     - status: (Default) Checks the current healthscan status of the cluster.
@@ -116,7 +117,7 @@ def is_helm_installed() -> bool:
 def cli(
     ctx: click.Context,
     machine_type: str,
-    check: str,
+    check: tuple[str, ...],
     nodes: list[str],
     run_only_on_available_nodes: bool,
     dry_run: bool,
@@ -124,7 +125,7 @@ def cli(
 ):
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
-  check_runner = None
+  check_runners = []
   if orchestrator == 'slurm':
     if partition is None:
       raise click.MissingParameter(
@@ -137,57 +138,69 @@ def cli(
       print('Helm is not installed. Please install Helm before running '
             'healthscan: https://helm.sh/docs/intro/install/')
       return
-  match check:
-    case nccl_check.NAME:
-      check_runner = nccl_check.get_check_for_orchestrator(
-          orchestrator=orchestrator,
-          machine_type=machine_type,
-          partition=partition,
-          nodes=nodes,
-          run_only_on_available_nodes=run_only_on_available_nodes,
-          dry_run=dry_run,
-      )
-    case gpu_check.NAME:
-      check_runner = gpu_check.get_check_for_orchestrator(
-          orchestrator=orchestrator,
-          machine_type=machine_type,
-          partition=partition,
-          nodes=nodes,
-          run_only_on_available_nodes=run_only_on_available_nodes,
-          dry_run=dry_run,
-      )
-    case straggler_check.NAME:
-      check_runner = straggler_check.get_check_for_orchestrator(
-          orchestrator=orchestrator,
-          machine_type=machine_type,
-          nodes=nodes,
-          run_only_on_available_nodes=run_only_on_available_nodes,
-          dry_run=dry_run,
-      )
-    case neper_check.NAME:
-      check_runner = neper_check.get_check_for_orchestrator(
-          orchestrator=orchestrator,
-          machine_type=machine_type,
-          nodes=nodes,
-          run_only_on_available_nodes=run_only_on_available_nodes,
-          dry_run=dry_run,
-      )
-    case tinymax_check.NAME:
-      check_runner = tinymax_check.get_check_for_orchestrator(
-          orchestrator=orchestrator,
-          machine_type=machine_type,
-          nodes=nodes,
-          run_only_on_available_nodes=run_only_on_available_nodes,
-          dry_run=dry_run,
-      )
-    case status.NAME:
-      check_runner = status.get_check_for_orchestrator(
-          orchestrator=orchestrator,
-          machine_type=machine_type,
-          nodes=nodes,
-      )
-
-  if check_runner:
+  for check_name in check:
+    match check_name:
+      case nccl_check.NAME:
+        check_runners.append(
+            nccl_check.get_check_for_orchestrator(
+                orchestrator=orchestrator,
+                machine_type=machine_type,
+                partition=partition,
+                nodes=nodes,
+                run_only_on_available_nodes=run_only_on_available_nodes,
+                dry_run=dry_run,
+            )
+        )
+      case gpu_check.NAME:
+        check_runners.append(
+            gpu_check.get_check_for_orchestrator(
+                orchestrator=orchestrator,
+                machine_type=machine_type,
+                partition=partition,
+                nodes=nodes,
+                run_only_on_available_nodes=run_only_on_available_nodes,
+                dry_run=dry_run,
+            )
+        )
+      case straggler_check.NAME:
+        check_runners.append(
+            straggler_check.get_check_for_orchestrator(
+                orchestrator=orchestrator,
+                machine_type=machine_type,
+                nodes=nodes,
+                run_only_on_available_nodes=run_only_on_available_nodes,
+                dry_run=dry_run,
+            )
+        )
+      case neper_check.NAME:
+        check_runners.append(
+            neper_check.get_check_for_orchestrator(
+                orchestrator=orchestrator,
+                machine_type=machine_type,
+                nodes=nodes,
+                run_only_on_available_nodes=run_only_on_available_nodes,
+                dry_run=dry_run,
+            )
+        )
+      case tinymax_check.NAME:
+        check_runners.append(
+            tinymax_check.get_check_for_orchestrator(
+                orchestrator=orchestrator,
+                machine_type=machine_type,
+                nodes=nodes,
+                run_only_on_available_nodes=run_only_on_available_nodes,
+                dry_run=dry_run,
+            )
+        )
+      case status.NAME:
+        check_runners.append(
+            status.get_check_for_orchestrator(
+                orchestrator=orchestrator,
+                machine_type=machine_type,
+                nodes=nodes,
+            )
+        )
+  for check_runner in check_runners:
     check_runner.set_up()
     check_runner.run()
     check_runner.clean_up()

@@ -67,10 +67,10 @@ def _create_a3ultra_config():
       nccl_test_command_template=(
           "bash /scripts/run-nccl-combined-plugins.sh rdma {benchmark}"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
-          " {start_message_size} {end_message_size} {nhosts} 3"
+          " {start_message_size} {end_message_size} {nhosts} 3 {iterations}"
       ),
       default_threshold=120,
-      ld_library_path="/usr/local/gib/lib64:/usr/local/nvidia/lib64/"
+      ld_library_path="/usr/local/gib/lib64:/usr/local/nvidia/lib64/",
   )
 
 
@@ -81,10 +81,10 @@ def _create_a4_config():
       nccl_test_command_template=(
           "bash /scripts/run-nccl-combined-plugins.sh rdma {benchmark}"
           " {ld_library_path} 8 eth1,eth2,eth3,eth4,eth5,eth6,eth7,eth8"
-          " {start_message_size} {end_message_size} {nhosts} 3"
+          " {start_message_size} {end_message_size} {nhosts} 3 {iterations}"
       ),
       default_threshold=120,
-      ld_library_path="/usr/local/gib/lib64:/usr/local/nvidia/lib64/"
+      ld_library_path="/usr/local/gib/lib64:/usr/local/nvidia/lib64/",
   )
 
 
