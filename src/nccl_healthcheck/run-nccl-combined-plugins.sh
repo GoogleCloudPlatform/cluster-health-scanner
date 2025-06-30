@@ -57,7 +57,7 @@ run_nccl_rdma() {
     -x LD_LIBRARY_PATH -x PATH \
     $NCCL_FLAGS \
     /third_party/nccl-tests/build/"${benchmark}" \
-      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 50--iters "${iter}" 2>&1 | \
+      -b "${data_b}" -e "${data_e}" -f 2 -g 1 -w 50 --iters "${iter}" 2>&1 | \
     tee "${benchmark}_${nhosts}_${gpu_per_node}_${socket_ifnames}_i${iter}.txt"
 }
 

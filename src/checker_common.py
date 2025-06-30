@@ -47,12 +47,16 @@ K_DELETE_FORMAT = "%s delete -f %s"
 
 K_GSUTIL_COPY_FILE_FORMAT = "gsutil cp %s %s"
 
+K_32GIB_MESSAGE_SIZE = 32 * 1024 * 1024 * 1024
+K_16GIB_MESSAGE_SIZE = 16 * 1024 * 1024 * 1024
 K_8GIB_MESSAGE_SIZE = 8 * 1024 * 1024 * 1024
 K_1GIB_MESSAGE_SIZE = 1024 * 1024 * 1024
 K_64MIB_MESSAGE_SIZE = 64 * 1024 * 1024
 K_4MIB_MESSAGE_SIZE = 4 * 1024 * 1024
 
 K_SUPPORT_MESSAGE_SIZES = [
+    K_32GIB_MESSAGE_SIZE,
+    K_16GIB_MESSAGE_SIZE,
     K_8GIB_MESSAGE_SIZE,
     K_1GIB_MESSAGE_SIZE,
     K_64MIB_MESSAGE_SIZE,
@@ -60,6 +64,8 @@ K_SUPPORT_MESSAGE_SIZES = [
 ]
 
 K_MESSAGE_SIZE_TO_BANDWIDTH_LABEL = {
+    K_32GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-32G-bandwidth",
+    K_16GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-16G-bandwidth",
     K_8GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-8G-bandwidth",
     K_1GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-1G-bandwidth",
     K_64MIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-64MiB-bandwidth",

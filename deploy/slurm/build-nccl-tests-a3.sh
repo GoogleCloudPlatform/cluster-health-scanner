@@ -19,6 +19,7 @@
 #SBATCH --partition=a3
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
+#SBATCH --mem=0
 
 # Usage: sbatch build-nccl-tests.sh
 
