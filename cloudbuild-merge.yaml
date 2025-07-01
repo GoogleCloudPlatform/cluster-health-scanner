@@ -56,8 +56,8 @@ steps:
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
           _VERSION=$(cat deploy/helm/health_runner/version.txt)
-          echo "Building ${health_check_name} for ${machine_type} with version $_VERSION..."
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$_VERSION"
+          echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
+          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION"
           dockerfile="docker/${health_check_name//-/_}.Dockerfile"
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
           docker buildx build  --platform linux/amd64,linux/arm64 -t "${latest_tag}" -f "${dockerfile}" . --push
@@ -81,8 +81,8 @@ steps:
       machine_types=("a3-ultragpu-8g" "a4-highgpu-8g")
       for machine_type in "${machine_types[@]}"; do
         _VERSION=$(cat deploy/helm/health_runner/version.txt)
-        echo "Building nccl-healthcheck for ${machine_type} with version $_VERSION..."
-        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$_VERSION"
+        echo "Building nccl-healthcheck for ${machine_type} with version $$_VERSION..."
+        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$$_VERSION"
         dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
         echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
         docker buildx build \
@@ -110,7 +110,7 @@ steps:
       for health_check_name in "${health_check_names[@]}"; do
         for machine_type in "${machine_types[@]}"; do
           _VERSION=$(cat deploy/helm/health_runner/version.txt)
-          echo "Building ${health_check_name} for ${machine_type} with version $_VERSION..."
+          echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
 
           if [[ ("$machine_type" == "a3-ultragpu-8g" || "$machine_type" == "a4-highgpu-8g") && "$health_check_name" == "nccl-healthcheck" ]]; then
             continue
@@ -118,7 +118,7 @@ steps:
             dockerfile="docker/${health_check_name//-/_}.Dockerfile"
           fi
 
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$_VERSION"
+          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION"
 
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
           docker build -t "${latest_tag}" -f "${dockerfile}" .
@@ -141,9 +141,9 @@ steps:
       _BUILD_TARGET="health_runner"
 
       _VERSION=$(cat deploy/helm/health_runner/version.txt)
-      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$_VERSION"
+      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$$_VERSION"
 
-      echo "Building $$_BUILD_TARGET with version $_VERSION..."
+      echo "Building $$_BUILD_TARGET with version $$_VERSION..."
       docker buildx build \
       --platform linux/amd64,linux/arm64 \
       -t "${latest_tag}" \
