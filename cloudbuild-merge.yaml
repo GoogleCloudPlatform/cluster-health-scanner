@@ -62,11 +62,6 @@ steps:
           echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
           docker buildx build  --platform linux/amd64,linux/arm64 -t "${latest_tag}" -f "${dockerfile}" . --push
           echo "Successfully built image: ${latest_tag}"
-
-          major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
-          latest_tag_major_minor="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$${major_minor_version}-latest"
-          docker tag "${latest_tag}" "${latest_tag_major_minor}"
-          docker push "${latest_tag_major_minor}"
         done
       done
   id: 'Build and Push Multi-Arch Image'
@@ -98,11 +93,6 @@ steps:
           . \
           --push
         echo "Successfully built image: ${latest_tag}"
-
-        major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
-        latest_tag_major_minor="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$${major_minor_version}-latest"
-        docker tag "${latest_tag}" "${latest_tag_major_minor}"
-        docker push "${latest_tag_major_minor}"
       done
 
 # Build and Push NCCL ARM64 GIB variant
@@ -127,10 +117,6 @@ steps:
       -f "${dockerfile}" \
       . \
       --push
-    major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
-    latest_tag_major_minor="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4x-highgpu-4g_$${major_minor_version}-latest"
-    docker tag "${latest_tag}" "${latest_tag_major_minor}"
-    docker push "${latest_tag_major_minor}"
 
 # Build and push the healthchecks images
 - name: 'gcr.io/cloud-builders/docker'
@@ -164,11 +150,6 @@ steps:
           docker build -t "${latest_tag}" -f "${dockerfile}" .
           echo "Successfully built image: ${latest_tag}"
           docker push "${latest_tag}"
-
-          major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
-          latest_tag_major_minor="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$${major_minor_version}-latest"
-          docker tag "${latest_tag}" "${latest_tag_major_minor}"
-          docker push "${latest_tag_major_minor}"
         done
       done
   id: build-healthchecks
