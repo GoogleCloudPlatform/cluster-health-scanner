@@ -103,5 +103,5 @@ class SlurmGpuCheck(slurm_check.SlurmCheck):
         partition=partition,
         nodes=nodes,
         supported_machine_types=self._SUPPORTED_MACHINE_TYPES,
-        dry_run=dry_run
+        dry_run=dry_run,
     )

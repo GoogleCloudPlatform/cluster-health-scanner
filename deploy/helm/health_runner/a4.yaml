@@ -56,7 +56,7 @@ health_checks:
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "15"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG} --set health_check.env.INSTANCE_TYPE=${MACHINE_TYPE}"
       ACCELERATOR_TYPE: "nvidia-b200-141gb"
       HC_ENV_R_LEVEL: 1
       # HC_ENV_DCGM_PARAMS: "pcie.dont_bind_numa=1" # Add this for HC_ENV_R_LEVEL: 2/3/4

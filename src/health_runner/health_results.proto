@@ -68,13 +68,6 @@ message HealthResultList {
   // Additional results for NEMO health checks.
   repeated NEMOHealthResult nemo_health_result = 5;
 
-  // TODO: b/414746423 To be deprecated once HPC tests are migrated to new test
-  // behavior
-  oneof result {
-    HPCNCCLHealthResult hpc_nccl_health_result = 6;
-    HPLHealthResult hpl_health_result = 7;
-  }
-
   HPCHealthResult hpc_health_result = 8;
 }
 

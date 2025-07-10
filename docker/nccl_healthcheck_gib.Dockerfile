@@ -18,7 +18,7 @@ ARG BASE_IMAGE=us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0
 FROM ${BASE_IMAGE}
 
 WORKDIR /scripts
-RUN apt-get update && apt-get install -y net-tools openssh-server python3.10 ca-certificates curl python3-pip &&\
+RUN apt-get update && apt-get install -y net-tools openssh-server python3.10 ca-certificates curl python3-pip sudo &&\
   update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 &&\
   mkdir /var/run/sshd && chmod 0755 /var/run/sshd &&\
   ssh-keygen -t rsa -f /root/.ssh/google_compute_engine -b 2048 -P "" &&\

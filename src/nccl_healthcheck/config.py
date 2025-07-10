@@ -88,6 +88,20 @@ def _create_a4_config():
   )
 
 
+def _create_a4x_config():
+  return config_pb2.ASeriesConfig(
+      instance_type="a4x-highgpu-4g",
+      second_pass_yaml_path="a4x/nccl_secondpass.yaml",
+      nccl_test_command_template=(
+          "bash /scripts/run-nccl-combined-plugins.sh rdma {benchmark}"
+          " {ld_library_path} 4 eth1,eth2,eth3,eth4"
+          " {start_message_size} {end_message_size} {nhosts} 3 {iterations}"
+      ),
+      default_threshold=120,
+      ld_library_path="/usr/local/gib/lib64:/usr/local/nvidia/lib64/",
+  )
+
+
 def get_config(instance_type: str) -> config_pb2.ASeriesConfig:
   """Returns the config for the given instance type.
 
@@ -110,5 +124,7 @@ def get_config(instance_type: str) -> config_pb2.ASeriesConfig:
     return _create_a3ultra_config()
   elif instance_type == "a4-highgpu-8g":
     return _create_a4_config()
+  elif instance_type == "a4x-highgpu-4g":
+    return _create_a4x_config()
   else:
     raise ValueError(f"Unsupported instance type: {instance_type}")

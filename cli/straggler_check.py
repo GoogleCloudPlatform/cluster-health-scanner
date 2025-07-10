@@ -53,7 +53,7 @@ class GkeStragglerCheck(gke_check.GkeCheck):
   _SUPPORTED_MACHINE_TYPES = frozenset(
       machine_type
       for machine_type in common.SUPPORTED_MACHINE_TYPES
-      if machine_type not in ['a4-highgpu-8g']
+      if machine_type not in ['a4-highgpu-8g', 'a4x-highgpu-4g']
   )
 
   launch_label = 'aiinfra/straggler-healthcheck-test'

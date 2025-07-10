@@ -19,7 +19,10 @@ FROM ubuntu:22.04
 WORKDIR /app
 
 RUN apt-get update &&\
-    apt-get install -y --no-install-recommends git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq python3 python3-pip python3-venv &&\
+    apt-get install -y --no-install-recommends git make gcc g++ util-linux software-properties-common openssh-server ca-certificates curl jq python3 python3-pip python3-venv
+
+ARG TARGETARCH
+RUN echo "Installing kubectl" &&\
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl" &&\
     chmod +x kubectl
 
