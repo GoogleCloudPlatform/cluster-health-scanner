@@ -12,21 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-timeout: 7200s  # Sets the overall build timeout to 2 hours.
+# Sets the overall build timeout to 2 hours.
+timeout: 7200s
 
 substitutions:
   _HEALTH_CHECK_REPOSITORY_BASE: us-docker.pkg.dev/gce-ai-infra/health-check
   _BASE_IMAGE_GIB_AMD: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib:v1.0.2
   _BASE_IMAGE_GIB_ARM: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.0.6
+
 steps:
-# Enable QEMU emulation for cross-platform builds
-# Allows the AMD64 Cloud Build worker to execute ARM64 instructions
+# Step 1: Enable QEMU emulation for cross-platform builds.
+# This allows the AMD64 Cloud Build worker to execute ARM64 instructions.
 - name: 'gcr.io/cloud-builders/docker'
   args: ['run', '--rm', '--privileged', 'multiarch/qemu-user-static', '--reset', '-p', 'yes']
   id: 'Setup QEMU'
   waitFor: ['-']
 
-# Enable Buildx Driver for multi-platform builds
+# Step 2: Enable Buildx Driver for multi-platform builds.
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
   args:
@@ -40,34 +42,39 @@ steps:
   id: 'Setup Buildx Driver'
   waitFor: ['Setup QEMU']
 
-
-# Execute the multi-platform build and push using Docker Buildx
+# Step 3: Build and push the multi-platform gpu-healthcheck image.
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
     #!/bin/bash
-      set -e
-      echo "Starting multi-arch build"
-      health_check_names=("gpu-healthcheck")
-      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
+    set -e
+    echo "Starting multi-arch build for gpu-healthcheck"
+    health_check_names=("gpu-healthcheck")
+    machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
 
-      for health_check_name in "${health_check_names[@]}"; do
-        for machine_type in "${machine_types[@]}"; do
-          _VERSION=$(cat deploy/helm/health_runner/version.txt)
-          echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION"
-          dockerfile="docker/${health_check_name//-/_}.Dockerfile"
-          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker buildx build  --platform linux/amd64,linux/arm64 -t "${latest_tag}" -f "${dockerfile}" . --push
-          echo "Successfully built image: ${latest_tag}"
-        done
+    for health_check_name in "${health_check_names[@]}"; do
+      for machine_type in "${machine_types[@]}"; do
+        _VERSION=$(cat deploy/helm/health_runner/version.txt)
+        major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
+        version_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION"
+        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$${major_minor_version}-latest"
+        dockerfile="docker/${health_check_name//-/_}.Dockerfile"
+
+        echo "Building with tags: ${version_tag}, ${latest_tag}"
+        docker buildx build \
+          --platform linux/amd64,linux/arm64 \
+          -t "${version_tag}" \
+          -t "${latest_tag}" \
+          -f "${dockerfile}" . --push
+        echo "Successfully built and pushed multi-arch image for ${health_check_name} on ${machine_type}"
       done
-  id: 'Build and Push Multi-Arch Image'
+    done
+  id: 'Build and Push Multi-Arch GPU Healthcheck'
   waitFor: ['Setup Buildx Driver']
 
-# Build and Push NCCL AMD64 GIB variant
+# Step 4: Build and Push NCCL AMD64 GIB variant.
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
   id: 'Build AMD64 GIB'
@@ -75,27 +82,31 @@ steps:
   args:
   - '-c'
   - |
-   #!/bin/bash
-      set -e
-      echo "Building NCCL AMD64 GIB Variant..."
-      machine_types=("a3-ultragpu-8g" "a4-highgpu-8g")
-      for machine_type in "${machine_types[@]}"; do
-        _VERSION=$(cat deploy/helm/health_runner/version.txt)
-        echo "Building nccl-healthcheck for ${machine_type} with version $$_VERSION..."
-        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$$_VERSION"
-        dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
-        echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-        docker buildx build \
-          --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_AMD}" \
-          --platform linux/amd64 \
-          -t "${latest_tag}" \
-          -f "${dockerfile}" \
-          . \
-          --push
-        echo "Successfully built image: ${latest_tag}"
-      done
+    #!/bin/bash
+    set -e
+    echo "Building NCCL AMD64 GIB Variant..."
+    machine_types=("a3-ultragpu-8g" "a4-highgpu-8g")
+    for machine_type in "${machine_types[@]}"; do
+      _VERSION=$(cat deploy/helm/health_runner/version.txt)
+      major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
 
-# Build and Push NCCL ARM64 GIB variant
+      version_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$$_VERSION"
+      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:$${machine_type}_$${major_minor_version}-latest"
+      dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
+
+      echo "Building with tags: ${version_tag}, ${latest_tag}"
+      docker buildx build \
+        --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_AMD}" \
+        --platform linux/amd64 \
+        -t "${version_tag}" \
+        -t "${latest_tag}" \
+        -f "${dockerfile}" \
+        . \
+        --push
+      echo "Successfully built and pushed image for nccl-healthcheck (AMD64 GIB) on ${machine_type}"
+    done
+
+# Step 5: Build and Push NCCL ARM64 GIB variant.
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: 'bash'
   id: 'Build ARM64 GIB'
@@ -107,81 +118,95 @@ steps:
     set -e
     echo "Building NCCL ARM64 GIB Variant..."
     _VERSION=$(cat deploy/helm/health_runner/version.txt)
-    latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4x-highgpu-4g_$$_VERSION"
+    major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
+
+    version_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4x-highgpu-4g_$$_VERSION"
+    latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/nccl-healthcheck:a4x-highgpu-4g_$${major_minor_version}-latest"
     dockerfile="docker/nccl_healthcheck_gib.Dockerfile"
-    echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
+
+    echo "Building with tags: ${version_tag}, ${latest_tag}"
     docker buildx build \
       --build-arg BASE_IMAGE="${_BASE_IMAGE_GIB_ARM}" \
       --platform linux/arm64 \
+      -t "${version_tag}" \
       -t "${latest_tag}" \
       -f "${dockerfile}" \
       . \
       --push
+    echo "Successfully built and pushed image for nccl-healthcheck (ARM64 GIB)"
 
-# Build and push the healthchecks images
+# Step 6: Build and push the remaining single-architecture healthcheck images.
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
   - -c
   - |
-      #!/bin/bash
-      set -e
+    #!/bin/bash
+    set -e
 
-      health_check_names=("nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
-      machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g" "a4x-highgpu-4g")
+    health_check_names=("nccl-healthcheck" "neper-healthcheck" "straggler-healthcheck" "tinymax-healthcheck")
+    machine_types=("a3-highgpu-8g" "a3-megagpu-8g" "a3-ultragpu-8g" "a4-highgpu-8g")
 
-      for health_check_name in "${health_check_names[@]}"; do
-        for machine_type in "${machine_types[@]}"; do
-          _VERSION=$(cat deploy/helm/health_runner/version.txt)
-          echo "Building ${health_check_name} for ${machine_type} with version $$_VERSION..."
+    for health_check_name in "${health_check_names[@]}"; do
+      for machine_type in "${machine_types[@]}"; do
+        # Skip combinations that are built as GIB variants in other steps
+        if [[ "$health_check_name" == "nccl-healthcheck" && \
+              ( "$machine_type" == "a3-ultragpu-8g" || \
+                "$machine_type" == "a4-highgpu-8g" ) ]]; then
+          echo "Skipping ${health_check_name} for ${machine_type} as it has a dedicated build step."
+          continue
+        fi
 
-          if [[ "$health_check_name" == "nccl-healthcheck" && \
-                ("$machine_type" == "a3-ultragpu-8g" || \
-                "$machine_type" == "a4-highgpu-8g" || \
-                "$machine_type" == "a4x-highgpu-4g") ]]; then
-            continue
-          else
-            dockerfile="docker/${health_check_name//-/_}.Dockerfile"
-          fi
+        _VERSION=$(cat deploy/helm/health_runner/version.txt)
+        major_minor_version=$(echo "$$_VERSION" | cut -d '.' -f 1-2)
 
-          latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION"
+        version_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$$_VERSION"
+        latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/$${health_check_name}:$${machine_type}_$${major_minor_version}-latest"
+        dockerfile="docker/${health_check_name//-/_}.Dockerfile"
 
-          echo "Building with tag: ${latest_tag} and Dockerfile: ${dockerfile}"
-          docker build -t "${latest_tag}" -f "${dockerfile}" .
-          echo "Successfully built image: ${latest_tag}"
-          docker push "${latest_tag}"
-        done
+        echo "Building ${health_check_name} for ${machine_type} with tags: ${version_tag}, ${latest_tag}"
+
+        docker build -t "${version_tag}" -t "${latest_tag}" -f "${dockerfile}" .
+        echo "Pushing images..."
+        docker push "${version_tag}"
+        docker push "${latest_tag}"
+        echo "Successfully pushed images."
       done
-  id: build-healthchecks
+    done
+  id: 'build-healthchecks'
   waitFor: ['-']
 
-# Build health-runner
+# Step 7: Build and push the multi-arch health-runner image.
 - name: 'gcr.io/cloud-builders/docker'
   entrypoint: bash
   args:
   - -c
   - |
-      #!/bin/bash
-      set -e
+    #!/bin/bash
+    set -e
+    _VERSION=$(cat deploy/helm/health_runner/version.txt)
 
-      _BUILD_TARGET="health_runner"
+    version_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$$_VERSION"
 
-      _VERSION=$(cat deploy/helm/health_runner/version.txt)
-      latest_tag="$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$$_VERSION"
-
-      echo "Building $$_BUILD_TARGET with version $$_VERSION..."
-      docker buildx build \
+    echo "Building health-runner with tag: ${version_tag}"
+    docker buildx build \
       --platform linux/amd64,linux/arm64 \
-      -t "${latest_tag}" \
-      -f "docker/$$_BUILD_TARGET.Dockerfile" \
+      -t "${version_tag}" \
+      -f "docker/health_runner.Dockerfile" \
       . \
       --push
-      echo "Successfully built image: ${latest_tag}"
-  id: build-health-runner
+    echo "Successfully built and pushed multi-arch image: health-runner"
+  id: 'build-health-runner'
   waitFor: ['Setup Buildx Driver']
 
+# Step 8: Scan the final health-runner image.
 - name: 'us-docker.pkg.dev/scaevola-builder-integration/release/scanvola/scanvola'
   args: ['--image=$_HEALTH_CHECK_REPOSITORY_BASE/health-runner:$REF_NAME']
+
+options:
+  # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
+  requestedVerifyOption: VERIFIED
+
 
 options:
   # See: https://cloud.google.com/build/docs/securing-builds/view-build-provenance#req-metadata
