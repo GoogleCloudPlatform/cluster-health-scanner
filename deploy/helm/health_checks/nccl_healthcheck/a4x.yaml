@@ -1,0 +1,77 @@
+# Copyright 2024 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+job:
+  base_name: "chs-hc"
+  # guid: "xckd"  # Can specify a GUID if desired. Otherwise, a random GUID will be generated.
+  # check_time: "1590303600"  # Will automatically be set if not given
+health_check:
+  name: "nccl"
+  image:
+    repo: "us-docker.pkg.dev/gce-ai-infra/health-check/nccl-healthcheck"
+    tag: "a4x-highgpu-4g_4.7.0"
+    pull_policy: "Always"
+  env:
+    # A4x instance type is a4x-highgpu-4g
+    INSTANCE_TYPE: "a4x-highgpu-4g"
+    HEALTH_VALIDITY_HOURS: "24"
+    DRY_RUN: "true"
+    START_MESSAGE_SIZE: "2G"
+    END_MESSAGE_SIZE: "8G"
+    TEST_ITERATIONS: "1"
+    NHOSTS: "2"
+    nr: "4"
+    LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/nvidia/lib64
+    BANDWIDTH_THRESHOLD: "160"
+    NCCL_MNNVL_ENABLE: "0"
+    NCCL_DEBUG: "INFO"
+    NCCL_DEBUG_SUBSYS: "INIT,NET"
+  volumeMounts:
+  - name: usr-local-gib
+    mountPath: /usr/local/gib
+  - name: library-dir-host
+    mountPath: /usr/local/nvidia
+  - name: shared-memory
+    mountPath: /dev/shm
+  - name: varlog
+    mountPath: /var/log
+
+# Configuration specific to a4x
+volumes:
+- name: library-dir-host
+  hostPath:
+    path: /home/kubernetes/bin/nvidia
+- name: shared-memory
+  emptyDir:
+    medium: "Memory"
+    sizeLimit: 250Gi
+- name: usr-local-gib
+  hostPath:
+    path: /home/kubernetes/bin/gib
+- name: run-sshd
+  emptyDir: {}
+- name: varlog
+  emptyDir: {}
+- name: fluentbit-key
+  secret:
+    secretName: fluentbit-key
+    optional: true
+initContainers:
+  nccl_plugin_installer:
+    name: "nccl-plugin-installer"
+    image: "us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.0.6"
+    imagePullPolicy: "Always"
+    volumeMounts:
+      name: "usr-local-gib"
+      mountPath: "/usr/local/home/kubernetes/bin/gib"

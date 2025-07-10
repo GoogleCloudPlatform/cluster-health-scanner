@@ -37,6 +37,7 @@ import node_config_fetcher
 
 _SUPPORTED_MACHINE_TYPES = list(common.SUPPORTED_MACHINE_TYPES)
 _SUPPORTED_MACHINE_TYPES.remove('a4-highgpu-8g')
+_SUPPORTED_MACHINE_TYPES.remove('a4x-highgpu-4g')
 
 GKE_DEPENDENCIES_BY_MACHINE = {
     'a3-ultragpu-8g': dependencies.GKE_DEPENDENCY_PARSERS,

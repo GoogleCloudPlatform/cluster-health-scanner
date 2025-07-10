@@ -148,6 +148,16 @@ if [[ -z "$NODES" ]] || [[ -z "$NUM_NODES" ]] || [[ -z "$PARTITION" ]] || [[ -z 
     exit 1
 fi
 
+echo "--- Script Arguments ---"
+echo "Node List: ${NODES}"
+echo "Number of Nodes: ${NUM_NODES}"
+echo "Partition: ${PARTITION}"
+echo "Machine Type: ${MACHINE_TYPE}"
+echo "Run DCGM: ${RUN_DCGMI:-0}"
+echo "Run NCCL: ${RUN_NCCL:-0}"
+echo "Results Directory: ${RESULTS_DIR}"
+echo "------------------------"
+
 # Basic check to ensure valid values for required arguments
 srun -p "${PARTITION}" -N "${NUM_NODES}" -w "${NODES}" true > /dev/null 2> /dev/null
 if [[ $? != 0 ]]; then
@@ -165,15 +175,18 @@ mkdir -p "$RESULTS_DIR"
 
 if [[ $RUN_DCGMI == 1 ]]; then
     echo "Starting DCGM Diagnostics..."
+    echo "Submitting DCGM diagnostic job..."
     JOBID=$(sbatch  -N "$NUM_NODES" \
             -p "$PARTITION" \
             -w "$NODES" \
             -o "$RESULTS_DIR"/dcgmi-%j.out \
             -W "$RELATIVE_PATH"dcgmi-diag.sh)
     JOBID=${JOBID##* } # Remove everything but the slurm job id from output of sbatch command
+    echo "DCGM diagnostic job submitted with ID: ${JOBID}"
     grep -i "fail\|error" "$RESULTS_DIR"/dcgmi-"${JOBID}".out > /dev/null # Check log for failures
     FOUND=$?
     if [[ $FOUND == 0 ]]; then
+
         # One of the diagnostics failed
         FAILED=$(grep -i -P -o "srun: error: [^:]*" "$RESULTS_DIR"/dcgmi-"${JOBID}".out | cut -d':' -f3)
         echo -e "DCGM failed on the following nodes: \n $FAILED"
@@ -204,15 +217,19 @@ if [[ $RUN_NCCL == 1 ]]; then
         # Determine which script to run based on the machine type
         case "$MACHINE_TYPE" in
             a3-highgpu-8g)
+                echo "Submitting NCCL build job with build-nccl-tests-a3.sh..."
                 sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-a3.sh > /dev/null 2> /dev/null
                 ;;
             a3-megagpu-8g)
+                echo "Submitting NCCL build job with build-nccl-tests-a3mega.sh..."
                 sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-a3mega.sh > /dev/null 2> /dev/null
                 ;;
             a3-ultragpu-8g)
+                echo "Submitting NCCL build job with build-nccl-tests-gib.sh..."
                 sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-gib.sh > /dev/null 2> /dev/null
                 ;;
             a4-highgpu-8g)
+                echo "Submitting NCCL build job with build-nccl-tests-gib.sh..."
                 sbatch -N 1 -p "$PARTITION" -W "$RELATIVE_PATH"build-nccl-tests-gib.sh > /dev/null 2> /dev/null
                 ;;
             *)
@@ -236,40 +253,46 @@ if [[ $RUN_NCCL == 1 ]]; then
 
     # Determine which script to run based on the machine type
     if [[ "$MACHINE_TYPE" == "a3-highgpu-8g" ]]; then
-        script="./""$RELATIVE_PATH""nccl-a3.sh"
+        script="$RELATIVE_PATH""nccl-a3.sh"
     elif [[ "$MACHINE_TYPE" == "a3-megagpu-8g" ]]; then
-        script="./""$RELATIVE_PATH""nccl-a3mega.sh"
+        script="$RELATIVE_PATH""nccl-a3mega.sh"
     elif [[ "$MACHINE_TYPE" == "a3-ultragpu-8g" ]]; then
-        script="./""$RELATIVE_PATH""nccl-gib.sh"
+        script="$RELATIVE_PATH""nccl-gib.sh"
     elif [[ "$MACHINE_TYPE" == "a4-highgpu-8g" ]]; then
-        script="./""$RELATIVE_PATH""nccl-gib.sh"
+        script="$RELATIVE_PATH""nccl-gib.sh"
     else
         echo "Unsupported MACHINE_TYPE: $MACHINE_TYPE"
         continue
     fi
 
     declare -a slurm_ids # ids for all the jobs launched, should be $NODES / 2
+    echo "Submitting NCCL all_reduce_perf jobs..."
     for (( i = 0; i < $ARR_LEN - 1; i+=8 )); do
         j=$((i + 4))
+        echo "Submitting NCCL job for nodes: ${NODES_ARR[$i]}, ${NODES_ARR[$j]}"
         id=$(sbatch -N 2 \
                     -w "${NODES_ARR[$i]}","${NODES_ARR[$j]}" \
                     -p "$PARTITION" \
                     --parsable \
                     -o "$RESULTS_DIR"/nccl-gcp.sh_%j.log \
                     "$script")
+        echo "NCCL job submitted with ID: ${id}"
         slurm_ids+=($id)
     done
 
     all_ids=$(join , "${slurm_ids[@]}")
 
     # Wait for NCCL jobs to finish
+    echo "Waiting for NCCL jobs to complete: ${all_ids}"
     srun -p "${PARTITION}" -N 1 --dependency="$all_ids" true > /dev/null 2> /dev/null
 
     nccl_pass=1
     for i in "${slurm_ids[@]}"; do
-        CURR_NODES=$(grep -oP ' on \K[^\s]+' "$RESULTS_DIR"/nccl-gcp.sh_"${i}".log | sort -u) # Get the nodes in this test
+        log_file="$RESULTS_DIR"/nccl-gcp.sh_"${i}".log
+        echo "Parsing NCCL log file: ${log_file}"
+        CURR_NODES=$(grep -oP ' on \K[^\s]+' "$log_file" | sort -u) # Get the nodes in this test
         echo "CURR_NODES:  $CURR_NODES"
-        CURR_BUSBW=$(grep "# Avg bus bandwidth" "$RESULTS_DIR"/nccl-gcp.sh_"${i}".log | cut -d':' -f2 | xargs | awk '{printf "%.0f", $1}')
+        CURR_BUSBW=$(grep "# Avg bus bandwidth" "$log_file" | cut -d':' -f2 | xargs | awk '{printf "%.0f", $1}')
         echo "CURR_BUSBW:  $CURR_BUSBW"
 
         # Check CURR_BUSBW is a number

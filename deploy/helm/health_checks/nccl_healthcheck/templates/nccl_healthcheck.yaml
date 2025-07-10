@@ -136,6 +136,10 @@ spec:
           /scripts/container_entry.sh install --install-nccl
           cp -R /var/lib/gib/. /usr/local/gib
           echo "installation finishes"
+          {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a4x-highgpu-4g" }}
+          /scripts/container_entry.sh install --install-nccl
+          cp -R /var/lib/gib/. /usr/local/home/kubernetes/bin/gib
+          echo "installation finishes"
           {{- else if eq .Values.health_check.env.INSTANCE_TYPE "a4-highgpu-8g" }}
           /scripts/container_entry.sh install --install-nccl
           cp -R /var/lib/gib/. /usr/local/home/kubernetes/bin/gib
@@ -203,7 +207,11 @@ spec:
         volumeMounts: {{- toYaml .Values.health_check.volumeMounts | nindent 8 }}
         resources:
           limits:
+            {{- if eq .Values.health_check.env.INSTANCE_TYPE "a4x-highgpu-4g" }}
+            nvidia.com/gpu: !!int 4
+            {{- else }}
             nvidia.com/gpu: !!int 8
+            {{- end }}
       - name: google-logging
         image: "us-docker.pkg.dev/gce-ai-infra/health-check/logging:latest"
         volumeMounts:

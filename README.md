@@ -26,8 +26,10 @@ CHS serves two main purposes:
 *   **Debugging tool**: Helps diagnose issues when you encounter problems with a
     training workload.
 
-__GPU Cluster availability__: A3, A3+, A3U and A4<br>
-__Orchestrator support__: GKE and Slurm
+__GPU Cluster availability__:
+
+*   **A3, A3+, A3U, A4**: Supported on GKE and Slurm.
+*   **A4x**: Supported on GKE only.
 
 The **Cluster Health Scanner** tool or simply **CHS** runs a series of tests
 called _health checks_ to analyze the health of a cluster of GPU nodes.
