@@ -199,7 +199,11 @@ spec:
         volumeMounts: {{- toYaml .Values.health_check.volumeMounts | nindent 8 }}
         resources:
           limits:
+            {{- if eq .Values.health_check.env.INSTANCE_TYPE "a4x-highgpu-4g" }}
+            nvidia.com/gpu: !!int 4
+            {{- else }}
             nvidia.com/gpu: !!int 8
+            {{- end }}
       - name: google-logging
         image: "us-docker.pkg.dev/gce-ai-infra/health-check/logging:latest"
         volumeMounts:

@@ -54,6 +54,7 @@ class GkeTinymaxCheck(gke_check.GkeCheck):
           'a3-highgpu-8g',
           'a3-ultragpu-8g',
           'a4-highgpu-8g',
+          'a4x-highgpu-4g',
       ]
   )
 

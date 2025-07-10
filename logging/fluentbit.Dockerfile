@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+ARG TARGETARCH
 FROM debian:bullseye-slim
 RUN mkdir -p /fluent-bit/etc /fluent-bit/bin
 
@@ -21,7 +22,7 @@ RUN apt-get upgrade -y
 RUN apt-get install -y curl bash gpg
 RUN apt-get install -y procps
 
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl && mv kubectl /usr/local/bin/kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl" && chmod +x kubectl && mv kubectl /usr/local/bin/kubectl
 
 # Install fluent-bit
 RUN curl https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh

@@ -64,8 +64,9 @@ def run_nccl_healthcheck(
     orchestrator_config: checker_common.HelmConfig | str,
 ) -> health_results_pb2.HealthResult:
   """Runs NCCL health check and waits for it to complete."""
-  logging.info("Setting timeout to %s minutes", _TIMEOUT_MINUTES)
-  signal.alarm(int(_TIMEOUT_MINUTES) * 60)
+  if os.environ.get("ENABLE_TIMEOUT", "true") == "true":
+    print(f"Setting timeout to {int(_TIMEOUT_MINUTES)} minutes")
+    signal.alarm(int(_TIMEOUT_MINUTES) * 60)
   try:
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
