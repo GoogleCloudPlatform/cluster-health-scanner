@@ -159,11 +159,13 @@ echo "Results Directory: ${RESULTS_DIR}"
 echo "------------------------"
 
 # Basic check to ensure valid values for required arguments
-srun -p "${PARTITION}" -N "${NUM_NODES}" -w "${NODES}" true > /dev/null 2> /dev/null
+srun --time=2 -p "${PARTITION}" -N "${NUM_NODES}" -w "${NODES}" true > /dev/null 2> /dev/null
 if [[ $? != 0 ]]; then
     usage
     error_exit "Invalid values for one of --partition --nodes or --nodelist.\nCheck sinfo." 1
 fi
+
+echo "Basic check for required arguments passed."
 
 # Enable all checks if none specified
 if [[ -z $RUN_DCGMI ]] && [[ -z $RUN_NCCL ]]; then
@@ -190,7 +192,7 @@ if [[ $RUN_DCGMI == 1 ]]; then
         # One of the diagnostics failed
         FAILED=$(grep -i -P -o "srun: error: [^:]*" "$RESULTS_DIR"/dcgmi-"${JOBID}".out | cut -d':' -f3)
         echo -e "DCGM failed on the following nodes: \n $FAILED"
-        echo "See results/cluster_validation/dcgmi-${JOBID}.out for more details"
+        echo "See ${RESULTS_DIR}/dcgmi-${JOBID}.out for more details"
 
         # Drain bad nodes if --drain-bad-nodes flag is set
         if [[ $DRAIN_BAD_NODES == 1 ]]; then
@@ -300,7 +302,7 @@ if [[ $RUN_NCCL == 1 ]]; then
 
         if ! [[ $CURR_BUSBW =~ $re ]]; then
             echo "NCCL failed to run properly on $CURR_NODES ..."
-            echo "See results/cluster_validation/nccl-gcp.sh_${i}.log for more details"
+            echo "See ${RESULTS_DIR}/nccl-gcp.sh_${i}.log for more details"
 
             # Drain bad nodes if --drain-bad-nodes flag is set
             if [[ $DRAIN_BAD_NODES == 1 ]]; then
@@ -318,7 +320,7 @@ if [[ $RUN_NCCL == 1 ]]; then
             nccl_pass=0
         elif [[ $CURR_BUSBW -lt 100 ]]; then
             echo "Insufficient bus bandwidth on nodes on $CURR_NODES"
-            echo "See results/cluster_validation/nccl-gcp.sh_${i}.log for more details"
+            echo "See ${RESULTS_DIR}/nccl-gcp.sh_${i}.log for more details"
             nccl_pass=0
         fi
     done
