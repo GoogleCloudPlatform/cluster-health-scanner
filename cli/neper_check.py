@@ -48,9 +48,11 @@ class GkeNeperCheck(gke_check.GkeCheck):
 
   launch_label = 'aiinfra/neper-healthcheck-test'
 
+  test_result_label = 'aiinfra/neper-healthcheck-result'
+
   results_labels = [
       'aiinfra/neper-healthcheck-runtime-sec',
-      'aiinfra/neper-healthcheck-result',
+      test_result_label,
   ]
 
   def __init__(
@@ -72,5 +74,6 @@ class GkeNeperCheck(gke_check.GkeCheck):
         run_only_on_available_nodes=run_only_on_available_nodes,
         timeout_sec=15 * 60,
         dry_run=dry_run,
+        test_result_label=self.test_result_label,
         **kwargs,
     )
