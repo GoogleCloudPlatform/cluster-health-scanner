@@ -19,12 +19,18 @@ This is part of the larger cluster_diag CLI. To get the full helpstring, run
 """
 
 import subprocess
+
 import click
+from kubernetes import client
+from kubernetes import config
 
 import common
+import gke_node_fetcher
 import gpu_check
+import label_telemetry
 import nccl_check
 import neper_check
+import slurm_node_fetcher
 import status
 import straggler_check
 import tinymax_check
@@ -113,6 +119,13 @@ def is_helm_installed() -> bool:
     Partition to run the healthcheck on.
     This is only used for Slurm clusters.""",
 )
+@click.option(
+    '--disable-usage-analytics',
+    default=False,
+    is_flag=True,
+    help="""
+    Disable telemetry tracking.""",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -121,23 +134,58 @@ def cli(
     nodes: list[str],
     run_only_on_available_nodes: bool,
     dry_run: bool,
+    disable_usage_analytics: bool,
     partition: str,
 ):
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
   check_runners = []
+  nodes_list = nodes
+  kubectl_core_api = None
   if orchestrator == 'slurm':
     if partition is None:
       raise click.MissingParameter(
           'Partition is required for Slurm clusters. Please specify a partition'
           ' using the --partition flag.'
       )
-
+    nodes_list = slurm_node_fetcher.expand_slurm_nodes(nodes)
   else:
     if not is_helm_installed():
       print('Helm is not installed. Please install Helm before running '
             'healthscan: https://helm.sh/docs/intro/install/')
       return
+    if orchestrator == 'gke' and not dry_run:
+      config.load_kube_config()
+      kubectl_core_api = client.CoreV1Api()
+      try:
+        nodes_list, occupied_nodes = gke_node_fetcher.fetch_gke_nodes(
+            kubectl_core_api=kubectl_core_api,
+            machine_type=machine_type,
+            nodes=nodes,
+            run_only_on_available_nodes=run_only_on_available_nodes,
+        )
+        if occupied_nodes and not run_only_on_available_nodes:
+          click.echo(
+              click.style(
+                  'WARNING: Running only on available nodes is not'
+                  ' recommended.\n The following nodes are occupied and will be'
+                  f' skipped: {occupied_nodes}',
+                  fg='red',
+                  bold=True,
+              )
+          )
+      except ValueError as e:
+        click.echo(click.style(f'{e}', fg='red', bold=True))
+        raise click.Abort()
+      except client.rest.ApiException as e:
+        click.echo(
+            click.style(
+                f'Failed to list nodes in cluster: {e}',
+                fg='red',
+                bold=True,
+            )
+        )
+        raise click.Abort()
   for check_name in check:
     match check_name:
       case nccl_check.NAME:
@@ -146,7 +194,7 @@ def cli(
                 orchestrator=orchestrator,
                 machine_type=machine_type,
                 partition=partition,
-                nodes=nodes,
+                nodes=nodes_list,
                 run_only_on_available_nodes=run_only_on_available_nodes,
                 dry_run=dry_run,
             )
@@ -157,7 +205,7 @@ def cli(
                 orchestrator=orchestrator,
                 machine_type=machine_type,
                 partition=partition,
-                nodes=nodes,
+                nodes=nodes_list,
                 run_only_on_available_nodes=run_only_on_available_nodes,
                 dry_run=dry_run,
             )
@@ -167,7 +215,7 @@ def cli(
             straggler_check.get_check_for_orchestrator(
                 orchestrator=orchestrator,
                 machine_type=machine_type,
-                nodes=nodes,
+                nodes=nodes_list,
                 run_only_on_available_nodes=run_only_on_available_nodes,
                 dry_run=dry_run,
             )
@@ -177,7 +225,7 @@ def cli(
             neper_check.get_check_for_orchestrator(
                 orchestrator=orchestrator,
                 machine_type=machine_type,
-                nodes=nodes,
+                nodes=nodes_list,
                 run_only_on_available_nodes=run_only_on_available_nodes,
                 dry_run=dry_run,
             )
@@ -187,7 +235,7 @@ def cli(
             tinymax_check.get_check_for_orchestrator(
                 orchestrator=orchestrator,
                 machine_type=machine_type,
-                nodes=nodes,
+                nodes=nodes_list,
                 run_only_on_available_nodes=run_only_on_available_nodes,
                 dry_run=dry_run,
             )
@@ -197,10 +245,33 @@ def cli(
             status.get_check_for_orchestrator(
                 orchestrator=orchestrator,
                 machine_type=machine_type,
-                nodes=nodes,
+                nodes=nodes_list,
             )
         )
+
+  labels_by_check_name = {}
+
   for check_runner in check_runners:
     check_runner.set_up()
     check_runner.run()
     check_runner.clean_up()
+    if orchestrator == 'gke' and check_runner.test_result_label:
+      labels_by_check_name[check_runner.name] = check_runner.test_result_label
+
+  if labels_by_check_name and not disable_usage_analytics:
+    # TODO: b/431233627 - update telemetry message
+    click.echo(
+        click.style(
+            'Reporting healthscan telemetry to Google. To disable this, rerun'
+            ' with the --disable-usage-analytics flag.',
+            fg='yellow',
+            bold=True,
+        )
+    )
+    label_telemetry.add_telemetry_labels(
+        kubectl_core_api=kubectl_core_api,
+        machine_type=machine_type,
+        nodes=nodes_list,
+        check_name_to_result_label=labels_by_check_name,
+        dry_run=dry_run,
+    )

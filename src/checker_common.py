@@ -254,6 +254,32 @@ def get_created_jobs(release_names: Iterable[str]) -> Iterable[str]:
     return []
 
 
+def get_jobs_by_prefix(prefix: str) -> list[str]:
+  """Get the jobs whose name starts with the given prefix.
+
+  Args:
+    prefix: the prefix to match against.
+
+  Returns:
+    Job names that start with the given prefix.
+  """
+  config.load_incluster_config()
+  batch_v1 = batch_v1_api.BatchV1Api()
+  try:
+    jobs = batch_v1.list_namespaced_job(namespace="default").items
+
+    matching_jobs = [
+        job.metadata.name
+        for job in jobs
+        if job.metadata.name.startswith(prefix)
+    ]
+    return matching_jobs
+
+  except client.ApiException as e:
+    print(f"Error getting jobs from recipe: {e}")
+    return []
+
+
 def job_succeeded(
     job_v1: batch_v1_api.BatchV1Api,
     job_name: str,
@@ -459,6 +485,19 @@ def run_healthcheck(
     )
   else:
     raise ValueError("No health check file specified.")
+
+  # Correct the job name if we are running a NEMO test
+  if (
+      health_check.name
+      == health_runner_config_pb2.HealthCheckName.HEALTH_CHECK_NEMO_PERFORMANCE
+  ):
+    print("Sleeping for 5 seconds: waiting for job to be created")
+    time.sleep(5)
+    jobs_with_prefix = get_jobs_by_prefix(job_name)
+    if not jobs_with_prefix:
+      raise ValueError(f"No jobs found with prefix {job_name}")
+    job_name = jobs_with_prefix[0]
+
   return job_name
 
 
