@@ -53,9 +53,11 @@ class GkeGpuCheck(gke_check.GkeCheck):
 
   launch_label = 'aiinfra/gpu-healthcheck-test'
 
+  test_result_label = 'aiinfra/gpu-healthcheck-result'
+
   results_labels = [
       'aiinfra/gpu-healthcheck-runtime-sec',
-      'aiinfra/gpu-healthcheck-result',
+      test_result_label,
   ]
 
   def __init__(
@@ -77,6 +79,7 @@ class GkeGpuCheck(gke_check.GkeCheck):
         run_only_on_available_nodes=run_only_on_available_nodes,
         timeout_sec=20 * 60,
         dry_run=dry_run,
+        test_result_label=self.test_result_label,
         **kwargs,
     )
 
