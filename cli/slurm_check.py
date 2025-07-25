@@ -19,7 +19,6 @@ import subprocess
 import click
 
 import check
-import slurm_node_fetcher
 
 
 class SlurmCheck(check.Check):
@@ -57,7 +56,7 @@ class SlurmCheck(check.Check):
     )
     self.check_flag = check_flag
     self.partition = partition
-    self.nodes = slurm_node_fetcher.expand_slurm_nodes(nodes)
+    self.nodes = _expand_slurm_nodes(nodes)
 
   def _get_slurm_run_command(self) -> list[str]:
     """Builds the command to run the slurm check."""
@@ -113,19 +112,34 @@ class SlurmCheck(check.Check):
       dry_run_command = ' '.join(command)
       click.echo(f'Skipping running command: {dry_run_command}')
       return None
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-    if process.stdout:
-      for line in process.stdout:
-        click.echo(line, nl=False)
-    process.wait()
+    result = subprocess.run(
+        command, text=True, check=False, capture_output=True
+    ).stdout
+    click.echo(result)
+    return result
 
-    if process.returncode != 0:
-      click.echo(
-          f'\nCommand failed with exit code: {process.returncode}', err=True
-      )
-    return str(process.returncode)
+
+def _expand_slurm_nodes(nodes: list[str]) -> list[str]:
+  """Expands a list of slurm nodes into a list of nodes."""
+  nodelist = []
+  for node in nodes:
+    nodelist.extend(_expand_slurm_node_pattern(node))
+  return nodelist
+
+
+def _expand_slurm_node_pattern(node_pattern: str) -> list[str]:
+  """Expands a slurm node pattern into a list of nodes."""
+  slurm_nodelist_expansion_cmd = [
+      'scontrol',
+      'show',
+      'hostname',
+      node_pattern,
+  ]
+  output = subprocess.run(
+      slurm_nodelist_expansion_cmd,
+      text=True,
+      check=True,
+      capture_output=True,
+  ).stdout.strip()
+  nodes = output.split('\n')
+  return nodes
