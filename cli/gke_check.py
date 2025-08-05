@@ -25,6 +25,7 @@ from kubernetes import client
 from kubernetes import config
 
 import check
+import gke_node_fetcher
 import launch_helm
 
 
@@ -71,9 +72,11 @@ class GkeCheck(check.Check):
       timeout_sec: int = 15 * 60,
       dry_run: bool = False,
       container_name: str | None = None,
+      test_result_label: str | None = None,
   ):
     """Initialize a check to run on a GKE cluster.
 
+    Note: This class's instance takes ownership of the `nodes` list.
     Args:
       name: The name of the check.
       description: The description of the check.
@@ -89,6 +92,7 @@ class GkeCheck(check.Check):
       timeout_sec: The timeout in seconds for the check.
       dry_run: Whether to run the check in dry run mode.
       container_name: The name of the main container used by the check.
+      test_result_label: The label to use for the test results.
     """
     super().__init__(
         name=name,
@@ -105,6 +109,7 @@ class GkeCheck(check.Check):
     self.timeout_sec = timeout_sec
     self.check_logs = None
     self.check_container_name = container_name
+    self.test_result_label = test_result_label
 
     self.hr_release_name: str = f'chs-hr-{self.name}-cli'
     # Generate a unique base name for the HC Helm release
@@ -120,56 +125,6 @@ class GkeCheck(check.Check):
         config.load_kube_config()
         self._v1 = client.CoreV1Api()
 
-  def _get_occupied_nodes(self) -> set[str]:
-    """Gets all requested nodes that are currently occupied.
-
-    Returns:
-      A list of occupied nodes. Optionally, if nodes is provided, only the
-      occupied nodes of those provided will be returned.
-    """
-    occupied_nodes = set()
-    try:
-      pods = self._v1.list_pod_for_all_namespaces(
-          watch=False, field_selector='status.phase=Running'
-      )
-      for pod in pods.items:
-        for container in pod.spec.containers:
-          if container.resources.requests:
-            requested_gpus = set(
-                resource_name
-                for resource_name, _ in container.resources.requests.items()
-                if resource_name == 'nvidia.com/gpu'
-            )
-            if requested_gpus:
-              occupied_nodes.add(pod.spec.node_name)
-    except client.rest.ApiException as e:
-      click.echo(
-          click.style(
-              f'Failed to list nodes in cluster: {e}', fg='red', bold=True
-          )
-      )
-
-    return (
-        occupied_nodes
-        if not self.nodes
-        else set(self.nodes).intersection(occupied_nodes)
-    )
-
-  def _get_nodes_with_machine_type(self) -> list[str]:
-    """Returns the names of all nodes with the given machine type."""
-    return [
-        node.metadata.name
-        for node in self._v1.list_node(
-            label_selector=(
-                f'node.kubernetes.io/instance-type={self.machine_type}'
-            )
-        ).items
-    ]
-
-  def _has_machine_type_on_cluster(self) -> bool:
-    """Returns all nodes with the given machine type."""
-    return bool(len(self._get_nodes_with_machine_type()))
-
   def set_up(self):
     """Set up for the check on a GKE cluster."""
     if self.dry_run:
@@ -181,56 +136,27 @@ class GkeCheck(check.Check):
           )
       )
       return
-    if not self._has_machine_type_on_cluster():
-      click.echo(
-          click.style(
-              f'Active cluster does not have machine type {self.machine_type}.',
-              fg='red',
-              bold=True,
-          )
+    try:
+      self.nodes, occupied_nodes = gke_node_fetcher.fetch_gke_nodes(
+          kubectl_core_api=self._v1,
+          machine_type=self.machine_type,
+          nodes=self.nodes,
+          run_only_on_available_nodes=self.run_only_on_available_nodes,
       )
-      raise click.Abort()
-
-    occupied_nodes = self._get_occupied_nodes()
-
-    if occupied_nodes and not self.run_only_on_available_nodes:
-      click.echo(
-          click.style(
-              f'The following nodes are occupied: {occupied_nodes}. Please free'
-              ' up these nodes before running healthscan.\n'
-              ' Alternatively, you can run again with'
-              ' --run_only_on_available_nodes to skip these nodes.',
-              fg='red',
-              bold=True,
-          )
-      )
-      raise click.Abort()
-    elif self.run_only_on_available_nodes and not self.nodes:
-      click.echo(
-          click.style(
-              'WARNING: Running only on available nodes is not recommended.\n'
-              'The following nodes are occupied and will be skipped: '
-              f'{occupied_nodes}',
-              fg='red',
-              bold=True,
-          )
-      )
-      self.nodes = [
-          node
-          for node in self._get_nodes_with_machine_type()
-          if node not in occupied_nodes
-      ]
-    elif self.run_only_on_available_nodes:
-      click.echo(
-          click.style(
-              'WARNING: Running only on available nodes is not recommended.\n'
-              'The following nodes are occupied and will be skipped: '
-              f'{occupied_nodes}',
-              fg='red',
-              bold=True,
-          )
-      )
-      self.nodes = [node for node in self.nodes if node not in occupied_nodes]
+      if occupied_nodes:
+        click.echo(
+            click.style(
+                'WARNING: Running only on available nodes is not recommended.\n'
+                'The following nodes are occupied and will be skipped: '
+                f'{occupied_nodes}',
+                fg='red',
+                bold=True,
+            )
+        )
+    except ValueError as e:
+      raise click.Abort(str(e))
+    except client.rest.ApiException as e:
+      raise click.Abort(f'Failed to list nodes in cluster: {e}')
     launch_helm.setup_k8s_cluster(
         launch_label=self.launch_label,
         launch_label_value=self.launch_label_value,
