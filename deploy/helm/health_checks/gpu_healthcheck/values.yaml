@@ -34,6 +34,12 @@ health_check:
     mountPath: /usr/local/nvidia
   - name: varlog
     mountPath: /var/log
+  - name: host-etc
+    mountPath: /etc_host
+    readOnly: true
+  - name: host-lib-modules
+    mountPath: /lib/modules
+    readOnly: true
 volumes:
 - name: nvidia-install-dir-host
   hostPath:
@@ -44,3 +50,11 @@ volumes:
   secret:
     secretName: fluentbit-key
     optional: true
+- name: host-etc
+  hostPath:
+    path: /etc
+    type: Directory
+- name: host-lib-modules
+  hostPath:
+    path: /lib/modules
+    type: Directory

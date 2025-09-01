@@ -31,12 +31,21 @@ Note:
     cluster.
 """
 
+import dataclasses
+import glob
 import json
 import os
+import subprocess
 import time
+
+import google.cloud.exceptions
+import google.cloud.storage
+import requests
 
 import checker_common
 import dcgm_pb2
+import mft_installer
+
 
 _RESULT_LABEL_KEY = "aiinfra/gpu-healthcheck-result"
 TAINT_KEY = "aiinfra/gpu-healthcheck"
@@ -57,6 +66,7 @@ K_ENABLE_PERSISTENCE_MODE = "/usr/local/nvidia/bin/nvidia-smi -pm 1"
 K_ADD_LABEL_FORMAT = "/app/kubectl label node %s %s=%s --overwrite"
 K_REMOVE_LABEL_FORMAT = "/app/kubectl label node %s %s-"
 K_TAINT_NODE_FORMAT = "/app/kubectl taint node %s %s=%s:%s"
+NVIDIA_BUG_REPORT_SCRIPT = "/usr/local/nvidia/bin/nvidia-bug-report.sh"
 K_UNTAINT_NODE_FORMAT = "/app/kubectl taint node %s %s-"
 
 # https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html
@@ -181,6 +191,104 @@ def generate_dcgm_command() -> str:
   return command
 
 
+@dataclasses.dataclass
+class Artifact:
+  """A simple class to hold information about a file to be uploaded."""
+  filepath: str
+  content_type: str = "application/gzip"
+
+
+def upload_report_to_gcs(
+    artifact: Artifact, bucket_name: str, node_name: str
+) -> None:
+  """Uploads a file artifact to GCS using the native Python client library."""
+  try:
+    # 1. Create a client, which handles authentication automatically.
+    storage_client = google.cloud.storage.Client()
+
+    # 2. Get a reference to the GCS bucket.
+    bucket = storage_client.bucket(bucket_name)
+
+    # 3. Construct the full destination path for the object.
+    timestamp = time.strftime("%Y_%m_%d_%H_%M_%S_UTC", time.gmtime())
+    destination_path = (
+        f"bug_reports/{node_name}_{timestamp}/"
+        f"{os.path.basename(artifact.filepath)}"
+    )
+
+    print(
+        f"Uploading {artifact.filepath} to"
+        f" gs://{bucket_name}/{destination_path}"
+    )
+
+    # 4. Get a blob reference and upload the file from disk.
+    blob = bucket.blob(destination_path)
+    blob.upload_from_filename(
+        artifact.filepath, content_type=artifact.content_type
+    )
+
+    print("Successfully uploaded bug report.")
+
+  except google.cloud.exceptions.GoogleCloudError as e:
+    print(f"A Google Cloud Storage error occurred during upload: {e}")
+
+
+def generate_nvidia_bug_report(node_name: str) -> None:
+  """Generates NVIDIA bug report using nvidia-bug-report.sh script.
+
+  Args:
+      node_name: The name of the node where the bug report is generated.
+  """
+  print(f"Generating NVIDIA bug report for node: {node_name}")
+
+  bug_report_output_path = os.environ.get("BUG_REPORT_OUTPUT_PATH", "/tmp")
+
+  report_path = None
+  try:
+    result = subprocess.run(
+        NVIDIA_BUG_REPORT_SCRIPT,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=bug_report_output_path
+    )
+    report_files = glob.glob(
+        os.path.join(bug_report_output_path, "nvidia-bug-report.log.gz")
+    )
+    if not report_files:
+      print("Could not find the generated bug report file.")
+      return  # Exit if the file wasn't created
+
+    report_path = report_files[
+        0
+    ]  # Get the full path, e.g., /tmp/nvidia-bug-report.log.gz
+    print(f"Bug report generated at: {report_path}")
+
+    print(f"NVIDIA bug report generated successfully:\n {result.stdout}")
+    print(f"Bug report generated in: {bug_report_output_path}")
+  except subprocess.CalledProcessError as e:
+    print(f"Error generating NVIDIA bug report: {e}")
+    print(f"stderr: {e.stderr}")
+  except FileNotFoundError as e:
+    print(f"Error generating NVIDIA bug report: {e}")
+  except OSError as e:
+    print(f"An unexpected error occurred: {e}")
+
+  gcs_bucket_name = os.environ.get("GCS_BUCKET_NAME")
+  if gcs_bucket_name:
+    print(
+        "Found GCS_BUCKET_NAME environment variable. Uploading report..."
+    )
+    # Use the correct 'report_path' variable which contains the full file path.
+    if report_path:
+      bug_report_artifact = Artifact(filepath=report_path)
+      upload_report_to_gcs(bug_report_artifact, gcs_bucket_name, node_name)
+    else:
+      print("Skipping GCS upload because no bug report file was found.")
+  else:
+    print("No GCS_BUCKET_NAME environment variable found.")
+
+
 def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
   """run dcgm diag."""
   command = generate_dcgm_command()
@@ -209,6 +317,16 @@ def run_dcgm_diag(node_name: str, reboot_required: bool) -> None:
   if failed:
     print(f"Node {node_name} failed dcgm test")
     taint_node(node_name, TAINT_KEY, TAINT_VALUE, TAINT_EFFECT)
+    try:
+      mft_installer.install_mft_if_needed(node_name)
+    except (
+        FileNotFoundError,
+        requests.exceptions.RequestException,
+        subprocess.CalledProcessError,
+        OSError,
+    ) as e:
+      print(f"MFT installation failed, bug report may be incomplete: {e}")
+    generate_nvidia_bug_report(node_name)
   else:
     print(f"Node {node_name} passed dcgm test")
     if not reboot_required:

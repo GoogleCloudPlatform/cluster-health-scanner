@@ -42,6 +42,9 @@ ConnectTimeoutError = exceptions.ConnectTimeoutError
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 
+K_TOPOLOGY_LABEL_SUBBLOCK = "cloud.google.com/gce-topology-subblock"
+K_DIAG_RUNNER_TAINT_KEY = "aiinfra.diagrunner/bad"
+K_DIAG_RUNNER_TAINT = f"{K_DIAG_RUNNER_TAINT_KEY}=true:NoSchedule"
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
 
@@ -165,6 +168,27 @@ def add_label(
   )
 
 
+def remove_taint_from_all_nodes(
+    taint_key: str,
+    kubectl_path: str = _KUBECTL,
+) -> None:
+  """Removes the taint label from all nodes."""
+  run_command(f"{kubectl_path} taint node --all {taint_key}-")
+
+
+def taint_node(
+    node_name: str,
+    taint: str,
+    kubectl_path: str = _KUBECTL,
+) -> None:
+  """Adds a taint to a node."""
+  print(f"tainting node {node_name} with {taint}")
+  run_command(
+      f"{kubectl_path} taint node {node_name} {taint}",
+      print_output=False,
+  )
+
+
 def run_command_with_retry(
     command: str,
     print_output: bool = True,
@@ -179,6 +203,10 @@ def run_command_with_retry(
       return run_command(command, print_output=print_output, check=True)
     except subprocess.CalledProcessError as e:
       print("command failed: %s" % e)
+      print("stdout: %s", e.stdout)
+      print("stderr: %s", e.stderr)
+      print("returncode: %s", e.returncode)
+      print("output: %s", e.output)
       if attempt >= retry_attempts:
         # If we've reached the retry limit, raise the error
         raise e
@@ -197,7 +225,7 @@ def run_command(
   Args:
     command (str): The shell command to be executed.
     check (bool, optional): If True, raises CalledProcessError if the command
-      returns a non-zero exit status. Defaults to True.
+      returns a non-zero exit status. Defaults to False.
     print_output (bool, optional): If True, prints the output of the command.
       Defaults to True.
 
@@ -687,6 +715,7 @@ def expand_template(
       "R_LEVEL": os.environ.get("R_LEVEL"),
       "IMAGE_TAG": os.environ.get("IMAGE_TAG", "latest"),
       "SHORT_GUID": os.environ.get("SHORT_GUID", str(uuid.uuid4())[:8]),
+      "INSTANCE_TYPE": os.environ.get("INSTANCE_TYPE"),
       "ITERATIONS": os.environ.get("ITERATIONS", 5),
       "WORKFLOW_ID": os.environ.get("WORKFLOW_ID"),
       "BUG_ID": os.environ.get("BUG_ID"),
@@ -833,7 +862,7 @@ def _get_node_data_v2(
         "cloud.google.com/gce-topology-block", "unknown"
     )
     node["rack"] = gpu_node.metadata.labels.get(
-        "cloud.google.com/gce-topology-subblock", "unknown"
+        K_TOPOLOGY_LABEL_SUBBLOCK, "unknown"
     )
     node["host"] = gpu_node.metadata.labels.get(
         "cloud.google.com/gce-topology-host", "unknown"
@@ -847,6 +876,7 @@ def get_nodes_data(
     kube_nodes: list[client.models.V1Node],
     filter_label_name: str | None = None,
     filter_label_value: str | None = None,
+    taint_label: str | None = None,
 ) -> list[dict[str, str]]:
   """Returns a list of node data from the given list of nodes & conditions.
 
@@ -854,12 +884,13 @@ def get_nodes_data(
     kube_nodes: List of nodes.
     filter_label_name: Name of the label to filter on.
     filter_label_value: Value of the label to filter on.
+    taint_label: Name of the taint label to filter on.
 
   Returns:
     List of node data.
   """
   gpu_nodes = _get_nodes_under_test(
-      kube_nodes, filter_label_name, filter_label_value
+      kube_nodes, filter_label_name, filter_label_value, taint_label
   )
 
   # If no nodes are found then return an empty list
@@ -882,6 +913,7 @@ def _get_nodes_under_test(
     kube_nodes: list[client.models.V1Node],
     filter_label_name: str | None = None,
     filter_label_value: str | None = None,
+    taint_label: str | None = None,
 ) -> list[client.models.V1Node]:
   """Returns a list of nodes under test."""
   # Filter set of nodes before getting data
@@ -891,16 +923,41 @@ def _get_nodes_under_test(
     if not has_gpu_resources(node):
       continue
 
+    # Must not have the taint label
+    if taint_label and has_taint(node, taint_label):
+      print(f"Skipping node {node.metadata.name} due to taint {taint_label}")
+      continue
+
+    # Must be ready
+    if not is_node_ready(node):
+      print(f"Skipping node {node.metadata.name} due to not ready")
+      continue
+
     # If filter label is specified, then the node must have the label and the
     # value must match
-    if (filter_label_name and filter_label_value) and (
-        filter_label_name not in node.metadata.labels
-        or node.metadata.labels[filter_label_name] != filter_label_value
+    if (filter_label_name and filter_label_value) and not has_label(
+        node, filter_label_name, filter_label_value
     ):
       continue
 
     gpu_nodes.append(node)
   return gpu_nodes
+
+
+def get_rack_ids_from_nodes(
+    nodes: list[str], capacity: common_pb2.Capacity
+) -> list[str]:
+  """Returns a list of rack ids from the given list of nodes."""
+  # convert nodes list to set for faster lookup
+  nodes_set = set(nodes)
+  rack_ids = []
+  for cluster in capacity.clusters:
+    for rack in cluster.racks:
+      for rack_node in rack.nodes:
+        if rack_node.id in nodes_set:
+          rack_ids.append(rack.id)
+          break
+  return list(rack_ids)
 
 
 def topology_key(
@@ -1007,6 +1064,211 @@ def parse_nccl_results(
   return nccl_health_result
 
 
+def has_label(node: client.models.V1Node, label: str, value: str) -> bool:
+  """Check if the node has the given label and value."""
+  return label in node.metadata.labels and node.metadata.labels[label] == value
+
+
+def has_taint(node: client.models.V1Node, taint: str) -> bool:
+  """Check if the node has the given taint."""
+  if node.spec is None or node.spec.taints is None:
+    return False
+
+  for node_taint in node.spec.taints:
+    if node_taint.key.startswith(taint):
+      return True
+  return False
+
+
+def is_node_ready(node: client.models.V1Node) -> bool:
+  """Check if the node is ready."""
+  node_status = node.status
+  if node_status and node_status.conditions:
+    for condition in node_status.conditions:
+      if condition.type == "Ready" and condition.status == "True":
+        return True
+  return False
+
+
+def parse_nemo_results(
+    job_name: str,
+    num_gpus: int,
+    health_check: health_runner_config_pb2.HealthCheck,
+) -> health_results_pb2.NEMOHealthResult | None:
+  """Parses the NEMO metrics that were uploaded to the GCS training bucket.
+
+  Args:
+    job_name: The name of the NEMO job.
+    num_gpus: The number of GPUs used in the NEMO job.
+    health_check: The health check configuration.
+
+  Returns:
+    The NEMO health result proto.
+  """
+  nemo_config = (
+      health_check.performance_health_check_config.nemo_performance_health_check_config
+  )
+  metrics_data_local_path = pull_nemo_metrics_data(
+      job_name, nemo_config.results_bucket
+  )
+
+  if not metrics_data_local_path:
+    return None
+
+  try:
+    metrics_script_process = run_command(
+        f"python3 {nemo_config.parser_script_path} "
+        f"--file {metrics_data_local_path} "
+        f"--batch_size {nemo_config.batch_size} "
+        f"--num_accelerators {num_gpus} "
+        f"--precision {nemo_config.floating_point_precision} "
+        f"--model_type {nemo_config.model_type} "
+        f"--accelerator_type {nemo_config.accelerator_type}",
+        print_output=True,
+        check=True
+    )
+  except subprocess.CalledProcessError as e:
+    logging.exception("Failed to run metrics data parsing script: %s", e)
+    return None
+
+  # Parse the metrics data from the script output
+  metrics = {}
+  for metric_line in metrics_script_process.stdout.strip().splitlines():
+    parts = metric_line.split(":", 1)
+    if len(parts) == 2:
+      metric_name, metric_value = parts
+      try:
+        metrics[metric_name.strip()] = float(metric_value)
+      except ValueError:
+        logging.warning(
+            "Could not parse value for metric '%s': %s",
+            metric_name,
+            metric_value,
+        )
+        return None
+  try:
+    nemo_health_result = health_results_pb2.NEMOHealthResult(
+        step_time_seconds=metrics["Average step time"],
+        tflops_per_accelerator=metrics["TFLOPS/Accelerator"],
+        mfu=metrics["MFU"],
+    )
+  except KeyError as e:
+    logging.exception("Standard training metrics not found: %s", e)
+    return None
+
+  return nemo_health_result
+
+
+def pull_nemo_metrics_data(job_name: str, results_bucket: str) -> str | None:
+  """Pulls the NEMO metrics data from the GCS bucket associated with the job.
+
+  Args:
+    job_name: The name of the NEMO job.
+    results_bucket: The GCS bucket where the NEMO metrics data is uploaded.
+
+  Returns:
+    The path of the pulled NEMO job data or None in the case of an error.
+  """
+  nemo_metrics_data_gcs_path = get_nemo_metrics_data_gcs_path(
+      job_name, results_bucket
+  )
+  if not nemo_metrics_data_gcs_path:
+    return None
+
+  nemo_metrics_data_local_path = f"nemo-metrics-data/dllogger-{job_name}.json"
+
+  if not pull_from_gcs(
+      results_bucket,
+      nemo_metrics_data_gcs_path,
+      nemo_metrics_data_local_path,
+      make_dirs=True,
+  ):
+    return None
+
+  return nemo_metrics_data_local_path
+
+
+def pull_from_gcs(
+    bucket: str, gcs_path: str, local_path: str, make_dirs: bool = True
+) -> bool:
+  """Pulls the an object from GCS to a local path.
+
+  Args:
+    bucket: The GCS bucket containing the object.
+    gcs_path: The GCS path to the object.
+    local_path: The local path to download the object to.
+    make_dirs: If True, creates the local directory structure if it doesn't
+      exist.
+
+  Returns:
+    True if the object was downloaded successfully, otherwise False.
+  """
+  storage_client = storage.Client()
+  if make_dirs:
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+  try:
+    bucket = storage_client.bucket(bucket)
+    blob = bucket.blob(gcs_path)
+    blob.download_to_filename(local_path)
+  except Exception as e:  # pylint: disable=broad-exception-caught
+    logging.exception("Error downloading %s from %s: %s", gcs_path, bucket, e)
+    return False
+  return True
+
+
+def get_nemo_metrics_data_gcs_path(
+    job_name: str, results_bucket: str
+) -> str | None:
+  """Gets the GCS path of the NEMO metrics data for the given job name.
+
+  Args:
+    job_name: The name of the NEMO job.
+    results_bucket: The GCS bucket where the NEMO metrics data is uploaded.
+
+  Returns:
+    The GCS path of the NEMO metrics data if found, otherwise None.
+  """
+  storage_client = storage.Client()
+
+  try:
+    bucket = storage_client.bucket(results_bucket)
+    # Because the GPU receipes don't accept a bucket path, we must fetch the
+    # folder name containing the metrics data corresponding to the current job
+    # using a prefix search.
+    # 
+    nemo_folder_blobs = bucket.list_blobs(
+        prefix="nemo-experiments/", delimiter="/"
+    )
+    # Consume the iterator to access prefixes
+    list(nemo_folder_blobs)
+    nemo_folder_names = [
+        prefix.split("/")[-2] for prefix in nemo_folder_blobs.prefixes
+    ]
+  except Exception as e:  # pylint: disable=broad-exception-caught
+    logging.exception(
+        "Error accessing bucket %s folders: %s", results_bucket, e
+    )
+    return None
+
+  job_name_parts = job_name.split("-")
+
+  if len(job_name_parts) < 4:
+    logging.error("Job name %s does not have expected format", job_name)
+    return None
+  common_prefix = "-".join(job_name_parts[:4])
+
+  for folder in nemo_folder_names:
+    if common_prefix == folder:
+      # Path within the bucket expected
+      return f"nemo-experiments/{folder}/dllogger/rank-0/dllogger.json"
+
+  logging.error(
+      "Failed to find NEMO metrics data GCS path for job: %s", job_name
+  )
+  return None
+
+
 def has_gpu_resources(node: client.models.V1Node) -> bool:
   """Check if the node has GPU resources in capacity or allocatable.
 
@@ -1034,12 +1296,17 @@ def has_gpu_resources(node: client.models.V1Node) -> bool:
   return False
 
 
-def get_node_list() -> list[str]:
+def get_node_list(
+    filter_label_name: str | None = None,
+    filter_label_value: str | None = None,
+) -> list[str]:
   """Returns a list of the nodes names in the cluster."""
   config.load_incluster_config()
   v1 = client.CoreV1Api()
   kube_nodes = v1.list_node().items
-  gpu_nodes = _get_nodes_under_test(kube_nodes)
+  gpu_nodes = _get_nodes_under_test(
+      kube_nodes, filter_label_name, filter_label_value
+  )
   nodes = []
   for node in gpu_nodes:
     nodes.append(node.metadata.name)
