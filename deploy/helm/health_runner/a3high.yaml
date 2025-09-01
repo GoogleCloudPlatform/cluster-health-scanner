@@ -53,17 +53,18 @@ health_checks:
       tag: ""  # This will be populated by the version in the version.txt file
       pull_policy: "Always"
     env:
-      HC_IMAGE_TAG: "4.4-latest"
+      HC_IMAGE_TAG: "4.9-latest"
       MACHINE_TYPE: "a3-highgpu-8g"
       DRY_RUN: "true"
       TIMEOUT_MINUTES: "30"
       SLEEP_TIME_MINUTES: "10"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG} --set health_check.env.INSTANCE_TYPE=${MACHINE_TYPE}"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG} --set health_check.env.INSTANCE_TYPE=${MACHINE_TYPE} --set health_check.env.GCS_BUCKET_NAME=${GCS_BUCKET_NAME}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
       HC_ENV_R_LEVEL: 3
       HC_ENV_DCGM_PARAMS: "pcie.dont_bind_numa=1"  # Add this for HC_ENV_R_LEVEL: 2/3/4
       ADJUST_SLEEP_TIME: "true"
+      GCS_BUCKET_NAME: ""  # Overridden by --set flag during Helm deployment.
     # Blast Mode
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel

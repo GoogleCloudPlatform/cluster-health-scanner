@@ -59,6 +59,16 @@ message HealthResultList {
   // The status of the health check.
   Status status = 2;
 
+  // The master pod name of the health check. This is used to find the master
+  // node for the health check.
+  string master_pod_name = 12;
+
+  // The start time of the health check.
+  google.protobuf.Timestamp start_time = 9;
+
+  // The end time of the health check.
+  google.protobuf.Timestamp end_time = 10;
+
   // The number of nodes in the topology under test.
   int32 num_nodes = 4;
 
@@ -67,6 +77,14 @@ message HealthResultList {
 
   // Additional results for NEMO health checks.
   repeated NEMOHealthResult nemo_health_result = 5;
+
+  // The instance IDs of the node under test.
+  string instance_id = 6 [deprecated = true];
+  repeated string instance_ids = 11;
+
+  // The rack IDs of the nodes under test. Only populated for performance
+  // health checks.
+  repeated string rack_ids = 7;
 
   HPCHealthResult hpc_health_result = 8;
 }

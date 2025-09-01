@@ -14,7 +14,23 @@
 
 ARG TARGETARCH
 FROM nvcr.io/nvidia/cloud-native/dcgm:4.1.1-1-ubuntu22.04
-RUN apt-get update && apt-get install -y ca-certificates curl python3 python3-pip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    python3 \
+    python3-pip \
+    pciutils \
+    kmod \
+    dmidecode \
+    libc-bin \
+    mesa-utils \
+    usbutils \
+    x11-xserver-utils \
+    vulkan-tools \
+    acpica-tools \
+    sudo \
+    infiniband-diags \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ARG TARGETARCH
 RUN echo "Installing kubectl for architecture: ${TARGETARCH}" && \
@@ -33,6 +49,7 @@ COPY src/gpu_healthcheck/dcgm.proto /app/
 COPY src/health_runner/health_results.proto /app/
 COPY src/health_runner/health_runner_config.proto /app/
 
+RUN pip install --no-cache-dir requests packaging retry protobuf
 RUN pip install grpcio-tools
 RUN pip install google-cloud-storage
 RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/dcgm.proto
@@ -41,8 +58,9 @@ RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_pyth
 RUN python3 -m grpc_tools.protoc -I /app/ --python_out=. --pyi_out=. --grpc_python_out=. --experimental_editions /app/common.proto
 
 COPY src/gpu_healthcheck/gpu_healthcheck.py .
+COPY src/gpu_healthcheck/mft_installer.py .
 COPY src/checker_common.py .
 ENV PYTHONUNBUFFERED=1
 
-RUN chmod +x /app/gpu_healthcheck.py /app/checker_common.py
+RUN chmod +x /app/gpu_healthcheck.py /app/checker_common.py /app/mft_installer.py
 ENTRYPOINT ["python3", "/app/gpu_healthcheck.py"]
