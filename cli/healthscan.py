@@ -126,6 +126,15 @@ def is_helm_installed() -> bool:
     help="""
     Disable telemetry tracking.""",
 )
+@click.option(
+    '--gcs-bucket-name',
+    'gcs_bucket_name',
+    type=str,
+    default=None,
+    help='GCS bucket name for uploading GPU health check bug reports.',
+)
+
+
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -136,6 +145,7 @@ def cli(
     dry_run: bool,
     disable_usage_analytics: bool,
     partition: str,
+    gcs_bucket_name: str,
 ):
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
@@ -208,6 +218,7 @@ def cli(
                 nodes=nodes_list,
                 run_only_on_available_nodes=run_only_on_available_nodes,
                 dry_run=dry_run,
+                gcs_bucket_name=gcs_bucket_name
             )
         )
       case straggler_check.NAME:

@@ -146,6 +146,7 @@ Options:
   --dry_run                       Run the healthcheck in dry run mode. This
                                   will print the commands that would be run,
                                   but not run them.
+  --gcs-bucket-name TEXT          GCS bucket name for uploading GPU health check bug reports.
   --help                          Show this message and exit.
 ```
 
@@ -155,6 +156,7 @@ Options:
 |--------------------------------------------------|-----------------------------------------------------------------------------------------|
 |Get GKE cluster status                            |`$ cluster_diag -o gke healthscan a3-megagpu-8g -c status`                             |
 |Running a DCGM/GPU check                          |`$ cluster_diag -o gke healthscan a3-megagpu-8g -c gpu`                                |
+|Running a DCGM/GPU check with GCS bucket.         |`$ cluster_diag -o gke healthscan a3-megagpu-8g -c gpu --gcs-bucket-name my-bucket`    |
 |Running a DCGM/GPU check _only on available nodes_|`$ cluster_diag -o gke healthscan a3-megagpu-8g -c gpu --run_only_on_available_nodes`|
 |Running a DCGM/GPU check on two Slurm Nodes       |`$ cluster_diag -o slurm healthscan a3-megagpu-8g -c gpu -n node-[0-1]`|
 |Dry run of a DCGM/GPU check                       |`$ cluster_diag -o slurm healthscan a3-megagpu-8g -c gpu -n node-[0-1] --dry_run`|
@@ -457,9 +459,10 @@ health_checks:
       DRY_RUN: "true"
       SLEEP_TIME_MINUTES: "30"
       HELM_CHART: "/app/health_checks/gpu_healthcheck"  # Path to Helm chart in container
-      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG}"
+      HELM_INSTALL_FLAGS: "--set health_check.image.tag=${MACHINE_TYPE}_${HC_IMAGE_TAG} --set health_check.env.GCS_BUCKET_NAME {GCS_BUCKET_NAME}"
       ACCELERATOR_TYPE: "nvidia-h100-mega-80gb"
       HC_ENV_R_LEVEL: 3
+      GCS_BUCKET_NAME: ""  # Overridden by --set flag during Helm deployment.
     # Blast Mode
     blast_mode:
       blast_mode_enabled: true  # Defaults to run multiple health checks in parallel
