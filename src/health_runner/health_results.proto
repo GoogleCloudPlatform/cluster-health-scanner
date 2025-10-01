@@ -113,6 +113,12 @@ message NCCLHealthResult {
 
     // The latency value in ms.
     int64 latency_ms = 3;
+
+    // The latency baseline in ms.
+    int64 latency_baseline_ms = 5;
+
+    // The readable message size (e.g., "4MB", "1GB").
+    string message_size_readable = 6;
   }
 
   // The benchmark of the NCCL test (all_reduce, all_gather, etc).
@@ -160,4 +166,10 @@ enum Status {
   // the case of performance and communication health checks, not enough nodes
   // to run the test.
   SKIP = 3;
+
+  // The health check failed due to not meeting the baseline.
+  FAIL_BASELINE_MISS = 4;
+
+  // The health check failed due to not being able to parse the result.
+  FAIL_PARSE_RESULT = 5;
 }

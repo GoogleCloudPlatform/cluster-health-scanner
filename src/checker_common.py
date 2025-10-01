@@ -44,18 +44,25 @@ HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 
 K_TOPOLOGY_LABEL_SUBBLOCK = "cloud.google.com/gce-topology-subblock"
 K_DIAG_RUNNER_TAINT_KEY = "aiinfra.diagrunner/bad"
-K_DIAG_RUNNER_TAINT = f"{K_DIAG_RUNNER_TAINT_KEY}=true:NoSchedule"
+# This tag taints nodes to prevent new pods from being scheduled on them.
+K_DIAG_RUNNER_TAINT_ALL = f"{K_DIAG_RUNNER_TAINT_KEY}=true:NoSchedule"
+
+# This tag is for tainting nodes to prevent pods related to inter-rack testing.
+# We'll use a different value to distinguish it from the general taint.
+K_DIAG_RUNNER_TAINT_INTER_RACK = (
+    f"{K_DIAG_RUNNER_TAINT_KEY}=inter-rack:NoSchedule"
+)
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
 
 K_GSUTIL_COPY_FILE_FORMAT = "gsutil cp %s %s"
 
-K_32GIB_MESSAGE_SIZE = 32 * 1024 * 1024 * 1024
-K_16GIB_MESSAGE_SIZE = 16 * 1024 * 1024 * 1024
-K_8GIB_MESSAGE_SIZE = 8 * 1024 * 1024 * 1024
-K_1GIB_MESSAGE_SIZE = 1024 * 1024 * 1024
-K_64MIB_MESSAGE_SIZE = 64 * 1024 * 1024
-K_4MIB_MESSAGE_SIZE = 4 * 1024 * 1024
+K_32GIB_MESSAGE_SIZE = "32GB"
+K_16GIB_MESSAGE_SIZE = "16GB"
+K_8GIB_MESSAGE_SIZE = "8GB"
+K_1GIB_MESSAGE_SIZE = "1GB"
+K_64MIB_MESSAGE_SIZE = "64MB"
+K_4MIB_MESSAGE_SIZE = "4MB"
 
 K_SUPPORT_MESSAGE_SIZES = [
     K_32GIB_MESSAGE_SIZE,
@@ -65,6 +72,15 @@ K_SUPPORT_MESSAGE_SIZES = [
     K_64MIB_MESSAGE_SIZE,
     K_4MIB_MESSAGE_SIZE,
 ]
+
+K_MESSAGE_SIZE_TO_BYTES = {
+    K_32GIB_MESSAGE_SIZE: 32 * 1024 * 1024 * 1024,
+    K_16GIB_MESSAGE_SIZE: 16 * 1024 * 1024 * 1024,
+    K_8GIB_MESSAGE_SIZE: 8 * 1024 * 1024 * 1024,
+    K_1GIB_MESSAGE_SIZE: 1024 * 1024 * 1024,
+    K_64MIB_MESSAGE_SIZE: 64 * 1024 * 1024,
+    K_4MIB_MESSAGE_SIZE: 4 * 1024 * 1024,
+}
 
 K_MESSAGE_SIZE_TO_BANDWIDTH_LABEL = {
     K_32GIB_MESSAGE_SIZE: "aiinfra/nccl-healthcheck-32G-bandwidth",
@@ -370,7 +386,10 @@ def wait_till_jobs_complete(
     if job_list:
       for job in job_list.items:
         if job.metadata.name in remaining_jobs:
-          if job.status.succeeded is not None and job.status.succeeded >= 1:
+          if (
+              job.status.succeeded is not None
+              and job.status.succeeded == job.spec.completions
+          ):
             remaining_jobs.remove(job.metadata.name)
             print(f"Job {job.metadata.name} completed successfully.")
           elif job.status.failed is not None and job.status.failed >= 1:
@@ -1041,7 +1060,6 @@ def parse_nccl_results(
   else:
     return None
 
-  # TODO: Update labels units
   # Attempt to parse the bandwidths and latencies for each message size.
   for msg_size in K_SUPPORT_MESSAGE_SIZES:
     bandwidth_label = K_MESSAGE_SIZE_TO_BANDWIDTH_LABEL.get(msg_size, None)
@@ -1057,7 +1075,9 @@ def parse_nccl_results(
         health_results_pb2.NCCLHealthResult.NCCLBandwidthResult(
             bandwidth_gbps=float(node.metadata.labels.get(bandwidth_label, 0)),
             latency_ms=int(node.metadata.labels.get(latency_label, 0)),
-            message_size_bytes=int(msg_size),
+            message_size_readable=msg_size,
+            # keep message size bytes for BOH metric usage
+            message_size_bytes=K_MESSAGE_SIZE_TO_BYTES.get(msg_size, 0),
         )
     )
 
@@ -1125,7 +1145,7 @@ def parse_nemo_results(
         f"--model_type {nemo_config.model_type} "
         f"--accelerator_type {nemo_config.accelerator_type}",
         print_output=True,
-        check=True
+        check=True,
     )
   except subprocess.CalledProcessError as e:
     logging.exception("Failed to run metrics data parsing script: %s", e)

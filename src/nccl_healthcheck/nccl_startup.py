@@ -19,11 +19,14 @@ This module controls execution of pairwise NCCL test.
 
 import collections
 import dataclasses
+import math
 import os
 import re
 import time
+
 import checker_common
 import config
+
 
 JOB_NAME = os.environ.get("JOB_NAME")
 SERVICE_NAME = os.environ.get("SERVICE_NAME")
@@ -366,6 +369,15 @@ def mark_failed_node(
   )
 
 
+def find_closest_power_of_2(n: float) -> float:
+  if n <= 0:
+    return 0
+
+  # Calculate the power of 2 using logarithm
+  p = round(math.log2(n))
+  return 2 ** p
+
+
 def parse_nccl_result(test_result: str) -> NcclResults:
   """Parse the NCCL test result for message size and bandwidth.
 
@@ -389,7 +401,9 @@ def parse_nccl_result(test_result: str) -> NcclResults:
     if chunks[_NCCL_RESULT_TYPE_INDEX] != "float":
       # If the type isn't float then this is not a valid line
       continue
-    size = chunks[_NCCL_RESULT_MESSAGE_SIZE_INDEX]
+    origianal_size = chunks[_NCCL_RESULT_MESSAGE_SIZE_INDEX]
+    size = str(find_closest_power_of_2(float(origianal_size)))
+    print(f"reformatted the nccl resultsize from {origianal_size} to {size}")
     bandwidth_label = MESSAGE_SIZE_TO_BANDWIDTH_LABEL.get(size, None)
     latency_label = MESSAGE_SIZE_TO_LATENCY_LABEL.get(size, None)
     if bandwidth_label is None and latency_label is None:

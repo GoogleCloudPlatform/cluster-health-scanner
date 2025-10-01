@@ -17,13 +17,13 @@
 
 #SBATCH --job-name=dcgmi-diag
 #SBATCH --time=1:00:00
-CONTAINER_IMAGE=./nvidia+dcgm+3.3.8-1-ubuntu22.04.sqsh
+CONTAINER_IMAGE=./nvidia+dcgm+4.3.1-1-ubuntu22.04.sqsh
 
 # Import the pytorch container to enroot if not already present.
 if [[ ! -f ${CONTAINER_IMAGE} ]]; then
-  enroot import docker://nvidia/dcgm:3.3.8-1-ubuntu22.04
+  enroot import docker://nvidia/dcgm:4.3.1-1-ubuntu22.04
 fi
 
 # This is a Data Center GPU Manager container. This command will run GPU diagnostics.
 # This script should not be called manually. It should only be called by cluster_validation.sh
-srun --container-image=./nvidia+dcgm+3.3.8-1-ubuntu22.04.sqsh bash -c "dcgmi diag -r 3"
+srun --container-image=./nvidia+dcgm+4.3.1-1-ubuntu22.04.sqsh bash -c "dcgmi diag -r 3"
