@@ -70,6 +70,8 @@ message PerformanceHealthCheckConfig {
 
   // Optional. Number of nodes to use for performance test.
   // If set, disables max_node_count and min_node_count checks.
+  // TODO: We should merge static_node_count and min_node_count
+  // as disable fields to avoid use at the same time.
   int32 static_node_count = 8;
 
   // If true, run a warmup before the actual test.
@@ -77,6 +79,13 @@ message PerformanceHealthCheckConfig {
 
   // The baseline file path for the health check.
   string baseline_file = 7;
+
+  // The number of times to run the test.
+  // If not set, the test will be run once.
+  int32 num_runs = 10;
+
+  // If true, reset the nodes between runs.
+  bool reset_between_runs = 11;
 
   oneof performance_health_check_config {
     NCCLPerformanceHealthCheckConfig nccl_performance_health_check_config = 3;
@@ -95,6 +104,7 @@ message PerformanceHealthCheckConfig {
     string model_type = 5;
     string floating_point_precision = 6;
     string accelerator_type = 7;
+    float max_step_time_seconds = 8;
   }
 }
 

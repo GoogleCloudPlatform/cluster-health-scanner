@@ -532,7 +532,7 @@ def cli(
   if project is None:
     project = _get_gcloud_config_value('project')
   if nodes:
-    node_list = nodes.split(',')
+    node_list = [n.strip() for n in nodes.split(',') if n.strip()]
   else:
     node_list = common.run_for_orchestrator(
         orchestrator=orchestrator,

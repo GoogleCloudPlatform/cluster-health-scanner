@@ -19,6 +19,7 @@
 #SBATCH --mem=0
 #SBATCH --gpus-per-node=8
 #SBATCH --ntasks-per-node=8
+#SBATCH --exclusive
 
 set -x
 # This should be set to the squashfs file that you created for your application
