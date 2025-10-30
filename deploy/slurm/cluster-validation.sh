@@ -158,6 +158,25 @@ echo "Run NCCL: ${RUN_NCCL:-0}"
 echo "Results Directory: ${RESULTS_DIR}"
 echo "------------------------"
 
+FAILING_NODES=""
+NODE_INFO=$(sinfo --nodes="$NODES" -h -o "%N %T")
+
+if [[ -z "$NODE_INFO" ]]; then
+  error_exit "Could not retrieve information for any nodes matching '$NODES'. Please check nodelist and Slurm status." 1
+fi
+
+while read -r NODE NODE_STATE; do
+  # NODE_STATE might have extra spaces or control characters depending on sinfo version/output
+  NODE_STATE_TRIMMED=$(echo "$NODE_STATE" | xargs)
+  if [[ "$NODE_STATE_TRIMMED" != "idle" ]]; then
+    FAILING_NODES="${FAILING_NODES}Node: $NODE, State: $NODE_STATE\n"
+  fi
+done <<< "$NODE_INFO"
+
+if [[ -n "$FAILING_NODES" ]]; then
+  error_exit "The following nodes are not in the 'idle' state:\n\n${FAILING_NODES}\nPlease ensure that all nodes are in the 'idle' state before running the validation." 1
+fi
+
 # Basic check to ensure valid values for required arguments
 srun --time=2 -p "${PARTITION}" -N "${NUM_NODES}" -w "${NODES}" true > /dev/null 2> /dev/null
 if [[ $? != 0 ]]; then
