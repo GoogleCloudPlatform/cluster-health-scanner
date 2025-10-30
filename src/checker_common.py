@@ -15,11 +15,13 @@
 """Common functions shared between health checkers."""
 
 from collections.abc import Callable, Iterable
+from concurrent import futures
 import dataclasses
 import enum
 import json
 import logging
 import os
+import re
 import string
 import subprocess
 import tempfile
@@ -38,19 +40,26 @@ import common_pb2
 import health_results_pb2
 import health_runner_config_pb2
 
+ThreadPoolExecutor = futures.ThreadPoolExecutor
 ConnectTimeoutError = exceptions.ConnectTimeoutError
 _KUBECTL = os.environ.get("KUBECTL_PATH", "/app/kubectl")
 HELM = os.environ.get("HELM_PATH", "/usr/local/bin/helm")
 
 K_TOPOLOGY_LABEL_SUBBLOCK = "cloud.google.com/gce-topology-subblock"
-K_DIAG_RUNNER_TAINT_KEY = "aiinfra.diagrunner/bad"
+K_DIAG_RUNNER_TAINT_KEY = "aiinfra.diagrunner/bad-"
+K_DIAG_RUNNER_TAINT_ALL_KEY = f"{K_DIAG_RUNNER_TAINT_KEY}for-all"
+K_DIAG_RUNNER_TAINT_INTER_RACK_KEY = f"{K_DIAG_RUNNER_TAINT_KEY}for-inter-rack"
 # This tag taints nodes to prevent new pods from being scheduled on them.
-K_DIAG_RUNNER_TAINT_ALL = f"{K_DIAG_RUNNER_TAINT_KEY}=true:NoSchedule"
+K_DIAG_RUNNER_TAINT_ALL = f"{K_DIAG_RUNNER_TAINT_ALL_KEY}=true:NoSchedule"
+K_ROTATIONAL_TAINT_KEY_FORMAT = "aiinfra.diagrunner/nemo-not-schedule-{}=true:NoSchedule"
 
+K_NEMO_TRAIN_STEP_TIMING_REGEX = re.compile(
+    r"train_step_timing in s: (?P<time>[\d\.]+)"
+)
 # This tag is for tainting nodes to prevent pods related to inter-rack testing.
 # We'll use a different value to distinguish it from the general taint.
 K_DIAG_RUNNER_TAINT_INTER_RACK = (
-    f"{K_DIAG_RUNNER_TAINT_KEY}=inter-rack:NoSchedule"
+    f"{K_DIAG_RUNNER_TAINT_INTER_RACK_KEY}=true:NoSchedule"
 )
 K_APPLY_FORMAT = "%s apply -f %s"
 K_DELETE_FORMAT = "%s delete -f %s"
@@ -345,12 +354,182 @@ def job_succeeded(
   return False
 
 
+def _fetch_pod_logs(
+    v1: client.CoreV1Api,
+    master_pod_name: str,
+) -> tuple[str | None, str | None]:
+  """Fetches the logs for the 'nemo' container in the master pod.
+
+  Args:
+    v1: The k8s V1 client.
+    master_pod_name: The name of the master pod.
+
+  Returns:
+    A tuple of (pod_logs, error_message). pod_logs is None on failure.
+  """
+  try:
+    pod_logs = v1.read_namespaced_pod_log(
+        name=master_pod_name,
+        namespace="default",
+        container="nemo",
+        tail_lines=100,
+        _preload_content=True,
+    )
+    logging.info("Fetched logs for pod %s (container: nemo).", master_pod_name)
+    return pod_logs, None
+  except client.ApiException as e:
+    error_msg = f"ERROR fetching logs: {e}. Treating as failure for this check."
+    logging.exception(error_msg)
+    return None, error_msg
+
+
+def _check_job_started(pod_logs: str) -> bool:
+  """Checks if the NEMO job has successfully started training."""
+  if not pod_logs or "Training epoch" not in pod_logs:
+    print(
+        "Failure: 'Training epoch' keyword NOT found or logs empty. Failing"
+        " early. ---"
+    )
+    return False
+  return True
+
+
+def _validate_nemo_performance(
+    pod_logs: str,
+    job_name: str,
+    jobs_started_successfully: set[str],
+    max_step_time_seconds: float,
+) -> bool:
+  """Validates the latest training step time against the max allowed threshold.
+
+  Args:
+    pod_logs: The logs of the NEMO job.
+    job_name: The name of the NEMO job.
+    jobs_started_successfully: A set of jobs that have passed this check before.
+    max_step_time_seconds: The maximum allowed step time in seconds.
+
+  Returns:
+    True if performance is validated and job should continue, False otherwise.
+  """
+  log_lines = pod_logs.strip().splitlines()
+  print("--- LOG SNIPPET (last 5 lines) ---")
+  print("\n".join(log_lines[-5:]))
+
+  match = None
+  for line in reversed(log_lines):
+    if "Training epoch" in line:
+      match = K_NEMO_TRAIN_STEP_TIMING_REGEX.search(line)
+      if match:
+        break  # Found the latest/most recent match
+
+  if not match:
+    print("'epoch' found, but step time metric is missing. Failing early.")
+    return False
+
+  # 2. GUARD CLAUSE: Handle the ValueError (unparsable time) first.
+  try:
+    step_time = float(match.group("time"))
+  except ValueError:
+    print(" Could not parse step time value. Failing early.")
+    return False
+
+  print(f"DEBUG:epoch' keyword found. Latest step time: {step_time:.2f}s ---")
+
+  # 3. GUARD CLAUSE: Check for the performance threshold failure condition.
+  if step_time > max_step_time_seconds:
+    print(
+        f"Step time ({step_time:.2f}s) exceeds max threshold "
+        f"({max_step_time_seconds:.1f}s). Failing "
+        "early."
+    )
+    return False
+
+  # FINAL SUCCESS: If all guards are passed, execute the success logic.
+  jobs_started_successfully.add(job_name)
+  return True
+
+
+def check_if_fail_nemo_early(
+    nemo_check_config: dict[str, Any],
+    remaining_jobs: set[str],
+    jobs_started_successfully: set[str],
+) -> set[str]:
+  """Checks running NEMO jobs against early failure conditions.
+
+  Conditions for early failure:
+  1. Pod logs cannot be fetched (e.g., pod stuck in ContainerCreating).
+  2. Training has not started (e.g., 'Training epoch' keyword not found).
+  3. Training step time exceeds the maximum allowed threshold.
+  4. **Master pod cannot be found or an error occurs during lookup.**
+
+  Args:
+    nemo_check_config: Configuration including the k8s V1 client and pod finder.
+    remaining_jobs: Set of job names still running.
+    jobs_started_successfully: Set of jobs that have passed this check before.
+
+  Returns:
+    set[str]: A set of job names that should be failed early.
+  """
+  v1 = nemo_check_config["v1_client"]
+  # Type hint assumes master_pod_finder can return a tuple of strings
+  master_pod_finder: Callable[[client.CoreV1Api, str], tuple[str, str]] = (
+      nemo_check_config["master_pod_finder"]
+  )
+  jobs_to_fail_early = set()
+  print(
+      "DEBUG:check_if_fail_nemo_early: ",
+      remaining_jobs,
+      jobs_started_successfully,
+  )
+
+  for job_name in remaining_jobs - jobs_started_successfully:
+    try:
+      master_pod_name, _ = master_pod_finder(v1, job_name)
+      if not master_pod_name:
+        print(f"No master pod found for job: {job_name}. Failing early.")
+        jobs_to_fail_early.add(job_name)
+        continue
+
+    except client.ApiException as e:
+      print(f"Exception while finding master pod for job {job_name}: {e}")
+      jobs_to_fail_early.add(job_name)
+      continue
+
+    print("DEBUG:master_pod_name: ", master_pod_name, job_name)
+
+    # 1. Fetch Logs (Failure Condition 1)
+    pod_logs, error_msg = _fetch_pod_logs(v1, master_pod_name)
+    if error_msg:
+      jobs_to_fail_early.add(job_name)
+      continue
+
+    # 2. Check Job Started (Failure Condition 2)
+    if not _check_job_started(pod_logs):
+      jobs_to_fail_early.add(job_name)
+      continue
+
+    # 3. Validate Performance (Failure Condition 3)
+    if nemo_check_config[
+        "max_step_time_seconds"
+    ] > 1 and not _validate_nemo_performance(
+        pod_logs,
+        job_name,
+        jobs_started_successfully,
+        nemo_check_config["max_step_time_seconds"],
+    ):
+      jobs_to_fail_early.add(job_name)
+      continue
+
+  return jobs_to_fail_early
+
+
 def wait_till_jobs_complete(
     job_v1: batch_v1_api.BatchV1Api,
     jobs_to_monitor: Iterable[str],
     namespace: str = "default",
     timeout_seconds: int = 900,
     check_interval: int = 30,
+    nemo_check_config: dict[str, Any] | None = None,
 ) -> list[str]:
   """Waits for a list of jobs to complete.
 
@@ -360,12 +539,16 @@ def wait_till_jobs_complete(
     namespace: Namespace of the jobs.
     timeout_seconds: Timeout in seconds.
     check_interval: Interval in seconds to check for the jobs.
+    nemo_check_config: Optional dictionary containing NEMO-specific check
+      configuration.
 
   Returns:
     list[str]: Any non-completed jobs.
   """
   remaining_jobs = set(jobs_to_monitor)
+  jobs_started_successfully = set()
   start_time = time.time()
+  nemo_log_check_timeout = 600  # 10 minutes
 
   # Poll list jobs API until all jobs are completed or the timeout is reached.
   print(
@@ -406,8 +589,21 @@ def wait_till_jobs_complete(
       break
 
     print(
-        f"{int(time.time() - start_time)} secs out of {timeout_seconds} secs",
+        f"{int(elapsed_time)} secs out of {timeout_seconds} secs",
     )
+    # If we're running NEMO test and the job has been running for more than 10
+    # minutes, we will check the logs to see if the job has started training.
+    # If not, we will fail the test early.
+    if (
+        nemo_check_config
+        and int(elapsed_time) >= nemo_log_check_timeout
+        and remaining_jobs - jobs_started_successfully
+    ):
+      print("DEBUG:check nemo test early: ", int(elapsed_time))
+      jobs_to_fail_early = check_if_fail_nemo_early(
+          nemo_check_config, remaining_jobs, jobs_started_successfully
+      )
+      remaining_jobs -= jobs_to_fail_early
     print("Remaining jobs: ", remaining_jobs)
     print(f"Sleeping for {check_interval} seconds")
     time.sleep(check_interval)
@@ -1356,3 +1552,67 @@ def sigterm_handler(signum: Any, frame: Any) -> None:
   """
   print(f"Received {signum} signal on frame {frame}. Exiting...")
   exit(0)
+
+
+def reset_nodes(nodes: list[str]) -> None:
+  """Reset the nodes.
+
+  Args:
+    nodes: List of nodes to reset.
+  """
+  zone = os.environ.get("ZONE", "")
+  if not zone:
+    raise ValueError(
+        "ZONE environment variable is not set. Cannot reset nodes."
+    )
+
+  def _reset_node(node: str) -> None:
+
+    print(f"Resetting node {node} in zone {zone}\n")
+    run_command(
+        f"gcloud compute instances reset {node} --zone={zone}",
+    )
+    print(f"Finished reset of node {node} in zone {zone}\n")
+
+  with ThreadPoolExecutor() as executor:
+    list(executor.map(_reset_node, nodes, timeout=900))  # 15 minutes timeout
+
+  print("Finished resetting all nodes")
+
+
+def get_job_metadata(
+    v1: client.CoreV1Api, job_names: Iterable[str]
+) -> dict[str, health_results_pb2.JobMetadata]:
+  """Get the job metadata for the given job names."""
+  job_name_to_metadata = {}
+  for job_name in job_names:
+    job_metadata = health_results_pb2.JobMetadata(job_name=job_name)
+    job_metadata.pods.extend(_get_pod_metadata(v1, job_name))
+    job_name_to_metadata[job_name] = job_metadata
+  return job_name_to_metadata
+
+
+def _get_pod_metadata(
+    v1: client.CoreV1Api, job_name: str
+) -> list[health_results_pb2.JobMetadata.Pod]:
+  """Get the pod metadata for the given job name."""
+  pod_metadata = []
+  for pod in v1.list_namespaced_pod(
+      namespace="default", label_selector=f"job-name={job_name}"
+  ).items:
+    node_name = pod.spec.node_name
+    node = v1.read_node(
+        name=node_name,
+    )
+    node_instance_id = node.metadata.annotations.get(
+        "container.googleapis.com/instance_id", ""
+    )
+    pod_metadata.append(
+        health_results_pb2.JobMetadata.Pod(
+            pod=pod.metadata.name,
+            node_name=node_name,
+            node_instance_id=node_instance_id,
+        )
+    )
+
+  return pod_metadata

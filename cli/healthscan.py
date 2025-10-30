@@ -89,8 +89,7 @@ def is_helm_installed() -> bool:
 @click.option(
     '-n',
     '--nodes',
-    multiple=True,
-    default=[],
+    default='',
     help=(
         'Nodes to run checks on. Defaults to running on all nodes. When using'
         ' slurm, a shortened node format can be used. For example, "node-[0-1]"'
@@ -140,7 +139,7 @@ def cli(
     ctx: click.Context,
     machine_type: str,
     check: tuple[str, ...],
-    nodes: list[str],
+    nodes: str,
     run_only_on_available_nodes: bool,
     dry_run: bool,
     disable_usage_analytics: bool,
@@ -150,7 +149,10 @@ def cli(
   """Run a healthscan on a cluster."""
   orchestrator = ctx.obj['orchestrator']
   check_runners = []
-  nodes_list = nodes
+  nodes_list: list[str] = []
+  if nodes:
+    nodes_list = [n.strip() for n in nodes.split(',') if n.strip()]
+
   kubectl_core_api = None
   if orchestrator == 'slurm':
     if partition is None:
@@ -158,7 +160,7 @@ def cli(
           'Partition is required for Slurm clusters. Please specify a partition'
           ' using the --partition flag.'
       )
-    nodes_list = slurm_node_fetcher.expand_slurm_nodes(nodes)
+    nodes_list = slurm_node_fetcher.expand_slurm_nodes(nodes_list)
   else:
     if not is_helm_installed():
       print('Helm is not installed. Please install Helm before running '
@@ -171,10 +173,10 @@ def cli(
         nodes_list, occupied_nodes = gke_node_fetcher.fetch_gke_nodes(
             kubectl_core_api=kubectl_core_api,
             machine_type=machine_type,
-            nodes=nodes,
+            nodes=nodes_list,
             run_only_on_available_nodes=run_only_on_available_nodes,
         )
-        if occupied_nodes and not run_only_on_available_nodes:
+        if occupied_nodes and run_only_on_available_nodes:
           click.echo(
               click.style(
                   'WARNING: Running only on available nodes is not'

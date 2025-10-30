@@ -80,13 +80,23 @@ message HealthResultList {
 
   // The instance IDs of the node under test.
   string instance_id = 6 [deprecated = true];
-  repeated string instance_ids = 11;
+  repeated string instance_ids = 11 [deprecated = true];
 
+  JobMetadata job_metadata = 13;
   // The rack IDs of the nodes under test. Only populated for performance
   // health checks.
   repeated string rack_ids = 7;
 
   HPCHealthResult hpc_health_result = 8;
+}
+message JobMetadata {
+  message Pod {
+    string pod = 1;
+    string node_name = 2;
+    string node_instance_id = 3;
+  }
+  string job_name = 1;
+  repeated Pod pods = 2;
 }
 
 message HPCHealthResult {

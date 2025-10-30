@@ -71,13 +71,16 @@ class GkeStatus(gke_check.GkeCheck):
 
   def _status(self) -> str:
     """Get the current healthscan status of a GKE cluster."""
-    command = (
-        f"kubectl get nodes -o custom-columns={self._custom_cols} "
-        f"-l node.kubernetes.io/instance-type={self.machine_type}"
-    )
+    command = [
+        "kubectl",
+        "get",
+        "nodes",
+        *self.nodes,
+        "-o",
+        f"custom-columns={self._custom_cols}",
+    ]
     return subprocess.run(
         command,
-        shell=True,
         text=True,
         check=False,
         capture_output=True,
