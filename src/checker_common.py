@@ -1601,6 +1601,15 @@ def _get_pod_metadata(
       namespace="default", label_selector=f"job-name={job_name}"
   ).items:
     node_name = pod.spec.node_name
+    if not node_name:
+      logging.warning("Pod %s has no node name", pod.metadata.name)
+      pod_metadata.append(
+          health_results_pb2.JobMetadata.Pod(
+              pod=pod.metadata.name,
+          )
+      )
+      continue
+
     node = v1.read_node(
         name=node_name,
     )
