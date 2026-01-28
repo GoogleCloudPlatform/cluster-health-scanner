@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chs"
+version = "0.1.0"
+description = "CHS provides a comprehensive suite of tools for validating the health and performance of Accelerators."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click",
+    # TODO: Get ramble from https://github.com/GoogleCloudPlatform/ramble develop branch once the req branch is merged
+    "ramble @ git+https://github.com/sarthakag/ramble.git@req",
+]
+
+[project.scripts]
+chs = "chs.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
