@@ -5,6 +5,10 @@ routing, and error handling for various valid and invalid inputs.
 """
 
 import dataclasses
+import datetime
+import logging
+import pathlib
+import subprocess
 import unittest
 from unittest import mock
 
@@ -13,6 +17,8 @@ import click
 from click import testing
 
 CliRunner = testing.CliRunner
+MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
+MOCK_WORKSPACE_NAME = MOCK_DATETIME.strftime("%Y-%m-%d_%H.%M.%S.%f")
 
 
 @dataclasses.dataclass
@@ -41,7 +47,7 @@ class _CommandErrorTestCase:
 class _RunCommandTestCase:
   name: str
   args_list: list[str]
-  expected_return: tuple[str, str, list[str] | None]
+  expected_return: tuple[str, str, list[str] | None, str, str]
 
 
 @dataclasses.dataclass
@@ -60,6 +66,59 @@ class TestCli(unittest.TestCase):
   def setUp(self):
     super().setUp()
     self.runner = CliRunner()
+    self.mock_rm_cls = self.enterContext(
+        mock.patch("chs.cli.RambleManager", autospec=True)
+    )
+    self.mock_rm_instance = self.mock_rm_cls.return_value
+    self.mock_dt = self.enterContext(
+        mock.patch("chs.cli.datetime.datetime", autospec=True)
+    )
+    self.mock_dt.now.return_value = MOCK_DATETIME
+    logging.disable(logging.CRITICAL)
+
+  def tearDown(self):
+    super().tearDown()
+    logging.disable(logging.NOTSET)
+
+  @mock.patch("chs.cli.platformdirs", autospec=True)
+  @mock.patch("chs.cli.pathlib", autospec=True)
+  def test_get_default_workspaces_dir_succeeds(
+      self, mock_pathlib, mock_platformdirs
+  ):
+    """Tests that the default workspaces directory is created successfully."""
+    mock_platformdirs.user_data_dir.return_value = "/path/to/user/data"
+    mock_path_obj = mock_pathlib.Path.return_value
+    mock_workspaces_dir = mock_path_obj / "workspaces"
+    mock_workspaces_dir.mkdir.return_value = None
+
+    result = cli.get_default_workspaces_dir()
+
+    self.assertEqual(result, str(mock_workspaces_dir))
+    mock_platformdirs.user_data_dir.assert_called_once_with(
+        appname="cluster-health-scanner"
+    )
+    mock_pathlib.Path.assert_called_once_with("/path/to/user/data")
+    mock_workspaces_dir.mkdir.assert_called_once_with(
+        parents=True, exist_ok=True
+    )
+
+  @mock.patch("chs.cli.platformdirs", autospec=True)
+  @mock.patch("chs.cli.pathlib", autospec=True)
+  def test_get_default_workspaces_dir_fails(
+      self, mock_pathlib, mock_platformdirs
+  ):
+    """Tests that OSError is raised when workspace directory creation fails."""
+    mock_platformdirs.user_data_dir.return_value = "/path/to/user/data"
+    mock_path_obj = mock_pathlib.Path.return_value
+    mock_workspaces_dir = mock_path_obj / "workspaces"
+    mock_workspaces_dir.mkdir.side_effect = OSError("Creation failed")
+
+    with self.assertRaises(OSError):
+      cli.get_default_workspaces_dir()
+
+    mock_workspaces_dir.mkdir.assert_called_once_with(
+        parents=True, exist_ok=True
+    )
 
   def test_non_empty_str_callback(self):
     """Test non_empty_str_callback raises BadParameter on empty string."""
@@ -246,8 +305,12 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
         self.assertIn(case.expected_output, result.output)
 
-  def test_run_command(self):
+  @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+  def test_run_command(self, mock_get_default_dir):
     """Test 'run' command."""
+    mock_default_dir = "/mocked/workspaces"
+    mock_get_default_dir.return_value = mock_default_dir
+
     test_cases = [
         _RunCommandTestCase(
             name="success",
@@ -259,7 +322,13 @@ class TestCli(unittest.TestCase):
                 "--scheduler",
                 "slurm",
             ],
-            expected_return=("suite1", "slurm", None),
+            expected_return=(
+                "suite1",
+                "slurm",
+                None,
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="with_tests",
@@ -273,7 +342,13 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "t1,t2",
             ],
-            expected_return=("suite1", "slurm", ["t1", "t2"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1", "t2"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="with_single_test",
@@ -287,7 +362,13 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "t1",
             ],
-            expected_return=("suite1", "slurm", ["t1"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="gke_scheduler",
@@ -299,7 +380,13 @@ class TestCli(unittest.TestCase):
                 "--scheduler",
                 "gke",
             ],
-            expected_return=("suite1", "gke", None),
+            expected_return=(
+                "suite1",
+                "gke",
+                None,
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="trailing_comma",
@@ -313,7 +400,13 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "t1,",
             ],
-            expected_return=("suite1", "slurm", ["t1"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="leading_comma",
@@ -327,7 +420,13 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 ",t1",
             ],
-            expected_return=("suite1", "slurm", ["t1"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="double_comma",
@@ -341,7 +440,13 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "t1,,t2",
             ],
-            expected_return=("suite1", "slurm", ["t1", "t2"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1", "t2"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="whitespace",
@@ -355,7 +460,13 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "t1, t2 ",
             ],
-            expected_return=("suite1", "slurm", ["t1", "t2"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1", "t2"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
         _RunCommandTestCase(
             name="whitespace_and_comma",
@@ -369,18 +480,67 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "t1, t2 ,t3 ",
             ],
-            expected_return=("suite1", "slurm", ["t1", "t2", "t3"]),
+            expected_return=(
+                "suite1",
+                "slurm",
+                ["t1", "t2", "t3"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+            ),
         ),
     ]
     for case in test_cases:
       with self.subTest(case.name):
+        self.mock_rm_cls.reset_mock()
+        self.mock_rm_instance.reset_mock()
+        mock_get_default_dir.reset_mock()
+
         result = self.runner.invoke(
             cli.cli,
             case.args_list,
             standalone_mode=False,
         )
-        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(
+            result.exit_code, 0, f"Subtest {case.name} failed: {result.output}"
+        )
         self.assertEqual(result.return_value, case.expected_return)
+
+        mock_get_default_dir.assert_called_once()
+        self.mock_rm_cls.assert_called_once_with(
+            mock_default_dir, MOCK_WORKSPACE_NAME
+        )
+        self.mock_rm_instance.create_workspace.assert_called_once()
+        self.mock_rm_instance.configure_workspace.assert_called_once_with(
+            case.expected_return[0],
+            case.expected_return[1],
+            case.expected_return[2],
+        )
+        self.mock_rm_instance.setup_workspace.assert_called_once()
+        self.mock_rm_instance.execute_experiments.assert_called_once()
+
+  @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+  def test_run_action_exception_handling(self, mock_get_default_dir):
+    """Test that run_action wraps exceptions in ClickException."""
+    mock_get_default_dir.return_value = "/mocked/workspaces"
+    self.mock_rm_instance.create_workspace.side_effect = OSError(
+        "Permission denied"
+    )
+    result = self.runner.invoke(cli.cli, ["run", "-s", "s1", "-sch", "gke"])
+    self.assertEqual(result.exit_code, 1)
+    self.assertIn("CHS execution failed", result.output)
+    self.assertIn("Permission denied", result.output)
+
+  @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+  def test_run_action_clickexception_handling(self, mock_get_default_dir):
+    """Test that run_action does not wrap ClickExceptions."""
+    mock_get_default_dir.return_value = "/mocked/workspaces"
+    self.mock_rm_instance.create_workspace.side_effect = click.ClickException(
+        "A ClickException"
+    )
+    result = self.runner.invoke(cli.cli, ["run", "-s", "s1", "-sch", "gke"])
+    self.assertEqual(result.exit_code, 1)
+    self.assertNotIn("CHS execution failed", result.output)
+    self.assertIn("A ClickException", result.output)
 
   def test_run_command_errors(self):
     """Test 'run' command with invalid flags."""

@@ -12,6 +12,7 @@ dependencies = [
     "click",
     # TODO: Get ramble from https://github.com/GoogleCloudPlatform/ramble develop branch once the req branch is merged
     "ramble @ git+https://github.com/sarthakag/ramble.git@req",
+    "platformdirs"
 ]
 
 [project.scripts]
