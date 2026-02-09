@@ -200,9 +200,13 @@ class RambleManager:
     """Analyzes and stores the results of the Ramble experiments.
 
     Analyzes the results and stores BoH in GCS/ BigQuery for later retrieval.
+
+    Raises:
+      click.ClickException: If the experiment analyze command fails.
     """
-    # TODO: Implement the logic for this method.
-    pass
+    # TODO: Bill of health generation goes here.
+    logger.debug("Analyzing Ramble experiments in %s...", self.path)
+    self._execute_ramble_command(subcommand="workspace", args=["analyze"])
 
   def cleanup_workspace(self) -> None:
     """Cleans up the Ramble workspace directory."""

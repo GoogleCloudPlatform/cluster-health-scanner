@@ -8,9 +8,9 @@ import datetime
 import logging
 import pathlib
 import subprocess
-import platformdirs
 from chs.ramble_manager import RambleManager
 import click
+import platformdirs
 
 logger = logging.getLogger(__name__)
 
@@ -203,9 +203,23 @@ def analyze_action(run_id: str) -> str:
 
   Returns:
     The run_id of the analyzed test run.
+
+  Raises:
+    click.ClickException: If an error occurs during CHS analysis.
   """
+
   logger.debug("Analyzing run_id=%r", run_id)
-  # TODO: Add code to analyze test results here.
+  workspaces_base_dir = get_default_workspaces_dir()
+  manager = RambleManager(workspaces_base_dir, run_id)
+
+  try:
+    manager.analyze_results()
+  except click.ClickException:
+    raise
+  except (OSError, subprocess.CalledProcessError) as e:
+    logger.exception("CHS analysis failed for run_id=%r", run_id)
+    raise click.ClickException(f"CHS analysis failed: {e!r}") from e
+
   return run_id
 
 
@@ -303,9 +317,12 @@ def run(
 
 
 @cli.command()
-@click.argument("run_id", callback=non_empty_str_callback)
-def analyze(run_id: str) -> str:
+@click.argument("run_id", required=False, callback=non_empty_str_callback)
+def analyze(run_id: str | None) -> str:
   """Analyze results from a test run.
+
+  If no run_id is provided, the most recent run from the workspaces directory
+  will be used.
 
   Args:
     run_id: The ID of the test run to analyze.
@@ -313,6 +330,32 @@ def analyze(run_id: str) -> str:
   Returns:
     The run_id of the analyzed test run.
   """
+  if not run_id:
+    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
+    if not workspaces_dir.exists():
+      raise click.ClickException("No workspaces directory found.")
+
+    valid_runs = []
+    # %Y-%m-%d_%H.%M.%S.%f
+    date_format = "%Y-%m-%d_%H.%M.%S.%f"
+    for d in workspaces_dir.iterdir():
+      if d.is_dir():
+        try:
+          parsed_time = datetime.datetime.strptime(d.name, date_format)
+          valid_runs.append((parsed_time, d))
+        except ValueError:
+          # Directory name doesn't match the expected format; ignore it.
+          continue
+
+    if not valid_runs:
+      raise click.ClickException("No previous runs found to analyze.")
+
+    # Sort by the parsed datetime to find the latest
+    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
+    run_id = latest_dir.name
+    logger.info("No run_id provided. Using latest run: %s", run_id)
+    click.echo(f"Analyzing latest run: {run_id}")
+
   return analyze_action(run_id)
 
 
