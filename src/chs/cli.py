@@ -176,6 +176,7 @@ def run_action(
 
   try:
     ramble_manager.create_workspace()
+    ramble_manager.add_custom_repository()
     ramble_manager.configure_workspace(suite, scheduler, tests)
     ramble_manager.setup_workspace()
     ramble_manager.execute_experiments()

@@ -21,3 +21,6 @@ chs = "chs.main:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+
+[tool.setuptools.package-data]
+"chs" = ["repos/repo.yaml", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]

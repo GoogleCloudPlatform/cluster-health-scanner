@@ -140,6 +140,16 @@ class RambleManager:
     exec_cmd = self._prepare_ramble_command(cmd)
     self._execute_shell_command(exec_cmd)
 
+  def add_custom_repository(self) -> None:
+    """Adds the internal custom CHS repository to the Ramble workspace.
+
+    Raises:
+      click.ClickException: If the repository addition command fails.
+    """
+    logger.debug("Adding custom CHS repository to Ramble workspace...")
+    with pkg_resources.path(chs, "repos") as p:
+      self._execute_ramble_command(subcommand="repo", args=["add", str(p)])
+
   def configure_workspace(
       self, suite: str, scheduler: str, tests: list[str] | None
   ) -> None:
