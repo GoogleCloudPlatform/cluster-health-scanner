@@ -5,10 +5,13 @@ the creation, setup, and execution of Ramble workspaces for CHS test runs.
 """
 
 from collections.abc import Callable
+import importlib.resources as pkg_resources
 import logging
 import os
+import shutil
 import subprocess
 import sysconfig
+import chs
 import click
 
 logger = logging.getLogger(__name__)
@@ -160,12 +163,18 @@ class RambleManager:
       scheduler: The scheduler to use (e.g., slurm, gke).
       tests: An optional list of names of specific tests to run.
     """
-    # TODO: Add logic to inject experiment configs here.
+
     logger.debug("Configuring Ramble workspace in %s...", self.path)
     logger.debug("Configuring workspace for suite: %s", suite)
     logger.debug("Configuring workspace for scheduler: %s", scheduler)
     if tests:
       logger.debug("Configuring workspace for tests: %s", tests)
+
+    workspace_config_dir = os.path.join(self.path, "configs")
+
+    with pkg_resources.path(chs, "ramble.yaml") as p:
+      shutil.copy(p, os.path.join(workspace_config_dir, "ramble.yaml"))
+      logger.debug("Copied ramble.yaml to %s", workspace_config_dir)
 
   def setup_workspace(self) -> None:
     """Sets up the Ramble workspace by running 'ramble workspace setup'.
@@ -199,4 +208,3 @@ class RambleManager:
     """Cleans up the Ramble workspace directory."""
     # TODO: Implement the logic for this method.
     pass
-
