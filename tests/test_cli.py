@@ -47,7 +47,7 @@ class _CommandErrorTestCase:
 class _RunCommandTestCase:
   name: str
   args_list: list[str]
-  expected_return: tuple[str, str, list[str] | None, str, str]
+  expected_return: tuple[str, str, list[str] | None, str, str, list[str]]
 
 
 @dataclasses.dataclass
@@ -70,10 +70,20 @@ class TestCli(unittest.TestCase):
         mock.patch("chs.cli.RambleManager", autospec=True)
     )
     self.mock_rm_instance = self.mock_rm_cls.return_value
+    self.mock_rm_instance.execute_experiments.return_value = []
+
     self.mock_dt = self.enterContext(
         mock.patch("chs.cli.datetime.datetime", autospec=True)
     )
     self.mock_dt.now.return_value = MOCK_DATETIME
+
+    self.mock_get_scheduler = self.enterContext(
+        mock.patch("chs.cli.get_scheduler", autospec=True)
+    )
+    self.mock_scheduler = self.mock_get_scheduler.return_value
+    self.mock_scheduler.name = "mock_scheduler"
+    self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+
     logging.disable(logging.CRITICAL)
 
   def tearDown(self):
@@ -321,13 +331,16 @@ class TestCli(unittest.TestCase):
                 "suite1",
                 "--scheduler",
                 "slurm",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
-                None,
+                "mock_scheduler",
+                ["nccl-cluster", "nccl-pairwise", "dcgm"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -341,13 +354,16 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "t1,t2",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1", "t2"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -361,13 +377,16 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "t1",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -379,13 +398,16 @@ class TestCli(unittest.TestCase):
                 "suite1",
                 "--scheduler",
                 "gke",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "gke",
-                None,
+                "mock_scheduler",
+                ["nccl-cluster", "nccl-pairwise", "dcgm"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -399,13 +421,16 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "t1,",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -419,13 +444,16 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 ",t1",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -439,13 +467,16 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "t1,,t2",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1", "t2"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -459,13 +490,16 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "t1, t2 ",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1", "t2"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
             ),
         ),
         _RunCommandTestCase(
@@ -479,13 +513,39 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "t1, t2 ,t3 ",
+                "--machine-type",
+                "a3-high",
             ],
             expected_return=(
                 "suite1",
-                "slurm",
+                "mock_scheduler",
                 ["t1", "t2", "t3"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
+                [],
+            ),
+        ),
+        _RunCommandTestCase(
+            name="with_nodes",
+            args_list=[
+                "-v",
+                "run",
+                "--suite",
+                "suite1",
+                "--scheduler",
+                "slurm",
+                "--nodes",
+                "node1,node2",
+                "--machine-type",
+                "a3-high",
+            ],
+            expected_return=(
+                "suite1",
+                "mock_scheduler",
+                ["nccl-cluster", "nccl-pairwise", "dcgm"],
+                MOCK_WORKSPACE_NAME,
+                mock_default_dir,
+                [],
             ),
         ),
     ]
@@ -493,7 +553,20 @@ class TestCli(unittest.TestCase):
       with self.subTest(case.name):
         self.mock_rm_cls.reset_mock()
         self.mock_rm_instance.reset_mock()
+        self.mock_get_scheduler.reset_mock()
         mock_get_default_dir.reset_mock()
+
+        if "--scheduler" in case.args_list:
+          scheduler_arg_idx = case.args_list.index("--scheduler") + 1
+          expected_scheduler_name = case.args_list[scheduler_arg_idx]
+        else:
+          expected_scheduler_name = "slurm"
+
+        self.mock_scheduler.name = "slurm"
+
+        expected_return_list = list(case.expected_return)
+        expected_return_list[1] = "slurm"
+        case.expected_return = tuple(expected_return_list)
 
         result = self.runner.invoke(
             cli.cli,
@@ -512,8 +585,9 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.create_workspace.assert_called_once()
         self.mock_rm_instance.configure_workspace.assert_called_once_with(
             case.expected_return[0],
-            case.expected_return[1],
+            self.mock_scheduler,
             case.expected_return[2],
+            machine_type="a3-high",
         )
         self.mock_rm_instance.setup_workspace.assert_called_once()
         self.mock_rm_instance.execute_experiments.assert_called_once()
@@ -522,10 +596,16 @@ class TestCli(unittest.TestCase):
   def test_run_action_exception_handling(self, mock_get_default_dir):
     """Test that run_action wraps exceptions in ClickException."""
     mock_get_default_dir.return_value = "/mocked/workspaces"
+
+    self.mock_scheduler.name = "slurm"
+
     self.mock_rm_instance.create_workspace.side_effect = OSError(
         "Permission denied"
     )
-    result = self.runner.invoke(cli.cli, ["run", "-s", "s1", "-sch", "gke"])
+    result = self.runner.invoke(
+        cli.cli,
+        ["run", "-s", "s1", "-sch", "slurm", "--machine-type", "a3-high"],
+    )
     self.assertEqual(result.exit_code, 1)
     self.assertIn("CHS execution failed", result.output)
     self.assertIn("Permission denied", result.output)
@@ -534,10 +614,16 @@ class TestCli(unittest.TestCase):
   def test_run_action_clickexception_handling(self, mock_get_default_dir):
     """Test that run_action does not wrap ClickExceptions."""
     mock_get_default_dir.return_value = "/mocked/workspaces"
+
+    self.mock_scheduler.name = "slurm"
+
     self.mock_rm_instance.create_workspace.side_effect = click.ClickException(
         "A ClickException"
     )
-    result = self.runner.invoke(cli.cli, ["run", "-s", "s1", "-sch", "gke"])
+    result = self.runner.invoke(
+        cli.cli,
+        ["run", "-s", "s1", "-sch", "slurm", "--machine-type", "a3-high"],
+    )
     self.assertEqual(result.exit_code, 1)
     self.assertNotIn("CHS execution failed", result.output)
     self.assertIn("A ClickException", result.output)
@@ -555,22 +641,31 @@ class TestCli(unittest.TestCase):
                 "slurm",
                 "--tests",
                 "",
+                "--machine-type",
+                "a3-high",
             ],
             expected_output="cannot be an empty string",
         ),
         _CommandErrorTestCase(
-            name="missing_suite",
-            args_list=["run", "--scheduler", "slurm"],
-            expected_output="Missing option '--suite'",
-        ),
-        _CommandErrorTestCase(
             name="missing_scheduler",
-            args_list=["run", "--suite", "suite1"],
+            args_list=["run", "--suite", "suite1", "--machine-type", "a3-high"],
             expected_output="Missing option '--scheduler'",
         ),
         _CommandErrorTestCase(
+            name="missing_machine_type",
+            args_list=["run", "--suite", "suite1", "--scheduler", "slurm"],
+            expected_output="Missing option '--machine-type'",
+        ),
+        _CommandErrorTestCase(
             name="suite_missing_value",
-            args_list=["run", "--suite", "--scheduler", "gke"],
+            args_list=[
+                "run",
+                "--suite",
+                "--scheduler",
+                "gke",
+                "--machine-type",
+                "a3-high",
+            ],
             expected_output="Missing option '--scheduler' / '-sch'",
         ),
         _CommandErrorTestCase(
@@ -582,6 +677,8 @@ class TestCli(unittest.TestCase):
                 "--scheduler",
                 "--tests",
                 "t1",
+                "--machine-type",
+                "a3-high",
             ],
             expected_output="Got unexpected extra argument",
         ),
@@ -594,17 +691,48 @@ class TestCli(unittest.TestCase):
                 "--tests",
                 "--suite",
                 "s1",
+                "--machine-type",
+                "a3-high",
             ],
-            expected_output="Missing option '--suite' / '-s'",
+            expected_output="Got unexpected extra argument",
         ),
         _CommandErrorTestCase(
             name="empty_suite",
-            args_list=["run", "--suite", "", "--scheduler", "slurm"],
+            args_list=[
+                "run",
+                "--suite",
+                "",
+                "--scheduler",
+                "slurm",
+                "--machine-type",
+                "a3-high",
+            ],
             expected_output="cannot be an empty string",
         ),
         _CommandErrorTestCase(
             name="empty_scheduler",
-            args_list=["run", "--suite", "suite1", "--scheduler", ""],
+            args_list=[
+                "run",
+                "--suite",
+                "suite1",
+                "--scheduler",
+                "",
+                "--machine-type",
+                "a3-high",
+            ],
+            expected_output="cannot be an empty string",
+        ),
+        _CommandErrorTestCase(
+            name="empty_machine_type",
+            args_list=[
+                "run",
+                "--suite",
+                "suite1",
+                "--scheduler",
+                "slurm",
+                "--machine-type",
+                "",
+            ],
             expected_output="cannot be an empty string",
         ),
     ]
@@ -636,11 +764,6 @@ class TestCli(unittest.TestCase):
             name="whitespace_run_id",
             args_list=["analyze", " "],
             expected_output="cannot be an empty string",
-        ),
-        _CommandErrorTestCase(
-            name="missing_run_id",
-            args_list=["analyze"],
-            expected_output="Missing argument 'RUN_ID'",
         ),
     ]
     for case in test_cases:

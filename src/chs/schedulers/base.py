@@ -1,3 +1,5 @@
+"""Base scheduler module."""
+
 import abc
 
 
@@ -24,4 +26,14 @@ class BaseScheduler(abc.ABC):
       machine_type: str,
   ) -> None:
     """Writes the ramble configuration into the given workspace configs directory."""
+    pass
+
+  @abc.abstractmethod
+  def check_jobs_running(self, job_ids: list[str]) -> bool:
+    """Checks if the given jobs are still running."""
+    pass
+
+  @abc.abstractmethod
+  def parse_job_ids(self, output: str) -> list[str]:
+    """Parses job IDs from the experiment execution output."""
     pass

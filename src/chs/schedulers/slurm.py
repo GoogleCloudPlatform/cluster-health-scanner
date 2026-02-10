@@ -1,6 +1,9 @@
+"""Slurm scheduler implementation for Cluster Health Scanner."""
+
 import importlib.resources as pkg_resources
 import logging
 import os
+import re
 import shutil
 import subprocess
 
@@ -128,3 +131,28 @@ class SlurmScheduler(BaseScheduler):
 
     with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
       f.write(rendered_content)
+
+  def check_jobs_running(self, job_ids: list[str]) -> bool:
+    """Checks if the given jobs are still running."""
+    if not job_ids:
+      logger.warning(
+          "No job IDs provided to check. Proceeding with analyzing logs."
+          "Did chs run submit jobs?"
+      )
+      return False
+
+    cmd = ["squeue", "--jobs", ",".join(job_ids), "--noheader"]
+    try:
+      result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+      if result.stdout.strip():
+        logger.debug("Jobs are still running. Output: %s", result.stdout)
+        return True
+      logger.debug("No running jobs found in squeue.")
+      return False
+    except FileNotFoundError:
+      logger.warning("squeue command not found. Cannot check job status.")
+      return False
+
+  def parse_job_ids(self, output: str) -> list[str]:
+    """Parses job IDs from the experiment execution output."""
+    return re.findall(r"Submitted batch job (\d+)", output)

@@ -1,3 +1,5 @@
+"""Default scheduler implementation for Cluster Health Scanner."""
+
 import importlib.resources as pkg_resources
 import logging
 import os
@@ -35,3 +37,11 @@ class DefaultScheduler(BaseScheduler):
     with pkg_resources.path(chs, "ramble.yaml") as p:
       shutil.copy(p, os.path.join(workspace_config_dir, "ramble.yaml"))
       logger.debug("Copied default ramble.yaml to %s", workspace_config_dir)
+
+  def check_jobs_running(self, job_ids: list[str]) -> bool:
+    """Checks if the given jobs are still running."""
+    return False
+
+  def parse_job_ids(self, output: str) -> list[str]:
+    """Parses job IDs from the experiment execution output."""
+    return []

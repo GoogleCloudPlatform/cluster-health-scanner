@@ -150,7 +150,7 @@ def run_action(
     workspaces_base_dir: str,
     ramble_manager: type[RambleManager],
     machine_type: str,
-) -> tuple[str, str, list[str] | None, str, str]:
+) -> tuple[str, str, list[str] | None, str, str, list[str]]:
   """Validates parameters and orchestrates test suite execution.
 
   Args:
@@ -160,10 +160,13 @@ def run_action(
     workspace_name: The name of the test workspace.
     workspaces_base_dir: The base directory for workspaces.
     ramble_manager: The class to use for RambleManager.
+    machine_type: The machine type of the cluster nodes (e.g., a3-high).
 
   Returns:
     A tuple containing the suite name, scheduler name, a list of
-    test names, workspace name, and workspaces base directory.
+    test names, workspace name, and workspaces base directory, and submitted job
+    IDs.
+
 
   Raises:
     click.ClickException: If an error occurs during CHS execution.
@@ -185,7 +188,7 @@ def run_action(
         suite, scheduler_obj, tests, machine_type=machine_type
     )
     ramble_manager.setup_workspace()
-    ramble_manager.execute_experiments()
+    job_ids = ramble_manager.execute_experiments()
   except click.ClickException:
     # Re-raise ClickExceptions, which are already user-friendly.
     raise
@@ -198,7 +201,14 @@ def run_action(
     )
     raise click.ClickException(f"CHS execution failed: {e!r}") from e
   else:
-    return suite, scheduler_obj.name, tests, workspace_name, workspaces_base_dir
+    return (
+        suite,
+        scheduler_obj.name,
+        tests,
+        workspace_name,
+        workspaces_base_dir,
+        job_ids,
+    )
 
 
 def analyze_action(run_id: str) -> str:
@@ -216,10 +226,26 @@ def analyze_action(run_id: str) -> str:
 
   logger.debug("Analyzing run_id=%r", run_id)
   workspaces_base_dir = get_default_workspaces_dir()
-  manager = RambleManager(workspaces_base_dir, run_id)
+  logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
+  ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
   try:
-    manager.analyze_results()
+    if ramble_manager.check_jobs_running():
+      click.echo(
+          f"Jobs for run {run_id} are still running. Please try again later."
+      )
+      logger.debug("Jobs deemed running for run_id=%r", run_id)
+      return run_id
+
+    logger.debug(
+        "No jobs running for run_id=%r. Proceeding with analysis.", run_id
+    )
+
+    output_path = ramble_manager.analyze_results()
+    logger.debug("Analysis complete for run_id=%r", run_id)
+    click.echo(f"Results generated at: {output_path}")
+    click.echo(f"Bill of Health: {output_path}/bill_of_health.json")
+    click.echo(f"Logs: {output_path}/experiments")
   except click.ClickException:
     raise
   except (OSError, subprocess.CalledProcessError) as e:
@@ -272,8 +298,8 @@ def list_command(
 @click.option(
     "--suite",
     "-s",
-    required=True,
     help="Name of the test suite to run",
+    default="a3-ultra",
     callback=non_empty_str_callback,
 )
 @click.option(
@@ -319,17 +345,21 @@ def run(
     nodelist: str | None,
     partition: str | None,
     machine_type: str,
-) -> tuple[str, str, list[str] | None, str, str]:
+) -> tuple[str, str, list[str] | None, str, str, list[str]]:
   """Command to run a test suite.
 
   Args:
     suite: Name of the test suite to run.
     scheduler: Scheduler to use (e.g., slurm, gke).
     tests: Comma-separated list of specific tests to run (optional).
+    nodes: Comma-separated list of individual nodes to run on.
+    nodelist: Slurm node list pattern to run on (e.g., node-[1-3]).
+    partition: Slurm partition to run on.
+    machine_type: The machine type of the cluster nodes (e.g., a3-high).
 
   Returns:
     A tuple containing the suite name, scheduler name, a list of
-    test names, workspace name, and workspaces base directory.
+    test names, workspace name, workspaces base directory, and job ids.
   """
   scheduler_obj = get_scheduler(
       scheduler, nodes=nodes, nodelist=nodelist, partition=partition
@@ -339,14 +369,19 @@ def run(
     nodes_under_test = scheduler_obj.get_nodes_under_test()
     if not nodes_under_test:
       raise click.ClickException("No free nodes found to run on.")
+  else:
+    # TODO: Add support for other schedulers.
+    raise click.ClickException("Only slurm scheduler is supported for now.")
 
   workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
   workspaces_base_dir = get_default_workspaces_dir()
+  if not tests:
+    tests = "nccl-cluster, nccl-pairwise, dcgm"
   parsed_tests = _parse_tests(tests)
   logger.debug("run_action: Parsed tests: %r", parsed_tests)
   logger.debug("Workspace name: %s", workspace_name)
   logger.debug("Workspaces base directory: %s", workspaces_base_dir)
-  return run_action(
+  result = run_action(
       suite=suite,
       scheduler_obj=scheduler_obj,
       tests=parsed_tests,
@@ -355,6 +390,18 @@ def run(
       ramble_manager=RambleManager,
       machine_type=machine_type,
   )
+
+  click.echo(f"Run submitted successfully.")
+  click.echo(f"Request ID (Workspace Name): {workspace_name}")
+  if result[5]:  # job_ids
+    click.echo(f"Job IDs: {', '.join(result[5])}")
+  else:
+    click.echo("No Job IDs captured (running locally?)")
+
+  click.echo(f"Query results using the command: chs analyze {workspace_name}")
+  click.echo("Note: 'chs analyze' retrieves the latest results.")
+
+  return result
 
 
 @cli.command()

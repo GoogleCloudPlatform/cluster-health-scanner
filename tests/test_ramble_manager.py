@@ -1,11 +1,12 @@
 """Unit tests for RambleManager."""
 
+import logging
 import os
+import pathlib
 import subprocess
 import sysconfig
 import unittest
 from unittest import mock
-import logging
 from chs.ramble_manager import RambleManager
 import click
 
@@ -28,7 +29,6 @@ class TestRambleManager(unittest.TestCase):
 
     self.mock_sysconfig.return_value = "/venv/lib/python/site-packages"
     self.mock_os_path_exists.return_value = True
-    # Make abspath return the path it's given for simplicity in tests
     self.mock_os_path_abspath.side_effect = lambda x: x
     logging.disable(logging.CRITICAL)
 
@@ -68,6 +68,7 @@ class TestRambleManager(unittest.TestCase):
         text=True,
         cwd=None,
         stdout=subprocess.DEVNULL,
+        stderr=None,
     )
 
   def test_execute_shell_command_failure(self):
@@ -124,6 +125,7 @@ class TestRambleManager(unittest.TestCase):
         text=True,
         cwd=None,
         stdout=subprocess.DEVNULL,
+        stderr=None,
     )
 
   def test_setup_workspace(self):
@@ -149,14 +151,22 @@ class TestRambleManager(unittest.TestCase):
         text=True,
         cwd="/tmp/ws1",
         stdout=subprocess.DEVNULL,
+        stderr=None,
     )
 
   def test_execute_experiments(self):
-    """Test execute_experiments executes correct ramble command."""
+    """Test execute_experiments executes correct ramble command and parses job IDs."""
+
     manager = RambleManager("/tmp", "ws1", self.mock_run)
+    mock_scheduler = mock.Mock()
+    mock_scheduler.name = "mock_scheduler"
+    mock_scheduler.parse_job_ids.return_value = ["123"]
+    manager._scheduler = mock_scheduler
     expected_script_path = self._get_expected_setup_script_path()
 
-    manager.execute_experiments()
+    with mock.patch.object(manager, "_update_registry") as mock_update_registry:
+      self.mock_run.return_value.stdout = "Submitted batch job 123"
+      job_ids = manager.execute_experiments()
 
     self.mock_run.assert_called_once_with(
         [
@@ -172,14 +182,76 @@ class TestRambleManager(unittest.TestCase):
         check=True,
         text=True,
         cwd="/tmp/ws1",
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+
+    mock_scheduler.parse_job_ids.assert_called_once()
+    self.assertEqual(job_ids, ["123"])
+    mock_update_registry.assert_called_once_with(["123"])
 
   def test_configure_workspace_runs(self):
     """Test configure_workspace runs without error."""
     manager = RambleManager("/tmp", "ws1", self.mock_run)
-    manager.configure_workspace("suite1", "slurm", ["test1"])
-    manager.configure_workspace("suite1", "slurm", None)
+    mock_scheduler = mock.Mock()
+    mock_scheduler.name = "mock_scheduler"
+
+    with mock.patch("os.makedirs"):
+      manager.configure_workspace(
+          "suite1", mock_scheduler, ["test1"], machine_type="a3-high"
+      )
+      manager.configure_workspace(
+          "suite1", mock_scheduler, None, machine_type="a3-high"
+      )
+
+    self.assertEqual(mock_scheduler.write_ramble_config.call_count, 2)
+
+  def test_check_jobs_running_true(self):
+    """Test check_jobs_running returns True when jobs are running."""
+    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    mock_scheduler = mock.Mock()
+    mock_scheduler.check_jobs_running.return_value = True
+
+    with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
+      with mock.patch("chs.ramble_manager.get_scheduler") as mock_get_scheduler:
+        mock_get_entry.return_value = {
+            "job_ids": ["123"],
+            "scheduler": "mock_scheduler",
+        }
+        mock_get_scheduler.return_value = mock_scheduler
+
+        result = manager.check_jobs_running()
+
+        self.assertTrue(result)
+        mock_get_scheduler.assert_called_once_with("mock_scheduler")
+        mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
+
+  def test_check_jobs_running_false(self):
+    """Test check_jobs_running returns False when jobs are not running."""
+    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    mock_scheduler = mock.Mock()
+    mock_scheduler.check_jobs_running.return_value = False
+
+    with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
+      with mock.patch("chs.ramble_manager.get_scheduler") as mock_get_scheduler:
+        mock_get_entry.return_value = {
+            "job_ids": ["123"],
+            "scheduler": "mock_scheduler",
+        }
+        mock_get_scheduler.return_value = mock_scheduler
+
+        result = manager.check_jobs_running()
+
+        self.assertFalse(result)
+
+  def test_check_jobs_running_no_entry(self):
+    """Test check_jobs_running returns False when no registry entry found."""
+    manager = RambleManager("/tmp", "ws1", self.mock_run)
+
+    with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
+      mock_get_entry.return_value = None
+      result = manager.check_jobs_running()
+      self.assertFalse(result)
 
   def test_repr(self):
     """Test __repr__ format."""
@@ -187,6 +259,35 @@ class TestRambleManager(unittest.TestCase):
     self.assertEqual(
         repr(manager), "RambleManager(workspace_name='ws1', path='/tmp/ws1')"
     )
+
+  def test_analyze_results(self):
+    """Test analyze_results generates BoH and copies experiments."""
+    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    self.mock_run.return_value.stdout = "analysis complete"
+
+    with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
+      with mock.patch("shutil.copytree") as mock_copytree:
+        with mock.patch("shutil.ignore_patterns") as mock_ignore_patterns:
+          with mock.patch("builtins.open", mock.mock_open()) as mock_file:
+            with mock.patch("os.getcwd", return_value="/home/user"):
+              with mock.patch("pathlib.Path.mkdir") as mock_mkdir:
+                self.mock_os_path_exists.side_effect = lambda p: True
+
+                output_path = manager.analyze_results()
+
+                self.assertEqual(output_path, "/home/user/ws1")
+                mock_boh_gen.return_value.generate.assert_called_once()
+                mock_ignore_patterns.assert_called_once_with("chs-*")
+                mock_copytree.assert_called_once()
+                args, kwargs = mock_copytree.call_args
+                self.assertEqual(args[0], "/tmp/ws1/experiments")
+                self.assertEqual(
+                    args[1], pathlib.Path("/home/user/ws1/experiments")
+                )
+                self.assertTrue(kwargs["dirs_exist_ok"])
+                self.assertEqual(
+                    kwargs.get("ignore"), mock_ignore_patterns.return_value
+                )
 
 
 if __name__ == "__main__":
