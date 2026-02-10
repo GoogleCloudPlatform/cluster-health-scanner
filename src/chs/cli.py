@@ -8,7 +8,10 @@ import datetime
 import logging
 import pathlib
 import subprocess
+
 from chs.ramble_manager import RambleManager
+from chs.schedulers import get_scheduler
+from chs.schedulers.base import BaseScheduler
 import click
 import platformdirs
 
@@ -141,17 +144,18 @@ def _parse_tests(tests_str: str | None) -> list[str] | None:
 def run_action(
     *,
     suite: str,
-    scheduler: str,
+    scheduler_obj: BaseScheduler,
     tests: list[str] | None,
     workspace_name: str,
     workspaces_base_dir: str,
     ramble_manager: type[RambleManager],
+    machine_type: str,
 ) -> tuple[str, str, list[str] | None, str, str]:
   """Validates parameters and orchestrates test suite execution.
 
   Args:
     suite: Name of the test suite to run.
-    scheduler: Scheduler to use (e.g., 'slurm', 'gke').
+    scheduler_obj: Scheduler object to use.
     tests: An optional list of names of specific tests to run.
     workspace_name: The name of the test workspace.
     workspaces_base_dir: The base directory for workspaces.
@@ -168,7 +172,7 @@ def run_action(
   logger.debug(
       "run_action: Attempting to run suite=%r, scheduler=%r, tests=%r",
       suite,
-      scheduler,
+      scheduler_obj.name,
       tests,
   )
 
@@ -177,7 +181,9 @@ def run_action(
   try:
     ramble_manager.create_workspace()
     ramble_manager.add_custom_repository()
-    ramble_manager.configure_workspace(suite, scheduler, tests)
+    ramble_manager.configure_workspace(
+        suite, scheduler_obj, tests, machine_type=machine_type
+    )
     ramble_manager.setup_workspace()
     ramble_manager.execute_experiments()
   except click.ClickException:
@@ -187,12 +193,12 @@ def run_action(
     logger.exception(
         "CHS execution failed for suite=%r, scheduler=%r, tests=%r",
         suite,
-        scheduler,
+        scheduler_obj.name,
         tests,
     )
     raise click.ClickException(f"CHS execution failed: {e!r}") from e
   else:
-    return suite, scheduler, tests, workspace_name, workspaces_base_dir
+    return suite, scheduler_obj.name, tests, workspace_name, workspaces_base_dir
 
 
 def analyze_action(run_id: str) -> str:
@@ -283,11 +289,36 @@ def list_command(
     help="Comma-separated list of specific tests to run (optional)",
     callback=non_empty_str_callback,
 )
+@click.option(
+    "--nodes",
+    help="Comma-separated list of individual nodes to run on",
+    callback=non_empty_str_callback,
+)
+@click.option(
+    "--nodelist",
+    help="Slurm node list pattern to run on (e.g., node-[1-3])",
+    callback=non_empty_str_callback,
+)
+@click.option(
+    "--partition",
+    help="Slurm partition to run on",
+    callback=non_empty_str_callback,
+)
+@click.option(
+    "--machine-type",
+    required=True,
+    help="The machine type of the cluster nodes (e.g., a3-high).",
+    callback=non_empty_str_callback,
+)
 def run(
     *,
     suite: str,
     scheduler: str,
     tests: str | None,
+    nodes: str | None,
+    nodelist: str | None,
+    partition: str | None,
+    machine_type: str,
 ) -> tuple[str, str, list[str] | None, str, str]:
   """Command to run a test suite.
 
@@ -300,6 +331,15 @@ def run(
     A tuple containing the suite name, scheduler name, a list of
     test names, workspace name, and workspaces base directory.
   """
+  scheduler_obj = get_scheduler(
+      scheduler, nodes=nodes, nodelist=nodelist, partition=partition
+  )
+
+  if scheduler_obj.name == "slurm":
+    nodes_under_test = scheduler_obj.get_nodes_under_test()
+    if not nodes_under_test:
+      raise click.ClickException("No free nodes found to run on.")
+
   workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
   workspaces_base_dir = get_default_workspaces_dir()
   parsed_tests = _parse_tests(tests)
@@ -308,11 +348,12 @@ def run(
   logger.debug("Workspaces base directory: %s", workspaces_base_dir)
   return run_action(
       suite=suite,
-      scheduler=scheduler,
+      scheduler_obj=scheduler_obj,
       tests=parsed_tests,
       workspace_name=workspace_name,
       workspaces_base_dir=workspaces_base_dir,
       ramble_manager=RambleManager,
+      machine_type=machine_type,
   )
 
 

@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sysconfig
 import chs
+from chs.schedulers.base import BaseScheduler
 import click
 
 logger = logging.getLogger(__name__)
@@ -154,27 +155,36 @@ class RambleManager:
       self._execute_ramble_command(subcommand="repo", args=["add", str(p)])
 
   def configure_workspace(
-      self, suite: str, scheduler: str, tests: list[str] | None
+      self,
+      suite: str,
+      scheduler: BaseScheduler,
+      tests: list[str] | None,
+      machine_type: str,
   ) -> None:
     """Configures the Ramble workspace for the CHS run.
 
     Args:
       suite: The name of the test suite to run.
-      scheduler: The scheduler to use (e.g., slurm, gke).
+      scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
       tests: An optional list of names of specific tests to run.
+      machine_type: The machine type.
     """
 
     logger.debug("Configuring Ramble workspace in %s...", self.path)
     logger.debug("Configuring workspace for suite: %s", suite)
-    logger.debug("Configuring workspace for scheduler: %s", scheduler)
+    logger.debug("Configuring workspace for scheduler: %s", scheduler.name)
     if tests:
       logger.debug("Configuring workspace for tests: %s", tests)
 
     workspace_config_dir = os.path.join(self.path, "configs")
+    os.makedirs(workspace_config_dir, exist_ok=True)
 
-    with pkg_resources.path(chs, "ramble.yaml") as p:
-      shutil.copy(p, os.path.join(workspace_config_dir, "ramble.yaml"))
-      logger.debug("Copied ramble.yaml to %s", workspace_config_dir)
+    scheduler.write_ramble_config(
+        workspace_config_dir=workspace_config_dir,
+        suite=suite,
+        tests=tests,
+        machine_type=machine_type,
+    )
 
   def setup_workspace(self) -> None:
     """Sets up the Ramble workspace by running 'ramble workspace setup'.
