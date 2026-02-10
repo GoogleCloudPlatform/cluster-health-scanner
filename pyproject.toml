@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "grpcio-tools"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,7 +12,9 @@ dependencies = [
     "click",
     # TODO: Get ramble from https://github.com/GoogleCloudPlatform/ramble develop branch once the req branch is merged
     "ramble @ git+https://github.com/sarthakag/ramble.git@req",
-    "platformdirs"
+    "platformdirs",
+    "protobuf",
+    "rich",
 ]
 
 [project.scripts]
