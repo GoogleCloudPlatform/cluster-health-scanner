@@ -20,6 +20,7 @@ from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 import click
+from google.protobuf.json_format import MessageToJson
 import platformdirs
 
 logger = logging.getLogger(__name__)
@@ -357,18 +358,20 @@ class RambleManager:
           " the command."
       )
 
-    boh_generator = BOHGenerator(results_json_path)
-    logger.debug("Generating Bill of Health from %s", results_json_path)
-    boh = boh_generator.generate()
-    logger.debug("Bill of Health generated successfully.")
-
     home_dir = pathlib.Path(os.getcwd())
     output_dir = home_dir / self._workspace_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    boh_generator = BOHGenerator(
+        results_json_path, base_log_dir=str(output_dir)
+    )
+    logger.debug("Generating Bill of Health from %s", results_json_path)
+    boh = boh_generator.generate()
+    logger.debug("Bill of Health generated successfully.")
+
     boh_path = output_dir / "bill_of_health.json"
     with open(boh_path, "w") as f:
-      f.write(str(boh))
+      f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
     experiments_dir = os.path.join(self.path, "experiments")
     if os.path.exists(experiments_dir):

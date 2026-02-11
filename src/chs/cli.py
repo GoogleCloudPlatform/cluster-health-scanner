@@ -6,6 +6,7 @@ logic for handling subcommands such as listing resources.
 
 import datetime
 import logging
+import os
 import pathlib
 import subprocess
 
@@ -445,6 +446,70 @@ def analyze(run_id: str | None) -> str:
     click.echo(f"Analyzing latest run: {run_id}")
 
   return analyze_action(run_id)
+
+
+@cli.group()
+def show() -> None:
+  """Show commands for displaying CHS information."""
+  pass
+
+
+@show.command()
+@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.option(
+    "--tests",
+    "-t",
+    help="Comma-separated list of test names to show details for.",
+    callback=non_empty_str_callback,
+)
+def results(run_id: str | None, tests: str | None) -> None:
+  """Show Bill of Health results for a run.
+
+  If no run_id is provided, the most recent run from the workspaces directory
+  will be used.
+  """
+  from chs.results_viewer import ResultsViewer
+
+  workspaces_dir = pathlib.Path(get_default_workspaces_dir())
+  if not run_id:
+    if not workspaces_dir.exists():
+      raise click.ClickException("No workspaces directory found.")
+
+    valid_runs = []
+    # %Y-%m-%d_%H.%M.%S.%f
+    date_format = "%Y-%m-%d_%H.%M.%S.%f"
+    for d in workspaces_dir.iterdir():
+      if d.is_dir():
+        try:
+          parsed_time = datetime.datetime.strptime(d.name, date_format)
+          valid_runs.append((parsed_time, d))
+        except ValueError:
+          # Directory name doesn't match the expected format; ignore it.
+          continue
+
+    if not valid_runs:
+      raise click.ClickException("No previous runs found to analyze.")
+
+    # Sort by the parsed datetime to find the latest
+    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
+    run_id = latest_dir.name
+    logger.info("No run_id provided. Using latest run: %s", run_id)
+    click.echo(f"Showing results for latest run: {run_id}")
+  current_dir_path = pathlib.Path(os.getcwd()) / run_id / "bill_of_health.json"
+  if current_dir_path.exists():
+    boh_path = current_dir_path
+  else:
+    click.echo(f"Could not find bill of health at {current_dir_path}.")
+    click.echo(f"Have you run 'chs analyze {run_id}'?")
+    return
+
+  viewer = ResultsViewer(boh_path)
+
+  parsed_tests = _parse_tests(tests)
+  if parsed_tests:
+    viewer.show_details(tests=parsed_tests)
+  else:
+    viewer.show_summary()
 
 
 def main() -> None:

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import json
+import os
 from typing import Any
 import uuid
 
@@ -12,8 +13,9 @@ from google.protobuf.timestamp_pb2 import Timestamp
 class BOHGenerator:
   """Generates Bill of Health from Ramble JSON results."""
 
-  def __init__(self, file_path: str):
+  def __init__(self, file_path: str, base_log_dir: str | None = None):
     self.file_path = file_path
+    self.base_log_dir = base_log_dir
     self.report = pb.BillOfHealth()
 
   def _get_timestamp(self) -> Timestamp:
@@ -99,6 +101,10 @@ class BOHGenerator:
       # Currently, it points to log files inside workspace. I'll update it
       # after the followup PR on uploading logs to bucket.
       if log_file:
+        if self.base_log_dir:
+          workspace_dir = os.path.dirname(self.file_path)
+          rel_path = os.path.relpath(log_file, workspace_dir)
+          log_file = os.path.join(self.base_log_dir, rel_path)
         test_result.metadata.fields["log_file"].string_value = log_file
       else:
         test_result.metadata.fields["log_file"].string_value = ""

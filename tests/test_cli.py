@@ -315,11 +315,24 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
         self.assertIn(case.expected_output, result.output)
 
+  @mock.patch("chs.cli.get_scheduler")
   @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-  def test_run_command(self, mock_get_default_dir):
+  def test_run_command(self, mock_get_default_dir, mock_get_scheduler):
     """Test 'run' command."""
     mock_default_dir = "/mocked/workspaces"
     mock_get_default_dir.return_value = mock_default_dir
+
+    # Setup mock scheduler
+    mock_scheduler = mock.Mock()
+    mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+
+    def get_scheduler_side_effect(name, **kwargs):
+      s = mock.Mock()
+      s.name = name
+      s.get_nodes_under_test.return_value = ["node1"]
+      return s
+
+    mock_get_scheduler.side_effect = get_scheduler_side_effect
 
     test_cases = [
         _RunCommandTestCase(
@@ -336,11 +349,11 @@ class TestCli(unittest.TestCase):
             ],
             expected_return=(
                 "suite1",
-                "mock_scheduler",
+                "slurm",
                 ["nccl-cluster", "nccl-pairwise", "dcgm"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -363,7 +376,7 @@ class TestCli(unittest.TestCase):
                 ["t1", "t2"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -386,28 +399,7 @@ class TestCli(unittest.TestCase):
                 ["t1"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
-            ),
-        ),
-        _RunCommandTestCase(
-            name="gke_scheduler",
-            args_list=[
-                "-v",
-                "run",
-                "--suite",
-                "suite1",
-                "--scheduler",
-                "gke",
-                "--machine-type",
-                "a3-high",
-            ],
-            expected_return=(
-                "suite1",
-                "mock_scheduler",
-                ["nccl-cluster", "nccl-pairwise", "dcgm"],
-                MOCK_WORKSPACE_NAME,
-                mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -430,7 +422,7 @@ class TestCli(unittest.TestCase):
                 ["t1"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -453,7 +445,7 @@ class TestCli(unittest.TestCase):
                 ["t1"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -476,7 +468,7 @@ class TestCli(unittest.TestCase):
                 ["t1", "t2"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -499,7 +491,7 @@ class TestCli(unittest.TestCase):
                 ["t1", "t2"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -522,7 +514,7 @@ class TestCli(unittest.TestCase):
                 ["t1", "t2", "t3"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
         _RunCommandTestCase(
@@ -545,7 +537,7 @@ class TestCli(unittest.TestCase):
                 ["nccl-cluster", "nccl-pairwise", "dcgm"],
                 MOCK_WORKSPACE_NAME,
                 mock_default_dir,
-                [],
+                ["job1"],
             ),
         ),
     ]
@@ -555,6 +547,7 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.reset_mock()
         self.mock_get_scheduler.reset_mock()
         mock_get_default_dir.reset_mock()
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
 
         if "--scheduler" in case.args_list:
           scheduler_arg_idx = case.args_list.index("--scheduler") + 1
@@ -583,12 +576,12 @@ class TestCli(unittest.TestCase):
             mock_default_dir, MOCK_WORKSPACE_NAME
         )
         self.mock_rm_instance.create_workspace.assert_called_once()
-        self.mock_rm_instance.configure_workspace.assert_called_once_with(
-            case.expected_return[0],
-            self.mock_scheduler,
-            case.expected_return[2],
-            machine_type="a3-high",
-        )
+        self.mock_rm_instance.configure_workspace.assert_called_once()
+        args, kwargs = self.mock_rm_instance.configure_workspace.call_args
+        self.assertEqual(args[0], case.expected_return[0])
+        self.assertEqual(args[1].name, case.expected_return[1])
+        self.assertEqual(args[2], case.expected_return[2])
+        self.assertEqual(kwargs["machine_type"], "a3-high")
         self.mock_rm_instance.setup_workspace.assert_called_once()
         self.mock_rm_instance.execute_experiments.assert_called_once()
 
@@ -604,7 +597,7 @@ class TestCli(unittest.TestCase):
     )
     result = self.runner.invoke(
         cli.cli,
-        ["run", "-s", "s1", "-sch", "slurm", "--machine-type", "a3-high"],
+        ["run", "-s", "s1", "-sch", "gke", "--machine-type", "a3-high"],
     )
     self.assertEqual(result.exit_code, 1)
     self.assertIn("CHS execution failed", result.output)
@@ -622,7 +615,7 @@ class TestCli(unittest.TestCase):
     )
     result = self.runner.invoke(
         cli.cli,
-        ["run", "-s", "s1", "-sch", "slurm", "--machine-type", "a3-high"],
+        ["run", "-s", "s1", "-sch", "gke", "--machine-type", "a3-high"],
     )
     self.assertEqual(result.exit_code, 1)
     self.assertNotIn("CHS execution failed", result.output)
@@ -645,6 +638,19 @@ class TestCli(unittest.TestCase):
                 "a3-high",
             ],
             expected_output="cannot be an empty string",
+        ),
+        _CommandErrorTestCase(
+            name="gke_scheduler_unsupported",
+            args_list=[
+                "run",
+                "--suite",
+                "suite1",
+                "--scheduler",
+                "gke",
+                "--machine-type",
+                "a3-high",
+            ],
+            expected_output="Only slurm scheduler is supported",
         ),
         _CommandErrorTestCase(
             name="missing_scheduler",
@@ -686,15 +692,15 @@ class TestCli(unittest.TestCase):
             name="tests_missing_value",
             args_list=[
                 "run",
-                "--scheduler",
-                "gke",
                 "--tests",
+                "--scheduler",  # Values for tests consumes scheduler flag
+                "slurm",
                 "--suite",
                 "s1",
                 "--machine-type",
                 "a3-high",
             ],
-            expected_output="Got unexpected extra argument",
+            expected_output="Missing option '--scheduler'",
         ),
         _CommandErrorTestCase(
             name="empty_suite",
@@ -739,7 +745,7 @@ class TestCli(unittest.TestCase):
     for case in test_cases:
       with self.subTest(case.name):
         result = self.runner.invoke(cli.cli, case.args_list)
-        self.assertEqual(result.exit_code, 2)
+        self.assertNotEqual(result.exit_code, 0)
         self.assertIn(case.expected_output, result.output)
 
   def test_analyze_command(self):

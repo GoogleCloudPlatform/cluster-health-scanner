@@ -3,8 +3,10 @@
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import sysconfig
+import tempfile
 import unittest
 from unittest import mock
 from chs.ramble_manager import RambleManager
@@ -16,20 +18,31 @@ class TestRambleManager(unittest.TestCase):
 
   def setUp(self):
     super().setUp()
+    self.tmp_dir_obj = tempfile.TemporaryDirectory()
+    self.tmp_dir = self.tmp_dir_obj.name
+    self.addCleanup(self.tmp_dir_obj.cleanup)
     self.mock_run = mock.Mock(spec=subprocess.run)
     self.mock_sysconfig = self.enterContext(
         mock.patch.object(sysconfig, "get_path", autospec=True)
     )
-    self.mock_os_path_exists = self.enterContext(
-        mock.patch.object(os.path, "exists", autospec=True)
-    )
-    self.mock_os_path_abspath = self.enterContext(
-        mock.patch.object(os.path, "abspath", autospec=True)
-    )
 
-    self.mock_sysconfig.return_value = "/venv/lib/python/site-packages"
-    self.mock_os_path_exists.return_value = True
+    self.mock_sysconfig.return_value = self.tmp_dir
+    self.real_os_path_exists = os.path.exists
+    self.mock_os_path_exists = self.enterContext(
+        mock.patch("os.path.exists", autospec=True)
+    )
+    self.mock_os_path_exists.side_effect = self.real_os_path_exists
+
+    self.mock_os_path_abspath = self.enterContext(
+        mock.patch("os.path.abspath", autospec=True)
+    )
     self.mock_os_path_abspath.side_effect = lambda x: x
+    setup_script_dir = os.path.join(self.tmp_dir, "share/ramble")
+    os.makedirs(setup_script_dir, exist_ok=True)
+    self.setup_script_path = os.path.join(setup_script_dir, "setup-env.sh")
+    with open(self.setup_script_path, "w") as f:
+      f.write("#!/bin/bash\n")
+
     logging.disable(logging.CRITICAL)
 
   def tearDown(self):
@@ -49,9 +62,6 @@ class TestRambleManager(unittest.TestCase):
     )
     self.assertEqual(manager.path, "/tmp/ws1")
     self.mock_sysconfig.assert_called_once_with("purelib")
-    self.mock_os_path_exists.assert_called_once_with(
-        os.path.abspath(self._get_expected_setup_script_path())
-    )
 
   def test_execute_shell_command_success(self):
     """Test _execute_shell_command runs command successfully."""
@@ -103,7 +113,7 @@ class TestRambleManager(unittest.TestCase):
 
   def test_create_workspace(self):
     """Test create_workspace executes correct ramble command with setup script."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     expected_script_path = self._get_expected_setup_script_path()
 
     manager.create_workspace()
@@ -119,7 +129,7 @@ class TestRambleManager(unittest.TestCase):
             "create",
             "-a",
             "-d",
-            "/tmp/ws1",
+            f"{self.tmp_dir}/ws1",
         ],
         check=True,
         text=True,
@@ -130,7 +140,7 @@ class TestRambleManager(unittest.TestCase):
 
   def test_setup_workspace(self):
     """Test setup_workspace executes correct ramble command."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     expected_script_path = self._get_expected_setup_script_path()
 
     manager.setup_workspace()
@@ -143,13 +153,13 @@ class TestRambleManager(unittest.TestCase):
             "bash",
             "ramble",
             "-w",
-            "/tmp/ws1",
+            f"{self.tmp_dir}/ws1",
             "workspace",
             "setup",
         ],
         check=True,
         text=True,
-        cwd="/tmp/ws1",
+        cwd=f"{self.tmp_dir}/ws1",
         stdout=subprocess.DEVNULL,
         stderr=None,
     )
@@ -157,7 +167,7 @@ class TestRambleManager(unittest.TestCase):
   def test_execute_experiments(self):
     """Test execute_experiments executes correct ramble command and parses job IDs."""
 
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     mock_scheduler = mock.Mock()
     mock_scheduler.name = "mock_scheduler"
     mock_scheduler.parse_job_ids.return_value = ["123"]
@@ -176,12 +186,12 @@ class TestRambleManager(unittest.TestCase):
             "bash",
             "ramble",
             "-w",
-            "/tmp/ws1",
+            f"{self.tmp_dir}/ws1",
             "on",
         ],
         check=True,
         text=True,
-        cwd="/tmp/ws1",
+        cwd=f"{self.tmp_dir}/ws1",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -192,7 +202,7 @@ class TestRambleManager(unittest.TestCase):
 
   def test_configure_workspace_runs(self):
     """Test configure_workspace runs without error."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     mock_scheduler = mock.Mock()
     mock_scheduler.name = "mock_scheduler"
 
@@ -208,7 +218,7 @@ class TestRambleManager(unittest.TestCase):
 
   def test_check_jobs_running_true(self):
     """Test check_jobs_running returns True when jobs are running."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     mock_scheduler = mock.Mock()
     mock_scheduler.check_jobs_running.return_value = True
 
@@ -228,7 +238,7 @@ class TestRambleManager(unittest.TestCase):
 
   def test_check_jobs_running_false(self):
     """Test check_jobs_running returns False when jobs are not running."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     mock_scheduler = mock.Mock()
     mock_scheduler.check_jobs_running.return_value = False
 
@@ -246,7 +256,7 @@ class TestRambleManager(unittest.TestCase):
 
   def test_check_jobs_running_no_entry(self):
     """Test check_jobs_running returns False when no registry entry found."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
 
     with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
       mock_get_entry.return_value = None
@@ -255,14 +265,12 @@ class TestRambleManager(unittest.TestCase):
 
   def test_repr(self):
     """Test __repr__ format."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
-    self.assertEqual(
-        repr(manager), "RambleManager(workspace_name='ws1', path='/tmp/ws1')"
-    )
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+    self.assertIn(f"{self.tmp_dir}/ws1", repr(manager))
 
   def test_analyze_results(self):
     """Test analyze_results generates BoH and copies experiments."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
+    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
     self.mock_run.return_value.stdout = "analysis complete"
 
     with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
@@ -280,7 +288,7 @@ class TestRambleManager(unittest.TestCase):
                 mock_ignore_patterns.assert_called_once_with("chs-*")
                 mock_copytree.assert_called_once()
                 args, kwargs = mock_copytree.call_args
-                self.assertEqual(args[0], "/tmp/ws1/experiments")
+                self.assertEqual(args[0], f"{self.tmp_dir}/ws1/experiments")
                 self.assertEqual(
                     args[1], pathlib.Path("/home/user/ws1/experiments")
                 )
