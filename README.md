@@ -11,6 +11,36 @@ CHS (Cluster Health Scanner) is designed to help site reliability engineers and 
 -   **Managing Resources**: List and filter available tests, suites, and schedulers.
 -   **Visualizing Data**: View detailed results and metrics directly in the terminal.
 
+## Prerequisites
+
+### Enroot Configuration
+
+To run tests that require containerized workloads, you must configure Enroot authentication for the Google Artifact Registry.
+
+Run the following commands to set up your credentials:
+
+```bash
+# 1. Verify gcloud authentication
+gcloud auth list
+
+# 2. Configure Docker to use the US Docker registry
+gcloud auth configure-docker us-docker.pkg.dev
+
+# 3. Create the Enroot configuration directory
+mkdir -p ~/.enroot
+
+# 4. Set the credentials file path
+export ENROOT_CONFIG_CREDENTIALS="${HOME}/.enroot/.credentials"
+
+# 5. Generate the Enroot credentials file using your gcloud access token
+cat <<EOF > "${ENROOT_CONFIG_CREDENTIALS}"
+machine us-docker.pkg.dev login oauth2accesstoken password $(gcloud auth application-default print-access-token)
+EOF
+
+# 6. Verify the credentials were created successfully
+cat "${ENROOT_CONFIG_CREDENTIALS}"
+```
+
 ## Installation
 
 Clone CHS from Gerrit's develop branch
