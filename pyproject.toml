@@ -25,4 +25,4 @@ where = ["src"]
 
 
 [tool.setuptools.package-data]
-"chs" = ["/*.yaml", "repos/repo.yaml", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+"chs" = ["**/*.yaml", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
