@@ -45,3 +45,7 @@ class DefaultScheduler(BaseScheduler):
   def parse_job_ids(self, output: str) -> list[str]:
     """Parses job IDs from the experiment execution output."""
     return []
+
+  def cancel_jobs(self, job_ids: list[str]) -> None:
+    """Cancels the given jobs."""
+    pass

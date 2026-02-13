@@ -156,3 +156,19 @@ class SlurmScheduler(BaseScheduler):
   def parse_job_ids(self, output: str) -> list[str]:
     """Parses job IDs from the experiment execution output."""
     return re.findall(r"Submitted batch job (\d+)", output)
+
+  def cancel_jobs(self, job_ids: list[str]) -> None:
+    """Cancels the given jobs using scancel."""
+    if not job_ids:
+      logger.warning("No job IDs to cancel.")
+      return
+
+    cmd = ["scancel", ",".join(job_ids)]
+    try:
+      subprocess.run(cmd, capture_output=True, text=True, check=True)
+      logger.debug("Successfully canceled jobs: %s", job_ids)
+    except FileNotFoundError:
+      logger.warning("scancel command not found. Cannot cancel jobs.")
+    except subprocess.CalledProcessError as e:
+      logger.error("Failed to cancel jobs. Error: %s", e.stderr)
+      raise click.ClickException(f"Failed to cancel jobs: {e.stderr}") from e

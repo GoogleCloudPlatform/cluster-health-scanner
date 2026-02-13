@@ -271,6 +271,33 @@ class RambleManager:
     self._update_registry(job_ids)
     return job_ids
 
+  def cancel_experiments(self) -> None:
+    """Cancels running experiments in the Ramble workspace.
+
+    This retrieves job IDs from the registry and cancels them via the scheduler.
+
+    Raises:
+      click.ClickException: If the experiment cancellation command fails.
+    """
+    registry_entry = self._get_registry_entry()
+    if not registry_entry:
+      logger.warning("No registry entry found. Cannot cancel jobs.")
+      click.echo(f"No registry entry found for run {self._workspace_name}.")
+      return
+
+    job_ids = registry_entry.get("job_ids", [])
+    if not job_ids:
+      logger.warning("No job IDs found in registry. Cannot cancel jobs.")
+      click.echo(f"No job IDs found for run {self._workspace_name}.")
+      return
+
+    scheduler_name = registry_entry.get("scheduler", "slurm")
+    logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
+    scheduler = get_scheduler(scheduler_name)
+
+    logger.debug("Canceling Ramble experiments %s in %s...", job_ids, self.path)
+    scheduler.cancel_jobs(job_ids)
+
   def _get_registry_path(self) -> pathlib.Path:
     """Returns the path to the runs registry file."""
     app_data_dir = pathlib.Path(

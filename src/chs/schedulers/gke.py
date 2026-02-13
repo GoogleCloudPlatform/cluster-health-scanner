@@ -161,3 +161,20 @@ class GKEScheduler(BaseScheduler):
         r"([a-zA-Z0-9.-]+)\s+(?:created|configured|unchanged)"
     )
     return re.findall(regex, output)
+
+  def cancel_jobs(self, job_ids: list[str]) -> None:
+    """Cancels the given JobSets using kubectl delete."""
+    if not job_ids:
+      logger.warning("No job IDs to cancel.")
+      return
+
+    for job_id in job_ids:
+      cmd = ["kubectl", "delete", "jobset", job_id]
+      try:
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        logger.debug("Successfully deleted JobSet: %s", job_id)
+      except FileNotFoundError:
+        logger.warning("kubectl command not found. Cannot cancel jobs.")
+      except subprocess.CalledProcessError as e:
+        logger.error("Failed to delete JobSet %s. Error: %s", job_id, e.stderr)
+        click.echo(f"Failed to delete JobSet {job_id}: {e.stderr}")

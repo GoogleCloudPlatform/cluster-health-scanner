@@ -258,6 +258,40 @@ def analyze_action(run_id: str) -> str:
   return run_id
 
 
+def cancel_action(run_id: str) -> str:
+  """Cancels jobs for a specific test run.
+
+  Args:
+    run_id: The ID of the test run to cancel.
+
+  Returns:
+    The run_id of the cancelled test run.
+
+  Raises:
+    click.ClickException: If an error occurs during CHS job cancellation.
+  """
+  logger.debug("Canceling run_id=%r", run_id)
+  workspaces_base_dir = get_default_workspaces_dir()
+  logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
+  ramble_manager = RambleManager(workspaces_base_dir, run_id)
+
+  try:
+    if not ramble_manager.check_jobs_running():
+      click.echo(f"No jobs for run {run_id} are currently running.")
+      return run_id
+
+    ramble_manager.cancel_experiments()
+    logger.debug("Cancellation complete for run_id=%r", run_id)
+    click.echo(f"Jobs for run {run_id} have been canceled.")
+  except click.ClickException:
+    raise
+  except (OSError, subprocess.CalledProcessError) as e:
+    logger.exception("CHS cancellation failed for run_id=%r", run_id)
+    raise click.ClickException(f"CHS cancellation failed: {e!r}") from e
+
+  return run_id
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
@@ -459,6 +493,49 @@ def analyze(run_id: str | None) -> str:
     click.echo(f"Analyzing latest run: {run_id}")
 
   return analyze_action(run_id)
+
+
+@cli.command()
+@click.argument("run_id", required=False, callback=non_empty_str_callback)
+def cancel(run_id: str | None) -> str:
+  """Cancel running jobs for a test run.
+
+  If no run_id is provided, the most recent run from the workspaces directory
+  will be used.
+
+  Args:
+    run_id: The ID of the test run to cancel.
+
+  Returns:
+    The run_id of the canceled test run.
+  """
+  if not run_id:
+    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
+    if not workspaces_dir.exists():
+      raise click.ClickException("No workspaces directory found.")
+
+    valid_runs = []
+    # %Y-%m-%d_%H.%M.%S.%f
+    date_format = "%Y-%m-%d_%H.%M.%S.%f"
+    for d in workspaces_dir.iterdir():
+      if d.is_dir():
+        try:
+          parsed_time = datetime.datetime.strptime(d.name, date_format)
+          valid_runs.append((parsed_time, d))
+        except ValueError:
+          # Directory name doesn't match the expected format; ignore it.
+          continue
+
+    if not valid_runs:
+      raise click.ClickException("No previous runs found to cancel.")
+
+    # Sort by the parsed datetime to find the latest
+    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
+    run_id = latest_dir.name
+    logger.info("No run_id provided. Using latest run: %s", run_id)
+    click.echo(f"Canceling latest run: {run_id}")
+
+  return cancel_action(run_id)
 
 
 @cli.group()
