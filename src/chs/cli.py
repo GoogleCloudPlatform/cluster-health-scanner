@@ -452,6 +452,37 @@ def run(
   return result
 
 
+def _get_latest_workspace_run_id() -> str:
+  """Finds and returns the most recent run_id from the workspaces directory.
+
+  Returns:
+    The run_id of the most recently created workspace.
+
+  Raises:
+    click.ClickException: If workspaces directory does not exist or has no valid runs.
+  """
+  workspaces_dir = pathlib.Path(get_default_workspaces_dir())
+  if not workspaces_dir.exists():
+    raise click.ClickException("No workspaces directory found.")
+
+  valid_runs = []
+  date_format = "%Y-%m-%d_%H.%M.%S.%f"
+  for d in workspaces_dir.iterdir():
+    if d.is_dir():
+      try:
+        parsed_time = datetime.datetime.strptime(d.name, date_format)
+        valid_runs.append((parsed_time, d))
+      except ValueError:
+        continue
+
+  if not valid_runs:
+    raise click.ClickException("No previous runs found.")
+
+  # Sort by the parsed datetime to find the latest
+  latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
+  return latest_dir.name
+
+
 @cli.command()
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
 def analyze(run_id: str | None) -> str:
@@ -467,28 +498,12 @@ def analyze(run_id: str | None) -> str:
     The run_id of the analyzed test run.
   """
   if not run_id:
-    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
-    if not workspaces_dir.exists():
-      raise click.ClickException("No workspaces directory found.")
-
-    valid_runs = []
-    # %Y-%m-%d_%H.%M.%S.%f
-    date_format = "%Y-%m-%d_%H.%M.%S.%f"
-    for d in workspaces_dir.iterdir():
-      if d.is_dir():
-        try:
-          parsed_time = datetime.datetime.strptime(d.name, date_format)
-          valid_runs.append((parsed_time, d))
-        except ValueError:
-          # Directory name doesn't match the expected format; ignore it.
-          continue
-
-    if not valid_runs:
-      raise click.ClickException("No previous runs found to analyze.")
-
-    # Sort by the parsed datetime to find the latest
-    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
-    run_id = latest_dir.name
+    try:
+      run_id = _get_latest_workspace_run_id()
+    except click.ClickException as e:
+      if str(e) == "No previous runs found.":
+        raise click.ClickException("No previous runs found to analyze.") from e
+      raise
     logger.info("No run_id provided. Using latest run: %s", run_id)
     click.echo(f"Analyzing latest run: {run_id}")
 
@@ -510,28 +525,12 @@ def cancel(run_id: str | None) -> str:
     The run_id of the canceled test run.
   """
   if not run_id:
-    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
-    if not workspaces_dir.exists():
-      raise click.ClickException("No workspaces directory found.")
-
-    valid_runs = []
-    # %Y-%m-%d_%H.%M.%S.%f
-    date_format = "%Y-%m-%d_%H.%M.%S.%f"
-    for d in workspaces_dir.iterdir():
-      if d.is_dir():
-        try:
-          parsed_time = datetime.datetime.strptime(d.name, date_format)
-          valid_runs.append((parsed_time, d))
-        except ValueError:
-          # Directory name doesn't match the expected format; ignore it.
-          continue
-
-    if not valid_runs:
-      raise click.ClickException("No previous runs found to cancel.")
-
-    # Sort by the parsed datetime to find the latest
-    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
-    run_id = latest_dir.name
+    try:
+      run_id = _get_latest_workspace_run_id()
+    except click.ClickException as e:
+      if str(e) == "No previous runs found.":
+        raise click.ClickException("No previous runs found to cancel.") from e
+      raise
     logger.info("No run_id provided. Using latest run: %s", run_id)
     click.echo(f"Canceling latest run: {run_id}")
 
@@ -569,27 +568,12 @@ def results(
 
   workspaces_dir = pathlib.Path(get_default_workspaces_dir())
   if not run_id:
-    if not workspaces_dir.exists():
-      raise click.ClickException("No workspaces directory found.")
-
-    valid_runs = []
-    # %Y-%m-%d_%H.%M.%S.%f
-    date_format = "%Y-%m-%d_%H.%M.%S.%f"
-    for d in workspaces_dir.iterdir():
-      if d.is_dir():
-        try:
-          parsed_time = datetime.datetime.strptime(d.name, date_format)
-          valid_runs.append((parsed_time, d))
-        except ValueError:
-          # Directory name doesn't match the expected format; ignore it.
-          continue
-
-    if not valid_runs:
-      raise click.ClickException("No previous runs found to analyze.")
-
-    # Sort by the parsed datetime to find the latest
-    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
-    run_id = latest_dir.name
+    try:
+      run_id = _get_latest_workspace_run_id()
+    except click.ClickException as e:
+      if str(e) == "No previous runs found.":
+        raise click.ClickException("No previous runs found to analyze.") from e
+      raise
     logger.info("No run_id provided. Using latest run: %s", run_id)
     click.echo(f"Showing results for latest run: {run_id}")
   current_dir_path = (
