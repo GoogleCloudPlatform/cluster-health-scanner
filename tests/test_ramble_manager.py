@@ -176,8 +176,8 @@ class TestRambleManager(unittest.TestCase):
         check=True,
         text=True,
         cwd=f"{self.tmp_dir}/ws1",
-        stdout=subprocess.DEVNULL,
-        stderr=None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env=mock.ANY,
     )
     _, kwargs = self.mock_run.call_args

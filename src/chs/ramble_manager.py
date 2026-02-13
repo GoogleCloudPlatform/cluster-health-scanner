@@ -243,6 +243,7 @@ class RambleManager:
     self._execute_ramble_command(
         subcommand="workspace",
         args=["setup"],
+        capture_output=True,
         env={"TQDM_DISABLE": "1", "TERM": "dumb"},
     )
 
