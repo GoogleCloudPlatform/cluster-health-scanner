@@ -10,7 +10,6 @@ from unittest import mock
 from chs.results_viewer import ResultsViewer
 from rich.console import Console
 
-
 class TestResultsViewer(unittest.TestCase):
 
   def setUp(self):
@@ -138,6 +137,59 @@ class TestResultsViewer(unittest.TestCase):
     )  # Should print "No matching results found"
     args, _ = mock_print.call_args
     self.assertIn("No matching results found", str(args[0].renderable))
+
+  @mock.patch.object(Console, "print")
+  def test_show_details_filtered_by_resource_substring(self, mock_print):
+    """Test show_details filtered by resource substring."""
+    viewer = ResultsViewer(self.valid_json_path)
+    viewer.show_details(resources=["ode2"])  # Should match "node2"
+    self.assertTrue(mock_print.called)
+    # Should only print test2 (which targets node2)
+    self.assertEqual(mock_print.call_count, 1)
+
+  @mock.patch.object(Console, "print")
+  def test_show_summary_list_with_description(self, mock_print):
+    """Test show_summary_list includes test description."""
+    # Create a viewer with a mock console
+    viewer = ResultsViewer(self.valid_json_path)
+    viewer.console = mock.Mock(spec=Console)
+
+    # Mock data with a known test name
+    test_results = [{
+        "name": "cluster_health_diagnostics-nccl-all",
+        "result_status": "RESULT_STATUS_SUCCESS",
+        "target_resource_ids": ["node1"],
+    }]
+
+    viewer._show_summary_list(test_results)
+
+    # Verify print was called
+    self.assertTrue(viewer.console.print.called)
+
+    # Check if the description is in the rendered content
+    # The second call to print should be the panel
+    args, _ = viewer.console.print.call_args_list[1]
+    panel = args[0]
+    self.assertIn(
+        "Validates cluster-wide GPU communication", panel.renderable.plain
+    )
+
+  @mock.patch.object(Console, "print")
+  def test_get_test_description(self, mock_print):
+    """Test _get_test_description returns correct descriptions."""
+    viewer = ResultsViewer(self.valid_json_path)
+
+    desc = viewer._get_test_description("nccl-all-test")
+    self.assertIn("Validates cluster-wide", desc)
+
+    desc = viewer._get_test_description("nccl-pairwise-test")
+    self.assertIn("Measures point-to-point", desc)
+
+    desc = viewer._get_test_description("dcgm-test")
+    self.assertIn("Performs deep hardware diagnostics", desc)
+
+    desc = viewer._get_test_description("unknown-test")
+    self.assertEqual(desc, "")
 
 
 if __name__ == "__main__":

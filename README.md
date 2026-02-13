@@ -13,11 +13,12 @@ CHS (Cluster Health Scanner) is designed to help site reliability engineers and 
 
 ## Prerequisites
 
-### Enroot Configuration
+### Slurm Configuration
 
-To run tests that require containerized workloads, you must configure Enroot authentication for the Google Artifact Registry.
+**Note:** Commands for Slurm should be run from the Slurm controller node.
 
-Run the following commands to set up your credentials:
+Enroot is required to run the containerized workloads. Run the following commands to configure your credentials on the Slurm cluster.
+
 
 ```bash
 # 1. Verify gcloud authentication
@@ -39,6 +40,16 @@ EOF
 
 # 6. Verify the credentials were created successfully
 cat "${ENROOT_CONFIG_CREDENTIALS}"
+```
+
+### GKE Configuration
+
+To run tests on GKE, you first need to get the cluster credentials. For example:
+
+```bash
+gcloud container clusters get-credentials {cluster_name} \
+    --location {location} \
+    --project {project_id}
 ```
 
 ## Installation
@@ -106,7 +117,7 @@ Executes a test suite on a specified cluster.
 
 **Arguments:**
 -   `--scheduler` / `-sch` **(Required)**: The scheduler to use.
-    *   *Supported values:* `slurm` (Currently, only Slurm is fully supported).
+    *   *Supported values:* `slurm`, `gke`.
 -   `--machine-type` **(Required)**: The machine type of the cluster nodes (e.g., `a3-high`, `a3-edge`).
 -   `--suite` / `-s`: Name of the Ramble application/suite to run.
     *   *Default:* `a3-ultra`
@@ -114,6 +125,7 @@ Executes a test suite on a specified cluster.
     *   *Default (if not provided):* `nccl-cluster, nccl-pairwise, dcgm`
 -   `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
 -   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
+-   `--nodepool`: GKE node pool to run on.
 -   `--partition`: Slurm partition to run on.
 
 **Example:**
@@ -123,6 +135,9 @@ chs run --scheduler slurm --machine-type a3-high --nodes node-01,node-02
 
 # Run specific tests
 chs run --scheduler slurm --machine-type a3-high --tests nccl-cluster
+
+# Run on GKE with a specific node pool
+chs run --scheduler gke --machine-type a3-high --nodepool my-node-pool
 ```
 
 **Output:**
@@ -152,18 +167,29 @@ chs analyze 2023-10-27_10.30.00.123456
 
 **Output Directory Structure:**
 
-When `chs analyze` is run, it creates a directory in your current path named after the `RUN_ID`:
+Workspaces are created in: `~/.local/share/cluster-health-scanner/workspaces`
+
+The workspace name follows the format: `yyyy-mm-dd_hh.mm.ss.ffffff`
+
+The Bill of Health and experiment logs are located in the `chs-results` directory within the workspace.
+
+This folder is what will be uploaded to GCS.
 
 ```
-cluster-health-scanner/
-└── <RUN_ID>/                  # e.g., 2023-10-27_10.30.00.123456
-    ├── bill_of_health.json    # The summarized Bill of Health report
-    └── experiments/           # Raw logs and experiment data
-        ├── experiment_1/
-        │   ├── execute.log
-        │   └── ...
-        └── ...
+~/.local/share/cluster-health-scanner/workspaces/
+└── <WORKSPACE_NAME>/            # e.g., 2026-02-13_08.48.45.261141
+    └── chs-results/             # Contains Bill of Health and experiment logs
+        ├── bill_of_health.json  # The summarized Bill of Health report
+        └── experiments/         # Raw logs and experiment data
+            ├── nccl-tests/
+            │   └── ...
+            └── ...
 ```
+
+The `bill_of_health.json` contains a `log_file` field for every test, pointing to the absolute path of the log file in the `experiments` directory.
+
+**Example Log File Path:**
+`log_file: "/usr/local/google/home/user/.local/share/cluster-health-scanner/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
 
 #### 4. `show results`
 Displays the Bill of Health results in the terminal.

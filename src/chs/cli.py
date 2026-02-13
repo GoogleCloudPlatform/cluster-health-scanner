@@ -11,6 +11,7 @@ import pathlib
 import subprocess
 
 from chs.ramble_manager import RambleManager
+from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 import click
@@ -128,18 +129,19 @@ def list_action(
   return show_all
 
 
-def _parse_tests(tests_str: str | None) -> list[str] | None:
-  """Parses a comma-separated string of test names.
+def _parse_str_to_list(str: str | None) -> list[str] | None:
+  """Parses a comma-separated string.
 
   Args:
-    tests_str: A comma-separated string of test names, or None.
+    str: A comma-separated string, or None.
 
   Returns:
-    A list of cleaned test names, or None if the input was None.
+    A list of cleaned strings, or None if the input was None.
   """
-  if tests_str is None:
+
+  if str is None:
     return None
-  return [test.strip() for test in tests_str.split(",") if test.strip()]
+  return [item.strip() for item in str.split(",") if item.strip()]
 
 
 def run_action(
@@ -327,6 +329,11 @@ def list_command(
     callback=non_empty_str_callback,
 )
 @click.option(
+    "--nodepool",
+    help="GKE node pool to run on",
+    callback=non_empty_str_callback,
+)
+@click.option(
     "--partition",
     help="Slurm partition to run on",
     callback=non_empty_str_callback,
@@ -344,6 +351,7 @@ def run(
     tests: str | None,
     nodes: str | None,
     nodelist: str | None,
+    nodepool: str | None,
     partition: str | None,
     machine_type: str,
 ) -> tuple[str, str, list[str] | None, str, str, list[str]]:
@@ -355,6 +363,7 @@ def run(
     tests: Comma-separated list of specific tests to run (optional).
     nodes: Comma-separated list of individual nodes to run on.
     nodelist: Slurm node list pattern to run on (e.g., node-[1-3]).
+    nodepool: GKE node pool to run on.
     partition: Slurm partition to run on.
     machine_type: The machine type of the cluster nodes (e.g., a3-high).
 
@@ -363,22 +372,26 @@ def run(
     test names, workspace name, workspaces base directory, and job ids.
   """
   scheduler_obj = get_scheduler(
-      scheduler, nodes=nodes, nodelist=nodelist, partition=partition
+      scheduler,
+      nodes=nodes,
+      nodelist=nodelist,
+      nodepool=nodepool,
+      partition=partition,
   )
 
-  if scheduler_obj.name == "slurm":
+  if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
     nodes_under_test = scheduler_obj.get_nodes_under_test()
     if not nodes_under_test:
-      raise click.ClickException("No free nodes found to run on.")
+      raise click.ClickException("No nodes provided to run on.")
   else:
     # TODO: Add support for other schedulers.
-    raise click.ClickException("Only slurm scheduler is supported for now.")
+    raise click.ClickException("Only Slurm and GKE schedulers are supported.")
 
   workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
   workspaces_base_dir = get_default_workspaces_dir()
   if not tests:
     tests = "nccl-cluster, nccl-pairwise, dcgm"
-  parsed_tests = _parse_tests(tests)
+  parsed_tests = _parse_str_to_list(tests)
   logger.debug("run_action: Parsed tests: %r", parsed_tests)
   logger.debug("Workspace name: %s", workspace_name)
   logger.debug("Workspaces base directory: %s", workspaces_base_dir)
@@ -462,13 +475,20 @@ def show() -> None:
     help="Comma-separated list of test names to show details for.",
     callback=non_empty_str_callback,
 )
-def results(run_id: str | None, tests: str | None) -> None:
+@click.option(
+    "--resources",
+    "-r",
+    help="Comma-separated list of resource names to show details for.",
+    callback=non_empty_str_callback,
+)
+def results(
+    run_id: str | None, tests: str | None, resources: str | None
+) -> None:
   """Show Bill of Health results for a run.
 
   If no run_id is provided, the most recent run from the workspaces directory
   will be used.
   """
-  from chs.results_viewer import ResultsViewer
 
   workspaces_dir = pathlib.Path(get_default_workspaces_dir())
   if not run_id:
@@ -495,7 +515,9 @@ def results(run_id: str | None, tests: str | None) -> None:
     run_id = latest_dir.name
     logger.info("No run_id provided. Using latest run: %s", run_id)
     click.echo(f"Showing results for latest run: {run_id}")
-  current_dir_path = pathlib.Path(os.getcwd()) / run_id / "bill_of_health.json"
+  current_dir_path = (
+      workspaces_dir / run_id / "chs-results" / "bill_of_health.json"
+  )
   if current_dir_path.exists():
     boh_path = current_dir_path
   else:
@@ -505,9 +527,11 @@ def results(run_id: str | None, tests: str | None) -> None:
 
   viewer = ResultsViewer(boh_path)
 
-  parsed_tests = _parse_tests(tests)
-  if parsed_tests:
-    viewer.show_details(tests=parsed_tests)
+  parsed_tests = _parse_str_to_list(tests)
+  parsed_resources = _parse_str_to_list(resources)
+
+  if parsed_tests or parsed_resources:
+    viewer.show_details(tests=parsed_tests, resources=parsed_resources)
   else:
     viewer.show_summary()
 

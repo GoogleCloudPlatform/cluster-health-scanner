@@ -603,6 +603,36 @@ class TestCli(unittest.TestCase):
     self.assertIn("CHS execution failed", result.output)
     self.assertIn("Permission denied", result.output)
 
+  @mock.patch("chs.cli.get_scheduler")
+  @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+  def test_run_command_passes_nodepool_to_scheduler(
+      self, mock_get_default_dir, mock_get_scheduler
+  ):
+    """Test that nodepool argument is passed to get_scheduler."""
+    mock_get_default_dir.return_value = "/mocked/workspaces"
+    mock_scheduler = mock.Mock()
+    mock_scheduler.name = "gke"
+    mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+    mock_get_scheduler.return_value = mock_scheduler
+
+    result = self.runner.invoke(
+        cli.cli,
+        [
+            "run",
+            "--scheduler",
+            "gke",
+            "--nodepool",
+            "pool1",
+            "--machine-type",
+            "a3-high",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    mock_get_scheduler.assert_called_once()
+    _, kwargs = mock_get_scheduler.call_args
+    self.assertEqual(kwargs.get("nodepool"), "pool1")
+
   @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
   def test_run_action_clickexception_handling(self, mock_get_default_dir):
     """Test that run_action does not wrap ClickExceptions."""
@@ -650,7 +680,7 @@ class TestCli(unittest.TestCase):
                 "--machine-type",
                 "a3-high",
             ],
-            expected_output="Only slurm scheduler is supported",
+            expected_output="Only Slurm and GKE schedulers are supported",
         ),
         _CommandErrorTestCase(
             name="missing_scheduler",

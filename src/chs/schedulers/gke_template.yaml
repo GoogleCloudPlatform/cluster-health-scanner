@@ -1,0 +1,19 @@
+ramble:
+  variants:
+    workflow_manager: gke-suite-configs
+  config:
+    overwrite_inventories: True
+  variables:
+    nodes: {nodes}
+    machine_type: {machine_type}
+    tests: {tests}
+    gpu_subnet_prefix: 'rdma'
+
+  applications:
+    chs-gke:
+      workloads:
+        cluster_health:
+          experiments:
+            cluster_health_diagnostics:
+              variables:
+                foo: bar

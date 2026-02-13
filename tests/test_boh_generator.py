@@ -85,42 +85,72 @@ class TestBOHGenerator(unittest.TestCase):
     self.assertEqual(report.system_info.type, "SLURM_CLUSTER")
     self.assertEqual(len(report.test_results), 0)
 
+  def test_generate_cluster_type(self):
+    """Test generating report with different cluster types."""
+    data = {"workspace_hash": "test_hash", "experiments": []}
+    self._write_json(data)
+
+    # Test default (slurm)
+    generator = BOHGenerator(self.test_json_path)
+    report = generator.generate()
+    self.assertEqual(report.system_info.type, "SLURM_CLUSTER")
+
+    # Test GKE
+    generator = BOHGenerator(self.test_json_path, cluster_type="gke")
+    report = generator.generate()
+    self.assertEqual(report.system_info.type, "GKE_CLUSTER")
+
+    # Test custom
+    generator = BOHGenerator(self.test_json_path, cluster_type="custom")
+    report = generator.generate()
+    self.assertEqual(report.system_info.type, "CUSTOM_CLUSTER")
+
   def test_generate_statuses(self):
     """Test mapping of all supported experiment statuses."""
     experiments = [
-        ("SUCCESS", pb.RESULT_STATUS_SUCCESS),
-        ("PASS", pb.RESULT_STATUS_UNKNOWN),
-        ("PASSED", pb.RESULT_STATUS_UNKNOWN),
-        ("FAILED", pb.RESULT_STATUS_FAILED),
-        ("FAIL", pb.RESULT_STATUS_UNKNOWN),
-        ("FAILURE", pb.RESULT_STATUS_UNKNOWN),
-        ("ERROR", pb.RESULT_STATUS_UNKNOWN),
-        ("ERR", pb.RESULT_STATUS_UNKNOWN),
-        ("SKIPPED", pb.RESULT_STATUS_UNKNOWN),
-        ("SKIP", pb.RESULT_STATUS_UNKNOWN),
-        ("CANCELLED", pb.RESULT_STATUS_CANCELLED),
-        ("TIMEOUT", pb.RESULT_STATUS_TIMEOUT),
-        ("TIMEDOUT", pb.RESULT_STATUS_UNKNOWN),
-        ("UNKNOWN", pb.RESULT_STATUS_UNKNOWN),
+        (
+            {"criteria1": "PASSED", "criteria2": "PASSED"},
+            pb.RESULT_STATUS_SUCCESS,
+        ),
+        (
+            {"criteria1": "FAILED", "criteria2": "PASSED"},
+            pb.RESULT_STATUS_FAILED,
+        ),
+        (
+            {"criteria1": "TIMEOUT", "criteria2": "PASSED"},
+            pb.RESULT_STATUS_TIMEOUT,
+        ),
+        ({"criteria1": "CANCELLED"}, pb.RESULT_STATUS_CANCELLED),
+        (
+            {"criteria1": "UNKNOWN", "criteria2": "PASSED"},
+            pb.RESULT_STATUS_UNKNOWN,
+        ),
+        ({}, pb.RESULT_STATUS_UNKNOWN),  # Empty criteria
     ]
 
     data = {
         "experiments": [
-            {"name": f"exp_{status}", "EXPERIMENT_STATUS": status}
-            for status, _ in experiments
+            {"name": f"exp_{i}", "SUCCESS_CRITERIA": criteria}
+            for i, (criteria, _) in enumerate(experiments)
         ]
     }
+    # Add an experiment with no SUCCESS_CRITERIA key
+    data["experiments"].append({"name": "exp_missing"})
+    expected_statuses = [status_code for _, status_code in experiments] + [
+        pb.RESULT_STATUS_UNKNOWN
+    ]
+
     self._write_json(data)
 
     generator = BOHGenerator(self.test_json_path)
     report = generator.generate()
 
-    self.assertEqual(len(report.test_results), len(experiments))
-    for i, (_, expected_status) in enumerate(experiments):
+    self.assertEqual(len(report.test_results), len(expected_statuses))
+    for i, expected_status in enumerate(expected_statuses):
       self.assertEqual(
           report.test_results[i].result_status,
           expected_status,
-          f"Failed for status {experiments[i][0]}",
+          f"Failed for experiment {data['experiments'][i]['name']}",
       )
 
   def test_generate_contexts(self):
@@ -223,9 +253,12 @@ class TestBOHGenerator(unittest.TestCase):
         "experiments": [
             {
                 "experiment_name": "cluster_health_diagnostics",
-                "EXPERIMENT_STATUS": "SUCCESS",
+                "SUCCESS_CRITERIA": {"criteria1": "PASSED"},
             },
-            {"experiment_name": "valid_exp", "EXPERIMENT_STATUS": "SUCCESS"},
+            {
+                "experiment_name": "valid_exp",
+                "SUCCESS_CRITERIA": {"criteria1": "PASSED"},
+            },
         ]
     }
     self._write_json(data)

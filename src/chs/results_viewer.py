@@ -3,7 +3,10 @@
 import json
 import logging
 from typing import Any
-
+from chs.protos import bill_of_health_pb2 as pb
+from google.protobuf import text_format
+from google.protobuf.json_format import MessageToDict
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -26,16 +29,12 @@ class ResultsViewer:
     except (json.JSONDecodeError, UnicodeDecodeError):
       # Fallback: Try parsing as TextProto (in case it was written as such)
       try:
-        from chs.protos import bill_of_health_pb2 as pb
-        from google.protobuf import text_format
-        from google.protobuf.json_format import MessageToDict
-
         with open(self.boh_path, "r") as f:
           content = f.read()
           boh = pb.BillOfHealth()
           text_format.Parse(content, boh)
           self.data = MessageToDict(boh, preserving_proto_field_name=True)
-      except Exception as e:
+      except (text_format.ParseError, UnicodeDecodeError) as e:
         self.console.print(
             f"[bold red]Error loading Bill of Health:[/bold red] {e}"
         )
@@ -49,15 +48,13 @@ class ResultsViewer:
   def _get_status_style(self, status: str) -> tuple[str, str]:
     """Returns a rich style string and icon for a given status."""
     status = status.upper()
-    if status in ("SUCCESS", "PASS", "PASSED"):
+    if status == "SUCCESS":
       return "bold green", ""
-    elif status in ("FAILED", "FAIL", "FAILURE", "ERROR"):
+    elif status == "FAILED":
       return "bold red", ""
-    elif status in ("WARNING", "WARN"):
-      return "bold yellow", ""
-    elif status in ("TIMEOUT", "TIMEDOUT"):
+    elif status == "TIMEOUT":
       return "bold magenta", ""
-    elif status in ("CANCELLED", "CANCEL"):
+    elif status == "CANCELLED":
       return "bold white", ""
     else:
       return "bold cyan", ""
@@ -109,8 +106,6 @@ class ResultsViewer:
 
   def _show_summary_table(self, test_results: list[dict[str, Any]]) -> None:
     """Displays test results as a table."""
-    from rich import box
-
     table = Table(
         title="🔬 Test Results",
         show_lines=True,
@@ -138,6 +133,25 @@ class ResultsViewer:
 
     self.console.print(table)
 
+  def _get_test_description(self, name: str) -> str:
+    """Returns a description for the given test name."""
+    if "nccl-cluster" in name or "nccl-all" in name:
+      return (
+          "Validates cluster-wide GPU communication bandwidth/latency using"
+          " NCCL AllReduce and AllGather."
+      )
+    elif "nccl-pairwise" in name:
+      return (
+          "Measures point-to-point interconnect bandwidth between node pairs to"
+          " isolate network bottlenecks."
+      )
+    elif "dcgm" in name:
+      return (
+          "Performs deep hardware diagnostics (memory, PCIe, replay limits) to"
+          " detect GPU faults."
+      )
+    return ""
+
   def _show_summary_list(self, test_results: list[dict[str, Any]]) -> None:
     """Displays test results as a list of panels for smaller screens."""
     self.console.print(
@@ -153,17 +167,18 @@ class ResultsViewer:
       targets_str = ", ".join(targets) if targets else "Cluster"
 
       style, icon = self._get_status_style(status)
+      description = self._get_test_description(name)
 
       content = Text()
+      content.append(f"{name}\n", style="cyan bold")
+      if description:
+        content.append(f"{description}\n", style="italic dim")
       content.append("Targets: ", style="bold")
       content.append(f"{targets_str}\n", style="green")
 
       panel = Panel(
           content,
-          title=(
-              f"[{style}]{icon} {status}[/{style}] - [cyan bold]{name}[/cyan"
-              " bold]"
-          ),
+          title=f"[{style}]{icon} {status}[/{style}]",
           expand=True,
           border_style=style.split()[-1],  # extract color from style string
       )
@@ -189,15 +204,14 @@ class ResultsViewer:
         if name in tests:
           include = True
 
-      if resources:  # Check resources if provided (fixed logic)
-        if any(r in resources for r in targets):
+      if resources:
+        if any(r in targets for r in resources):
           include = True
 
       if tests or resources:
         if include:
           filtered_results.append(result)
       else:
-        # If no specific filter, maybe show all?
         filtered_results.append(result)
 
     if not filtered_results:
@@ -222,14 +236,12 @@ class ResultsViewer:
 
     # Metrics Table
     metrics = result.get("metrics", [])
-
-    from rich import box
-
     m_table = Table(
-        title=f"📊 Metrics for {name}",
+        title=f" Metrics for {name}",
         show_lines=True,
         box=box.SIMPLE,
         header_style=f"bold {border_color}",
+        expand=True,
     )
     m_table.add_column("Key", style="cyan")
     m_table.add_column("Value", style="bold white")

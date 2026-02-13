@@ -98,6 +98,7 @@ class RambleManager:
       check: bool = True,
       cwd: str | None = None,
       capture_output: bool = False,
+      env: dict[str, str] | None = None,
   ) -> subprocess.CompletedProcess[str]:
     """Executes a command with consistent logging and error handling.
 
@@ -107,6 +108,8 @@ class RambleManager:
         non-zero exit code.
       cwd: The current working directory to run the command in.
       capture_output: If True, captures stdout and stderr.
+      env: A dictionary of environment variables to add to the command
+        execution.
 
     Returns:
       The CompletedProcess object from subprocess.run.
@@ -115,6 +118,12 @@ class RambleManager:
       click.ClickException: If the command fails when check=True.
     """
     logger.debug("Running command: %s", cmd)
+    if env:
+      run_env = os.environ.copy()
+      run_env.update(env)
+    else:
+      run_env = None
+
     try:
       return self._run_command(
           cmd,
@@ -123,6 +132,7 @@ class RambleManager:
           cwd=cwd,
           stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
           stderr=subprocess.PIPE if capture_output else None,
+          env=run_env,
       )
     except subprocess.CalledProcessError as e:
       logger.error("Command failed: %s", cmd)
@@ -137,6 +147,7 @@ class RambleManager:
       subcommand: str,
       args: list[str],
       capture_output: bool = False,
+      env: dict[str, str] | None = None,
   ) -> subprocess.CompletedProcess[str]:
     """Runs a Ramble subcommand in the workspace context.
 
@@ -147,6 +158,8 @@ class RambleManager:
       subcommand: The Ramble subcommand to execute (e.g., 'workspace', 'on').
       args: A list of arguments for the Ramble subcommand.
       capture_output: Whether to capture stdout/stderr.
+      env: A dictionary of environment variables to add to the command
+        execution.
 
     Returns:
       The CompletedProcess object from subprocess.run.
@@ -157,7 +170,11 @@ class RambleManager:
     cmd = ["ramble", "-w", self.path, subcommand] + args
     exec_cmd = self._prepare_ramble_command(cmd)
     return self._execute_shell_command(
-        exec_cmd, check=True, cwd=self.path, capture_output=capture_output
+        exec_cmd,
+        check=True,
+        cwd=self.path,
+        capture_output=capture_output,
+        env=env,
     )
 
   def create_workspace(self) -> None:
@@ -169,7 +186,7 @@ class RambleManager:
     logger.debug("Creating Ramble workspace at: %s", self.path)
     cmd = ["ramble", "workspace", "create", "-a", "-d", self.path]
     exec_cmd = self._prepare_ramble_command(cmd)
-    self._execute_shell_command(exec_cmd)
+    self._execute_shell_command(exec_cmd, capture_output=True)
 
   def add_custom_repository(self) -> None:
     """Adds the internal custom CHS repository to the Ramble workspace.
@@ -179,7 +196,9 @@ class RambleManager:
     """
     logger.debug("Adding custom CHS repository to Ramble workspace...")
     with pkg_resources.path(chs, "repos") as p:
-      self._execute_ramble_command(subcommand="repo", args=["add", str(p)])
+      self._execute_ramble_command(
+          subcommand="repo", args=["add", str(p)], capture_output=True
+      )
 
   def configure_workspace(
       self,
@@ -221,7 +240,11 @@ class RambleManager:
       click.ClickException: If the workspace setup command fails.
     """
     logger.debug("Setting up Ramble workspace in %s...", self.path)
-    self._execute_ramble_command(subcommand="workspace", args=["setup"])
+    self._execute_ramble_command(
+        subcommand="workspace",
+        args=["setup"],
+        env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+    )
 
   def execute_experiments(self) -> list[str]:
     """Executes experiments in the Ramble workspace.
@@ -236,7 +259,10 @@ class RambleManager:
     """
     logger.debug("Executing Ramble experiments in %s...", self.path)
     output = self._execute_ramble_command(
-        subcommand="on", args=[], capture_output=True
+        subcommand="on",
+        args=[],
+        capture_output=True,
+        env={"TQDM_DISABLE": "1", "TERM": "dumb"},
     ).stdout
 
     job_ids = self._scheduler.parse_job_ids(output)
@@ -250,7 +276,14 @@ class RambleManager:
     app_data_dir = pathlib.Path(
         platformdirs.user_data_dir(appname="cluster-health-scanner")
     )
-    app_data_dir.mkdir(parents=True, exist_ok=True)
+    try:
+      app_data_dir.mkdir(parents=True, exist_ok=True)
+      if not os.access(app_data_dir, os.W_OK):
+        raise OSError(f"Directory {app_data_dir} is not writable")
+    except OSError:
+      app_data_dir = pathlib.Path("/tmp/cluster-health-scanner")
+      app_data_dir.mkdir(parents=True, exist_ok=True)
+
     return app_data_dir / "runs.json"
 
   def _update_registry(self, job_ids: list[str]) -> None:
@@ -313,7 +346,6 @@ class RambleManager:
       logger.debug("No job IDs found for checking.")
       return False
 
-    # TODO: Make this dynamic based on the config
     scheduler_name = registry_entry.get("scheduler", "slurm")
     logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
     scheduler = get_scheduler(scheduler_name)
@@ -332,6 +364,16 @@ class RambleManager:
       logger.warning("Failed to read runs registry: %s", e)
     return None
 
+  def get_scheduler_type(self) -> str:
+    """Retrieves scheduler type for this workspace from the registry."""
+    if hasattr(self, "_scheduler"):
+      return self._scheduler.name
+
+    entry = self._get_registry_entry()
+    if entry:
+      return entry.get("scheduler", "slurm")
+    return "slurm"
+
   def analyze_results(self) -> str:
     """Analyzes and stores the results of the Ramble experiments.
 
@@ -344,11 +386,24 @@ class RambleManager:
     Raises:
       click.ClickException: If the experiment analyze command fails.
     """
+    if self.get_scheduler_type() == "gke":
+      logger.debug(
+          "Executing batch wait before analyzing Ramble experiments in %s...",
+          self.path,
+      )
+      self._execute_ramble_command(
+          subcommand="on",
+          args=["--executor", "{batch_wait}"],
+          capture_output=True,
+          env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+      )
+
     logger.debug("Analyzing Ramble experiments in %s...", self.path)
     self._execute_ramble_command(
         subcommand="workspace",
         args=["analyze", "-f", "json"],
         capture_output=True,
+        env={"TQDM_DISABLE": "1", "TERM": "dumb"},
     ).stdout
     results_json_path = os.path.join(self.path, "results.latest.json")
 
@@ -358,12 +413,14 @@ class RambleManager:
           " the command."
       )
 
-    home_dir = pathlib.Path(os.getcwd())
-    output_dir = home_dir / self._workspace_name
+    workspace_dir = pathlib.Path(self._path)
+    output_dir = workspace_dir / "chs-results"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     boh_generator = BOHGenerator(
-        results_json_path, base_log_dir=str(output_dir)
+        results_json_path,
+        base_log_dir=str(output_dir),
+        cluster_type=self.get_scheduler_type(),
     )
     logger.debug("Generating Bill of Health from %s", results_json_path)
     boh = boh_generator.generate()
@@ -374,17 +431,25 @@ class RambleManager:
       f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
     experiments_dir = os.path.join(self.path, "experiments")
-    if os.path.exists(experiments_dir):
+    src_experiments = os.path.abspath(experiments_dir)
+    dst_experiments = os.path.abspath(output_dir / "experiments")
+
+    if src_experiments == dst_experiments:
+      logger.debug(
+          "Experiments directory is already in the output directory. Skipping"
+          " copy."
+      )
+    elif os.path.exists(experiments_dir):
       shutil.copytree(
           experiments_dir,
-          output_dir / "experiments",
+          dst_experiments,
           dirs_exist_ok=True,
           ignore=shutil.ignore_patterns("chs-*"),
       )
       logger.debug(
           "Copied experiments from %s to %s",
           experiments_dir,
-          output_dir / "experiments",
+          dst_experiments,
       )
     else:
       logger.debug("No experiments directory found at %s", experiments_dir)

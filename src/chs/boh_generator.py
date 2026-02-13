@@ -13,9 +13,15 @@ from google.protobuf.timestamp_pb2 import Timestamp
 class BOHGenerator:
   """Generates Bill of Health from Ramble JSON results."""
 
-  def __init__(self, file_path: str, base_log_dir: str | None = None):
+  def __init__(
+      self,
+      file_path: str,
+      base_log_dir: str | None = None,
+      cluster_type: str = "slurm",
+  ):
     self.file_path = file_path
     self.base_log_dir = base_log_dir
+    self.cluster_type = cluster_type
     self.report = pb.BillOfHealth()
 
   def _get_timestamp(self) -> Timestamp:
@@ -63,7 +69,7 @@ class BOHGenerator:
     self.report.chs_version = "1.0.0"
     self.report.created_at.CopyFrom(self._get_timestamp())
     # TODO: Fetch and add system info
-    self.report.system_info.type = "SLURM_CLUSTER"
+    self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"
 
     experiments = data.get("experiments", [])
     for exp in experiments:
@@ -77,17 +83,33 @@ class BOHGenerator:
       if test_result.name == "cluster_health_diagnostics":
         continue
 
-      status_str = exp.get("EXPERIMENT_STATUS", "UNSPECIFIED").upper()
-      if status_str == "SUCCESS":
-        test_result.result_status = pb.RESULT_STATUS_SUCCESS
-      elif status_str == "FAILED":
-        test_result.result_status = pb.RESULT_STATUS_FAILED
-      elif status_str == "TIMEOUT":
-        test_result.result_status = pb.RESULT_STATUS_TIMEOUT
-      elif status_str == "CANCELLED":
-        test_result.result_status = pb.RESULT_STATUS_CANCELLED
-      else:
+      success_criteria = exp.get("SUCCESS_CRITERIA", {})
+      if not success_criteria:
         test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+      else:
+        has_failure = any(
+            status.upper() == "FAILED" for status in success_criteria.values()
+        )
+        has_timeout = any(
+            status.upper() == "TIMEOUT" for status in success_criteria.values()
+        )
+        has_cancelled = any(
+            status.upper() == "CANCELLED"
+            for status in success_criteria.values()
+        )
+
+        if has_failure:
+          test_result.result_status = pb.RESULT_STATUS_FAILED
+        elif has_timeout:
+          test_result.result_status = pb.RESULT_STATUS_TIMEOUT
+        elif has_cancelled:
+          test_result.result_status = pb.RESULT_STATUS_CANCELLED
+        elif all(
+            status.upper() == "PASSED" for status in success_criteria.values()
+        ):
+          test_result.result_status = pb.RESULT_STATUS_SUCCESS
+        else:
+          test_result.result_status = pb.RESULT_STATUS_UNKNOWN
 
       tags = exp.get("TAGS", [])
       if tags:
