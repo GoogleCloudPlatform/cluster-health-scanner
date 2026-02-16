@@ -66,8 +66,6 @@ git clone -b develop https://github.com/GoogleCloudPlatform/cluster-health-scann
 cd cluster-health-scanner
 ```
 
-*Note: All commands listed below must be run from this root cluster-health-scanner directory*
-
 To install CHS, it is recommended to use a virtual environment:
 
 ```bash
@@ -118,11 +116,13 @@ Executes a test suite on a specified cluster.
 **Arguments:**
 -   `--scheduler` / `-sch` **(Required)**: The scheduler to use.
     *   *Supported values:* `slurm`, `gke`.
--   `--machine-type` **(Required)**: The machine type of the cluster nodes (e.g., `a3-high`, `a3-edge`).
+-   `--machine-type` **(Required)**: The machine type of the cluster nodes (e.g., `a3-ultra`, `a3-high`).
+    *   *Supported value:* `a3-ultra`.
 -   `--suite` / `-s`: Name of the Ramble application/suite to run.
     *   *Default:* `a3-ultra`
 -   `--tests` / `-t`: Comma-separated list of specific tests to run.
-    *   *Default (if not provided):* `nccl-cluster, nccl-pairwise, dcgm`
+    *   *Default (if not provided):* `nccl-cluster,nccl-pairwise,dcgm`
+    *   *Supported values:* `nccl-cluster`, `nccl-pairwise`, `dcgm`.
 -   `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
 -   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
 -   `--nodepool`: GKE node pool to run on.
@@ -130,8 +130,11 @@ Executes a test suite on a specified cluster.
 
 **Example:**
 ```bash
+# Run all tests for GKE provisioned a3-ultra machine
+chs run --scheduler gke --machine-type a3-ultra
+
 # Run the default a3-ultra suite on Slurm with specific nodes
-chs run --scheduler slurm --machine-type a3-high --nodes node-01,node-02
+chs run --scheduler slurm --machine-type a3-ultra --nodes node-01,node-02
 
 # Run specific tests
 chs run --scheduler slurm --machine-type a3-high --tests nccl-cluster
@@ -224,7 +227,7 @@ CHS expects a standard Ramble installation. It looks for the Ramble setup script
 
 The following features are currently in development or planned:
 
--   **Scheduler Support**: Currently, only `slurm` is fully supported. Support for `gke` (Google Kubernetes Engine) and others is planned.
+-   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs, and Bare Metals is planned.
 -   **Dynamic Listing**: The `list` command currently acts as a placeholder and needs to be connected to the Ramble registry to dynamically list available suites and tests.
 -   **Workspace Cleanup**: A `cleanup` command or logic to manage old workspaces is pending implementation.
 -   **Configurable Paths**: Support for user-defined workspace directories via configuration or flags.
