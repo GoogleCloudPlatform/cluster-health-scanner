@@ -15,6 +15,7 @@ dependencies = [
     "platformdirs",
     "protobuf",
     "rich",
+    "pre_commit",
 ]
 
 [project.scripts]
@@ -26,3 +27,59 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "chs" = ["**/*.yaml", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+
+[tool.ruff]
+exclude = [
+    # Version control
+    ".git",
+
+    # Caches
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+
+    # Virtual environments
+    ".venv",
+    "venv",
+
+    # Build artifacts
+    "build",
+    "dist",
+
+    # Auto-generated files
+    "*_pb2.py",
+]
+
+# Same as Black.
+line-length = 80
+indent-width = 4
+
+# Support Python 3.10.
+target-version = "py310"
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
+select = ["E4", "E7", "E9", "F", "E501"]
+ignore = []
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+# Ramble repos use star imports and special DSLs that Ruff doesn't fully understand.
+# We only want basic lint checks like trailing whitespace here.
+"src/chs/repos/**" = ["E402", "F403", "F405", "E501"]
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"

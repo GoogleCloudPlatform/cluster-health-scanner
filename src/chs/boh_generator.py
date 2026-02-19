@@ -11,157 +11,162 @@ from google.protobuf.timestamp_pb2 import Timestamp
 
 
 class BOHGenerator:
-  """Generates Bill of Health from Ramble JSON results."""
+    """Generates Bill of Health from Ramble JSON results."""
 
-  def __init__(
-      self,
-      file_path: str,
-      base_log_dir: str | None = None,
-      cluster_type: str = "slurm",
-  ):
-    self.file_path = file_path
-    self.base_log_dir = base_log_dir
-    self.cluster_type = cluster_type
-    self.report = pb.BillOfHealth()
+    def __init__(
+        self,
+        file_path: str,
+        base_log_dir: str | None = None,
+        cluster_type: str = "slurm",
+    ):
+        self.file_path = file_path
+        self.base_log_dir = base_log_dir
+        self.cluster_type = cluster_type
+        self.report = pb.BillOfHealth()
 
-  def _get_timestamp(self) -> Timestamp:
-    ts = Timestamp()
-    ts.FromDatetime(datetime.now(timezone.utc))
-    return ts
+    def _get_timestamp(self) -> Timestamp:
+        ts = Timestamp()
+        ts.FromDatetime(datetime.now(timezone.utc))
+        return ts
 
-  def _parse_foms(self, foms: list[dict[str, Any]]) -> list[pb.Metric]:
-    """Extracts metrics from list of FOM objects."""
-    metrics = []
-    for fom in foms:
-      key = fom.get("name", "unknown")
-      val = str(fom.get("value", ""))
-      unit = fom.get("units", "")
+    def _parse_foms(self, foms: list[dict[str, Any]]) -> list[pb.Metric]:
+        """Extracts metrics from list of FOM objects."""
+        metrics = []
+        for fom in foms:
+            key = fom.get("name", "unknown")
+            val = str(fom.get("value", ""))
+            unit = fom.get("units", "")
 
-      metric = pb.Metric(key=key)
-      if unit:
-        metric.unit = unit
+            metric = pb.Metric(key=key)
+            if unit:
+                metric.unit = unit
 
-      lower_val = val.lower()
-      if lower_val == "true":
-        metric.value.bool_value = True
-      elif lower_val == "false":
-        metric.value.bool_value = False
-      else:
+            lower_val = val.lower()
+            if lower_val == "true":
+                metric.value.bool_value = True
+            elif lower_val == "false":
+                metric.value.bool_value = False
+            else:
+                try:
+                    metric.value.number_value = float(val)
+                except ValueError:
+                    metric.value.string_value = val
+
+            metrics.append(metric)
+        return metrics
+
+    def generate(self) -> pb.BillOfHealth:
+        """Generates the Bill of Health report."""
         try:
-          metric.value.number_value = float(val)
-        except ValueError:
-          metric.value.string_value = val
+            with open(self.file_path, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            # TODO: Replace print statements with proper logging statements
+            print(f"Error reading JSON results: {e}")
+            return self.report
 
-      metrics.append(metric)
-    return metrics
+        self.report.report_id = data.get("workspace_hash", str(uuid.uuid4()))
+        self.report.chs_version = "1.0.0"
+        self.report.created_at.CopyFrom(self._get_timestamp())
+        # TODO: Fetch and add system info
+        self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"
 
-  def generate(self) -> pb.BillOfHealth:
-    """Generates the Bill of Health report."""
-    try:
-      with open(self.file_path, "r") as f:
-        data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-      # TODO: Replace print statements with proper logging statements
-      print(f"Error reading JSON results: {e}")
-      return self.report
+        experiments = data.get("experiments", [])
+        for exp in experiments:
+            test_result = pb.TestResult()
+            test_result.name = exp.get(
+                "experiment_name", "test_name_unidentified"
+            )
 
-    self.report.report_id = data.get("workspace_hash", str(uuid.uuid4()))
-    self.report.chs_version = "1.0.0"
-    self.report.created_at.CopyFrom(self._get_timestamp())
-    # TODO: Fetch and add system info
-    self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"
+            # Experiment cluster_health_diagnostics is used to inject other
+            # experiments, not required for BoH; hardcoding the skip for now.
+            # TODO: Make this more robust once other experiments (gke, custom,
+            # etc) are added.
+            if test_result.name == "cluster_health_diagnostics":
+                continue
 
-    experiments = data.get("experiments", [])
-    for exp in experiments:
-      test_result = pb.TestResult()
-      test_result.name = exp.get("experiment_name", "test_name_unidentified")
+            success_criteria = exp.get("SUCCESS_CRITERIA", {})
+            if not success_criteria:
+                test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            else:
+                has_failure = any(
+                    status.upper() == "FAILED"
+                    for status in success_criteria.values()
+                )
+                has_timeout = any(
+                    status.upper() == "TIMEOUT"
+                    for status in success_criteria.values()
+                )
+                has_cancelled = any(
+                    status.upper() == "CANCELLED"
+                    for status in success_criteria.values()
+                )
 
-      # Experiment cluster_health_diagnostics is used to inject other
-      # experiments, not required for BoH, hardcoding the skip for now.
-      # TODO: Make this more robust once other experiments (gke, custom, etc)
-      # are added.
-      if test_result.name == "cluster_health_diagnostics":
-        continue
+                if has_failure:
+                    test_result.result_status = pb.RESULT_STATUS_FAILED
+                elif has_timeout:
+                    test_result.result_status = pb.RESULT_STATUS_TIMEOUT
+                elif has_cancelled:
+                    test_result.result_status = pb.RESULT_STATUS_CANCELLED
+                elif all(
+                    status.upper() == "PASSED"
+                    for status in success_criteria.values()
+                ):
+                    test_result.result_status = pb.RESULT_STATUS_SUCCESS
+                else:
+                    test_result.result_status = pb.RESULT_STATUS_UNKNOWN
 
-      success_criteria = exp.get("SUCCESS_CRITERIA", {})
-      if not success_criteria:
-        test_result.result_status = pb.RESULT_STATUS_UNKNOWN
-      else:
-        has_failure = any(
-            status.upper() == "FAILED" for status in success_criteria.values()
-        )
-        has_timeout = any(
-            status.upper() == "TIMEOUT" for status in success_criteria.values()
-        )
-        has_cancelled = any(
-            status.upper() == "CANCELLED"
-            for status in success_criteria.values()
-        )
+            tags = exp.get("TAGS", [])
+            if tags:
+                test_result.metadata.fields["tags"].list_value.extend(tags)
 
-        if has_failure:
-          test_result.result_status = pb.RESULT_STATUS_FAILED
-        elif has_timeout:
-          test_result.result_status = pb.RESULT_STATUS_TIMEOUT
-        elif has_cancelled:
-          test_result.result_status = pb.RESULT_STATUS_CANCELLED
-        elif all(
-            status.upper() == "PASSED" for status in success_criteria.values()
-        ):
-          test_result.result_status = pb.RESULT_STATUS_SUCCESS
-        else:
-          test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            ramble_vars = exp.get("RAMBLE_VARIABLES", {})
+            ramble_raw_vars = exp.get("RAMBLE_RAW_VARIABLES", {})
 
-      tags = exp.get("TAGS", [])
-      if tags:
-        test_result.metadata.fields["tags"].list_value.extend(tags)
+            log_file = ramble_vars.get("log_file")
+            # TODO: Update log file link to point to the actual log file in
+            # bucket. Currently, it points to log files inside workspace. I'll
+            # update it after the followup PR on uploading logs to bucket.
+            if log_file:
+                if self.base_log_dir:
+                    workspace_dir = os.path.dirname(self.file_path)
+                    rel_path = os.path.relpath(log_file, workspace_dir)
+                    log_file = os.path.join(self.base_log_dir, rel_path)
+                test_result.metadata.fields["log_file"].string_value = log_file
+            else:
+                test_result.metadata.fields["log_file"].string_value = ""
 
-      ramble_vars = exp.get("RAMBLE_VARIABLES", {})
-      ramble_raw_vars = exp.get("RAMBLE_RAW_VARIABLES", {})
+            node = ramble_vars.get("node")
+            if node:
+                test_result.target_resource_ids.append(node)
+            else:
+                nodes = ramble_raw_vars.get("nodes", [])
+                test_result.target_resource_ids.extend(nodes)
 
-      log_file = ramble_vars.get("log_file")
-      # TODO: Update log file link to point to the actual log file in bucket
-      # Currently, it points to log files inside workspace. I'll update it
-      # after the followup PR on uploading logs to bucket.
-      if log_file:
-        if self.base_log_dir:
-          workspace_dir = os.path.dirname(self.file_path)
-          rel_path = os.path.relpath(log_file, workspace_dir)
-          log_file = os.path.join(self.base_log_dir, rel_path)
-        test_result.metadata.fields["log_file"].string_value = log_file
-      else:
-        test_result.metadata.fields["log_file"].string_value = ""
+            # Only including default (null) and the last context.
+            contexts = exp.get("CONTEXTS", [])
+            if contexts:
+                # Default Context
+                default_ctx = next(
+                    (c for c in contexts if c.get("name") == "null"),
+                    None,
+                )
 
-      node = ramble_vars.get("node")
-      if node:
-        test_result.target_resource_ids.append(node)
-      else:
-        nodes = ramble_raw_vars.get("nodes", [])
-        test_result.target_resource_ids.extend(nodes)
+                # Last Context (if different from default)
+                last_ctx = contexts[-1]
 
-      # Only including default (null) and the last context.
-      contexts = exp.get("CONTEXTS", [])
-      if contexts:
-        # Default Context
-        default_ctx = next(
-            (c for c in contexts if c.get("name") == "null"),
-            None,
-        )
+                contexts_to_process = []
+                if default_ctx:
+                    contexts_to_process.append(default_ctx)
 
-        # Last Context (if different from default)
-        last_ctx = contexts[-1]
+                if last_ctx and last_ctx != default_ctx:
+                    contexts_to_process.append(last_ctx)
 
-        contexts_to_process = []
-        if default_ctx:
-          contexts_to_process.append(default_ctx)
+                for ctx in contexts_to_process:
+                    foms = ctx.get("foms", [])
+                    metrics = self._parse_foms(foms)
+                    test_result.metrics.extend(metrics)
 
-        if last_ctx and last_ctx != default_ctx:
-          contexts_to_process.append(last_ctx)
+            self.report.test_results.append(test_result)
 
-        for ctx in contexts_to_process:
-          foms = ctx.get("foms", [])
-          metrics = self._parse_foms(foms)
-          test_result.metrics.extend(metrics)
-
-      self.report.test_results.append(test_result)
-
-    return self.report
+        return self.report

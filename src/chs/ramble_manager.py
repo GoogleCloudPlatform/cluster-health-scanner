@@ -27,464 +27,475 @@ logger = logging.getLogger(__name__)
 
 
 class RambleManager:
-  """A manager for Ramble workspaces used in CHS runs."""
+    """A manager for Ramble workspaces used in CHS runs."""
 
-  def __init__(
-      self,
-      base_dir: str,
-      workspace_name: str,
-      run_command: Callable[
-          ..., subprocess.CompletedProcess[str]
-      ] = subprocess.run,
-  ) -> None:
-    """Initializes the RambleManager.
+    def __init__(
+        self,
+        base_dir: str,
+        workspace_name: str,
+        run_command: Callable[
+            ..., subprocess.CompletedProcess[str]
+        ] = subprocess.run,
+    ) -> None:
+        """Initializes the RambleManager.
 
-    Args:
-      base_dir: The base directory where Ramble workspaces will be created.
-      workspace_name: A unique name for this CHS workspace.
-      run_command: The function to use for running subprocess commands. Defaults
-        to `subprocess.run`.
+        Args:
+          base_dir: The base directory where Ramble workspaces will be created.
+          workspace_name: A unique name for this CHS workspace.
+          run_command: The function to use for running subprocess commands.
+            Defaults to `subprocess.run`.
 
-    Raises:
-      click.UsageError: If the Ramble setup script is not found.
-    """
-    self._base_dir = base_dir
-    self._workspace_name = workspace_name
-    self._path = os.path.join(self._base_dir, self._workspace_name)
-    self._run_command = run_command
-    logger.debug(
-        "Initialized RambleManager with workspace_name='%s', path='%s'",
-        self._workspace_name,
-        self._path,
-    )
-
-    site_packages_dir = sysconfig.get_path("purelib")
-    logger.debug("Python site-packages directory: %s", site_packages_dir)
-
-    self._ramble_setup_script = os.path.abspath(
-        os.path.join(
-            site_packages_dir,
-            "share/ramble/setup-env.sh",
+        Raises:
+          click.UsageError: If the Ramble setup script is not found.
+        """
+        self._base_dir = base_dir
+        self._workspace_name = workspace_name
+        self._path = os.path.join(self._base_dir, self._workspace_name)
+        self._run_command = run_command
+        logger.debug(
+            "Initialized RambleManager with workspace_name='%s', path='%s'",
+            self._workspace_name,
+            self._path,
         )
-    )
-    if not os.path.exists(self._ramble_setup_script):
-      raise click.UsageError(
-          "Please ensure CHS is installed correctly."
-      )
 
-  def __repr__(self) -> str:
-    return (
-        f"RambleManager(workspace_name='{self._workspace_name}',"
-        f" path='{self._path}')"
-    )
+        site_packages_dir = sysconfig.get_path("purelib")
+        logger.debug("Python site-packages directory: %s", site_packages_dir)
 
-  @property
-  def path(self) -> str:
-    """The absolute path to the Ramble workspace."""
-    return self._path
+        self._ramble_setup_script = os.path.abspath(
+            os.path.join(
+                site_packages_dir,
+                "share/ramble/setup-env.sh",
+            )
+        )
+        if not os.path.exists(self._ramble_setup_script):
+            raise click.UsageError("Please ensure CHS is installed correctly.")
 
-  def _prepare_ramble_command(self, cmd: list[str]) -> list[str]:
-    """Prepares a Ramble command by sourcing setup script."""
-    command_str = f'source {self._ramble_setup_script} && exec "$@"'
-    logger.debug(
-        "Sourcing %s before running ramble command.",
-        self._ramble_setup_script,
-    )
-    return ["bash", "-c", command_str, "bash"] + cmd
+    def __repr__(self) -> str:
+        return (
+            f"RambleManager(workspace_name='{self._workspace_name}',"
+            f" path='{self._path}')"
+        )
 
-  def _execute_shell_command(
-      self,
-      cmd: list[str],
-      check: bool = True,
-      cwd: str | None = None,
-      capture_output: bool = False,
-      env: dict[str, str] | None = None,
-  ) -> subprocess.CompletedProcess[str]:
-    """Executes a command with consistent logging and error handling.
+    @property
+    def path(self) -> str:
+        """The absolute path to the Ramble workspace."""
+        return self._path
 
-    Args:
-      cmd: The command to execute as a list of strings.
-      check: If True, raises a CalledProcessError if the command returns a
-        non-zero exit code.
-      cwd: The current working directory to run the command in.
-      capture_output: If True, captures stdout and stderr.
-      env: A dictionary of environment variables to add to the command
-        execution.
+    def _prepare_ramble_command(self, cmd: list[str]) -> list[str]:
+        """Prepares a Ramble command by sourcing setup script."""
+        command_str = f'source {self._ramble_setup_script} && exec "$@"'
+        logger.debug(
+            "Sourcing %s before running ramble command.",
+            self._ramble_setup_script,
+        )
+        return ["bash", "-c", command_str, "bash"] + cmd
 
-    Returns:
-      The CompletedProcess object from subprocess.run.
+    def _execute_shell_command(
+        self,
+        cmd: list[str],
+        check: bool = True,
+        cwd: str | None = None,
+        capture_output: bool = False,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Executes a command with consistent logging and error handling.
 
-    Raises:
-      click.ClickException: If the command fails when check=True.
-    """
-    logger.debug("Running command: %s", cmd)
-    if env:
-      run_env = os.environ.copy()
-      run_env.update(env)
-    else:
-      run_env = None
+        Args:
+          cmd: The command to execute as a list of strings.
+          check: If True, raises a CalledProcessError if the command returns a
+            non-zero exit code.
+          cwd: The current working directory to run the command in.
+          capture_output: If True, captures stdout and stderr.
+          env: A dictionary of environment variables to add to the command
+            execution.
 
-    try:
-      return self._run_command(
-          cmd,
-          check=check,
-          text=True,
-          cwd=cwd,
-          stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
-          stderr=subprocess.PIPE if capture_output else None,
-          env=run_env,
-      )
-    except subprocess.CalledProcessError as e:
-      logger.error("Command failed: %s", cmd)
-      logger.debug("Command stdout: %s", e.stdout)
-      logger.debug("Command stderr: %s", e.stderr)
-      raise click.ClickException(
-          f"Command '{' '.join(cmd)}' failed with exit code {e.returncode}."
-      )
+        Returns:
+          The CompletedProcess object from subprocess.run.
 
-  def _execute_ramble_command(
-      self,
-      subcommand: str,
-      args: list[str],
-      capture_output: bool = False,
-      env: dict[str, str] | None = None,
-  ) -> subprocess.CompletedProcess[str]:
-    """Runs a Ramble subcommand in the workspace context.
+        Raises:
+          click.ClickException: If the command fails when check=True.
+        """
+        logger.debug("Running command: %s", cmd)
+        if env:
+            run_env = os.environ.copy()
+            run_env.update(env)
+        else:
+            run_env = None
 
-    This is a wrapper around _execute_shell_command that prepends
-    'ramble -w self.path' to the command and sets cwd to self.path.
+        try:
+            return self._run_command(
+                cmd,
+                check=check,
+                text=True,
+                cwd=cwd,
+                stdout=subprocess.PIPE
+                if capture_output
+                else subprocess.DEVNULL,
+                stderr=subprocess.PIPE if capture_output else None,
+                env=run_env,
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error("Command failed: %s", cmd)
+            logger.debug("Command stdout: %s", e.stdout)
+            logger.debug("Command stderr: %s", e.stderr)
+            raise click.ClickException(
+                f"Command '{' '.join(cmd)}' failed with exit code "
+                f"{e.returncode}."
+            )
 
-    Args:
-      subcommand: The Ramble subcommand to execute (e.g., 'workspace', 'on').
-      args: A list of arguments for the Ramble subcommand.
-      capture_output: Whether to capture stdout/stderr.
-      env: A dictionary of environment variables to add to the command
-        execution.
+    def _execute_ramble_command(
+        self,
+        subcommand: str,
+        args: list[str],
+        capture_output: bool = False,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Runs a Ramble subcommand in the workspace context.
 
-    Returns:
-      The CompletedProcess object from subprocess.run.
+                This is a wrapper around _execute_shell_command that prepends
+        'ramble -w self.path' to the command and sets cwd to self.path.
 
-    Raises:
-      click.ClickException: If the Ramble command fails.
-    """
-    cmd = ["ramble", "-w", self.path, subcommand] + args
-    exec_cmd = self._prepare_ramble_command(cmd)
-    return self._execute_shell_command(
-        exec_cmd,
-        check=True,
-        cwd=self.path,
-        capture_output=capture_output,
-        env=env,
-    )
+        Args:
+          subcommand: The Ramble subcommand to execute (e.g., 'workspace',
+            'on').
+          args: A list of arguments for the Ramble subcommand.
+          capture_output: Whether to capture stdout/stderr.
+          env: A dictionary of environment variables to add to the command
+            execution.
 
-  def create_workspace(self) -> None:
-    """Creates the Ramble workspace directory and initializes it.
+        Returns:
+          The CompletedProcess object from subprocess.run.
 
-    Raises:
-      click.ClickException: If the workspace creation command fails.
-    """
-    logger.debug("Creating Ramble workspace at: %s", self.path)
-    cmd = ["ramble", "workspace", "create", "-a", "-d", self.path]
-    exec_cmd = self._prepare_ramble_command(cmd)
-    self._execute_shell_command(exec_cmd, capture_output=True)
+        Raises:
+          click.ClickException: If the Ramble command fails.
+        """
+        cmd = ["ramble", "-w", self.path, subcommand] + args
+        exec_cmd = self._prepare_ramble_command(cmd)
+        return self._execute_shell_command(
+            exec_cmd,
+            check=True,
+            cwd=self.path,
+            capture_output=capture_output,
+            env=env,
+        )
 
-  def add_custom_repository(self) -> None:
-    """Adds the internal custom CHS repository to the Ramble workspace.
+    def create_workspace(self) -> None:
+        """Creates the Ramble workspace directory and initializes it.
 
-    Raises:
-      click.ClickException: If the repository addition command fails.
-    """
-    logger.debug("Adding custom CHS repository to Ramble workspace...")
-    with pkg_resources.path(chs, "repos") as p:
-      self._execute_ramble_command(
-          subcommand="repo", args=["add", str(p)], capture_output=True
-      )
+        Raises:
+          click.ClickException: If the workspace creation command fails.
+        """
+        logger.debug("Creating Ramble workspace at: %s", self.path)
+        cmd = ["ramble", "workspace", "create", "-a", "-d", self.path]
+        exec_cmd = self._prepare_ramble_command(cmd)
+        self._execute_shell_command(exec_cmd, capture_output=True)
 
-  def configure_workspace(
-      self,
-      suite: str,
-      scheduler: BaseScheduler,
-      tests: list[str] | None,
-      machine_type: str,
-  ) -> None:
-    """Configures the Ramble workspace for the CHS run.
+    def add_custom_repository(self) -> None:
+        """Adds the internal custom CHS repository to the Ramble workspace.
 
-    Args:
-      suite: The name of the test suite to run.
-      scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
-      tests: An optional list of names of specific tests to run.
-      machine_type: The machine type.
-    """
-    self._scheduler = scheduler
+        Raises:
+          click.ClickException: If the repository addition command fails.
+        """
+        logger.debug("Adding custom CHS repository to Ramble workspace...")
+        with pkg_resources.path(chs, "repos") as p:
+            self._execute_ramble_command(
+                subcommand="repo", args=["add", str(p)], capture_output=True
+            )
 
-    logger.debug("Configuring Ramble workspace in %s...", self.path)
-    logger.debug("Configuring workspace for suite: %s", suite)
-    logger.debug("Configuring workspace for scheduler: %s", scheduler.name)
-    if tests:
-      logger.debug("Configuring workspace for tests: %s", tests)
+    def configure_workspace(
+        self,
+        suite: str,
+        scheduler: BaseScheduler,
+        tests: list[str] | None,
+        machine_type: str,
+    ) -> None:
+        """Configures the Ramble workspace for the CHS run.
 
-    workspace_config_dir = os.path.join(self.path, "configs")
-    os.makedirs(workspace_config_dir, exist_ok=True)
+        Args:
+          suite: The name of the test suite to run.
+          scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
+          tests: An optional list of names of specific tests to run.
+          machine_type: The machine type.
+        """
+        self._scheduler = scheduler
 
-    scheduler.write_ramble_config(
-        workspace_config_dir=workspace_config_dir,
-        suite=suite,
-        tests=tests,
-        machine_type=machine_type,
-    )
+        logger.debug("Configuring Ramble workspace in %s...", self.path)
+        logger.debug("Configuring workspace for suite: %s", suite)
+        logger.debug("Configuring workspace for scheduler: %s", scheduler.name)
+        if tests:
+            logger.debug("Configuring workspace for tests: %s", tests)
 
-  def setup_workspace(self) -> None:
-    """Sets up the Ramble workspace by running 'ramble workspace setup'.
+        workspace_config_dir = os.path.join(self.path, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
 
-    Raises:
-      click.ClickException: If the workspace setup command fails.
-    """
-    logger.debug("Setting up Ramble workspace in %s...", self.path)
-    self._execute_ramble_command(
-        subcommand="workspace",
-        args=["setup"],
-        capture_output=True,
-        env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-    )
+        scheduler.write_ramble_config(
+            workspace_config_dir=workspace_config_dir,
+            suite=suite,
+            tests=tests,
+            machine_type=machine_type,
+        )
 
-  def execute_experiments(self) -> list[str]:
-    """Executes experiments in the Ramble workspace.
+    def setup_workspace(self) -> None:
+        """Sets up the Ramble workspace by running 'ramble workspace setup'.
 
-    This runs 'ramble on' to start the experiments and captures Job IDs.
+        Raises:
+          click.ClickException: If the workspace setup command fails.
+        """
+        logger.debug("Setting up Ramble workspace in %s...", self.path)
+        self._execute_ramble_command(
+            subcommand="workspace",
+            args=["setup"],
+            capture_output=True,
+            env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+        )
 
-    Returns:
-      A list of submitted Job IDs.
+    def execute_experiments(self) -> list[str]:
+        """Executes experiments in the Ramble workspace.
 
-    Raises:
-      click.ClickException: If the experiment execution command fails.
-    """
-    logger.debug("Executing Ramble experiments in %s...", self.path)
-    output = self._execute_ramble_command(
-        subcommand="on",
-        args=[],
-        capture_output=True,
-        env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-    ).stdout
+        This runs 'ramble on' to start the experiments and captures Job IDs.
 
-    job_ids = self._scheduler.parse_job_ids(output)
-    logger.debug("Captured Job IDs: %s", job_ids)
+        Returns:
+          A list of submitted Job IDs.
 
-    self._update_registry(job_ids)
-    return job_ids
+        Raises:
+          click.ClickException: If the experiment execution command fails.
+        """
+        logger.debug("Executing Ramble experiments in %s...", self.path)
+        output = self._execute_ramble_command(
+            subcommand="on",
+            args=[],
+            capture_output=True,
+            env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+        ).stdout
 
-  def cancel_experiments(self) -> None:
-    """Cancels running experiments in the Ramble workspace.
+        job_ids = self._scheduler.parse_job_ids(output)
+        logger.debug("Captured Job IDs: %s", job_ids)
 
-    This retrieves job IDs from the registry and cancels them via the scheduler.
+        self._update_registry(job_ids)
+        return job_ids
 
-    Raises:
-      click.ClickException: If the experiment cancellation command fails.
-    """
-    registry_entry = self._get_registry_entry()
-    if not registry_entry:
-      logger.warning("No registry entry found. Cannot cancel jobs.")
-      click.echo(f"No registry entry found for run {self._workspace_name}.")
-      return
+    def cancel_experiments(self) -> None:
+        """Cancels running experiments in the Ramble workspace.
 
-    job_ids = registry_entry.get("job_ids", [])
-    if not job_ids:
-      logger.warning("No job IDs found in registry. Cannot cancel jobs.")
-      click.echo(f"No job IDs found for run {self._workspace_name}.")
-      return
+        This retrieves job IDs from the registry and cancels them via the
+        scheduler.
 
-    scheduler_name = registry_entry.get("scheduler", "slurm")
-    logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
-    scheduler = get_scheduler(scheduler_name)
+        Raises:
+          click.ClickException: If the experiment cancellation command fails.
+        """
+        registry_entry = self._get_registry_entry()
+        if not registry_entry:
+            logger.warning("No registry entry found. Cannot cancel jobs.")
+            click.echo(
+                f"No registry entry found for run {self._workspace_name}."
+            )
+            return
 
-    logger.debug("Canceling Ramble experiments %s in %s...", job_ids, self.path)
-    scheduler.cancel_jobs(job_ids)
+        job_ids = registry_entry.get("job_ids", [])
+        if not job_ids:
+            logger.warning("No job IDs found in registry. Cannot cancel jobs.")
+            click.echo(f"No job IDs found for run {self._workspace_name}.")
+            return
 
-  def _get_registry_path(self) -> pathlib.Path:
-    """Returns the path to the runs registry file."""
-    app_data_dir = pathlib.Path(
-        platformdirs.user_data_dir(appname="cluster-health-scanner")
-    )
-    try:
-      app_data_dir.mkdir(parents=True, exist_ok=True)
-      if not os.access(app_data_dir, os.W_OK):
-        raise OSError(f"Directory {app_data_dir} is not writable")
-    except OSError:
-      app_data_dir = pathlib.Path("/tmp/cluster-health-scanner")
-      app_data_dir.mkdir(parents=True, exist_ok=True)
+        scheduler_name = registry_entry.get("scheduler", "slurm")
+        logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
+        scheduler = get_scheduler(scheduler_name)
 
-    return app_data_dir / "runs.json"
+        logger.debug(
+            "Canceling Ramble experiments %s in %s...", job_ids, self.path
+        )
+        scheduler.cancel_jobs(job_ids)
 
-  def _update_registry(self, job_ids: list[str]) -> None:
-    """Updates the runs registry with the current run information."""
-    registry_path = self._get_registry_path()
-    logger.debug(
-        "Updating registry at %s for run %s with job_ids %s",
-        registry_path,
-        self._workspace_name,
-        job_ids,
-    )
-    run_entry = {
-        "run_id": self._workspace_name,
-        "workspace_path": self.path,
-        "job_ids": job_ids,
-        "submission_time": (
-            datetime.datetime.now(datetime.timezone.utc).isoformat()
-        ),
-        "scheduler": self._scheduler.name,
-    }
+    def _get_registry_path(self) -> pathlib.Path:
+        """Returns the path to the runs registry file."""
+        app_data_dir = pathlib.Path(
+            platformdirs.user_data_dir(appname="cluster-health-scanner")
+        )
+        try:
+            app_data_dir.mkdir(parents=True, exist_ok=True)
+            if not os.access(app_data_dir, os.W_OK):
+                raise OSError(f"Directory {app_data_dir} is not writable")
+        except OSError:
+            app_data_dir = pathlib.Path("/tmp/cluster-health-scanner")
+            app_data_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-      if registry_path.exists():
-        with open(registry_path, "r") as f:
-          registry = json.load(f)
-      else:
-        registry = {}
+        return app_data_dir / "runs.json"
 
-      registry[self._workspace_name] = run_entry
+    def _update_registry(self, job_ids: list[str]) -> None:
+        """Updates the runs registry with the current run information."""
+        registry_path = self._get_registry_path()
+        logger.debug(
+            "Updating registry at %s for run %s with job_ids %s",
+            registry_path,
+            self._workspace_name,
+            job_ids,
+        )
+        run_entry = {
+            "run_id": self._workspace_name,
+            "workspace_path": self.path,
+            "job_ids": job_ids,
+            "submission_time": (
+                datetime.datetime.now(datetime.timezone.utc).isoformat()
+            ),
+            "scheduler": self._scheduler.name,
+        }
 
-      with open(registry_path, "w") as f:
-        json.dump(registry, f, indent=2)
-      logger.debug("Updated registry at %s", registry_path)
-    except (OSError, json.JSONDecodeError) as e:
-      logger.warning("Failed to update runs registry: %s", e)
+        try:
+            if registry_path.exists():
+                with open(registry_path, "r") as f:
+                    registry = json.load(f)
+            else:
+                registry = {}
 
-  def get_job_ids(self) -> list[str]:
-    """Retrieves job IDs for this workspace from the registry."""
-    registry_path = self._get_registry_path()
-    try:
-      if registry_path.exists():
-        with open(registry_path, "r") as f:
-          registry = json.load(f)
-        entry = registry.get(self._workspace_name)
+            registry[self._workspace_name] = run_entry
+
+            with open(registry_path, "w") as f:
+                json.dump(registry, f, indent=2)
+            logger.debug("Updated registry at %s", registry_path)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to update runs registry: %s", e)
+
+    def get_job_ids(self) -> list[str]:
+        """Retrieves job IDs for this workspace from the registry."""
+        registry_path = self._get_registry_path()
+        try:
+            if registry_path.exists():
+                with open(registry_path, "r") as f:
+                    registry = json.load(f)
+                entry = registry.get(self._workspace_name)
+                if entry:
+                    return entry.get("job_ids", [])
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to read runs registry: %s", e)
+        return []
+
+    def check_jobs_running(self) -> bool:
+        """Checks if any jobs for this workspace are still running."""
+        registry_entry = self._get_registry_entry()
+        if not registry_entry:
+            logger.debug("No registry entry found for checking.")
+            return False
+
+        job_ids = registry_entry.get("job_ids", [])
+        if not job_ids:
+            logger.debug("No job IDs found for checking.")
+            return False
+
+        scheduler_name = registry_entry.get("scheduler", "slurm")
+        logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
+        scheduler = get_scheduler(scheduler_name)
+
+        return scheduler.check_jobs_running(job_ids)
+
+    def _get_registry_entry(self) -> dict[str, Any] | None:
+        """Retrieves the registry entry for this workspace."""
+        registry_path = self._get_registry_path()
+        try:
+            if registry_path.exists():
+                with open(registry_path, "r") as f:
+                    registry = json.load(f)
+                return registry.get(self._workspace_name)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to read runs registry: %s", e)
+        return None
+
+    def get_scheduler_type(self) -> str:
+        """Retrieves scheduler type for this workspace from the registry."""
+        if hasattr(self, "_scheduler"):
+            return self._scheduler.name
+
+        entry = self._get_registry_entry()
         if entry:
-          return entry.get("job_ids", [])
-    except (OSError, json.JSONDecodeError) as e:
-      logger.warning("Failed to read runs registry: %s", e)
-    return []
+            return entry.get("scheduler", "slurm")
+        return "slurm"
 
-  def check_jobs_running(self) -> bool:
-    """Checks if any jobs for this workspace are still running."""
-    registry_entry = self._get_registry_entry()
-    if not registry_entry:
-      logger.debug("No registry entry found for checking.")
-      return False
+    def analyze_results(self) -> str:
+        """Analyzes and stores the results of the Ramble experiments.
 
-    job_ids = registry_entry.get("job_ids", [])
-    if not job_ids:
-      logger.debug("No job IDs found for checking.")
-      return False
+        Analyzes the results and stores BoH in GCS/ BigQuery for later
+        retrieval.
 
-    scheduler_name = registry_entry.get("scheduler", "slurm")
-    logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
-    scheduler = get_scheduler(scheduler_name)
+        Returns:
+          The path to the directory containing the analysis results and Bill of
+          Health.
 
-    return scheduler.check_jobs_running(job_ids)
+        Raises:
+          click.ClickException: If the experiment analyze command fails.
+        """
+        if self.get_scheduler_type() == "gke":
+            logger.debug(
+                "Executing batch wait before analyzing Ramble experiments in "
+                "%s...",
+                self.path,
+            )
+            self._execute_ramble_command(
+                subcommand="on",
+                args=["--executor", "{batch_wait}"],
+                capture_output=True,
+                env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+            )
 
-  def _get_registry_entry(self) -> dict[str, Any] | None:
-    """Retrieves the registry entry for this workspace."""
-    registry_path = self._get_registry_path()
-    try:
-      if registry_path.exists():
-        with open(registry_path, "r") as f:
-          registry = json.load(f)
-        return registry.get(self._workspace_name)
-    except (OSError, json.JSONDecodeError) as e:
-      logger.warning("Failed to read runs registry: %s", e)
-    return None
+        logger.debug("Analyzing Ramble experiments in %s...", self.path)
+        self._execute_ramble_command(
+            subcommand="workspace",
+            args=["analyze", "-f", "json"],
+            capture_output=True,
+            env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+        ).stdout
+        results_json_path = os.path.join(self.path, "results.latest.json")
 
-  def get_scheduler_type(self) -> str:
-    """Retrieves scheduler type for this workspace from the registry."""
-    if hasattr(self, "_scheduler"):
-      return self._scheduler.name
+        if not os.path.exists(results_json_path):
+            raise click.ClickException(
+                "chs analyze command failed. Recheck the run id and try "
+                "rerunning the command."
+            )
 
-    entry = self._get_registry_entry()
-    if entry:
-      return entry.get("scheduler", "slurm")
-    return "slurm"
+        workspace_dir = pathlib.Path(self._path)
+        output_dir = workspace_dir / "chs-results"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-  def analyze_results(self) -> str:
-    """Analyzes and stores the results of the Ramble experiments.
+        boh_generator = BOHGenerator(
+            results_json_path,
+            base_log_dir=str(output_dir),
+            cluster_type=self.get_scheduler_type(),
+        )
+        logger.debug("Generating Bill of Health from %s", results_json_path)
+        boh = boh_generator.generate()
+        logger.debug("Bill of Health generated successfully.")
 
-    Analyzes the results and stores BoH in GCS/ BigQuery for later retrieval.
+        boh_path = output_dir / "bill_of_health.json"
+        with open(boh_path, "w") as f:
+            f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
-    Returns:
-      The path to the directory containing the analysis results and Bill of
-      Health.
+        experiments_dir = os.path.join(self.path, "experiments")
+        src_experiments = os.path.abspath(experiments_dir)
+        dst_experiments = os.path.abspath(output_dir / "experiments")
 
-    Raises:
-      click.ClickException: If the experiment analyze command fails.
-    """
-    if self.get_scheduler_type() == "gke":
-      logger.debug(
-          "Executing batch wait before analyzing Ramble experiments in %s...",
-          self.path,
-      )
-      self._execute_ramble_command(
-          subcommand="on",
-          args=["--executor", "{batch_wait}"],
-          capture_output=True,
-          env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-      )
+        if src_experiments == dst_experiments:
+            logger.debug(
+                "Experiments directory is already in the output directory. "
+                "Skipping copy."
+            )
+        elif os.path.exists(experiments_dir):
+            shutil.copytree(
+                experiments_dir,
+                dst_experiments,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("chs-*"),
+            )
+            logger.debug(
+                "Copied experiments from %s to %s",
+                experiments_dir,
+                dst_experiments,
+            )
+        else:
+            logger.debug(
+                "No experiments directory found at %s", experiments_dir
+            )
 
-    logger.debug("Analyzing Ramble experiments in %s...", self.path)
-    self._execute_ramble_command(
-        subcommand="workspace",
-        args=["analyze", "-f", "json"],
-        capture_output=True,
-        env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-    ).stdout
-    results_json_path = os.path.join(self.path, "results.latest.json")
+        return str(output_dir)
 
-    if not os.path.exists(results_json_path):
-      raise click.ClickException(
-          "chs analyze command failed. Recheck the run id and try rerunning"
-          " the command."
-      )
-
-    workspace_dir = pathlib.Path(self._path)
-    output_dir = workspace_dir / "chs-results"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    boh_generator = BOHGenerator(
-        results_json_path,
-        base_log_dir=str(output_dir),
-        cluster_type=self.get_scheduler_type(),
-    )
-    logger.debug("Generating Bill of Health from %s", results_json_path)
-    boh = boh_generator.generate()
-    logger.debug("Bill of Health generated successfully.")
-
-    boh_path = output_dir / "bill_of_health.json"
-    with open(boh_path, "w") as f:
-      f.write(MessageToJson(boh, preserving_proto_field_name=True))
-
-    experiments_dir = os.path.join(self.path, "experiments")
-    src_experiments = os.path.abspath(experiments_dir)
-    dst_experiments = os.path.abspath(output_dir / "experiments")
-
-    if src_experiments == dst_experiments:
-      logger.debug(
-          "Experiments directory is already in the output directory. Skipping"
-          " copy."
-      )
-    elif os.path.exists(experiments_dir):
-      shutil.copytree(
-          experiments_dir,
-          dst_experiments,
-          dirs_exist_ok=True,
-          ignore=shutil.ignore_patterns("chs-*"),
-      )
-      logger.debug(
-          "Copied experiments from %s to %s",
-          experiments_dir,
-          dst_experiments,
-      )
-    else:
-      logger.debug("No experiments directory found at %s", experiments_dir)
-
-    return str(output_dir)
-
-  def cleanup_workspace(self) -> None:
-    """Cleans up the Ramble workspace directory."""
-    # TODO: Implement the logic for this method.
-    pass
+    def cleanup_workspace(self) -> None:
+        """Cleans up the Ramble workspace directory."""
+        # TODO: Implement the logic for this method.
+        pass

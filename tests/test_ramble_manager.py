@@ -3,7 +3,6 @@
 import logging
 import os
 import pathlib
-import shutil
 import subprocess
 import sysconfig
 import tempfile
@@ -14,392 +13,441 @@ import click
 
 
 class TestRambleManager(unittest.TestCase):
-  """Tests for RambleManager."""
+    """Tests for RambleManager."""
 
-  def setUp(self):
-    super().setUp()
-    self.tmp_dir_obj = tempfile.TemporaryDirectory()
-    self.tmp_dir = self.tmp_dir_obj.name
-    self.addCleanup(self.tmp_dir_obj.cleanup)
-    self.mock_run = mock.Mock(spec=subprocess.run)
-    self.mock_sysconfig = self.enterContext(
-        mock.patch.object(sysconfig, "get_path", autospec=True)
-    )
+    def setUp(self):
+        super().setUp()
+        self.tmp_dir_obj = tempfile.TemporaryDirectory()
+        self.tmp_dir = self.tmp_dir_obj.name
+        self.addCleanup(self.tmp_dir_obj.cleanup)
+        self.mock_run = mock.Mock(spec=subprocess.run)
+        self.mock_sysconfig = self.enterContext(
+            mock.patch.object(sysconfig, "get_path", autospec=True)
+        )
 
-    self.mock_sysconfig.return_value = self.tmp_dir
-    self.real_os_path_exists = os.path.exists
-    self.mock_os_path_exists = self.enterContext(
-        mock.patch("os.path.exists", autospec=True)
-    )
-    self.mock_os_path_exists.side_effect = self.real_os_path_exists
+        self.mock_sysconfig.return_value = self.tmp_dir
+        self.real_os_path_exists = os.path.exists
+        self.mock_os_path_exists = self.enterContext(
+            mock.patch("os.path.exists", autospec=True)
+        )
+        self.mock_os_path_exists.side_effect = self.real_os_path_exists
 
-    self.mock_os_path_abspath = self.enterContext(
-        mock.patch("os.path.abspath", autospec=True)
-    )
-    self.mock_os_path_abspath.side_effect = lambda x: x
-    setup_script_dir = os.path.join(self.tmp_dir, "share/ramble")
-    os.makedirs(setup_script_dir, exist_ok=True)
-    self.setup_script_path = os.path.join(setup_script_dir, "setup-env.sh")
-    with open(self.setup_script_path, "w") as f:
-      f.write("#!/bin/bash\n")
+        self.mock_os_path_abspath = self.enterContext(
+            mock.patch("os.path.abspath", autospec=True)
+        )
+        self.mock_os_path_abspath.side_effect = lambda x: x
+        setup_script_dir = os.path.join(self.tmp_dir, "share/ramble")
+        os.makedirs(setup_script_dir, exist_ok=True)
+        self.setup_script_path = os.path.join(setup_script_dir, "setup-env.sh")
+        with open(self.setup_script_path, "w") as f:
+            f.write("#!/bin/bash\n")
 
-    logging.disable(logging.CRITICAL)
+        logging.disable(logging.CRITICAL)
 
-  def tearDown(self):
-    super().tearDown()
-    logging.disable(logging.NOTSET)
+    def tearDown(self):
+        super().tearDown()
+        logging.disable(logging.NOTSET)
 
-  def _get_expected_setup_script_path(self):
-    """Helper to get the expected path based on mock setup."""
-    return os.path.join(
-        self.mock_sysconfig.return_value, "share/ramble/setup-env.sh"
-    )
+    def _get_expected_setup_script_path(self):
+        """Helper to get the expected path based on mock setup."""
+        return os.path.join(
+            self.mock_sysconfig.return_value, "share/ramble/setup-env.sh"
+        )
 
-  def test_init_success(self):
-    """Test RambleManager initializes successfully when ramble is found."""
-    manager = RambleManager(
-        base_dir="/tmp", workspace_name="ws1", run_command=self.mock_run
-    )
-    self.assertEqual(manager.path, "/tmp/ws1")
-    self.mock_sysconfig.assert_called_once_with("purelib")
+    def test_init_success(self):
+        """Test RambleManager initializes successfully when ramble is found."""
+        manager = RambleManager(
+            base_dir="/tmp", workspace_name="ws1", run_command=self.mock_run
+        )
+        self.assertEqual(manager.path, "/tmp/ws1")
+        self.mock_sysconfig.assert_called_once_with("purelib")
 
-  def test_execute_shell_command_success(self):
-    """Test _execute_shell_command runs command successfully."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
-    self.mock_run.return_value = subprocess.CompletedProcess(
-        args=["echo", "hi"], returncode=0
-    )
+    def test_execute_shell_command_success(self):
+        """Test _execute_shell_command runs command successfully."""
+        manager = RambleManager("/tmp", "ws1", self.mock_run)
+        self.mock_run.return_value = subprocess.CompletedProcess(
+            args=["echo", "hi"], returncode=0
+        )
 
-    manager._execute_shell_command(["echo", "hi"])
+        manager._execute_shell_command(["echo", "hi"])
 
-    self.mock_run.assert_called_once_with(
-        ["echo", "hi"],
-        check=True,
-        text=True,
-        cwd=None,
-        stdout=subprocess.DEVNULL,
-        stderr=None,
-        env=None,
-    )
+        self.mock_run.assert_called_once_with(
+            ["echo", "hi"],
+            check=True,
+            text=True,
+            cwd=None,
+            stdout=subprocess.DEVNULL,
+            stderr=None,
+            env=None,
+        )
 
-  def test_execute_shell_command_with_env(self):
-    """Test _execute_shell_command passes env vars."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
-    self.mock_run.return_value = subprocess.CompletedProcess(
-        args=["echo", "hi"], returncode=0
-    )
+    def test_execute_shell_command_with_env(self):
+        """Test _execute_shell_command passes env vars."""
+        manager = RambleManager("/tmp", "ws1", self.mock_run)
+        self.mock_run.return_value = subprocess.CompletedProcess(
+            args=["echo", "hi"], returncode=0
+        )
 
-    manager._execute_shell_command(["echo", "hi"], env={"FOO": "bar"})
+        manager._execute_shell_command(["echo", "hi"], env={"FOO": "bar"})
 
-    self.mock_run.assert_called_once()
-    _, kwargs = self.mock_run.call_args
-    self.assertIsNotNone(kwargs.get("env"))
-    self.assertEqual(kwargs["env"].get("FOO"), "bar")
+        self.mock_run.assert_called_once()
+        _, kwargs = self.mock_run.call_args
+        self.assertIsNotNone(kwargs.get("env"))
+        self.assertEqual(kwargs["env"].get("FOO"), "bar")
 
-  def test_execute_shell_command_failure(self):
-    """Test _execute_shell_command raises ClickException on failure."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
-    self.mock_run.side_effect = subprocess.CalledProcessError(
-        1, ["bad_command"]
-    )
+    def test_execute_shell_command_failure(self):
+        """Test _execute_shell_command raises ClickException on failure."""
+        manager = RambleManager("/tmp", "ws1", self.mock_run)
+        self.mock_run.side_effect = subprocess.CalledProcessError(
+            1, ["bad_command"]
+        )
 
-    with self.assertRaisesRegex(
-        click.ClickException, "failed with exit code 1"
-    ):
-      manager._execute_shell_command(["bad_command"])
+        with self.assertRaisesRegex(
+            click.ClickException, "failed with exit code 1"
+        ):
+            manager._execute_shell_command(["bad_command"])
 
-  def test_prepare_ramble_command(self):
-    """Test _prepare_ramble_command wraps command to source setup script."""
-    manager = RambleManager("/tmp", "ws1", self.mock_run)
-    cmd = ["ramble", "test"]
-    expected_script_path = self._get_expected_setup_script_path()
-    expected_cmd = [
-        "bash",
-        "-c",
-        f'source {expected_script_path} && exec "$@"',
-        "bash",
-        "ramble",
-        "test",
-    ]
-
-    prepared_cmd = manager._prepare_ramble_command(cmd)
-
-    self.assertEqual(prepared_cmd, expected_cmd)
-
-  def test_create_workspace(self):
-    """Test create_workspace executes correct ramble command with setup script."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    expected_script_path = self._get_expected_setup_script_path()
-
-    manager.create_workspace()
-
-    self.mock_run.assert_called_once_with(
-        [
+    def test_prepare_ramble_command(self):
+        """Test _prepare_ramble_command wraps command to source setup script."""
+        manager = RambleManager("/tmp", "ws1", self.mock_run)
+        cmd = ["ramble", "test"]
+        expected_script_path = self._get_expected_setup_script_path()
+        expected_cmd = [
             "bash",
             "-c",
             f'source {expected_script_path} && exec "$@"',
             "bash",
             "ramble",
-            "workspace",
-            "create",
-            "-a",
-            "-d",
-            f"{self.tmp_dir}/ws1",
-        ],
-        check=True,
-        text=True,
-        cwd=None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=None,
-    )
+            "test",
+        ]
 
-  def test_setup_workspace(self):
-    """Test setup_workspace executes correct ramble command."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    expected_script_path = self._get_expected_setup_script_path()
+        prepared_cmd = manager._prepare_ramble_command(cmd)
 
-    manager.setup_workspace()
+        self.assertEqual(prepared_cmd, expected_cmd)
 
-    self.mock_run.assert_called_once_with(
-        [
-            "bash",
-            "-c",
-            f'source {expected_script_path} && exec "$@"',
-            "bash",
-            "ramble",
-            "-w",
-            f"{self.tmp_dir}/ws1",
-            "workspace",
-            "setup",
-        ],
-        check=True,
-        text=True,
-        cwd=f"{self.tmp_dir}/ws1",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=mock.ANY,
-    )
-    _, kwargs = self.mock_run.call_args
-    self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
-    self.assertEqual(kwargs["env"].get("TERM"), "dumb")
+    def test_create_workspace(self):
+        """Test create_workspace executes correct ramble command."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        expected_script_path = self._get_expected_setup_script_path()
 
-  def test_execute_experiments(self):
-    """Test execute_experiments executes correct ramble command and parses job IDs."""
+        manager.create_workspace()
 
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    mock_scheduler = mock.Mock()
-    mock_scheduler.name = "mock_scheduler"
-    mock_scheduler.parse_job_ids.return_value = ["123"]
-    manager._scheduler = mock_scheduler
-    expected_script_path = self._get_expected_setup_script_path()
+        self.mock_run.assert_called_once_with(
+            [
+                "bash",
+                "-c",
+                f'source {expected_script_path} && exec "$@"',
+                "bash",
+                "ramble",
+                "workspace",
+                "create",
+                "-a",
+                "-d",
+                f"{self.tmp_dir}/ws1",
+            ],
+            check=True,
+            text=True,
+            cwd=None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=None,
+        )
 
-    with mock.patch.object(manager, "_update_registry") as mock_update_registry:
-      self.mock_run.return_value.stdout = "Submitted batch job 123"
-      job_ids = manager.execute_experiments()
+    def test_setup_workspace(self):
+        """Test setup_workspace executes correct ramble command."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        expected_script_path = self._get_expected_setup_script_path()
 
-    self.mock_run.assert_called_once_with(
-        [
-            "bash",
-            "-c",
-            f'source {expected_script_path} && exec "$@"',
-            "bash",
-            "ramble",
-            "-w",
-            f"{self.tmp_dir}/ws1",
-            "on",
-        ],
-        check=True,
-        text=True,
-        cwd=f"{self.tmp_dir}/ws1",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=mock.ANY,
-    )
-    _, kwargs = self.mock_run.call_args
-    self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
-    self.assertEqual(kwargs["env"].get("TERM"), "dumb")
+        manager.setup_workspace()
 
-    mock_scheduler.parse_job_ids.assert_called_once()
-    self.assertEqual(job_ids, ["123"])
-    mock_update_registry.assert_called_once_with(["123"])
+        self.mock_run.assert_called_once_with(
+            [
+                "bash",
+                "-c",
+                f'source {expected_script_path} && exec "$@"',
+                "bash",
+                "ramble",
+                "-w",
+                f"{self.tmp_dir}/ws1",
+                "workspace",
+                "setup",
+            ],
+            check=True,
+            text=True,
+            cwd=f"{self.tmp_dir}/ws1",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=mock.ANY,
+        )
+        _, kwargs = self.mock_run.call_args
+        self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
+        self.assertEqual(kwargs["env"].get("TERM"), "dumb")
 
-  def test_configure_workspace_runs(self):
-    """Test configure_workspace runs without error."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    mock_scheduler = mock.Mock()
-    mock_scheduler.name = "mock_scheduler"
+    def test_execute_experiments(self):
+        """Test execute_experiments executes correct ramble on command."""
 
-    with mock.patch("os.makedirs"):
-      manager.configure_workspace(
-          "suite1", mock_scheduler, ["test1"], machine_type="a3-high"
-      )
-      manager.configure_workspace(
-          "suite1", mock_scheduler, None, machine_type="a3-high"
-      )
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "mock_scheduler"
+        mock_scheduler.parse_job_ids.return_value = ["123"]
+        manager._scheduler = mock_scheduler
+        expected_script_path = self._get_expected_setup_script_path()
 
-    self.assertEqual(mock_scheduler.write_ramble_config.call_count, 2)
+        with mock.patch.object(
+            manager, "_update_registry"
+        ) as mock_update_registry:
+            self.mock_run.return_value.stdout = "Submitted batch job 123"
+            job_ids = manager.execute_experiments()
 
-  def test_check_jobs_running_true(self):
-    """Test check_jobs_running returns True when jobs are running."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    mock_scheduler = mock.Mock()
-    mock_scheduler.check_jobs_running.return_value = True
+        self.mock_run.assert_called_once_with(
+            [
+                "bash",
+                "-c",
+                f'source {expected_script_path} && exec "$@"',
+                "bash",
+                "ramble",
+                "-w",
+                f"{self.tmp_dir}/ws1",
+                "on",
+            ],
+            check=True,
+            text=True,
+            cwd=f"{self.tmp_dir}/ws1",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=mock.ANY,
+        )
+        _, kwargs = self.mock_run.call_args
+        self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
+        self.assertEqual(kwargs["env"].get("TERM"), "dumb")
 
-    with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
-      with mock.patch("chs.ramble_manager.get_scheduler") as mock_get_scheduler:
-        mock_get_entry.return_value = {
-            "job_ids": ["123"],
-            "scheduler": "mock_scheduler",
-        }
-        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.parse_job_ids.assert_called_once()
+        self.assertEqual(job_ids, ["123"])
+        mock_update_registry.assert_called_once_with(["123"])
 
-        result = manager.check_jobs_running()
+    def test_configure_workspace_runs(self):
+        """Test configure_workspace runs without error."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "mock_scheduler"
 
-        self.assertTrue(result)
-        mock_get_scheduler.assert_called_once_with("mock_scheduler")
-        mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
+        with mock.patch("os.makedirs"):
+            manager.configure_workspace(
+                "suite1", mock_scheduler, ["test1"], machine_type="a3-high"
+            )
+            manager.configure_workspace(
+                "suite1", mock_scheduler, None, machine_type="a3-high"
+            )
 
-  def test_check_jobs_running_false(self):
-    """Test check_jobs_running returns False when jobs are not running."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    mock_scheduler = mock.Mock()
-    mock_scheduler.check_jobs_running.return_value = False
+        self.assertEqual(mock_scheduler.write_ramble_config.call_count, 2)
 
-    with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
-      with mock.patch("chs.ramble_manager.get_scheduler") as mock_get_scheduler:
-        mock_get_entry.return_value = {
-            "job_ids": ["123"],
-            "scheduler": "mock_scheduler",
-        }
-        mock_get_scheduler.return_value = mock_scheduler
+    def test_check_jobs_running_true(self):
+        """Test check_jobs_running returns True when jobs are running."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.check_jobs_running.return_value = True
 
-        result = manager.check_jobs_running()
-
-        self.assertFalse(result)
-
-  def test_check_jobs_running_no_entry(self):
-    """Test check_jobs_running returns False when no registry entry found."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-
-    with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
-      mock_get_entry.return_value = None
-      result = manager.check_jobs_running()
-      self.assertFalse(result)
-
-  def test_repr(self):
-    """Test __repr__ format."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    self.assertIn(f"{self.tmp_dir}/ws1", repr(manager))
-
-  def test_analyze_results_no_scheduler_attr(self):
-    """Test analyze_results works when _scheduler is not set (gets from registry)."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    # Ensure _scheduler is NOT set
-    if hasattr(manager, "_scheduler"):
-      del manager._scheduler
-
-    self.mock_run.return_value.stdout = "analysis complete"
-
-    with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-      with mock.patch.object(manager, "_get_registry_entry") as mock_get_entry:
-        mock_get_entry.return_value = {"scheduler": "gke"}
-        with mock.patch("shutil.copytree") as mock_copytree:
-          with mock.patch("shutil.ignore_patterns") as mock_ignore_patterns:
-            with mock.patch("builtins.open", mock.mock_open()):
-              with mock.patch("os.getcwd", return_value="/home/user"):
-                with mock.patch("pathlib.Path.mkdir"):
-                  self.mock_os_path_exists.side_effect = lambda p: True
-
-                  manager.analyze_results()
-
-                  mock_boh_gen.assert_called_once()
-                  _, kwargs = mock_boh_gen.call_args
-                  self.assertEqual(kwargs["cluster_type"], "gke")
-                  mock_ignore_patterns.assert_called_once_with("chs-*")
-                  mock_copytree.assert_called_once()
-                  args, kwargs = mock_copytree.call_args
-                  self.assertEqual(args[0], f"{self.tmp_dir}/ws1/experiments")
-                  self.assertEqual(
-                      args[1],
-                      pathlib.Path(
-                          f"{self.tmp_dir}/ws1/chs-results/experiments"
-                      ),
-                  )
-                  self.assertTrue(kwargs["dirs_exist_ok"])
-                  self.assertEqual(
-                      kwargs.get("ignore"), mock_ignore_patterns.return_value
-                  )
-
-  def test_analyze_results(self):
-    """Test analyze_results generates BoH and copies experiments."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    manager._scheduler = mock.Mock()
-    manager._scheduler.name = "slurm"
-    self.mock_run.return_value.stdout = "analysis complete"
-
-    with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-      with mock.patch("shutil.copytree") as mock_copytree:
-        with mock.patch("shutil.ignore_patterns") as mock_ignore_patterns:
-          with mock.patch("builtins.open", mock.mock_open()) as mock_file:
-            with mock.patch("os.getcwd", return_value="/home/user"):
-              with mock.patch("pathlib.Path.mkdir") as mock_mkdir:
-                self.mock_os_path_exists.side_effect = lambda p: True
-
-                output_path = manager.analyze_results()
-
-                for call_args in self.mock_run.call_args_list:
-                  args, kwargs = call_args
-                  cmd_list = args[0]
-                  self.assertNotIn("on", cmd_list)
-                  # Verify env is passed for analyze command
-                  if "analyze" in cmd_list:
-                    self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
-                    self.assertEqual(kwargs["env"]["TERM"], "dumb")
-
-                self.assertEqual(output_path, f"{self.tmp_dir}/ws1/chs-results")
-                mock_boh_gen.return_value.generate.assert_called_once()
-                mock_ignore_patterns.assert_called_once_with("chs-*")
-                mock_copytree.assert_called_once()
-                args, kwargs = mock_copytree.call_args
-                self.assertEqual(args[0], f"{self.tmp_dir}/ws1/experiments")
-                self.assertEqual(
-                    args[1],
-                    pathlib.Path(f"{self.tmp_dir}/ws1/chs-results/experiments"),
-                )
-                self.assertTrue(kwargs["dirs_exist_ok"])
-                self.assertEqual(
-                    kwargs.get("ignore"), mock_ignore_patterns.return_value
-                )
-
-  def test_analyze_results_skip_copy_same_dir(self):
-    """Test analyze_results skips copy if src and dst are same."""
-    manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-    manager._scheduler = mock.Mock()
-    manager._scheduler.name = "slurm"
-    self.mock_run.return_value.stdout = "analysis complete"
-
-    with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-      with mock.patch("shutil.copytree") as mock_copytree:
-        with mock.patch("builtins.open", mock.mock_open()) as mock_file:
-          with mock.patch("os.getcwd", return_value=self.tmp_dir):
+        with mock.patch.object(
+            manager, "_get_registry_entry"
+        ) as mock_get_entry:
             with mock.patch(
-                "chs.ramble_manager.os.path.abspath"
-            ) as mock_abspath:
-              self.mock_os_path_exists.side_effect = lambda p: True
+                "chs.ramble_manager.get_scheduler"
+            ) as mock_get_scheduler:
+                mock_get_entry.return_value = {
+                    "job_ids": ["123"],
+                    "scheduler": "mock_scheduler",
+                }
+                mock_get_scheduler.return_value = mock_scheduler
 
-              def side_effect(p):
-                return str(p)
+                result = manager.check_jobs_running()
 
-              mock_abspath.side_effect = side_effect
-              output_path = manager.analyze_results()
+                self.assertTrue(result)
+                mock_get_scheduler.assert_called_once_with("mock_scheduler")
+                mock_scheduler.check_jobs_running.assert_called_once_with(
+                    ["123"]
+                )
 
-              self.assertEqual(output_path, f"{self.tmp_dir}/ws1/chs-results")
-              # Copy should still happen because src and dst are different now (dst is subdir)
-              # But logic for skip_copy was relying on src == dst.
-              # Since they are different, copytree IS called.
-              mock_copytree.assert_called_once()
+    def test_check_jobs_running_false(self):
+        """Test check_jobs_running returns False when jobs are not running."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.check_jobs_running.return_value = False
+
+        with mock.patch.object(
+            manager, "_get_registry_entry"
+        ) as mock_get_entry:
+            with mock.patch(
+                "chs.ramble_manager.get_scheduler"
+            ) as mock_get_scheduler:
+                mock_get_entry.return_value = {
+                    "job_ids": ["123"],
+                    "scheduler": "mock_scheduler",
+                }
+                mock_get_scheduler.return_value = mock_scheduler
+
+                result = manager.check_jobs_running()
+
+                self.assertFalse(result)
+
+    def test_check_jobs_running_no_entry(self):
+        """Test check_jobs_running returns False for no registry entry."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+
+        with mock.patch.object(
+            manager, "_get_registry_entry"
+        ) as mock_get_entry:
+            mock_get_entry.return_value = None
+            result = manager.check_jobs_running()
+            self.assertFalse(result)
+
+    def test_repr(self):
+        """Test __repr__ format."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        self.assertIn(f"{self.tmp_dir}/ws1", repr(manager))
+
+    def test_analyze_results_no_scheduler_attr(self):
+        """Test analyze_results works when _scheduler is not set."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        # Ensure _scheduler is NOT set
+        if hasattr(manager, "_scheduler"):
+            del manager._scheduler
+
+        self.mock_run.return_value.stdout = "analysis complete"
+
+        with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
+            with mock.patch.object(
+                manager, "_get_registry_entry"
+            ) as mock_get_entry:
+                mock_get_entry.return_value = {"scheduler": "gke"}
+                with mock.patch("shutil.copytree") as mock_copytree:
+                    with mock.patch(
+                        "shutil.ignore_patterns"
+                    ) as mock_ignore_patterns:
+                        with mock.patch("builtins.open", mock.mock_open()):
+                            with mock.patch(
+                                "os.getcwd", return_value="/home/user"
+                            ):
+                                with mock.patch("pathlib.Path.mkdir"):
+                                    self.mock_os_path_exists.side_effect = (
+                                        lambda p: True
+                                    )
+
+                                    manager.analyze_results()
+
+                                    mock_boh_gen.assert_called_once()
+                                    _, kwargs = mock_boh_gen.call_args
+                                    self.assertEqual(
+                                        kwargs["cluster_type"], "gke"
+                                    )
+                                    mock_ignore_patterns.assert_called_once_with(
+                                        "chs-*"
+                                    )
+                                    mock_copytree.assert_called_once()
+                                    args, kwargs = mock_copytree.call_args
+                                    self.assertEqual(
+                                        args[0],
+                                        f"{self.tmp_dir}/ws1/experiments",
+                                    )
+                                    self.assertEqual(
+                                        args[1],
+                                        pathlib.Path(
+                                            f"{self.tmp_dir}/ws1/chs-results/experiments"
+                                        ),
+                                    )
+                                    self.assertTrue(kwargs["dirs_exist_ok"])
+                                    self.assertEqual(
+                                        kwargs.get("ignore"),
+                                        mock_ignore_patterns.return_value,
+                                    )
+
+    def test_analyze_results(self):
+        """Test analyze_results generates BoH and copies experiments."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        manager._scheduler = mock.Mock()
+        manager._scheduler.name = "slurm"
+        self.mock_run.return_value.stdout = "analysis complete"
+
+        with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
+            with mock.patch("shutil.copytree") as mock_copytree:
+                with mock.patch(
+                    "shutil.ignore_patterns"
+                ) as mock_ignore_patterns:
+                    with mock.patch("builtins.open", mock.mock_open()):
+                        with mock.patch("os.getcwd", return_value="/home/user"):
+                            with mock.patch("pathlib.Path.mkdir"):
+                                self.mock_os_path_exists.side_effect = (
+                                    lambda p: True
+                                )
+
+                                output_path = manager.analyze_results()
+
+                                for call_args in self.mock_run.call_args_list:
+                                    args, kwargs = call_args
+                                    cmd_list = args[0]
+                                    self.assertNotIn("on", cmd_list)
+                                    # Verify env is passed for analyze command
+                                    if "analyze" in cmd_list:
+                                        self.assertEqual(
+                                            kwargs["env"]["TQDM_DISABLE"], "1"
+                                        )
+                                        self.assertEqual(
+                                            kwargs["env"]["TERM"], "dumb"
+                                        )
+
+                                self.assertEqual(
+                                    output_path,
+                                    f"{self.tmp_dir}/ws1/chs-results",
+                                )
+                                mock_boh_gen.return_value.generate.assert_called_once()
+                                mock_ignore_patterns.assert_called_once_with(
+                                    "chs-*"
+                                )
+                                mock_copytree.assert_called_once()
+                                args, kwargs = mock_copytree.call_args
+                                self.assertEqual(
+                                    args[0], f"{self.tmp_dir}/ws1/experiments"
+                                )
+                                self.assertEqual(
+                                    args[1],
+                                    pathlib.Path(
+                                        f"{self.tmp_dir}/ws1/chs-results/experiments"
+                                    ),
+                                )
+                                self.assertTrue(kwargs["dirs_exist_ok"])
+                                self.assertEqual(
+                                    kwargs.get("ignore"),
+                                    mock_ignore_patterns.return_value,
+                                )
+
+    def test_analyze_results_skip_copy_same_dir(self):
+        """Test analyze_results skips copy if src and dst are same."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        manager._scheduler = mock.Mock()
+        manager._scheduler.name = "slurm"
+        self.mock_run.return_value.stdout = "analysis complete"
+
+        with mock.patch("chs.ramble_manager.BOHGenerator"):
+            with mock.patch("shutil.copytree") as mock_copytree:
+                with mock.patch("builtins.open", mock.mock_open()):
+                    with mock.patch("os.getcwd", return_value=self.tmp_dir):
+                        with mock.patch(
+                            "chs.ramble_manager.os.path.abspath"
+                        ) as mock_abspath:
+                            self.mock_os_path_exists.side_effect = (
+                                lambda p: True
+                            )
+
+                            def side_effect(p):
+                                return str(p)
+
+                            mock_abspath.side_effect = side_effect
+                            output_path = manager.analyze_results()
+
+                            self.assertEqual(
+                                output_path, f"{self.tmp_dir}/ws1/chs-results"
+                            )
+                            mock_copytree.assert_called_once()
 
 
 if __name__ == "__main__":
-  unittest.main()
+    unittest.main()
