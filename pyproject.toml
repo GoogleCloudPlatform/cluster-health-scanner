@@ -10,8 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click",
-    # TODO: Get ramble from https://github.com/GoogleCloudPlatform/ramble develop branch once the req branch is merged
-    "ramble @ git+https://github.com/sarthakag/ramble.git@req",
+    "ramble @ git+https://github.com/GoogleCloudPlatform/ramble.git@develop",
     "platformdirs",
     "protobuf",
     "rich",
