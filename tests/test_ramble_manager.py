@@ -448,6 +448,44 @@ class TestRambleManager(unittest.TestCase):
                             )
                             mock_copytree.assert_called_once()
 
+    def test_generate_boh(self):
+        """Test generate_boh generates BoH and copies experiments."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        manager._scheduler = mock.Mock()
+        manager._scheduler.name = "slurm"
+        results_json_path = f"{self.tmp_dir}/ws1/results.latest.json"
+
+        with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
+            with mock.patch("shutil.copytree") as mock_copytree:
+                with mock.patch(
+                    "shutil.ignore_patterns"
+                ) as mock_ignore_patterns:
+                    with mock.patch("os.getcwd", return_value="/home/user"):
+                        self.mock_os_path_exists.side_effect = lambda p: True
+
+                    output_path = manager.generate_boh(results_json_path)
+
+                    self.assertEqual(
+                        output_path, f"{self.tmp_dir}/ws1/chs-results"
+                    )
+                    mock_boh_gen.assert_called_once_with(
+                        results_json_path,
+                        base_log_dir=output_path,
+                        cluster_type="slurm",
+                    )
+                    mock_boh_gen.return_value.generate.assert_called_once()
+                    mock_ignore_patterns.assert_called_once_with("chs-*")
+                    mock_copytree.assert_called_once()
+                    args, kwargs = mock_copytree.call_args
+                    self.assertEqual(args[0], f"{self.tmp_dir}/ws1/experiments")
+                    self.assertEqual(
+                        args[1],
+                        pathlib.Path(
+                            f"{self.tmp_dir}/ws1/chs-results/experiments"
+                        ),
+                    )
+                    self.assertTrue(kwargs["dirs_exist_ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

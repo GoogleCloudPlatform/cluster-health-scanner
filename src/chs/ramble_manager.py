@@ -48,6 +48,7 @@ class RambleManager:
         Raises:
           click.UsageError: If the Ramble setup script is not found.
         """
+
         self._base_dir = base_dir
         self._workspace_name = workspace_name
         self._path = os.path.join(self._base_dir, self._workspace_name)
@@ -152,7 +153,7 @@ class RambleManager:
     ) -> subprocess.CompletedProcess[str]:
         """Runs a Ramble subcommand in the workspace context.
 
-                This is a wrapper around _execute_shell_command that prepends
+        This is a wrapper around _execute_shell_command that prepends
         'ramble -w self.path' to the command and sets cwd to self.path.
 
         Args:
@@ -449,6 +450,18 @@ class RambleManager:
                 "chs analyze command failed. Recheck the run id and try "
                 "rerunning the command."
             )
+        return self.generate_boh(results_json_path)
+
+    def generate_boh(self, results_json_path: str) -> str:
+        """Generates Bill of Health from results.latest.json.
+
+        Args:
+          results_json_path: Path to the results.latest.json file.
+
+        Returns:
+          The path to the directory containing the analysis results and Bill of
+          Health.
+        """
 
         workspace_dir = pathlib.Path(self._path)
         output_dir = workspace_dir / "chs-results"

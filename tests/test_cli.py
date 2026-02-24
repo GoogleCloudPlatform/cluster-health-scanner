@@ -787,8 +787,18 @@ class TestCli(unittest.TestCase):
                 self.assertNotEqual(result.exit_code, 0)
                 self.assertIn(case.expected_output, result.output)
 
-    def test_analyze_command(self):
+    @mock.patch("chs.cli.os.path.exists", return_value=True)
+    @mock.patch("chs.cli.get_default_workspaces_dir")
+    def test_analyze_command(self, mock_get_ws_dir, mock_path_exists):
         """Test 'analyze' command."""
+        # Setup mock path to return True for exists()
+        mock_ws_path = mock.MagicMock()
+        mock_get_ws_dir.return_value = mock_ws_path
+
+        # Configure RambleManager mock instance
+        self.mock_rm_instance.path = "/mocked/workspace/my_run_id"
+        self.mock_rm_instance.check_jobs_running.return_value = False
+
         result = self.runner.invoke(
             cli.cli,
             ["analyze", "my_run_id"],

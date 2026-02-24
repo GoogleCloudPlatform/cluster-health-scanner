@@ -6,6 +6,7 @@ logic for handling subcommands such as listing resources.
 
 import datetime
 import logging
+import os
 import pathlib
 import subprocess
 
@@ -238,19 +239,42 @@ def analyze_action(run_id: str) -> str:
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
     try:
+        if not os.path.exists(ramble_manager.path):
+            raise click.ClickException(f"Workspace '{run_id}' not found.")
+
         if ramble_manager.check_jobs_running():
-            click.echo(
-                f"Jobs for run {run_id} are still running. "
-                "Please try again later."
+            raise click.ClickException(
+                "Jobs for this run are still running. Please try again later."
             )
-            logger.debug("Jobs deemed running for run_id=%r", run_id)
-            return run_id
+
+        # Check if Bill of Health already exists
+        workspace_path = pathlib.Path(ramble_manager.path)
+        boh_path = workspace_path / "chs-results" / "bill_of_health.json"
+        if boh_path.exists():
+            click.echo("Analysis has already been run for this workspace.")
+            click.echo(f"Use 'chs show results {run_id}' to view the results.")
+            click.echo(f"Bill of Health: {boh_path}")
+            click.echo(
+                f"Logs: {workspace_path / "chs-results" / "experiments"}"
+            )
+            raise click.ClickException(
+                "Analysis has already been run. See output above for paths."
+            )
 
         logger.debug(
             "No jobs running for run_id=%r. Proceeding with analysis.", run_id
         )
 
-        output_path = ramble_manager.analyze_results()
+        # Check if results.latest.json exists (but no BoH), if so, generate BoH
+        results_json_path = workspace_path / "results.latest.json"
+        if results_json_path.exists():
+            click.echo(
+                "Found results from this run. Generating Bill of Health..."
+            )
+            output_path = ramble_manager.generate_boh(str(results_json_path))
+        else:
+            output_path = ramble_manager.analyze_results()
+
         logger.debug("Analysis complete for run_id=%r", run_id)
         click.echo(f"Results generated at: {output_path}")
         click.echo(f"Bill of Health: {output_path}/bill_of_health.json")
