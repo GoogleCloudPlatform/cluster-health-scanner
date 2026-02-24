@@ -35,7 +35,6 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    @abc.abstractmethod
     def parse_job_ids(self, output: str) -> list[str]:
         """Parses job IDs from the experiment execution output."""
         pass
