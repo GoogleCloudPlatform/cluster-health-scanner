@@ -1,10 +1,11 @@
-import hashlib
 import os
 import re
 import subprocess
 import sys
 import tempfile
 import textwrap
+import uuid
+
 
 from ramble.repository import ObjectTypes, paths
 from ramble.wmkit import *
@@ -199,9 +200,8 @@ class GkeJobset(WorkflowManagerBase):
         # K8S resource names can be max 63 chars and no `_` is supported
         sanitized_job_name = raw_job_name.replace("_", "-").lower()
         if len(sanitized_job_name) > 50:
-            name_hash = hashlib.md5(raw_job_name.encode("utf-8")).hexdigest()[
-                :6
-            ]
+            name_hash = uuid.uuid4().hex[:6]
+
             sanitized_job_name = (
                 sanitized_job_name[:43].strip("-") + "-" + name_hash
             )
