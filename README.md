@@ -194,7 +194,7 @@ The `bill_of_health.json` contains a `log_file` field for every test, pointing t
 **Example Log File Path:**
 `log_file: "/usr/local/google/home/user/.local/share/cluster-health-scanner/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
 
-#### 4. `show results`
+#### 4. `results`
 Displays the Bill of Health results in the terminal.
 
 **Arguments:**
@@ -203,14 +203,15 @@ Displays the Bill of Health results in the terminal.
 
 **Options:**
 -   `--tests` / `-t`: Comma-separated list of test names to show detailed metrics for.
+-   `--resources` / `-r`: Comma-separated list of resource names to show details for.
 
 **Example:**
 ```bash
 # Show summary of the latest run
-chs show results
+chs results
 
 # Show details for specific tests
-chs show results --tests nccl-cluster
+chs results --tests nccl-cluster
 ```
 
 ## Configuration

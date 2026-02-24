@@ -13,6 +13,9 @@ from unittest import mock
 from chs import cli
 import click
 from click import testing
+import shutil
+import tempfile
+import os
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
@@ -792,16 +795,23 @@ class TestCli(unittest.TestCase):
                 self.assertNotEqual(result.exit_code, 0)
                 self.assertIn(case.expected_output, result.output)
 
-    @mock.patch("chs.cli.os.path.exists", return_value=True)
-    @mock.patch("chs.cli.get_default_workspaces_dir")
-    def test_analyze_command(self, mock_get_ws_dir, mock_path_exists):
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+    def test_analyze_command(self, mock_get_ws_dir, mock_results_viewer):
         """Test 'analyze' command."""
-        # Setup mock path to return True for exists()
-        mock_ws_path = mock.MagicMock()
-        mock_get_ws_dir.return_value = mock_ws_path
+        # Create temp workspace
+        workspaces_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workspaces_dir)
+        mock_get_ws_dir.return_value = workspaces_dir
+
+        # Create BOH file
+        run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
+        os.makedirs(run_dir)
+        with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
+            f.write("{}")
 
         # Configure RambleManager mock instance
-        self.mock_rm_instance.path = "/mocked/workspace/my_run_id"
+        self.mock_rm_instance.path = os.path.join(workspaces_dir, "my_run_id")
         self.mock_rm_instance.check_jobs_running.return_value = False
 
         result = self.runner.invoke(
@@ -812,6 +822,8 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.return_value, "my_run_id")
         self.mock_rm_instance.wait_for_jobs.assert_called_once()
+        mock_results_viewer.assert_called_once()
+        mock_results_viewer.return_value.show_summary.assert_called_once()
 
     def test_analyze_command_errors(self):
         """Test 'analyze' command with invalid flags."""
@@ -832,6 +844,75 @@ class TestCli(unittest.TestCase):
                 result = self.runner.invoke(cli.cli, case.args_list)
                 self.assertEqual(result.exit_code, 2)
                 self.assertIn(case.expected_output, result.output)
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+    def test_results_command(self, mock_get_ws_dir, mock_results_viewer):
+        """Test 'results' command."""
+        # Create temp workspace
+        workspaces_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workspaces_dir)
+        mock_get_ws_dir.return_value = workspaces_dir
+
+        # Create BOH file
+        run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
+        os.makedirs(run_dir)
+        with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
+            f.write("{}")
+
+        # Test valid run_id
+        result = self.runner.invoke(
+            cli.cli,
+            ["results", "my_run_id"],
+        )
+        self.assertEqual(result.exit_code, 0)
+        mock_results_viewer.assert_called_once()
+        mock_results_viewer.return_value.show_summary.assert_called_once()
+
+        # Test with tests flag
+        mock_results_viewer.reset_mock()
+        result = self.runner.invoke(
+            cli.cli,
+            ["results", "my_run_id", "--tests", "t1,t2"],
+        )
+        self.assertEqual(result.exit_code, 0)
+        mock_results_viewer.return_value.show_details.assert_called_once_with(
+            tests=["t1", "t2"], resources=None
+        )
+
+        # Test with resources flag
+        mock_results_viewer.reset_mock()
+        result = self.runner.invoke(
+            cli.cli,
+            ["results", "my_run_id", "--resources", "r1"],
+        )
+        self.assertEqual(result.exit_code, 0)
+        mock_results_viewer.return_value.show_details.assert_called_once_with(
+            tests=None, resources=["r1"]
+        )
+
+    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+    def test_results_command_no_run_id(self, mock_get_ws_dir):
+        """Test 'results' command without run_id."""
+        workspaces_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workspaces_dir)
+        mock_get_ws_dir.return_value = workspaces_dir
+
+        # Create BOH file
+        run_dir = os.path.join(workspaces_dir, "latest_run", "chs-results")
+        os.makedirs(run_dir)
+        with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
+            f.write("{}")
+
+        with mock.patch(
+            "chs.cli._get_latest_workspace_run_id"
+        ) as mock_get_latest:
+            mock_get_latest.return_value = "latest_run"
+            with mock.patch("chs.cli.ResultsViewer") as mock_viewer:
+                result = self.runner.invoke(cli.cli, ["results"])
+                self.assertEqual(result.exit_code, 0)
+                mock_get_latest.assert_called_once()
+                mock_viewer.assert_called_once()
 
     def test_ensure_object_called(self):
         """Test that ctx.ensure_object(dict) is called."""

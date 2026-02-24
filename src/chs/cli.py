@@ -278,6 +278,44 @@ def analyze_action(run_id: str) -> str:
     return run_id
 
 
+def _show_results(
+    run_id: str | None, tests: str | None = None, resources: str | None = None
+) -> None:
+    """Show Bill of Health results for a run."""
+    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
+    if not run_id:
+        try:
+            run_id = _get_latest_workspace_run_id()
+        except click.ClickException as e:
+            if str(e) == "No previous runs found.":
+                raise click.ClickException(
+                    "No previous runs found to analyze."
+                ) from e
+            raise
+        logger.info("No run_id provided. Using latest run: %s", run_id)
+        click.echo(f"Showing results for latest run: {run_id}")
+
+    current_dir_path = (
+        workspaces_dir / run_id / "chs-results" / "bill_of_health.json"
+    )
+    if current_dir_path.exists():
+        boh_path = current_dir_path
+    else:
+        click.echo(f"Could not find bill of health at {current_dir_path}.")
+        click.echo(f"Have you run 'chs analyze {run_id}'?")
+        return
+
+    viewer = ResultsViewer(boh_path)
+
+    parsed_tests = _parse_str_to_list(tests)
+    parsed_resources = _parse_str_to_list(resources)
+
+    if parsed_tests or parsed_resources:
+        viewer.show_details(tests=parsed_tests, resources=parsed_resources)
+    else:
+        viewer.show_summary()
+
+
 def cancel_action(run_id: str) -> str:
     """Cancels jobs for a specific test run.
 
@@ -534,7 +572,9 @@ def analyze(run_id: str | None) -> str:
         logger.info("No run_id provided. Using latest run: %s", run_id)
         click.echo(f"Analyzing latest run: {run_id}")
 
-    return analyze_action(run_id)
+    run_id = analyze_action(run_id)
+    _show_results(run_id)
+    return run_id
 
 
 @cli.command()
@@ -566,13 +606,7 @@ def cancel(run_id: str | None) -> str:
     return cancel_action(run_id)
 
 
-@cli.group()
-def show() -> None:
-    """Show commands for displaying CHS information."""
-    pass
-
-
-@show.command()
+@cli.command()
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
 @click.option(
     "--tests",
@@ -594,38 +628,7 @@ def results(
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
     """
-
-    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
-    if not run_id:
-        try:
-            run_id = _get_latest_workspace_run_id()
-        except click.ClickException as e:
-            if str(e) == "No previous runs found.":
-                raise click.ClickException(
-                    "No previous runs found to analyze."
-                ) from e
-            raise
-        logger.info("No run_id provided. Using latest run: %s", run_id)
-        click.echo(f"Showing results for latest run: {run_id}")
-    current_dir_path = (
-        workspaces_dir / run_id / "chs-results" / "bill_of_health.json"
-    )
-    if current_dir_path.exists():
-        boh_path = current_dir_path
-    else:
-        click.echo(f"Could not find bill of health at {current_dir_path}.")
-        click.echo(f"Have you run 'chs analyze {run_id}'?")
-        return
-
-    viewer = ResultsViewer(boh_path)
-
-    parsed_tests = _parse_str_to_list(tests)
-    parsed_resources = _parse_str_to_list(resources)
-
-    if parsed_tests or parsed_resources:
-        viewer.show_details(tests=parsed_tests, resources=parsed_resources)
-    else:
-        viewer.show_summary()
+    _show_results(run_id, tests, resources)
 
 
 def main() -> None:
