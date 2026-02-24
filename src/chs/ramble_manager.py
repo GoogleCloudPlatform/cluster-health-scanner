@@ -507,6 +507,13 @@ class RambleManager:
                 "No experiments directory found at %s", experiments_dir
             )
 
+        # Cleanup jobs after successful analysis
+        try:
+            self.cancel_experiments()
+            logger.debug("Cleaned up jobs for run %s", self._workspace_name)
+        except Exception as e:
+            logger.warning("Failed to cleanup jobs after analysis: %s", e)
+
         return str(output_dir)
 
     def cleanup_workspace(self) -> None:
