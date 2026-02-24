@@ -1,5 +1,5 @@
 #!/bin/bash
-if [ "{application_name}" = "chs-gke" ]; then
+if [ "{application_name}" = "chs" ]; then
     echo "Skipping JobSet submission for {application_name} scaffolding experiment."
     echo "Submitted {experiment_name} at $(date)" > {log_file}
     exit 0

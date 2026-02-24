@@ -1,5 +1,5 @@
 #!/bin/bash
-if [ "{application_name}" = "chs-gke" ]; then
+if [ "{application_name}" = "chs" ]; then
     echo "Skipping JobSet wait for {application_name} scaffolding experiment."
     exit 0
 fi

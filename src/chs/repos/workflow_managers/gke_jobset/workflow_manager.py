@@ -46,6 +46,18 @@ class GkeJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="jobset_template",
+        default="jobset_standard.yaml.tpl",
+        description="Default JobSet template file",
+    )
+
+    workflow_manager_variable(
+        name="mpi_command",
+        default="",
+        description="Default MPI command to use",
+    )
+
+    workflow_manager_variable(
         name="jobset_labels_yaml",
         default="",
         description="Raw YAML string for JobSet metadata.labels (e.g. kueue queues)",
@@ -142,9 +154,6 @@ class GkeJobset(WorkflowManagerBase):
             return ""
         prefix = " " * indent_spaces
         key_line = f"{prefix}{key_name}:"
-        # The user's YAML string might have multiple lines. Indent it all by
-        # 2
-        # additional spaces.
         block = textwrap.indent(val.strip(), prefix + "  ")
         return f"{key_line}\n{block}"
 
@@ -198,9 +207,6 @@ class GkeJobset(WorkflowManagerBase):
             )
 
         raw_cmd = expander.expand_var_name("command")
-        # Strip standard Ramble output redirection so logs stream purely to
-        # stdout/stderr
-        # stdout/stderr
         raw_cmd = re.sub(r'>>\s*"[^"]+"\s*2>&1', "", raw_cmd)
 
         experiment_run_dir = expander.expand_var_name("experiment_run_dir")
@@ -215,12 +221,6 @@ class GkeJobset(WorkflowManagerBase):
                 workspace_dir, container_work_dir
             )
 
-            # Template spaces before the variable anchor only apply to the first
-        # line
-        # in str.format()
-        # We must indent all subsequent lines to maintain valid YAML block
-        # scalar
-        # format
         indented_mpi_command = raw_cmd.replace("\n", "\n" + (" " * 20))
         indented_standard_command = raw_cmd.replace("\n", "\n" + (" " * 18))
 
@@ -258,9 +258,6 @@ class GkeJobset(WorkflowManagerBase):
         svol = self._yaml_block("extra_volumes_yaml", "volumes", 14)
         smnt = self._yaml_block("extra_volume_mounts_yaml", "volumeMounts", 16)
 
-        # MPI templating (where 'volumes' / 'volumeMounts' keys are already
-        # present for the ssh keys)
-        # present for the ssh keys)
         mvol_add = self._yaml_append("extra_volumes_yaml", 14)
         mmnt_add = self._yaml_append("extra_volume_mounts_yaml", 16)
 

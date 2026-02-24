@@ -1,18 +1,19 @@
 ramble:
   variants:
-    workflow_manager: slurm-suite-configs
+    workflow_manager: slurm
   config:
     overwrite_inventories: True
   variables:
     nodes: {nodes}
     machine_type: {machine_type}
     tests: {tests}
+    scheduler: slurm
 
   applications:
-    chs-slurm:
+    chs:
       workloads:
         cluster_health:
           experiments:
             cluster_health_diagnostics:
               variables:
-                foo: bar
+                placeholder: "true"

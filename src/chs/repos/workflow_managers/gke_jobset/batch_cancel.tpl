@@ -1,5 +1,5 @@
 #!/bin/bash
-if [ "{application_name}" = "chs-gke" ]; then
+if [ "{application_name}" = "chs" ]; then
     exit 0
 fi
 
