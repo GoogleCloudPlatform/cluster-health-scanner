@@ -318,9 +318,12 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(result.exit_code, 2)
                 self.assertIn(case.expected_output, result.output)
 
+    @mock.patch("chs.cli.analyze_action", autospec=True)
     @mock.patch("chs.cli.get_scheduler")
     @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_run_command(self, mock_get_default_dir, mock_get_scheduler):
+    def test_run_command(
+        self, mock_get_default_dir, mock_get_scheduler, mock_analyze_action
+    ):
         """Test 'run' command."""
         mock_default_dir = "/mocked/workspaces"
         mock_get_default_dir.return_value = mock_default_dir
@@ -550,6 +553,7 @@ class TestCli(unittest.TestCase):
                 self.mock_rm_instance.reset_mock()
                 self.mock_get_scheduler.reset_mock()
                 mock_get_default_dir.reset_mock()
+                mock_analyze_action.reset_mock()
                 self.mock_rm_instance.execute_experiments.return_value = [
                     "job1"
                 ]
@@ -587,6 +591,7 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
+                mock_analyze_action.assert_called_once_with(MOCK_WORKSPACE_NAME)
 
     @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
     def test_run_action_exception_handling(self, mock_get_default_dir):
@@ -806,6 +811,7 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.return_value, "my_run_id")
+        self.mock_rm_instance.wait_for_jobs.assert_called_once()
 
     def test_analyze_command_errors(self):
         """Test 'analyze' command with invalid flags."""

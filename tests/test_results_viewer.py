@@ -176,7 +176,7 @@ class TestResultsViewer(unittest.TestCase):
 
         # Check if the description is in the rendered content
         # The second call to print should be the panel
-        args, _ = viewer.console.print.call_args_list[1]
+        args, _ = viewer.console.print.call_args_list[0]
         panel = args[0]
         self.assertIn(
             "Validates cluster-wide GPU communication", panel.renderable.plain

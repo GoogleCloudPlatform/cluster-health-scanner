@@ -242,28 +242,18 @@ def analyze_action(run_id: str) -> str:
         if not os.path.exists(ramble_manager.path):
             raise click.ClickException(f"Workspace '{run_id}' not found.")
 
-        if ramble_manager.check_jobs_running():
-            raise click.ClickException(
-                "Jobs for this run are still running. Please try again later."
-            )
+        # Blocking wait for jobs (Replaces upstream check_jobs_running check)
+        logger.debug(f"Waiting for jobs for {run_id}...")
+        ramble_manager.wait_for_jobs()
 
         # Check if Bill of Health already exists
         workspace_path = pathlib.Path(ramble_manager.path)
         boh_path = workspace_path / "chs-results" / "bill_of_health.json"
         if boh_path.exists():
-            click.echo("Analysis has already been run for this workspace.")
-            click.echo(f"Use 'chs show results {run_id}' to view the results.")
+            click.echo(f"Analysis already completed for run {run_id}.")
+            click.echo(f"Results at: {workspace_path / 'chs-results'}")
             click.echo(f"Bill of Health: {boh_path}")
-            click.echo(
-                f"Logs: {workspace_path / "chs-results" / "experiments"}"
-            )
-            raise click.ClickException(
-                "Analysis has already been run. See output above for paths."
-            )
-
-        logger.debug(
-            "No jobs running for run_id=%r. Proceeding with analysis.", run_id
-        )
+            return run_id
 
         # Check if results.latest.json exists (but no BoH), if so, generate BoH
         results_json_path = workspace_path / "results.latest.json"
@@ -480,8 +470,8 @@ def run(
     else:
         click.echo("No Job IDs captured (running locally?)")
 
-    click.echo(f"Query results using the command: chs analyze {workspace_name}")
-    click.echo("Note: 'chs analyze' retrieves the latest results.")
+    # Automatically trigger analysis
+    analyze_action(workspace_name)
 
     return result
 

@@ -22,6 +22,7 @@ from chs.schedulers.base import BaseScheduler
 import click
 from google.protobuf.json_format import MessageToJson
 import platformdirs
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -509,6 +510,22 @@ class RambleManager:
         return str(output_dir)
 
     def cleanup_workspace(self) -> None:
-        """Cleans up the Ramble workspace directory."""
         # TODO: Implement the logic for this method.
         pass
+
+    def wait_for_jobs(self, poll_interval: int = 30) -> None:
+        """Waits for all jobs in the workspace to complete.
+
+        Args:
+            poll_interval: Seconds to wait between checks.
+        """
+        logger.info(
+            "Waiting for jobs to complete for run %s...", self._workspace_name
+        )
+        while self.check_jobs_running():
+            # TODO: test progress should be shown here
+            logger.debug(
+                "Jobs still running. Waiting %s seconds...", poll_interval
+            )
+            time.sleep(poll_interval)
+        logger.info("All jobs completed for run %s.", self._workspace_name)
