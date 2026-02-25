@@ -3,7 +3,7 @@
 # TODO: Add support for dynamincally fetching the list of
 # supported machine types, suites, tests and schedulers.
 
-SUPPORTED_MACHINE_TYPES = ["a3-ultra"]
+SUPPORTED_MACHINE_TYPES = ["a3-ultra", "a4"]
 SUPPORTED_TESTS = [
     "dcgm",
     "nccl-cluster",

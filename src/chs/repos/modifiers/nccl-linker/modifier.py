@@ -63,7 +63,7 @@ class NcclLinker(BasicModifier):
                     " LD_LIBRARY_PATH=/var/lib/tcpx/lib64:${LD_LIBRARY_PATH};"
                     ' ./sendrecv_perf {additional_args}"'
                 ]
-        if machine_type == "a3-ultra":
+        if machine_type == "a3-ultra" or machine_type == "a4":
             if executable_name == "all-to-all-execute":
                 executable.template = [
                     'bash -c "export'

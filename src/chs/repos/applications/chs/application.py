@@ -33,7 +33,7 @@ class Chs(ExecutableApplication):
         "machine_type",
         default="",
         description="Machine type for the suite",
-        values=["a3-high", "a3-ultra"],
+        values=["a3-high", "a3-ultra", "a4"],
     )
 
     executable(
