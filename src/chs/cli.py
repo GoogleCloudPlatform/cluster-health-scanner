@@ -629,6 +629,7 @@ def results(
 
 def main() -> None:
     """Main entry point for the CHS CLI."""
+
     logger.info("CHS CLI starting...")
     try:
         cli(obj={})
