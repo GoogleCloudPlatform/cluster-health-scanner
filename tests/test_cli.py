@@ -16,6 +16,7 @@ from click import testing
 import shutil
 import tempfile
 import os
+import pathlib
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
@@ -155,23 +156,23 @@ class TestCli(unittest.TestCase):
         )
         self.assertIsNone(cli.non_empty_str_callback(ctx, param, None))
 
-    @mock.patch.object(click, "echo", autospec=True)
-    def test_list_tests_implementation_hint(self, mock_echo):
+    @mock.patch("chs.cli.logger")
+    def test_list_tests_implementation_hint(self, mock_logger):
         """Test _list_tests prints hint when listing all tests."""
         cli._list_tests(from_suite=None, tests_flag=True)
-        mock_echo.assert_any_call(
+        mock_logger.info.assert_any_call(
             "  (Hint: Use --from-suite <suite_name> to filter tests)"
         )
 
-    @mock.patch.object(click, "echo", autospec=True)
-    def test_list_tests_implementation_no_hint(self, mock_echo):
+    @mock.patch("chs.cli.logger")
+    def test_list_tests_implementation_no_hint(self, mock_logger):
         """Test _list_tests does not print hint when filtering by suite."""
         cli._list_tests(from_suite="suite1", tests_flag=True)
         hint_message = "  (Hint: Use --from-suite <suite_name> to filter tests)"
         self.assertTrue(
             all(
                 hint_message not in call.args
-                for call in mock_echo.call_args_list
+                for call in mock_logger.info.call_args_list
             )
         )
 
@@ -797,8 +798,10 @@ class TestCli(unittest.TestCase):
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_analyze_command(self, mock_get_ws_dir, mock_results_viewer):
-        """Test 'analyze' command."""
+    def test_analyze_command_shortcut_boh(
+        self, mock_get_ws_dir, mock_results_viewer
+    ):
+        """Test 'analyze' command shortcut when BoH already exists."""
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
@@ -807,12 +810,12 @@ class TestCli(unittest.TestCase):
         # Create BOH file
         run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
         os.makedirs(run_dir)
-        with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
+        boh_path = os.path.join(run_dir, "bill_of_health.json")
+        with open(boh_path, "w") as f:
             f.write("{}")
 
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = os.path.join(workspaces_dir, "my_run_id")
-        self.mock_rm_instance.check_jobs_running.return_value = False
 
         result = self.runner.invoke(
             cli.cli,
@@ -820,10 +823,86 @@ class TestCli(unittest.TestCase):
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual(result.return_value, "my_run_id")
-        self.mock_rm_instance.wait_for_jobs.assert_called_once()
+        self.mock_rm_instance.wait_for_jobs.assert_not_called()
+        self.mock_rm_instance.generate_boh.assert_not_called()
+        mock_results_viewer.assert_called_once_with(pathlib.Path(boh_path))
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+    def test_analyze_command_shortcut_results(
+        self, mock_get_ws_dir, mock_results_viewer
+    ):
+        """Test 'analyze' command shortcut when results.latest.json exists."""
+        # Create temp workspace
+        workspaces_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workspaces_dir)
+        mock_get_ws_dir.return_value = workspaces_dir
+
+        # Create results.latest.json file
+        workspace_dir = os.path.join(workspaces_dir, "my_run_id")
+        os.makedirs(workspace_dir)
+        results_path = os.path.join(workspace_dir, "results.latest.json")
+        with open(results_path, "w") as f:
+            f.write("{}")
+
+        # Configure RambleManager mock instance
+        self.mock_rm_instance.path = workspace_dir
+
+        def mock_generate_boh(results_path):
+            run_results_dir = os.path.join(workspace_dir, "chs-results")
+            os.makedirs(run_results_dir, exist_ok=True)
+            boh_file = os.path.join(run_results_dir, "bill_of_health.json")
+            with open(boh_file, "w") as f:
+                f.write("{}")
+            return run_results_dir
+
+        self.mock_rm_instance.generate_boh.side_effect = mock_generate_boh
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["analyze", "my_run_id"],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.mock_rm_instance.wait_for_jobs.assert_not_called()
+        self.mock_rm_instance.generate_boh.assert_called_once_with(results_path)
         mock_results_viewer.assert_called_once()
-        mock_results_viewer.return_value.show_summary.assert_called_once()
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
+    def test_analyze_command_full(self, mock_get_ws_dir, mock_results_viewer):
+        """Test 'analyze' command full path when no results exist yet."""
+        # Create temp workspace
+        workspaces_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workspaces_dir)
+        mock_get_ws_dir.return_value = workspaces_dir
+
+        # Create empty workspace dir
+        workspace_dir = os.path.join(workspaces_dir, "my_run_id")
+        os.makedirs(workspace_dir)
+
+        # Configure RambleManager mock instance
+        self.mock_rm_instance.path = workspace_dir
+
+        def mock_analyze_results():
+            run_results_dir = os.path.join(workspace_dir, "chs-results")
+            os.makedirs(run_results_dir, exist_ok=True)
+            boh_file = os.path.join(run_results_dir, "bill_of_health.json")
+            with open(boh_file, "w") as f:
+                f.write("{}")
+            return run_results_dir
+
+        self.mock_rm_instance.analyze_results.side_effect = mock_analyze_results
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["analyze", "my_run_id"],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.mock_rm_instance.wait_for_jobs.assert_called_once()
+        self.mock_rm_instance.analyze_results.assert_called_once()
+        mock_results_viewer.assert_called_once()
 
     def test_analyze_command_errors(self):
         """Test 'analyze' command with invalid flags."""

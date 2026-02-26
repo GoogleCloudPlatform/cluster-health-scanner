@@ -87,7 +87,7 @@ def _list_tests(from_suite: str | None, tests_flag: bool) -> None:
     else:
         # TODO: Add logic to list all tests
         if tests_flag:
-            click.echo(
+            logger.info(
                 "  (Hint: Use --from-suite <suite_name> to filter tests)"
             )
         logger.info("Listed tests.")
@@ -242,33 +242,31 @@ def analyze_action(run_id: str) -> str:
         if not os.path.exists(ramble_manager.path):
             raise click.ClickException(f"Workspace '{run_id}' not found.")
 
-        # Blocking wait for jobs (Replaces upstream check_jobs_running check)
+        workspace_path = pathlib.Path(ramble_manager.path)
+        boh_path = workspace_path / "chs-results" / "bill_of_health.json"
+        results_json_path = workspace_path / "results.latest.json"
+
+        # 1. Check if Bill of Health already exists
+        if boh_path.exists():
+            _show_results(run_id)
+            return run_id
+
+        # 2. If results.latest.json exists (but no BoH), generate BoH
+        if results_json_path.exists():
+            logger.info(
+                "Found results from this run. Generating Bill of Health..."
+            )
+            ramble_manager.generate_boh(str(results_json_path))
+            _show_results(run_id)
+            return run_id
+
+        # 3. If neither exists, wait for jobs and then analyze
         logger.debug(f"Waiting for jobs for {run_id}...")
         ramble_manager.wait_for_jobs()
 
-        # Check if Bill of Health already exists
-        workspace_path = pathlib.Path(ramble_manager.path)
-        boh_path = workspace_path / "chs-results" / "bill_of_health.json"
-        if boh_path.exists():
-            click.echo(f"Analysis already completed for run {run_id}.")
-            click.echo(f"Results at: {workspace_path / 'chs-results'}")
-            click.echo(f"Bill of Health: {boh_path}")
-            return run_id
-
-        # Check if results.latest.json exists (but no BoH), if so, generate BoH
-        results_json_path = workspace_path / "results.latest.json"
-        if results_json_path.exists():
-            click.echo(
-                "Found results from this run. Generating Bill of Health..."
-            )
-            output_path = ramble_manager.generate_boh(str(results_json_path))
-        else:
-            output_path = ramble_manager.analyze_results()
-
+        ramble_manager.analyze_results()
         logger.debug("Analysis complete for run_id=%r", run_id)
-        click.echo(f"Results generated at: {output_path}")
-        click.echo(f"Bill of Health: {output_path}/bill_of_health.json")
-        click.echo(f"Logs: {output_path}/experiments")
+        _show_results(run_id)
     except click.ClickException:
         raise
     except (OSError, subprocess.CalledProcessError) as e:
@@ -293,7 +291,7 @@ def _show_results(
                 ) from e
             raise
         logger.info("No run_id provided. Using latest run: %s", run_id)
-        click.echo(f"Showing results for latest run: {run_id}")
+        logger.info("Showing results for latest run: %s", run_id)
 
     current_dir_path = (
         workspaces_dir / run_id / "chs-results" / "bill_of_health.json"
@@ -301,8 +299,8 @@ def _show_results(
     if current_dir_path.exists():
         boh_path = current_dir_path
     else:
-        click.echo(f"Could not find bill of health at {current_dir_path}.")
-        click.echo(f"Have you run 'chs analyze {run_id}'?")
+        logger.error("Could not find bill of health at %s.", current_dir_path)
+        logger.info("Have you run 'chs analyze %s'?", run_id)
         return
 
     viewer = ResultsViewer(boh_path)
@@ -335,12 +333,12 @@ def cancel_action(run_id: str) -> str:
 
     try:
         if not ramble_manager.check_jobs_running():
-            click.echo(f"No jobs for run {run_id} are currently running.")
+            logger.info("No jobs for run %s are currently running.", run_id)
             return run_id
 
         ramble_manager.cancel_experiments()
         logger.debug("Cancellation complete for run_id=%r", run_id)
-        click.echo(f"Jobs for run {run_id} have been canceled.")
+        logger.info("Jobs for run %s have been canceled.", run_id)
     except click.ClickException:
         raise
     except (OSError, subprocess.CalledProcessError) as e:
@@ -501,12 +499,12 @@ def run(
         machine_type=machine_type,
     )
 
-    click.echo("Run submitted successfully.")
-    click.echo(f"Request ID (Workspace Name): {workspace_name}")
+    logger.info("Run submitted successfully.")
+    logger.info("Request ID (Workspace Name): %s", workspace_name)
     if result[5]:  # job_ids
-        click.echo(f"Job IDs: {', '.join(result[5])}")
+        logger.info("Job IDs: %s", ", ".join(result[5]))
     else:
-        click.echo("No Job IDs captured (running locally?)")
+        logger.info("No Job IDs captured (running locally?)")
 
     # Automatically trigger analysis
     analyze_action(workspace_name)
@@ -570,11 +568,9 @@ def analyze(run_id: str | None) -> str:
                 ) from e
             raise
         logger.info("No run_id provided. Using latest run: %s", run_id)
-        click.echo(f"Analyzing latest run: {run_id}")
+        logger.info("Analyzing latest run: %s", run_id)
 
-    run_id = analyze_action(run_id)
-    _show_results(run_id)
-    return run_id
+    return analyze_action(run_id)
 
 
 @cli.command()
@@ -601,7 +597,7 @@ def cancel(run_id: str | None) -> str:
                 ) from e
             raise
         logger.info("No run_id provided. Using latest run: %s", run_id)
-        click.echo(f"Canceling latest run: {run_id}")
+        logger.info("Canceling latest run: %s", run_id)
 
     return cancel_action(run_id)
 
