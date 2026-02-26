@@ -43,3 +43,26 @@ class BaseScheduler(abc.ABC):
     def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs."""
         pass
+
+    @abc.abstractmethod
+    def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
+        """Gets the status of the given jobs.
+
+        Args:
+            job_ids: A list of job IDs to check.
+
+        Returns:
+            A dictionary mapping job IDs to their status (e.g., 'RUNNING',
+            'COMPLETED', 'FAILED').
+        """
+        pass
+
+    @abc.abstractmethod
+    def fetch_job_log(self, job_id: str, log_path: str) -> None:
+        """Fetches the log for a completed job and saves it to the given path.
+
+        Args:
+            job_id: The ID of the job to fetch logs for.
+            log_path: The path to save the log file to.
+        """
+        pass

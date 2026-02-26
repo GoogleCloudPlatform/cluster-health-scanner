@@ -166,6 +166,92 @@ class GKEScheduler(BaseScheduler):
 
         return still_running
 
+    def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
+        """Gets the status of the given jobs using kubectl."""
+        statuses = {}
+        for job_id in job_ids:
+            try:
+                result = subprocess.run(
+                    ["kubectl", "get", "jobset", job_id, "-o", "json"],
+                    text=True,
+                    check=True,
+                    capture_output=True,
+                )
+                job_data = json.loads(result.stdout)
+                conditions = job_data.get("status", {}).get("conditions", [])
+
+                status = "RUNNING"  # Default if exists but not complete/failed
+                for cond in conditions:
+                    if (
+                        cond.get("type") == "Completed"
+                        and cond.get("status") == "True"
+                    ):
+                        status = "COMPLETED"
+                        break
+                    if (
+                        cond.get("type") == "Failed"
+                        and cond.get("status") == "True"
+                    ):
+                        status = "FAILED"
+                        break
+                statuses[job_id] = status
+
+            except subprocess.CalledProcessError:
+                # JobSet not found, likely deleted or never existed.
+                # In CHS context, if we are polling, it might mean it finished
+                # and was cleaned up? But persistent JobSets should stay until
+                # deleted. If it's missing, let's mark as UNKNOWN or COMPLETED?
+                # safer to say UNKNOWN if we expected it to be there.
+                statuses[job_id] = "UNKNOWN"
+            except (json.JSONDecodeError, AttributeError, TypeError) as e:
+                logger.warning(
+                    "Failed to check status for JobSet %s: %s", job_id, e
+                )
+                statuses[job_id] = "UNKNOWN"
+
+        return statuses
+
+    def fetch_job_log(self, job_id: str, log_path: str) -> None:
+        """Fetches the log for a completed GKE job."""
+        logger.debug("Fetching logs for JobSet %s to %s", job_id, log_path)
+        try:
+            # Find the head pod (rank 0)
+            # This logic mirrors batch_wait.tpl
+            cmd = [
+                "kubectl",
+                "get",
+                "pods",
+                "-l",
+                f"jobset.sigs.k8s.io/jobset-name={job_id},batch.kubernetes.io/job-completion-index=0",
+                "-o",
+                "jsonpath={.items[0].metadata.name}",
+            ]
+            result = subprocess.run(
+                cmd, text=True, check=True, capture_output=True
+            )
+            head_pod = result.stdout.strip()
+
+            if not head_pod:
+                logger.warning("Head pod not found for JobSet %s.", job_id)
+                return
+
+            logger.debug("Found head pod: %s", head_pod)
+
+            # Streaming logs to file
+            with open(log_path, "w") as f:
+                subprocess.run(
+                    ["kubectl", "logs", head_pod],
+                    stdout=f,
+                    check=True,
+                    text=True,
+                )
+            logger.debug("Logs saved to %s", log_path)
+
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to fetch logs for JobSet %s: %s", job_id, e)
+        except OSError as e:
+            logger.error("Failed to write log file %s: %s", log_path, e)
+
     def parse_job_ids(self, output: str) -> list[str]:
         """Parses job IDs from the experiment execution output."""
         # Match kubectl apply output for JobSets.

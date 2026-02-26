@@ -99,6 +99,14 @@ class Chs(ExecutableApplication):
                     "container_image",
                 },
             )
+
+            # Filter out any keys starting with "application::" as they are reserved
+            # by Ramble and can cause validation errors in sub-experiments.
+            test_vars = {
+                k: v
+                for k, v in test_vars.items()
+                if not k.startswith("application::")
+            }
             if test in ["nccl-cluster", "nccl-pairwise"]:
                 workloads = ["all-gather", "all-reduce"]
                 application_name = "nccl-tests"

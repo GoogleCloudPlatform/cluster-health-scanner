@@ -51,3 +51,11 @@ class DefaultScheduler(BaseScheduler):
     def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs."""
         pass
+
+    def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
+        """Gets the status of the given jobs."""
+        return {jid: "UNKNOWN" for jid in job_ids}
+
+    def fetch_job_log(self, job_id: str, log_path: str) -> None:
+        """Fetches the log for a completed job."""
+        pass

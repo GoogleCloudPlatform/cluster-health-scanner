@@ -156,6 +156,59 @@ class SlurmScheduler(BaseScheduler):
             logger.warning("squeue command not found. Cannot check job status.")
             return False
 
+    def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
+        """Gets the status of the given jobs using squeue."""
+        if not job_ids:
+            return {}
+
+        statuses = {}
+        # squeue format: JobID,StateCompact
+        cmd = [
+            "squeue",
+            "--jobs",
+            ",".join(job_ids),
+            "--noheader",
+            "--format=%i,%t",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if "," in line:
+                        jid, state = line.split(",", 1)
+                        # Map Slurm states to common statuses if needed,
+                        # but raw states are usually fine (R, PD, CG, etc.)
+                        statuses[jid.strip()] = state.strip()
+
+            # Jobs not in squeue are likely completed (or invalid).
+            # We can't strictly distinguish without accounting, but for CHS
+            # polling logic, absence implies completion.
+            for jid in job_ids:
+                if jid not in statuses:
+                    statuses[jid] = "COMPLETED"
+
+        except FileNotFoundError:
+            logger.warning("squeue command not found. Assuming UNKNOWN.")
+            for jid in job_ids:
+                statuses[jid] = "UNKNOWN"
+
+        return statuses
+
+    def fetch_job_log(self, job_id: str, log_path: str) -> None:
+        """Fetches the log for a completed job.
+
+        For Slurm, logs are typically written directly to the shared
+        filesystem by the job itself (via --output), so this might be a no-op
+        """
+        if os.path.exists(log_path):
+            logger.debug("Log file for job %s exists at %s", job_id, log_path)
+        else:
+            logger.warning(
+                "Log file for job %s not found at %s", job_id, log_path
+            )
+
     def parse_job_ids(self, output: str) -> list[str]:
         """Parses job IDs from the experiment execution output."""
         return re.findall(r"Submitted batch job (\d+)", output)

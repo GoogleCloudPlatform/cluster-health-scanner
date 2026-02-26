@@ -494,19 +494,12 @@ class TestRambleManager(unittest.TestCase):
                         mock_cancel.assert_called_once()
 
     def test_wait_for_jobs(self):
-        """Test wait_for_jobs waits until check_jobs_running is False."""
+        """Test wait_for_jobs calls _monitor_jobs."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
 
-        # Mock check_jobs_running to return True twice, then False
-        with mock.patch.object(
-            manager, "check_jobs_running", side_effect=[True, True, False]
-        ) as mock_check:
-            with mock.patch("time.sleep") as mock_sleep:
-                manager.wait_for_jobs(poll_interval=1)
-
-                self.assertEqual(mock_check.call_count, 3)
-                self.assertEqual(mock_sleep.call_count, 2)
-                mock_sleep.assert_called_with(1)
+        with mock.patch.object(manager, "_monitor_jobs") as mock_monitor:
+            manager.wait_for_jobs(poll_interval=1)
+            mock_monitor.assert_called_once_with(1)
 
 
 if __name__ == "__main__":

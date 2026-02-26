@@ -24,6 +24,7 @@ import click
 from google.protobuf.json_format import MessageToJson
 import platformdirs
 import time
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +447,139 @@ class RambleManager:
             logger.warning("Failed to read runs registry: %s", e)
         return None
 
+    def _map_jobs_to_log_paths(self) -> dict[str, str]:
+        """Maps Job IDs to their expected log paths on the filesystem.
+
+        Scans the 'experiments' directory for jobset.yaml files, extracts the
+        job name (which is the Job ID), and maps it to the '{experiment}.out'
+        file in the same directory. Matches against registry jobs.
+        """
+        registry_job_ids = set(self.get_job_ids())
+        mapping = {}
+        experiments_dir = os.path.join(self.path, "experiments")
+
+        if not os.path.exists(experiments_dir):
+            return mapping
+
+        for root, _, files in os.walk(experiments_dir):
+            if "jobset.yaml" in files:
+                try:
+                    with open(os.path.join(root, "jobset.yaml"), "r") as f:
+                        content = f.read()
+
+                        # Parse all docs (e.g. Service + JobSet) to find matching name.
+                        docs = list(yaml.safe_load_all(content))
+                        job_name = None
+                        for doc in docs:
+                            if not doc:
+                                continue
+                            name = doc.get("metadata", {}).get("name")
+                            if name and name in registry_job_ids:
+                                job_name = name
+                                break
+
+                        if job_name and job_name in registry_job_ids:
+                            # Find .out file (ignoring execute.log).
+                            out_files = [
+                                f
+                                for f in files
+                                if f.endswith(".out")
+                                and f != "execute.log"
+                                and not f.startswith("execute")
+                            ]
+
+                            if not out_files:
+                                logger.warning(
+                                    "No .out file found in %s for job %s",
+                                    root,
+                                    job_name,
+                                )
+                                continue
+
+                            # Priority 1: File containing job_name
+                            log_path = None
+                            for out_file in out_files:
+                                if job_name in out_file:
+                                    log_path = os.path.join(root, out_file)
+                                    break
+
+                            # Priority 2: Any other .out file (fallback)
+                            if not log_path:
+                                log_path = os.path.join(root, out_files[0])
+
+                            if log_path:
+                                mapping[job_name] = log_path
+                except Exception as e:
+                    logger.warning(
+                        "Failed to parse jobset.yaml in %s: %s", root, e
+                    )
+
+        return mapping
+
+    def wait_for_jobs(self, poll_interval: int = 30) -> None:
+        """Waits for all jobs in the workspace to complete and fetches logs.
+
+        Args:
+            poll_interval: Seconds to wait between checks.
+        """
+        logger.info(
+            "Waiting for jobs to complete for run %s...", self._workspace_name
+        )
+        self._monitor_jobs(poll_interval)
+
+    def _monitor_jobs(self, poll_interval: int) -> None:
+        """Generic wait logic to monitor job progress and fetch logs.
+
+        Polls job statuses for all jobs in the registry. When a job completes,
+        attempts to fetch its log (if a path is mapped). Logs progress.
+        """
+        job_log_map = self._map_jobs_to_log_paths()
+        pending_log_fetches = set(job_log_map.keys())
+        scheduler = get_scheduler(self.get_scheduler_type())
+
+        registry_jobs = set(self.get_job_ids())
+        if not registry_jobs:
+            logger.info("No jobs found in registry.")
+            return
+
+        # We poll ALL registry jobs for status
+        active_jobs = registry_jobs.copy()
+
+        while active_jobs:
+            statuses = scheduler.get_job_statuses(list(active_jobs))
+
+            still_running = False
+            for job_id, status in statuses.items():
+                if status in ["COMPLETED", "FAILED", "UNKNOWN"]:
+                    # Job finished
+                    if job_id in pending_log_fetches:
+                        log_path = job_log_map.get(job_id)
+                        if log_path:
+                            try:
+                                scheduler.fetch_job_log(job_id, log_path)
+                            except Exception as e:
+                                logger.error(
+                                    "Error fetching log for %s: %s", job_id, e
+                                )
+                        pending_log_fetches.remove(job_id)
+
+                    active_jobs.remove(job_id)
+                else:
+                    still_running = True
+
+            if still_running:
+                logger.info(
+                    "Jobs remaining: %d. Waiting %s seconds...",
+                    len(active_jobs),
+                    poll_interval,
+                )
+                time.sleep(poll_interval)
+
+        logger.info(
+            "All jobs completed and logs fetched for run %s.",
+            self._workspace_name,
+        )
+
     def get_scheduler_type(self) -> str:
         """Retrieves scheduler type for this workspace from the registry."""
         if hasattr(self, "_scheduler"):
@@ -469,18 +603,7 @@ class RambleManager:
         Raises:
           click.ClickException: If the experiment analyze command fails.
         """
-        if self.get_scheduler_type() == "gke":
-            logger.debug(
-                "Executing batch wait before analyzing experiments in " "%s...",
-                self.path,
-            )
-            self._execute_ramble_command(
-                subcommand="on",
-                args=["--executor", "{batch_wait}"],
-                capture_output=True,
-                env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-                error_context="Failed to retrieve logs from jobs",
-            )
+
 
         logger.debug("Analyzing experiments in %s...", self.path)
         self._execute_ramble_command(
@@ -565,20 +688,3 @@ class RambleManager:
     def cleanup_workspace(self) -> None:
         # TODO: Implement the logic for this method.
         pass
-
-    def wait_for_jobs(self, poll_interval: int = 30) -> None:
-        """Waits for all jobs in the workspace to complete.
-
-        Args:
-            poll_interval: Seconds to wait between checks.
-        """
-        logger.info(
-            "Waiting for jobs to complete for run %s...", self._workspace_name
-        )
-        while self.check_jobs_running():
-            # TODO: test progress should be shown here
-            logger.debug(
-                "Jobs still running. Waiting %s seconds...", poll_interval
-            )
-            time.sleep(poll_interval)
-        logger.info("All jobs completed for run %s.", self._workspace_name)
