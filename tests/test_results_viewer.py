@@ -163,7 +163,7 @@ class TestResultsViewer(unittest.TestCase):
         # Mock data with a known test name
         test_results = [
             {
-                "name": "cluster_health_diagnostics-nccl-all",
+                "test_name": "cluster_health_diagnostics-nccl-all",
                 "result_status": "RESULT_STATUS_SUCCESS",
                 "target_resource_ids": ["node1"],
             }

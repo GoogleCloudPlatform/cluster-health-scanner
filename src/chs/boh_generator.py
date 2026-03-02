@@ -23,6 +23,10 @@ class BOHGenerator:
         self.base_log_dir = base_log_dir
         self.cluster_type = cluster_type
         self.report = pb.BillOfHealth()
+        self._extractors = {
+            "nccl-tests": self._extract_nccl_info,
+            "nvidia-dcgm": self._extract_dcgm_info,
+        }
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()
@@ -55,6 +59,55 @@ class BOHGenerator:
             metrics.append(metric)
         return metrics
 
+    def _extract_nccl_info(
+        self, exp_name: str, workload_name: str
+    ) -> tuple[str, str]:
+        """Extractor for NCCL tests."""
+        if "nccl-cluster" in exp_name:
+            return "nccl-cluster", workload_name
+        if "nccl-pairwise" in exp_name:
+            return "nccl-pairwise", workload_name
+        return exp_name, workload_name
+
+    def _extract_dcgm_info(
+        self, exp_name: str, workload_name: str
+    ) -> tuple[str, str]:
+        """Extractor for DCGM tests."""
+        parts = exp_name.split("-")
+        if len(parts) > 3 and parts[2] == "level":
+            return "dcgm", f"level-{parts[3]}"
+        return "dcgm", workload_name
+
+    def _extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str]:
+        """Extracts test name and level from experiment data."""
+        exp_name = exp.get("experiment_name", "test_name_unidentified")
+        app_name = exp.get("application_name", "")
+        workload_name = exp.get("workload_name", "")
+
+        extractor = self._extractors.get(app_name)
+        if extractor:
+            return extractor(exp_name, workload_name)
+
+        return exp_name, workload_name
+
+    def _get_result_status(self, success_criteria: dict[str, str]) -> int:
+        """Maps experiment success criteria to ResultStatus."""
+        if not success_criteria:
+            return pb.RESULT_STATUS_UNKNOWN
+
+        statuses = {s.upper() for s in success_criteria.values()}
+
+        if "FAILED" in statuses:
+            return pb.RESULT_STATUS_FAILED
+        if "TIMEOUT" in statuses:
+            return pb.RESULT_STATUS_TIMEOUT
+        if "CANCELLED" in statuses:
+            return pb.RESULT_STATUS_CANCELLED
+        if statuses == {"PASSED"}:
+            return pb.RESULT_STATUS_SUCCESS
+
+        return pb.RESULT_STATUS_UNKNOWN
+
     def generate(self) -> pb.BillOfHealth:
         """Generates the Bill of Health report."""
         try:
@@ -71,50 +124,20 @@ class BOHGenerator:
         # TODO: Fetch and add system info
         self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"
 
-        experiments = data.get("experiments", [])
-        for exp in experiments:
-            test_result = pb.TestResult()
-            test_result.name = exp.get(
-                "experiment_name", "test_name_unidentified"
-            )
-
+        for exp in data.get("experiments", []):
+            exp_name = exp.get("experiment_name", "")
             # Experiment cluster_health_diagnostics is used to inject other
             # experiments, not required for BoH; hardcoding the skip for now.
-            # TODO: Make this more robust once other experiments (gke, custom,
-            # etc) are added.
-            if test_result.name == "cluster_health_diagnostics":
+            if exp_name == "cluster_health_diagnostics":
                 continue
 
-            success_criteria = exp.get("SUCCESS_CRITERIA", {})
-            if not success_criteria:
-                test_result.result_status = pb.RESULT_STATUS_UNKNOWN
-            else:
-                has_failure = any(
-                    status.upper() == "FAILED"
-                    for status in success_criteria.values()
-                )
-                has_timeout = any(
-                    status.upper() == "TIMEOUT"
-                    for status in success_criteria.values()
-                )
-                has_cancelled = any(
-                    status.upper() == "CANCELLED"
-                    for status in success_criteria.values()
-                )
-
-                if has_failure:
-                    test_result.result_status = pb.RESULT_STATUS_FAILED
-                elif has_timeout:
-                    test_result.result_status = pb.RESULT_STATUS_TIMEOUT
-                elif has_cancelled:
-                    test_result.result_status = pb.RESULT_STATUS_CANCELLED
-                elif all(
-                    status.upper() == "PASSED"
-                    for status in success_criteria.values()
-                ):
-                    test_result.result_status = pb.RESULT_STATUS_SUCCESS
-                else:
-                    test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            test_result = pb.TestResult()
+            test_result.test_name, test_result.test_level = (
+                self._extract_test_info(exp)
+            )
+            test_result.result_status = self._get_result_status(
+                exp.get("SUCCESS_CRITERIA", {})
+            )
 
             tags = exp.get("TAGS", [])
             if tags:

@@ -110,12 +110,14 @@ class ResultsViewer:
         )
         table.add_column("Status", justify="center")
         table.add_column("Test Name", style="cyan")
+        table.add_column("Level", style="magenta")
         table.add_column("Target Resources", style="green")
 
         for result in test_results:
             status_enum = result.get("result_status", "RESULT_STATUS_UNKNOWN")
             status = status_enum.replace("RESULT_STATUS_", "")
-            name = result.get("name", "Unknown")
+            name = result.get("test_name", "Unknown")
+            level = result.get("test_level", "")
 
             targets = result.get("target_resource_ids", [])
             targets_str = "\n".join(targets) if targets else "Cluster"
@@ -124,6 +126,7 @@ class ResultsViewer:
             table.add_row(
                 f"[{style}]{icon} {status}[/{style}]",
                 name,
+                level,
                 targets_str,
             )
 
@@ -131,21 +134,27 @@ class ResultsViewer:
 
     def _get_test_description(self, name: str) -> str:
         """Returns a description for the given test name."""
-        if "nccl-cluster" in name or "nccl-all" in name:
-            return (
+        descriptions = {
+            "nccl-cluster": (
                 "Validates cluster-wide GPU communication bandwidth/latency "
                 "using NCCL AllReduce and AllGather."
-            )
-        elif "nccl-pairwise" in name:
-            return (
+            ),
+            "nccl-all": (
+                "Validates cluster-wide GPU communication bandwidth/latency "
+                "using NCCL AllReduce and AllGather."
+            ),
+            "nccl-pairwise": (
                 "Measures point-to-point interconnect bandwidth between node "
                 "pairs to isolate network bottlenecks."
-            )
-        elif "dcgm" in name:
-            return (
+            ),
+            "dcgm": (
                 "Performs deep hardware diagnostics (memory, PCIe, replay "
                 "limits) to detect GPU faults."
-            )
+            ),
+        }
+        for key, desc in descriptions.items():
+            if key in name:
+                return desc
         return ""
 
     def _show_summary_list(self, test_results: list[dict[str, Any]]) -> None:
@@ -153,7 +162,8 @@ class ResultsViewer:
         for result in test_results:
             status_enum = result.get("result_status", "RESULT_STATUS_UNKNOWN")
             status = status_enum.replace("RESULT_STATUS_", "")
-            name = result.get("name", "Unknown")
+            name = result.get("test_name", "Unknown")
+            level = result.get("test_level", "")
             targets = result.get("target_resource_ids", [])
             targets_str = ", ".join(targets) if targets else "Cluster"
 
@@ -162,9 +172,11 @@ class ResultsViewer:
 
             content = Text()
             content.append(f"{name}\n", style="cyan bold")
+            if level:
+                content.append(f"Level: {level}\n", style="magenta")
             if description:
                 content.append(f"{description}\n", style="italic dim")
-            content.append("Targets: ", style="bold")
+            content.append("Target Resources: ", style="bold")
             content.append(f"{targets_str}\n", style="green")
 
             panel = Panel(
@@ -189,7 +201,7 @@ class ResultsViewer:
         # Filter results
         filtered_results = []
         for result in test_results:
-            name = result.get("name", "")
+            name = result.get("test_name", "")
             targets = result.get("target_resource_ids", [])
 
             include = False
@@ -221,7 +233,7 @@ class ResultsViewer:
             self._print_test_detail(result)
 
     def _print_test_detail(self, result: dict[str, Any]) -> None:
-        name = result.get("name", "Unknown")
+        name = result.get("test_name", "Unknown")
         status_enum = result.get("result_status", "RESULT_STATUS_UNKNOWN")
         status = status_enum.replace("RESULT_STATUS_", "")
         style, icon = self._get_status_style(status)
@@ -261,10 +273,16 @@ class ResultsViewer:
 
             m_table.add_row(key, str_val, unit)
 
+        level_suff = (
+            f" ({result.get('test_level')})" if result.get("test_level") else ""
+        )
         self.console.print(
             Panel(
                 m_table if metrics else "[italic]No metrics available[/italic]",
-                title=f"[{style}]{icon} {status}[/{style}] - [bold]{name}[/]",
+                title=(
+                    f"[{style}]{icon} {status}[/{style}] -"
+                    f" [bold]{name}[/]{level_suff}"
+                ),
                 expand=True,
                 border_style=border_color,
             )

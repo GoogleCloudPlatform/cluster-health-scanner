@@ -276,7 +276,53 @@ class TestBOHGenerator(unittest.TestCase):
         report = generator.generate()
 
         self.assertEqual(len(report.test_results), 1)
-        self.assertEqual(report.test_results[0].name, "valid_exp")
+        self.assertEqual(report.test_results[0].test_name, "valid_exp")
+
+    def test_extract_test_info(self):
+        """Test extraction of test name and level."""
+        generator = BOHGenerator(self.test_json_path)
+
+        # Test NCCL
+        name, level = generator._extract_test_info(
+            {
+                "experiment_name": "nccl-cluster",
+                "application_name": "nccl-tests",
+                "workload_name": "all_gather_perf",
+            }
+        )
+        self.assertEqual(name, "nccl-cluster")
+        self.assertEqual(level, "all_gather_perf")
+
+        # Test DCGM
+        name, level = generator._extract_test_info(
+            {
+                "experiment_name": "nvidia-dcgm-level-3",
+                "application_name": "nvidia-dcgm",
+            }
+        )
+        self.assertEqual(name, "dcgm")
+        self.assertEqual(level, "level-3")
+
+        # Test DCGM Fallback
+        name, level = generator._extract_test_info(
+            {
+                "experiment_name": "nvidia-dcgm",
+                "application_name": "nvidia-dcgm",
+                "workload_name": "diag",
+            }
+        )
+        self.assertEqual(name, "dcgm")
+        self.assertEqual(level, "diag")
+
+        # Test Generic
+        name, level = generator._extract_test_info(
+            {
+                "experiment_name": "generic_test",
+                "workload_name": "workload",
+            }
+        )
+        self.assertEqual(name, "generic_test")
+        self.assertEqual(level, "workload")
 
 
 if __name__ == "__main__":

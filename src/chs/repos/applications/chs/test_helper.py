@@ -153,7 +153,7 @@ podAntiAffinity:
             )
 
         experiment_template_name = (
-            f"{experiment_name}-dcgm-r{{diag_level}}-{{node}}"
+            f"{experiment_name}-dcgm-level-{{diag_level}}-{{node}}"
         )
 
         context_dict = {

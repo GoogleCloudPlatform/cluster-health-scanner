@@ -56,12 +56,13 @@ message ResourceEntity {
 
 // Message representing the result of a specific test.
 message TestResult {
-  string name = 1;
-  ResultStatus result_status = 2;
-  repeated string target_resource_ids = 3;
-  repeated Metric metrics = 4;
-  google.protobuf.Struct metadata = 5;
-  repeated ValidationCriteria validation_criteria = 6;
+  string test_name = 1;
+  string test_level = 2;
+  ResultStatus result_status = 3;
+  repeated string target_resource_ids = 4;
+  repeated Metric metrics = 5;
+  google.protobuf.Struct metadata = 6;
+  repeated ValidationCriteria validation_criteria = 7;
 }
 
 // Message representing a single metric or Figure of Merit (FOM).
