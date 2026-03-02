@@ -12,24 +12,25 @@ from chs.schedulers.slurm import SlurmScheduler
 import click
 
 
+@mock.patch("chs.schedulers.slurm.logger")
 class TestSlurmScheduler(unittest.TestCase):
     """Tests for SlurmScheduler."""
 
-    def test_name(self):
+    def test_name(self, mock_logger):
         scheduler = SlurmScheduler()
         self.assertEqual(scheduler.name, "slurm")
 
-    def test_get_nodes_under_test_nodes_arg(self):
+    def test_get_nodes_under_test_nodes_arg(self, mock_logger):
         scheduler = SlurmScheduler(nodes="node1,node2")
         self.assertEqual(scheduler.get_nodes_under_test(), ["node1", "node2"])
 
-    def test_get_nodes_under_test_multiple_args_error(self):
+    def test_get_nodes_under_test_multiple_args_error(self, mock_logger):
         scheduler = SlurmScheduler(nodes="n1", nodelist="nl1")
         with self.assertRaisesRegex(click.UsageError, "Only one of"):
             scheduler.get_nodes_under_test()
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_nodelist_arg(self, mock_run):
+    def test_get_nodes_under_test_nodelist_arg(self, mock_run, mock_logger):
         scheduler = SlurmScheduler(nodelist="node-[1-2]")
         mock_run.return_value.stdout = "node-1\nnode-2"
 
@@ -40,7 +41,7 @@ class TestSlurmScheduler(unittest.TestCase):
         self.assertIn("scontrol", mock_run.call_args[0][0])
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_partition_arg(self, mock_run):
+    def test_get_nodes_under_test_partition_arg(self, mock_run, mock_logger):
         """Tests get_nodes_under_test with partition argument."""
         scheduler = SlurmScheduler(partition="p1")
         mock_run.side_effect = [
@@ -55,19 +56,19 @@ class TestSlurmScheduler(unittest.TestCase):
         self.assertIn("sinfo", mock_run.call_args_list[0][0][0])
         self.assertIn("scontrol", mock_run.call_args_list[1][0][0])
 
-    def test_parse_job_ids(self):
+    def test_parse_job_ids(self, mock_logger):
         scheduler = SlurmScheduler()
         output = "Submitted batch job 123\nSubmitted batch job 456"
         self.assertEqual(scheduler.parse_job_ids(output), ["123", "456"])
 
     @mock.patch("subprocess.run")
-    def test_check_jobs_running_true(self, mock_run):
+    def test_check_jobs_running_true(self, mock_run, mock_logger):
         scheduler = SlurmScheduler()
         mock_run.return_value.stdout = "123"
         self.assertTrue(scheduler.check_jobs_running(["123"]))
 
     @mock.patch("subprocess.run")
-    def test_check_jobs_running_false(self, mock_run):
+    def test_check_jobs_running_false(self, mock_run, mock_logger):
         scheduler = SlurmScheduler()
         mock_run.return_value.stdout = ""
         self.assertFalse(scheduler.check_jobs_running(["123"]))
@@ -93,6 +94,7 @@ class TestDefaultScheduler(unittest.TestCase):
         self.assertEqual(scheduler.parse_job_ids("output"), [])
 
 
+@mock.patch("chs.schedulers.gke.logger")
 class TestGKEScheduler(unittest.TestCase):
     """Tests for GKEScheduler."""
 
@@ -102,40 +104,41 @@ class TestGKEScheduler(unittest.TestCase):
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
 
-    def test_init(self):
+    def test_init(self, mock_logger):
         """Test initialization."""
         scheduler = GKEScheduler(nodes="node1,node2")
         self.assertEqual(scheduler.name, "gke")
         self.assertEqual(scheduler.nodes_arg, "node1,node2")
         self.assertIsNone(scheduler.nodepool_arg)
 
-    def test_init_nodepool(self):
+    def test_init_nodepool(self, mock_logger):
         """Test initialization with nodepool."""
         scheduler = GKEScheduler(nodepool="pool-1")
         self.assertEqual(scheduler.name, "gke")
         self.assertIsNone(scheduler.nodes_arg)
         self.assertEqual(scheduler.nodepool_arg, "pool-1")
 
-    def test_get_nodes_under_test(self):
+    def test_get_nodes_under_test(self, mock_logger):
         """Test get_nodes_under_test returns parsed nodes."""
         scheduler = GKEScheduler(nodes="node1, node2 ")
         self.assertEqual(scheduler.get_nodes_under_test(), ["node1", "node2"])
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_empty(self, mock_run):
+    def test_get_nodes_under_test_empty(self, mock_run, mock_logger):
         """Test get_nodes_under_test returns empty list if no nodes."""
         scheduler = GKEScheduler()
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
-        with self.assertLogs("chs.schedulers.gke", level="WARNING") as cm:
-            self.assertEqual(scheduler.get_nodes_under_test(), [])
-        self.assertTrue(
-            any(
-                "Failed to automatically discover nodes" in o for o in cm.output
-            )
+
+        self.assertEqual(scheduler.get_nodes_under_test(), [])
+
+        mock_logger.warning.assert_called()
+        self.assertIn(
+            "Failed to automatically discover nodes using kubectl",
+            mock_logger.warning.call_args[0][0],
         )
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_nodepool(self, mock_run):
+    def test_get_nodes_under_test_nodepool(self, mock_run, mock_logger):
         """Test get_nodes_under_test uses nodepool to fetch nodes."""
         scheduler = GKEScheduler(nodepool="pool-1")
         mock_run.return_value.stdout = "node-1 node-2"
@@ -150,7 +153,7 @@ class TestGKEScheduler(unittest.TestCase):
         self.assertIn("cloud.google.com/gke-nodepool=pool-1", cmd)
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_nodes_precedence(self, mock_run):
+    def test_get_nodes_under_test_nodes_precedence(self, mock_run, mock_logger):
         """Test nodes arg takes precedence over nodepool."""
         scheduler = GKEScheduler(nodes="node-1", nodepool="pool-1")
 
@@ -159,7 +162,7 @@ class TestGKEScheduler(unittest.TestCase):
         self.assertEqual(nodes, ["node-1"])
         mock_run.assert_not_called()
 
-    def test_write_ramble_config(self):
+    def test_write_ramble_config(self, mock_logger):
         """Test write_ramble_config generates correct YAML."""
         scheduler = GKEScheduler(nodes="node1")
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
@@ -182,7 +185,7 @@ ramble:
                     workspace_config_dir, "suite", ["test1"], "a3-high"
                 )
 
-    def test_write_ramble_config_integration(self):
+    def test_write_ramble_config_integration(self, mock_logger):
         """Integration-like test for write_ramble_config using real template."""
         scheduler = GKEScheduler(nodes="node1")
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")

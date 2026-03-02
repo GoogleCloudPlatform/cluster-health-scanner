@@ -5,11 +5,27 @@ logic for handling subcommands such as listing resources.
 """
 
 import datetime
+import functools
+import json
 import logging
 import os
 import pathlib
 import subprocess
+import sys
 
+from chs.exceptions import (
+    BillOfHealthNotFoundException,
+    ChsAnalysisException,
+    ChsCancellationException,
+    ChsException,
+    ChsExecutionException,
+    ChsRunInProgressException,
+    NoNodesProvidedException,
+    NoPreviousRunsFoundException,
+    UnsupportedSchedulerException,
+    WorkspaceCreationException,
+    WorkspaceNotFoundException,
+)
 from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
@@ -18,6 +34,20 @@ import click
 import platformdirs
 
 logger = logging.getLogger(__name__)
+
+
+def handle_chs_exceptions(f):
+    """Decorator to handle CHS exceptions."""
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ChsException as e:
+            logging.error(f"{e}")
+            sys.exit(1)
+
+    return wrapper
 
 
 def get_default_workspaces_dir() -> str:
@@ -51,11 +81,10 @@ def get_default_workspaces_dir() -> str:
         workspaces_dir.mkdir(parents=True, exist_ok=True)
         logger.debug("Using workspaces directory: %s", workspaces_dir)
         return str(workspaces_dir)
-    except OSError:
-        logger.exception(
-            "Failed to create workspaces directory at %s", workspaces_dir
-        )
-        raise
+    except OSError as e:
+        raise WorkspaceCreationException(
+            f"Failed to create workspaces directory at {workspaces_dir}"
+        ) from e
 
 
 def non_empty_str_callback(
@@ -135,6 +164,33 @@ def list_action(
     return show_all
 
 
+def is_latest_chs_run_active() -> bool:
+    """Checks if the latest chs run is active by inspecting the runs registry.
+
+    Returns:
+      True if the latest run is active, False otherwise.
+    """
+    try:
+        latest_run_id = _get_latest_workspace_run_id()
+        if not latest_run_id:
+            return False
+
+        ramble_manager = RambleManager(
+            base_dir="", workspace_name=latest_run_id
+        )
+        if ramble_manager.check_jobs_running():
+            logger.warning(
+                "The latest CHS run ('%s') is still active.", latest_run_id
+            )
+            return True
+    except (NoPreviousRunsFoundException, WorkspaceNotFoundException):
+        return False
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not check for active CHS runs: %s", e)
+
+    return False
+
+
 def _parse_str_to_list(str: str | None) -> list[str] | None:
     """Parses a comma-separated string.
 
@@ -198,17 +254,8 @@ def run_action(
         )
         ramble_manager.setup_workspace()
         job_ids = ramble_manager.execute_experiments()
-    except click.ClickException:
-        # Re-raise ClickExceptions, which are already user-friendly.
-        raise
     except (OSError, subprocess.CalledProcessError) as e:
-        logger.exception(
-            "CHS execution failed for suite=%r, scheduler=%r, tests=%r",
-            suite,
-            scheduler_obj.name,
-            tests,
-        )
-        raise click.ClickException(f"CHS execution failed: {e!r}") from e
+        raise ChsExecutionException(f"CHS execution failed: {e!r}") from e
     else:
         return (
             suite,
@@ -240,7 +287,7 @@ def analyze_action(run_id: str) -> str:
 
     try:
         if not os.path.exists(ramble_manager.path):
-            raise click.ClickException(f"Workspace '{run_id}' not found.")
+            raise WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
 
         workspace_path = pathlib.Path(ramble_manager.path)
         boh_path = workspace_path / "chs-results" / "bill_of_health.json"
@@ -267,11 +314,10 @@ def analyze_action(run_id: str) -> str:
         ramble_manager.analyze_results()
         logger.debug("Analysis complete for run_id=%r", run_id)
         _show_results(run_id)
-    except click.ClickException:
-        raise
     except (OSError, subprocess.CalledProcessError) as e:
-        logger.exception("CHS analysis failed for run_id=%r", run_id)
-        raise click.ClickException(f"CHS analysis failed: {e!r}") from e
+        raise ChsAnalysisException(
+            f"CHS analysis failed for run_id={run_id}: {e!r}"
+        ) from e
 
     return run_id
 
@@ -282,14 +328,7 @@ def _show_results(
     """Show Bill of Health results for a run."""
     workspaces_dir = pathlib.Path(get_default_workspaces_dir())
     if not run_id:
-        try:
-            run_id = _get_latest_workspace_run_id()
-        except click.ClickException as e:
-            if str(e) == "No previous runs found.":
-                raise click.ClickException(
-                    "No previous runs found to analyze."
-                ) from e
-            raise
+        run_id = _get_latest_workspace_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Showing results for latest run: %s", run_id)
 
@@ -299,9 +338,10 @@ def _show_results(
     if current_dir_path.exists():
         boh_path = current_dir_path
     else:
-        logger.error("Could not find bill of health at %s.", current_dir_path)
-        logger.info("Have you run 'chs analyze %s'?", run_id)
-        return
+        raise BillOfHealthNotFoundException(
+            f"Could not find bill of health at {current_dir_path}. "
+            f"Have you run 'chs analyze {run_id}'?"
+        )
 
     viewer = ResultsViewer(boh_path)
 
@@ -339,11 +379,10 @@ def cancel_action(run_id: str) -> str:
         ramble_manager.cancel_experiments()
         logger.debug("Cancellation complete for run_id=%r", run_id)
         logger.info("Jobs for run %s have been canceled.", run_id)
-    except click.ClickException:
-        raise
     except (OSError, subprocess.CalledProcessError) as e:
-        logger.exception("CHS cancellation failed for run_id=%r", run_id)
-        raise click.ClickException(f"CHS cancellation failed: {e!r}") from e
+        raise ChsCancellationException(
+            f"CHS cancellation failed for run_id={run_id}: {e!r}"
+        ) from e
 
     return run_id
 
@@ -390,6 +429,7 @@ def list_command(
 
 
 @cli.command()
+@handle_chs_exceptions
 @click.option(
     "--suite",
     "-s",
@@ -463,6 +503,12 @@ def run(
       A tuple containing the suite name, scheduler name, a list of
       test names, workspace name, workspaces base directory, and job ids.
     """
+    if is_latest_chs_run_active():
+        raise ChsRunInProgressException(
+            "The latest CHS run is still in progress. Please wait for it to"
+            " complete or cancel it before submitting a new run."
+        )
+
     scheduler_obj = get_scheduler(
         scheduler,
         nodes=nodes,
@@ -474,10 +520,10 @@ def run(
     if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
         nodes_under_test = scheduler_obj.get_nodes_under_test()
         if not nodes_under_test:
-            raise click.ClickException("No nodes provided to run on.")
+            raise NoNodesProvidedException("No nodes provided to run on.")
     else:
         # TODO: Add support for other schedulers.
-        raise click.ClickException(
+        raise UnsupportedSchedulerException(
             "Only Slurm and GKE schedulers are supported."
         )
 
@@ -524,7 +570,7 @@ def _get_latest_workspace_run_id() -> str:
     """
     workspaces_dir = pathlib.Path(get_default_workspaces_dir())
     if not workspaces_dir.exists():
-        raise click.ClickException("No workspaces directory found.")
+        raise WorkspaceNotFoundException("No workspaces directory found.")
 
     valid_runs = []
     date_format = "%Y-%m-%d_%H.%M.%S.%f"
@@ -537,7 +583,7 @@ def _get_latest_workspace_run_id() -> str:
                 continue
 
     if not valid_runs:
-        raise click.ClickException("No previous runs found.")
+        raise NoPreviousRunsFoundException("No previous runs found.")
 
     # Sort by the parsed datetime to find the latest
     latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
@@ -545,6 +591,7 @@ def _get_latest_workspace_run_id() -> str:
 
 
 @cli.command()
+@handle_chs_exceptions
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
 def analyze(run_id: str | None) -> str:
     """Analyze results from a test run.
@@ -559,14 +606,7 @@ def analyze(run_id: str | None) -> str:
       The run_id of the analyzed test run.
     """
     if not run_id:
-        try:
-            run_id = _get_latest_workspace_run_id()
-        except click.ClickException as e:
-            if str(e) == "No previous runs found.":
-                raise click.ClickException(
-                    "No previous runs found to analyze."
-                ) from e
-            raise
+        run_id = _get_latest_workspace_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Analyzing latest run: %s", run_id)
 
@@ -574,6 +614,7 @@ def analyze(run_id: str | None) -> str:
 
 
 @cli.command()
+@handle_chs_exceptions
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
 def cancel(run_id: str | None) -> str:
     """Cancel running jobs for a test run.
@@ -588,14 +629,7 @@ def cancel(run_id: str | None) -> str:
       The run_id of the canceled test run.
     """
     if not run_id:
-        try:
-            run_id = _get_latest_workspace_run_id()
-        except click.ClickException as e:
-            if str(e) == "No previous runs found.":
-                raise click.ClickException(
-                    "No previous runs found to cancel."
-                ) from e
-            raise
+        run_id = _get_latest_workspace_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Canceling latest run: %s", run_id)
 
@@ -603,6 +637,7 @@ def cancel(run_id: str | None) -> str:
 
 
 @cli.command()
+@handle_chs_exceptions
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
 @click.option(
     "--tests",
