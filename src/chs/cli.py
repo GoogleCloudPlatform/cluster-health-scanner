@@ -11,7 +11,10 @@ import logging
 import os
 import pathlib
 import subprocess
-import sys
+import importlib.resources as pkg_resources
+
+import chs.repos.applications.chs
+from chs.utils.suites import load_suite_tests
 
 from chs.exceptions import (
     BillOfHealthNotFoundException,
@@ -44,8 +47,7 @@ def handle_chs_exceptions(f):
         try:
             return f(*args, **kwargs)
         except ChsException as e:
-            logging.error(f"{e}")
-            sys.exit(1)
+            raise click.ClickException(str(e)) from e
 
     return wrapper
 
@@ -191,19 +193,19 @@ def is_latest_chs_run_active() -> bool:
     return False
 
 
-def _parse_str_to_list(str: str | None) -> list[str] | None:
+def _parse_str_to_list(value: str | None) -> list[str] | None:
     """Parses a comma-separated string.
 
     Args:
-      str: A comma-separated string, or None.
+      value: A comma-separated string, or None.
 
     Returns:
       A list of cleaned strings, or None if the input was None.
     """
 
-    if str is None:
+    if value is None:
         return None
-    return [item.strip() for item in str.split(",") if item.strip()]
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def run_action(
@@ -250,7 +252,7 @@ def run_action(
         ramble_manager.create_workspace()
         ramble_manager.add_custom_repository()
         ramble_manager.configure_workspace(
-            suite, scheduler_obj, tests, machine_type=machine_type
+            scheduler_obj, tests, machine_type=machine_type
         )
         ramble_manager.setup_workspace()
         job_ids = ramble_manager.execute_experiments()
@@ -434,7 +436,6 @@ def list_command(
     "--suite",
     "-s",
     help="Name of the test suite to run",
-    default="a3-ultra",
     callback=non_empty_str_callback,
 )
 @click.option(
@@ -478,7 +479,7 @@ def list_command(
 )
 def run(
     *,
-    suite: str,
+    suite: str | None,
     scheduler: str,
     tests: str | None,
     nodes: str | None,
@@ -509,6 +510,32 @@ def run(
             " complete or cancel it before submitting a new run."
         )
 
+    # Resolve tests from suite if not provided
+    if not tests:
+        if not suite:
+            suite = "lite"
+
+        # Load tests for the suite
+        # Load tests for the suite
+        with pkg_resources.path(
+            chs.repos.applications.chs, "configs"
+        ) as configs_dir:
+            resolved_tests = load_suite_tests(suite, str(configs_dir))
+        test_names = [
+            t.get("name", str(t)) if isinstance(t, dict) else str(t)
+            for t in resolved_tests
+        ]
+        logger.info(
+            f"Loaded {len(resolved_tests)} tests ({', '.join(test_names)}) "
+            f"for suite '{suite}' from suites.yaml."
+        )
+        parsed_tests = resolved_tests
+    else:
+        # Tests provided explicitly
+        parsed_tests = _parse_str_to_list(tests)
+        if not suite:
+            suite = "custom"
+
     scheduler_obj = get_scheduler(
         scheduler,
         nodes=nodes,
@@ -529,9 +556,7 @@ def run(
 
     workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
     workspaces_base_dir = get_default_workspaces_dir()
-    if not tests:
-        tests = "nccl-cluster, nccl-pairwise, dcgm"
-    parsed_tests = _parse_str_to_list(tests)
+
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)

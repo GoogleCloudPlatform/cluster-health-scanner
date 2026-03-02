@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import json
 
 from chs.schedulers.base import BaseScheduler
 import click
@@ -106,7 +107,6 @@ class SlurmScheduler(BaseScheduler):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        suite: str,
         tests: list[str] | None,
         machine_type: str,
     ) -> None:
@@ -119,8 +119,17 @@ class SlurmScheduler(BaseScheduler):
             with open(p, "r") as f:
                 template_content = f.read()
 
-        nodes_str = f"[{', '.join(nodes)}]" if nodes else "[]"
-        tests_str = f"[{', '.join(tests)}]" if tests else "[]"
+        if nodes:
+            nodes_str = json.dumps(nodes)
+        else:
+            nodes_str = "[]"
+
+        if tests:
+            # Compact JSON representation for tests to avoid issues with
+            # newlines
+            tests_str = json.dumps(tests)
+        else:
+            tests_str = "[]"
 
         rendered_content = template_content.format(
             nodes=nodes_str,

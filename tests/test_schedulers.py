@@ -182,7 +182,7 @@ ramble:
                 "builtins.open", mock.mock_open(read_data=mock_template_content)
             ):
                 scheduler.write_ramble_config(
-                    workspace_config_dir, "suite", ["test1"], "a3-high"
+                    workspace_config_dir, ["test1"], "a3-high"
                 )
 
     def test_write_ramble_config_integration(self, mock_logger):
@@ -208,16 +208,16 @@ variables:
             "chs.schedulers.gke.pkg_resources.path", side_effect=mock_path_func
         ):
             scheduler.write_ramble_config(
-                workspace_config_dir, "suite", ["test1"], "a3-high"
+                workspace_config_dir, ["test1"], "a3-high"
             )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
         with open(output_path, "r") as f:
             content = f.read()
 
-        self.assertIn("nodes: [node1]", content)
+        self.assertIn('nodes: ["node1"]', content)
         self.assertIn("machine_type: a3-high", content)
-        self.assertIn("tests: [test1]", content)
+        self.assertIn('tests: ["test1"]', content)
         self.assertIn("gpu_subnet_prefix: 'rdma'", content)
 
 

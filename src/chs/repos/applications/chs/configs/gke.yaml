@@ -18,8 +18,7 @@ a3-ultra:
     node_selector_yaml: "cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
-        operator: "Equal"
-        value: "present"
+        operator: "Exists"
         effect: "NoSchedule"
     extra_volumes_yaml: |
       - name: shared-memory

@@ -43,3 +43,7 @@ class NoNodesProvidedException(ChsException):
 
 class UnsupportedSchedulerException(ChsException):
     """Raised when an unsupported scheduler is specified."""
+
+
+class SuiteNotFoundException(ChsException):
+    """Raised when a specific test suite is not found."""

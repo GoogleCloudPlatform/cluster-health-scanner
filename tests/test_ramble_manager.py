@@ -212,10 +212,10 @@ class TestRambleManager(unittest.TestCase):
 
         with mock.patch("os.makedirs"):
             manager.configure_workspace(
-                "suite1", mock_scheduler, ["test1"], machine_type="a3-high"
+                mock_scheduler, ["test1"], machine_type="a3-high"
             )
             manager.configure_workspace(
-                "suite1", mock_scheduler, None, machine_type="a3-high"
+                mock_scheduler, None, machine_type="a3-high"
             )
 
         self.assertEqual(mock_scheduler.write_ramble_config.call_count, 2)

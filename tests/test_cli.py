@@ -73,6 +73,7 @@ class TestCli(unittest.TestCase):
         )
         self.mock_rm_instance = self.mock_rm_cls.return_value
         self.mock_rm_instance.execute_experiments.return_value = []
+        self.mock_rm_instance.check_jobs_running.return_value = False
 
         self.mock_dt = self.enterContext(
             mock.patch("chs.cli.datetime.datetime", autospec=True)
@@ -85,6 +86,15 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+
+        self.mock_load_suite_tests = self.enterContext(
+            mock.patch("chs.cli.load_suite_tests", autospec=True)
+        )
+        self.mock_load_suite_tests.return_value = [
+            "nccl-cluster",
+            "nccl-pairwise",
+            "dcgm",
+        ]
 
     @mock.patch("chs.cli.platformdirs", autospec=True)
     @mock.patch("chs.cli.pathlib", autospec=True)
@@ -570,7 +580,8 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(
                     result.exit_code,
                     0,
-                    f"Subtest {case.name} failed: {result.output}",
+                    f"Subtest {case.name} failed: {result.output}\n"
+                    f"Exception: {result.exception}",
                 )
                 self.assertEqual(result.return_value, case.expected_return)
 
@@ -583,9 +594,8 @@ class TestCli(unittest.TestCase):
                 args, kwargs = (
                     self.mock_rm_instance.configure_workspace.call_args
                 )
-                self.assertEqual(args[0], case.expected_return[0])
-                self.assertEqual(args[1].name, case.expected_return[1])
-                self.assertEqual(args[2], case.expected_return[2])
+                self.assertEqual(args[0].name, case.expected_return[1])
+                self.assertEqual(args[1], case.expected_return[2])
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
@@ -667,22 +677,20 @@ class TestCli(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(
+            result.exit_code,
+            0,
+            f"Command failed: {result.output}\nException: {result.exception}",
+        )
         mock_get_scheduler.assert_called_once()
         _, kwargs = mock_get_scheduler.call_args
         self.assertEqual(kwargs.get("nodepool"), "pool1")
 
     @mock.patch("chs.cli._get_latest_workspace_run_id", autospec=True)
-    @mock.patch(
-        "chs.ramble_manager.RambleManager.check_jobs_running",
-        autospec=True,
-    )
-    def test_run_command_latest_run_active(
-        self, mock_check_jobs_running, mock_get_latest_run
-    ):
+    def test_run_command_latest_run_active(self, mock_get_latest_run):
         """Test `run` command when the latest run is active."""
         mock_get_latest_run.return_value = "2023-01-01_00.00.00.000000"
-        mock_check_jobs_running.return_value = True
+        self.mock_rm_instance.check_jobs_running.return_value = True
         result = self.runner.invoke(
             cli.cli, ["run", "-sch", "slurm", "--machine-type", "a3-high"]
         )

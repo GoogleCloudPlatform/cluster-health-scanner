@@ -21,12 +21,16 @@ class BaseScheduler(abc.ABC):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        suite: str,
         tests: list[str] | None,
         machine_type: str,
     ) -> None:
-        """Writes the ramble configuration into the given workspace configs
-        directory."""
+        """Writes the Ramble configuration file for the workspace.
+
+        Args:
+          workspace_config_dir: Directory to write the config file to.
+          tests: List of tests to run.
+          machine_type: The machine type of the cluster nodes.
+        """
         pass
 
     @abc.abstractmethod

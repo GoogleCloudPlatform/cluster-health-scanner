@@ -250,7 +250,6 @@ class RambleManager:
 
     def configure_workspace(
         self,
-        suite: str,
         scheduler: BaseScheduler,
         tests: list[str] | None,
         machine_type: str,
@@ -258,15 +257,13 @@ class RambleManager:
         """Configures the Ramble workspace for the CHS run.
 
         Args:
-          suite: The name of the test suite to run.
           scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
           tests: An optional list of names of specific tests to run.
           machine_type: The machine type.
         """
         self._scheduler = scheduler
 
-        logger.debug("Configuring workspace in %s...", self.path)
-        logger.debug("Configuring workspace for suite: %s", suite)
+        logger.debug("Configuring Ramble workspace in %s...", self.path)
         logger.debug("Configuring workspace for scheduler: %s", scheduler.name)
         if tests:
             logger.debug("Configuring workspace for tests: %s", tests)
@@ -276,7 +273,6 @@ class RambleManager:
 
         scheduler.write_ramble_config(
             workspace_config_dir=workspace_config_dir,
-            suite=suite,
             tests=tests,
             machine_type=machine_type,
         )
@@ -467,7 +463,7 @@ class RambleManager:
                     with open(os.path.join(root, "jobset.yaml"), "r") as f:
                         content = f.read()
 
-                        # Parse all docs (e.g. Service + JobSet) to find matching name.
+                        # Parse all docs (e.g. Service + JobSet) to find match.
                         docs = list(yaml.safe_load_all(content))
                         job_name = None
                         for doc in docs:
@@ -603,7 +599,6 @@ class RambleManager:
         Raises:
           click.ClickException: If the experiment analyze command fails.
         """
-
 
         logger.debug("Analyzing experiments in %s...", self.path)
         self._execute_ramble_command(

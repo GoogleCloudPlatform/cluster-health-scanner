@@ -12,6 +12,72 @@ sys.path.append(config_dir)
 
 from test_helper import TestHelper
 from ramble.appkit import *
+from ramble.appkit import *
+
+
+class TestModel:
+    def __init__(self, name, workloads=None, variables=None):
+        self.name = name
+        self.workloads = workloads or []
+        self.variables = variables or {}
+
+
+class TestsModel:
+    def __init__(self, tests):
+        self.tests = tests
+
+
+# Helper classes to support Ramble's CommentedMap/Seq in eval
+class CommentedMap(dict):
+    pass
+
+
+class CommentedSeq(list):
+    pass
+
+
+def parse_tests_config(raw_input) -> TestsModel:
+    try:
+        data = raw_input
+        if isinstance(raw_input, str):
+            # Basic safety check: if it looks like a list, try eval
+            # This is still risky but matches previous logic without ruamel dependency complexity
+            # ideally we should use json.loads if we ensure input is json
+            try:
+                import json
+
+                data = json.loads(raw_input)
+            except json.JSONDecodeError:
+                # Fallback to eval if it's a python string representation (e.g. from Ramble)
+                context = {
+                    "__builtins__": {},
+                    "CommentedMap": CommentedMap,
+                    "CommentedSeq": CommentedSeq,
+                }
+                data = eval(raw_input, context)
+
+        # If data is a list of strings, convert to list of dicts
+        if isinstance(data, list):
+            cleaned_data = []
+            for item in data:
+                if isinstance(item, str):
+                    cleaned_data.append(TestModel(name=item))
+                elif isinstance(item, dict):
+                    cleaned_data.append(
+                        TestModel(
+                            name=item.get("name"),
+                            workloads=item.get("workloads"),
+                            variables=item.get("variables"),
+                        )
+                    )
+            return TestsModel(tests=cleaned_data)
+
+        return TestsModel(tests=[])
+
+    except Exception as e:
+        logger.error(f"Failed to parse tests configuration: {e}")
+        # Re-raise to be caught by caller
+        raise e
 
 
 class Chs(ExecutableApplication):
@@ -20,11 +86,16 @@ class Chs(ExecutableApplication):
     name = "chs"
     maintainers("bytetwin")
 
+    variable("tests", default=[], description="Specific tests to run")
+    variable(
+        "machine_type", default="a3-ultra", description="Machine type to test"
+    )
+
     tags("chs-diagnostics")
 
     variable(
         "scheduler",
-        default="",
+        default="slurm",
         description="Scheduler for the suite",
         values=["slurm", "gke"],
     )
@@ -80,14 +151,31 @@ class Chs(ExecutableApplication):
                     slurm_configs = yaml.load(f) or {}
                 self._deep_merge(configs, slurm_configs)
 
-        tests = self.expander.expand_var_name("tests", typed=True)
-        if not tests:
+        # Try to expand tests variable
+        tests_str = self.expander.expand_var_name("tests", typed=True)
+        # Handle empty list from Ramble
+        if hasattr(tests_str, "__len__") and len(tests_str) == 0:
+            tests_str = None
+        if isinstance(tests_str, str) and tests_str.strip() == "[]":
+            tests_str = None
+
+        if not tests_str:
             logger.warn(
                 f"No tests defined for {self.name}. Skipping experiments generation."
             )
             return
 
-        for test in tests:
+        try:
+            tests_config = parse_tests_config(
+                str(tests_str) if isinstance(tests_str, str) else tests_str
+            )
+        except Exception as e:
+            logger.error(f"Failed to parse tests configuration: {e}")
+            return
+
+        for test in tests_config.tests:
+            # Merge per-test variables with workspace variables, giving precedence to test variables
+            # Create a context with merged variables
             test_vars = self.non_reserved_variables(
                 workspace,
                 remove_keys={
@@ -107,22 +195,29 @@ class Chs(ExecutableApplication):
                 for k, v in test_vars.items()
                 if not k.startswith("application::")
             }
-            if test in ["nccl-cluster", "nccl-pairwise"]:
-                workloads = ["all-gather", "all-reduce"]
+
+            # Update test_vars with per-test variables
+            if test.variables:
+                test_vars.update(test.variables)
+
+            if test.name in ["nccl-cluster", "nccl-pairwise"]:
+                workloads = (
+                    test.workloads
+                    if test.workloads
+                    else ["all-gather", "all-reduce"]
+                )
                 application_name = "nccl-tests"
 
                 for workload in workloads:
-                    experiment_name = (
-                        f"{self.expander.experiment_name}-{test}-{workload}"
-                    )
+                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
                     contexts = TestHelper.nccl_test(
-                        test_vars, experiment_name, configs, test
+                        test_vars, experiment_name, configs, test.name
                     )
                     for context in contexts:
                         self.experiment_set.render_chained_experiments(
                             application_name, workload, context
                         )
-            elif test == "dcgm":
+            elif test.name == "dcgm":
                 application_name = "nvidia-dcgm"
                 experiment_name = self.expander.experiment_name
 
@@ -133,4 +228,4 @@ class Chs(ExecutableApplication):
                     application_name, "diag", context
                 )
             else:
-                logger.warn(f"Unknown test {test} requested. Skipping.")
+                logger.warn(f"Unknown test {test.name} requested. Skipping.")

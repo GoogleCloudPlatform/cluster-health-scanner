@@ -91,7 +91,6 @@ class GKEScheduler(BaseScheduler):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        suite: str,
         tests: list[str] | None,
         machine_type: str,
     ) -> None:
@@ -102,8 +101,16 @@ class GKEScheduler(BaseScheduler):
             with open(p, "r") as f:
                 template_content = f.read()
 
-        nodes_str = f"[{', '.join(nodes)}]" if nodes else "[]"
-        tests_str = f"[{', '.join(tests)}]" if tests else "[]"
+        if nodes:
+            nodes_str = json.dumps(nodes)
+        else:
+            nodes_str = "[]"
+
+        if tests:
+            # Compact JSON representation for tests
+            tests_str = json.dumps(tests)
+        else:
+            tests_str = "[]"
 
         rendered_content = template_content.format(
             nodes=nodes_str,
