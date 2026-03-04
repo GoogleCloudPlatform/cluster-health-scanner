@@ -16,6 +16,7 @@ import subprocess
 import sysconfig
 from typing import Any
 import chs
+from chs.exceptions import ChsException
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
@@ -48,14 +49,18 @@ class RambleManager:
 
         Raises:
           click.UsageError: If the Ramble setup script is not found.
+          OSError: If the workspace directory cannot be created.
         """
 
         self._base_dir = base_dir
         self._workspace_name = workspace_name
         self._path = os.path.join(self._base_dir, self._workspace_name)
-        self._run_command = run_command
+
+        # Ensure the directory exists for logging and execution
+        os.makedirs(self._path, exist_ok=True)
+
         logger.debug(
-            "Initialized RambleManager with workspace_name='%s', path='%s'",
+            "Initialized manager with workspace_name='%s', path='%s'",
             self._workspace_name,
             self._path,
         )
@@ -87,7 +92,7 @@ class RambleManager:
         """Prepares a Ramble command by sourcing setup script."""
         command_str = f'source {self._ramble_setup_script} && exec "$@"'
         logger.debug(
-            "Sourcing %s before running ramble command.",
+            "Sourcing %s before running command.",
             self._ramble_setup_script,
         )
         return ["bash", "-c", command_str, "bash"] + cmd
@@ -99,6 +104,7 @@ class RambleManager:
         cwd: str | None = None,
         capture_output: bool = False,
         env: dict[str, str] | None = None,
+        error_context: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Executes a command with consistent logging and error handling.
 
@@ -110,6 +116,8 @@ class RambleManager:
           capture_output: If True, captures stdout and stderr.
           env: A dictionary of environment variables to add to the command
             execution.
+          error_context: Optional context message to prepend to the error
+            message if the command fails.
 
         Returns:
           The CompletedProcess object from subprocess.run.
@@ -124,26 +132,51 @@ class RambleManager:
         else:
             run_env = None
 
+        log_file_path = os.path.join(self.path, "internal.log")
+
         try:
-            return self._run_command(
-                cmd,
-                check=check,
-                text=True,
-                cwd=cwd,
-                stdout=subprocess.PIPE
-                if capture_output
-                else subprocess.DEVNULL,
-                stderr=subprocess.PIPE if capture_output else None,
-                env=run_env,
+            with open(log_file_path, "a") as log_file:
+                log_file.write(
+                    f"\n[{datetime.datetime.now()}] "
+                    f"Running command: {' '.join(cmd)}\n"
+                )
+                log_file.flush()
+
+                process = subprocess.run(
+                    cmd,
+                    cwd=cwd,
+                    env=run_env,
+                    capture_output=True,
+                    # We use text=True to get strings instead of bytes
+                    text=True,
+                    check=False,  # We handle check manually
+                )
+
+                if process.stdout:
+                    log_file.write(process.stdout)
+
+                if process.stderr:
+                    log_file.write(process.stderr)
+
+                if check and process.returncode != 0:
+                    msg = (
+                        f"Command failed with exit code {process.returncode}. "
+                        f"See {log_file_path} for details."
+                    )
+                    if error_context:
+                        msg = f"{error_context}. {msg}"
+                    raise ChsException(msg)
+
+                return process
+
+        except Exception as e:
+            msg = (
+                f"Failed to execute command: {e}. "
+                f"See {log_file_path} for details."
             )
-        except subprocess.CalledProcessError as e:
-            logger.error("Command failed: %s", cmd)
-            logger.debug("Command stdout: %s", e.stdout)
-            logger.debug("Command stderr: %s", e.stderr)
-            raise click.ClickException(
-                f"Command '{' '.join(cmd)}' failed with exit code "
-                f"{e.returncode}."
-            )
+            if error_context:
+                msg = f"{error_context}: {msg}"
+            raise ChsException(msg)
 
     def _execute_ramble_command(
         self,
@@ -151,6 +184,7 @@ class RambleManager:
         args: list[str],
         capture_output: bool = False,
         env: dict[str, str] | None = None,
+        error_context: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Runs a Ramble subcommand in the workspace context.
 
@@ -179,6 +213,7 @@ class RambleManager:
             cwd=self.path,
             capture_output=capture_output,
             env=env,
+            error_context=error_context,
         )
 
     def create_workspace(self) -> None:
@@ -187,10 +222,14 @@ class RambleManager:
         Raises:
           click.ClickException: If the workspace creation command fails.
         """
-        logger.debug("Creating Ramble workspace at: %s", self.path)
+        logger.debug("Creating workspace at: %s", self.path)
         cmd = ["ramble", "workspace", "create", "-a", "-d", self.path]
         exec_cmd = self._prepare_ramble_command(cmd)
-        self._execute_shell_command(exec_cmd, capture_output=True)
+        self._execute_shell_command(
+            exec_cmd,
+            capture_output=True,
+            error_context="Failed to create workspace",
+        )
 
     def add_custom_repository(self) -> None:
         """Adds the internal custom CHS repository to the Ramble workspace.
@@ -198,10 +237,14 @@ class RambleManager:
         Raises:
           click.ClickException: If the repository addition command fails.
         """
-        logger.debug("Adding custom CHS repository to Ramble workspace...")
+
+        logger.debug("Adding custom CHS repository to workspace...")
         with pkg_resources.path(chs, "repos") as p:
             self._execute_ramble_command(
-                subcommand="repo", args=["add", str(p)], capture_output=True
+                subcommand="repo",
+                args=["add", str(p)],
+                capture_output=True,
+                error_context="Failed to add custom repository",
             )
 
     def configure_workspace(
@@ -221,7 +264,7 @@ class RambleManager:
         """
         self._scheduler = scheduler
 
-        logger.debug("Configuring Ramble workspace in %s...", self.path)
+        logger.debug("Configuring workspace in %s...", self.path)
         logger.debug("Configuring workspace for suite: %s", suite)
         logger.debug("Configuring workspace for scheduler: %s", scheduler.name)
         if tests:
@@ -243,12 +286,14 @@ class RambleManager:
         Raises:
           click.ClickException: If the workspace setup command fails.
         """
-        logger.debug("Setting up Ramble workspace in %s...", self.path)
+
+        logger.debug("Setting up workspace in %s...", self.path)
         self._execute_ramble_command(
             subcommand="workspace",
             args=["setup"],
             capture_output=True,
             env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+            error_context="Failed to setup workspace",
         )
 
     def execute_experiments(self) -> list[str]:
@@ -262,12 +307,14 @@ class RambleManager:
         Raises:
           click.ClickException: If the experiment execution command fails.
         """
-        logger.debug("Executing Ramble experiments in %s...", self.path)
+
+        logger.debug("Executing experiments in %s...", self.path)
         output = self._execute_ramble_command(
             subcommand="on",
             args=[],
             capture_output=True,
             env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+            error_context="Failed to execute experiments",
         ).stdout
 
         job_ids = self._scheduler.parse_job_ids(output)
@@ -303,9 +350,7 @@ class RambleManager:
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
         scheduler = get_scheduler(scheduler_name)
 
-        logger.debug(
-            "Canceling Ramble experiments %s in %s...", job_ids, self.path
-        )
+        logger.debug("Canceling experiments %s in %s...", job_ids, self.path)
         scheduler.cancel_jobs(job_ids)
 
     def _get_registry_path(self) -> pathlib.Path:
@@ -426,8 +471,7 @@ class RambleManager:
         """
         if self.get_scheduler_type() == "gke":
             logger.debug(
-                "Executing batch wait before analyzing Ramble experiments in "
-                "%s...",
+                "Executing batch wait before analyzing experiments in " "%s...",
                 self.path,
             )
             self._execute_ramble_command(
@@ -435,19 +479,21 @@ class RambleManager:
                 args=["--executor", "{batch_wait}"],
                 capture_output=True,
                 env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+                error_context="Failed to retrieve logs from jobs",
             )
 
-        logger.debug("Analyzing Ramble experiments in %s...", self.path)
+        logger.debug("Analyzing experiments in %s...", self.path)
         self._execute_ramble_command(
             subcommand="workspace",
             args=["analyze", "-f", "json"],
             capture_output=True,
             env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+            error_context="Failed to analyze results",
         ).stdout
         results_json_path = os.path.join(self.path, "results.latest.json")
 
         if not os.path.exists(results_json_path):
-            raise click.ClickException(
+            raise ChsException(
                 "chs analyze command failed. Recheck the run id and try "
                 "rerunning the command."
             )
