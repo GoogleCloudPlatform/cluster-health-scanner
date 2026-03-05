@@ -26,7 +26,7 @@ from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 import click
 from google.protobuf.json_format import MessageToJson
-import platformdirs
+from chs.utils.app_data import ChsAppData
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,7 @@ class RambleManager:
         self._base_dir = base_dir
         self._workspace_name = workspace_name
         self._path = os.path.join(self._base_dir, self._workspace_name)
+        self._app_data = ChsAppData()
 
         # Ensure the directory exists for logging and execution
         os.makedirs(self._path, exist_ok=True)
@@ -335,7 +336,7 @@ class RambleManager:
         Raises:
           click.ClickException: If the experiment cancellation command fails.
         """
-        registry_entry = self._get_registry_entry()
+        registry_entry = self._app_data.get_run(self._workspace_name)
         if not registry_entry:
             logger.warning("No registry entry found. Cannot cancel jobs.")
             click.echo(
@@ -356,27 +357,10 @@ class RambleManager:
         logger.debug("Canceling experiments %s in %s...", job_ids, self.path)
         scheduler.cancel_jobs(job_ids)
 
-    def _get_registry_path(self) -> pathlib.Path:
-        """Returns the path to the runs registry file."""
-        app_data_dir = pathlib.Path(
-            platformdirs.user_data_dir(appname="cluster-health-scanner")
-        )
-        try:
-            app_data_dir.mkdir(parents=True, exist_ok=True)
-            if not os.access(app_data_dir, os.W_OK):
-                raise OSError(f"Directory {app_data_dir} is not writable")
-        except OSError:
-            app_data_dir = pathlib.Path("/tmp/cluster-health-scanner")
-            app_data_dir.mkdir(parents=True, exist_ok=True)
-
-        return app_data_dir / "runs.json"
-
     def _update_registry(self, job_ids: list[str]) -> None:
         """Updates the runs registry with the current run information."""
-        registry_path = self._get_registry_path()
         logger.debug(
-            "Updating registry at %s for run %s with job_ids %s",
-            registry_path,
+            "Updating registry for run %s with job_ids %s",
             self._workspace_name,
             job_ids,
         )
@@ -389,39 +373,18 @@ class RambleManager:
             ),
             "scheduler": self._scheduler.name,
         }
-
-        try:
-            if registry_path.exists():
-                with open(registry_path, "r") as f:
-                    registry = json.load(f)
-            else:
-                registry = {}
-
-            registry[self._workspace_name] = run_entry
-
-            with open(registry_path, "w") as f:
-                json.dump(registry, f, indent=2)
-            logger.debug("Updated registry at %s", registry_path)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to update runs registry: %s", e)
+        self._app_data.update_run(self._workspace_name, run_entry)
 
     def get_job_ids(self) -> list[str]:
         """Retrieves job IDs for this workspace from the registry."""
-        registry_path = self._get_registry_path()
-        try:
-            if registry_path.exists():
-                with open(registry_path, "r") as f:
-                    registry = json.load(f)
-                entry = registry.get(self._workspace_name)
-                if entry:
-                    return entry.get("job_ids", [])
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to read runs registry: %s", e)
+        entry = self._app_data.get_run(self._workspace_name)
+        if entry:
+            return entry.get("job_ids", [])
         return []
 
     def check_jobs_running(self) -> bool:
         """Checks if any jobs for this workspace are still running."""
-        registry_entry = self._get_registry_entry()
+        registry_entry = self._app_data.get_run(self._workspace_name)
         if not registry_entry:
             logger.debug("No registry entry found for checking.")
             return False
@@ -436,18 +399,6 @@ class RambleManager:
         scheduler = get_scheduler(scheduler_name)
 
         return scheduler.check_jobs_running(job_ids)
-
-    def _get_registry_entry(self) -> dict[str, Any] | None:
-        """Retrieves the registry entry for this workspace."""
-        registry_path = self._get_registry_path()
-        try:
-            if registry_path.exists():
-                with open(registry_path, "r") as f:
-                    registry = json.load(f)
-                return registry.get(self._workspace_name)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to read runs registry: %s", e)
-        return None
 
     def _map_jobs_to_log_paths(self) -> dict[str, str]:
         """Maps Job IDs to their expected log paths on the filesystem.
@@ -587,7 +538,7 @@ class RambleManager:
         if hasattr(self, "_scheduler"):
             return self._scheduler.name
 
-        entry = self._get_registry_entry()
+        entry = self._app_data.get_run(self._workspace_name)
         if entry:
             return entry.get("scheduler", "slurm")
         return "slurm"

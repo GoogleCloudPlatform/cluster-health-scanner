@@ -95,46 +95,14 @@ class TestCli(unittest.TestCase):
             "nccl-pairwise",
             "dcgm",
         ]
-
-    @mock.patch("chs.cli.platformdirs", autospec=True)
-    @mock.patch("chs.cli.pathlib", autospec=True)
-    def test_get_default_workspaces_dir_succeeds(
-        self, mock_pathlib, mock_platformdirs
-    ):
-        """Tests that default workspaces directory is created successfully."""
-        mock_platformdirs.user_data_dir.return_value = "/path/to/user/data"
-        mock_path_obj = mock_pathlib.Path.return_value
-        mock_workspaces_dir = mock_path_obj / "workspaces"
-        mock_workspaces_dir.mkdir.return_value = None
-
-        result = cli.get_default_workspaces_dir()
-
-        self.assertEqual(result, str(mock_workspaces_dir))
-        mock_platformdirs.user_data_dir.assert_called_once_with(
-            appname="cluster-health-scanner"
+        self.mock_app_data_cls = self.enterContext(
+            mock.patch("chs.cli.ChsAppData", autospec=True)
         )
-        mock_pathlib.Path.assert_called_once_with("/path/to/user/data")
-        mock_workspaces_dir.mkdir.assert_called_once_with(
-            parents=True, exist_ok=True
+        self.mock_app_data = self.mock_app_data_cls.return_value
+        self.mock_app_data.get_workspaces_dir.return_value = (
+            "/mocked/workspaces"
         )
-
-    @mock.patch("chs.cli.platformdirs", autospec=True)
-    @mock.patch("chs.cli.pathlib", autospec=True)
-    def test_get_default_workspaces_dir_fails(
-        self, mock_pathlib, mock_platformdirs
-    ):
-        """Tests OSError is raised when workspace directory creation fails."""
-        mock_platformdirs.user_data_dir.return_value = "/path/to/user/data"
-        mock_path_obj = mock_pathlib.Path.return_value
-        mock_workspaces_dir = mock_path_obj / "workspaces"
-        mock_workspaces_dir.mkdir.side_effect = OSError("Creation failed")
-
-        with self.assertRaises(exceptions.WorkspaceCreationException):
-            cli.get_default_workspaces_dir()
-
-        mock_workspaces_dir.mkdir.assert_called_once_with(
-            parents=True, exist_ok=True
-        )
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
     def test_non_empty_str_callback(self):
         """Test non_empty_str_callback raises BadParameter on empty string."""
@@ -328,13 +296,10 @@ class TestCli(unittest.TestCase):
 
     @mock.patch("chs.cli.analyze_action", autospec=True)
     @mock.patch("chs.cli.get_scheduler")
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_run_command(
-        self, mock_get_default_dir, mock_get_scheduler, mock_analyze_action
-    ):
+    def test_run_command(self, mock_get_scheduler, mock_analyze_action):
         """Test 'run' command."""
         mock_default_dir = "/mocked/workspaces"
-        mock_get_default_dir.return_value = mock_default_dir
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
 
         # Setup mock scheduler
         mock_scheduler = mock.Mock()
@@ -560,7 +525,7 @@ class TestCli(unittest.TestCase):
                 self.mock_rm_cls.reset_mock()
                 self.mock_rm_instance.reset_mock()
                 self.mock_get_scheduler.reset_mock()
-                mock_get_default_dir.reset_mock()
+                self.mock_app_data.get_workspaces_dir.reset_mock()
                 mock_analyze_action.reset_mock()
                 self.mock_rm_instance.execute_experiments.return_value = [
                     "job1"
@@ -585,8 +550,8 @@ class TestCli(unittest.TestCase):
                 )
                 self.assertEqual(result.return_value, case.expected_return)
 
-                mock_get_default_dir.assert_called()
-                self.mock_rm_cls.assert_called_once_with(
+                self.mock_app_data.get_workspaces_dir.assert_called()
+                self.mock_rm_cls.assert_any_call(
                     mock_default_dir, MOCK_WORKSPACE_NAME
                 )
                 self.mock_rm_instance.create_workspace.assert_called_once()
@@ -599,7 +564,9 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
-                mock_analyze_action.assert_called_once_with(MOCK_WORKSPACE_NAME)
+                mock_analyze_action.assert_called_once_with(
+                    self.mock_app_data, MOCK_WORKSPACE_NAME
+                )
 
     def test_analyze_action_exception_handling(self):
         """Test that analyze_action wraps exceptions in ClickException."""
@@ -620,23 +587,21 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
 
-    @mock.patch("chs.cli._get_latest_workspace_run_id")
-    def test_results_command_no_boh(self, mock_get_latest_run_id):
+    def test_results_command_no_boh(self):
         """Test `results` command when bill_of_health.json is not found."""
-        mock_get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch(
-                "chs.cli.get_default_workspaces_dir", return_value=tmpdir
-            ):
-                os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
-                result = self.runner.invoke(cli.cli, ["results"])
-                self.assertEqual(result.exit_code, 1)
-                self.assertIn("Could not find bill of health", result.output)
+            self.mock_app_data.get_workspaces_dir.return_value = tmpdir
+            os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
+            result = self.runner.invoke(cli.cli, ["results"])
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Could not find bill of health", result.output)
 
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_run_action_exception_handling(self, mock_get_default_dir):
+    def test_run_action_exception_handling(self):
         """Test that run_action wraps exceptions in ClickException."""
-        mock_get_default_dir.return_value = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = (
+            "/mocked/workspaces"
+        )
 
         self.mock_scheduler.name = "slurm"
 
@@ -653,12 +618,13 @@ class TestCli(unittest.TestCase):
 
     @mock.patch("chs.cli.get_scheduler")
     @mock.patch("chs.cli.analyze_action", autospec=True)
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
     def test_run_command_passes_nodepool_to_scheduler(
-        self, mock_get_default_dir, mock_analyze_action, mock_get_scheduler
+        self, mock_analyze_action, mock_get_scheduler
     ):
         """Test that nodepool argument is passed to get_scheduler."""
-        mock_get_default_dir.return_value = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = (
+            "/mocked/workspaces"
+        )
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "gke"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
@@ -686,10 +652,11 @@ class TestCli(unittest.TestCase):
         _, kwargs = mock_get_scheduler.call_args
         self.assertEqual(kwargs.get("nodepool"), "pool1")
 
-    @mock.patch("chs.cli._get_latest_workspace_run_id", autospec=True)
-    def test_run_command_latest_run_active(self, mock_get_latest_run):
+    def test_run_command_latest_run_active(self):
         """Test `run` command when the latest run is active."""
-        mock_get_latest_run.return_value = "2023-01-01_00.00.00.000000"
+        self.mock_app_data.get_latest_run_id.return_value = (
+            "2023-01-01_00.00.00.000000"
+        )
         self.mock_rm_instance.check_jobs_running.return_value = True
         result = self.runner.invoke(
             cli.cli, ["run", "-sch", "slurm", "--machine-type", "a3-high"]
@@ -697,12 +664,11 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("The latest CHS run is still in progress", result.output)
 
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_run_command_errors(self, mock_get_ws_dir):
+    def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
         ws_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, ws_dir)
-        mock_get_ws_dir.return_value = ws_dir
+        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
 
         test_cases = [
             _CommandErrorTestCase(
@@ -850,15 +816,12 @@ class TestCli(unittest.TestCase):
                 self.assertIn(case.expected_output, result.output)
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_analyze_command_shortcut_boh(
-        self, mock_get_ws_dir, mock_results_viewer
-    ):
+    def test_analyze_command_shortcut_boh(self, mock_results_viewer):
         """Test 'analyze' command shortcut when BoH already exists."""
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
-        mock_get_ws_dir.return_value = workspaces_dir
+        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
 
         # Create BOH file
         run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
@@ -881,15 +844,12 @@ class TestCli(unittest.TestCase):
         mock_results_viewer.assert_called_once_with(pathlib.Path(boh_path))
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_analyze_command_shortcut_results(
-        self, mock_get_ws_dir, mock_results_viewer
-    ):
+    def test_analyze_command_shortcut_results(self, mock_results_viewer):
         """Test 'analyze' command shortcut when results.latest.json exists."""
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
-        mock_get_ws_dir.return_value = workspaces_dir
+        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
 
         # Create results.latest.json file
         workspace_dir = os.path.join(workspaces_dir, "my_run_id")
@@ -922,13 +882,12 @@ class TestCli(unittest.TestCase):
         mock_results_viewer.assert_called_once()
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_analyze_command_full(self, mock_get_ws_dir, mock_results_viewer):
+    def test_analyze_command_full(self, mock_results_viewer):
         """Test 'analyze' command full path when no results exist yet."""
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
-        mock_get_ws_dir.return_value = workspaces_dir
+        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
 
         # Create empty workspace dir
         workspace_dir = os.path.join(workspaces_dir, "my_run_id")
@@ -978,13 +937,12 @@ class TestCli(unittest.TestCase):
                 self.assertIn(case.expected_output, result.output)
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_results_command(self, mock_get_ws_dir, mock_results_viewer):
+    def test_results_command(self, mock_results_viewer):
         """Test 'results' command."""
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
-        mock_get_ws_dir.return_value = workspaces_dir
+        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
 
         # Create BOH file
         run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
@@ -1023,12 +981,12 @@ class TestCli(unittest.TestCase):
             tests=None, resources=["r1"]
         )
 
-    @mock.patch("chs.cli.get_default_workspaces_dir", autospec=True)
-    def test_results_command_no_run_id(self, mock_get_ws_dir):
+    def test_results_command_no_run_id(self):
         """Test 'results' command without run_id."""
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
-        mock_get_ws_dir.return_value = workspaces_dir
+        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
         # Create BOH file
         run_dir = os.path.join(workspaces_dir, "latest_run", "chs-results")
@@ -1036,24 +994,18 @@ class TestCli(unittest.TestCase):
         with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
             f.write("{}")
 
-        with mock.patch(
-            "chs.cli._get_latest_workspace_run_id"
-        ) as mock_get_latest:
-            mock_get_latest.return_value = "latest_run"
-            with mock.patch("chs.cli.ResultsViewer") as mock_viewer:
-                result = self.runner.invoke(cli.cli, ["results"])
-                self.assertEqual(result.exit_code, 0)
-                mock_get_latest.assert_called_once()
-                mock_viewer.assert_called_once()
+        with mock.patch("chs.cli.ResultsViewer") as mock_viewer:
+            result = self.runner.invoke(cli.cli, ["results"])
+            self.assertEqual(result.exit_code, 0)
+            self.mock_app_data.get_latest_run_id.assert_called_once()
+            mock_viewer.assert_called_once()
 
     def test_ensure_object_called(self):
-        """Test that ctx.ensure_object(dict) is called."""
-        with mock.patch.object(
-            click.Context, "ensure_object", autospec=True
-        ) as mock_ensure:
-            result = self.runner.invoke(cli.cli, ["list"])
-            self.assertEqual(result.exit_code, 0)
-            mock_ensure.assert_called_once_with(mock.ANY, dict)
+        """Test that ctx.obj is initialized."""
+        self.mock_app_data_cls.reset_mock()
+        result = self.runner.invoke(cli.cli, ["list"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data_cls.assert_called_once()
 
     @mock.patch.object(cli, "_list_schedulers", autospec=True)
     @mock.patch.object(cli, "_list_tests", autospec=True)
@@ -1162,11 +1114,10 @@ class TestCli(unittest.TestCase):
         cli.main()
         mock_cli.assert_called_once_with(obj={})
 
-    @mock.patch("chs.cli._get_latest_workspace_run_id")
-    def test_results_command_no_previous_runs(self, mock_get_latest):
+    def test_results_command_no_previous_runs(self):
         """Test results command when no previous runs exist."""
-        mock_get_latest.side_effect = exceptions.NoPreviousRunsFoundException(
-            "No runs"
+        self.mock_app_data.get_latest_run_id.side_effect = (
+            exceptions.NoPreviousRunsFoundException("No runs")
         )
         result = self.runner.invoke(cli.cli, ["results"])
         self.assertEqual(result.exit_code, 1)

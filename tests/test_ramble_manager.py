@@ -27,6 +27,10 @@ class TestRambleManager(unittest.TestCase):
         self.mock_sysconfig = self.enterContext(
             mock.patch.object(sysconfig, "get_path", autospec=True)
         )
+        self.mock_app_data_cls = self.enterContext(
+            mock.patch("chs.ramble_manager.ChsAppData", autospec=True)
+        )
+        self.mock_app_data = self.mock_app_data_cls.return_value
 
         self.mock_sysconfig.return_value = self.tmp_dir
         self.real_os_path_exists = os.path.exists
@@ -222,62 +226,57 @@ class TestRambleManager(unittest.TestCase):
 
     def test_check_jobs_running_true(self):
         """Test check_jobs_running returns True when jobs are running."""
+        self.mock_app_data.get_run.return_value = {
+            "job_ids": ["123"],
+            "scheduler": "mock_scheduler",
+        }
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
         mock_scheduler.check_jobs_running.return_value = True
 
-        with mock.patch.object(
-            manager, "_get_registry_entry"
-        ) as mock_get_entry:
-            with mock.patch(
-                "chs.ramble_manager.get_scheduler"
-            ) as mock_get_scheduler:
-                mock_get_entry.return_value = {
-                    "job_ids": ["123"],
-                    "scheduler": "mock_scheduler",
-                }
-                mock_get_scheduler.return_value = mock_scheduler
+        with mock.patch(
+            "chs.ramble_manager.get_scheduler"
+        ) as mock_get_scheduler:
+            mock_get_scheduler.return_value = mock_scheduler
 
-                result = manager.check_jobs_running()
+            result = manager.check_jobs_running()
 
-                self.assertTrue(result)
-                mock_get_scheduler.assert_called_once_with("mock_scheduler")
-                mock_scheduler.check_jobs_running.assert_called_once_with(
-                    ["123"]
-                )
+            self.assertTrue(result)
+            self.mock_app_data.get_run.assert_called_once_with("ws1")
+            mock_get_scheduler.assert_called_once_with("mock_scheduler")
+            mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
 
     def test_check_jobs_running_false(self):
         """Test check_jobs_running returns False when jobs are not running."""
+        self.mock_app_data.get_run.return_value = {
+            "job_ids": ["123"],
+            "scheduler": "mock_scheduler",
+        }
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
         mock_scheduler.check_jobs_running.return_value = False
 
-        with mock.patch.object(
-            manager, "_get_registry_entry"
-        ) as mock_get_entry:
-            with mock.patch(
-                "chs.ramble_manager.get_scheduler"
-            ) as mock_get_scheduler:
-                mock_get_entry.return_value = {
-                    "job_ids": ["123"],
-                    "scheduler": "mock_scheduler",
-                }
-                mock_get_scheduler.return_value = mock_scheduler
+        with mock.patch(
+            "chs.ramble_manager.get_scheduler"
+        ) as mock_get_scheduler:
+            mock_get_scheduler.return_value = mock_scheduler
 
-                result = manager.check_jobs_running()
+            result = manager.check_jobs_running()
 
-                self.assertFalse(result)
+            self.assertFalse(result)
+            self.mock_app_data.get_run.assert_called_once_with("ws1")
+            mock_get_scheduler.assert_called_once_with("mock_scheduler")
+            mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
 
     def test_check_jobs_running_no_entry(self):
         """Test check_jobs_running returns False for no registry entry."""
+        self.mock_app_data.get_run.return_value = None
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
 
-        with mock.patch.object(
-            manager, "_get_registry_entry"
-        ) as mock_get_entry:
-            mock_get_entry.return_value = None
-            result = manager.check_jobs_running()
-            self.assertFalse(result)
+        result = manager.check_jobs_running()
+
+        self.assertFalse(result)
+        self.mock_app_data.get_run.assert_called_once_with("ws1")
 
     def test_repr(self):
         """Test __repr__ format."""
@@ -294,10 +293,8 @@ class TestRambleManager(unittest.TestCase):
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            with mock.patch.object(
-                manager, "_get_registry_entry"
-            ) as mock_get_entry:
-                mock_get_entry.return_value = {"scheduler": "gke"}
+            self.mock_app_data.get_run.return_value = {"scheduler": "gke"}
+            with mock.patch("chs.ramble_manager.get_scheduler"):
                 with mock.patch("shutil.copytree") as mock_copytree:
                     with mock.patch.object(
                         manager, "cancel_experiments"

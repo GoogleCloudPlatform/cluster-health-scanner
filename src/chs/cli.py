@@ -14,6 +14,7 @@ import subprocess
 import importlib.resources as pkg_resources
 
 import chs.repos.applications.chs
+from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite_tests
 
 from chs.exceptions import (
@@ -26,7 +27,6 @@ from chs.exceptions import (
     NoNodesProvidedException,
     NoPreviousRunsFoundException,
     UnsupportedSchedulerException,
-    WorkspaceCreationException,
     WorkspaceNotFoundException,
 )
 from chs.ramble_manager import RambleManager
@@ -34,7 +34,6 @@ from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 import click
-import platformdirs
 
 logger = logging.getLogger(__name__)
 
@@ -50,43 +49,6 @@ def handle_chs_exceptions(f):
             raise click.ClickException(str(e)) from e
 
     return wrapper
-
-
-def get_default_workspaces_dir() -> str:
-    """Returns the default workspaces directory path, creating it if necessary.
-
-    Uses platformdirs to determine the appropriate user-specific data directory,
-    and creates a 'workspaces' subdirectory within it.
-
-    Example paths based on OS:
-      Linux: ~/.local/share/cluster-health-scanner/workspaces
-      macOS: ~/Library/Application Support/cluster-health-scanner/workspaces
-
-    Returns:
-      The path to the workspaces directory as a string.
-
-    Raises:
-      OSError: If the directory cannot be created.
-    """
-    try:
-        # TODO: simrankaurb - Edit this once we finalise the location of the
-        # workspaces directory. Current options are:
-        # 1. tmp directory using tempfile.
-        # 2. User's data directory (using platformdirs). - Currently
-        # implemented.
-        # 3. A custom directory specified by the user using a flag.
-        # 4. A subdirectory in the cluster-health-scanner directory.
-        app_data_dir = pathlib.Path(
-            platformdirs.user_data_dir(appname="cluster-health-scanner")
-        )
-        workspaces_dir = app_data_dir / "workspaces"
-        workspaces_dir.mkdir(parents=True, exist_ok=True)
-        logger.debug("Using workspaces directory: %s", workspaces_dir)
-        return str(workspaces_dir)
-    except OSError as e:
-        raise WorkspaceCreationException(
-            f"Failed to create workspaces directory at {workspaces_dir}"
-        ) from e
 
 
 def non_empty_str_callback(
@@ -166,14 +128,17 @@ def list_action(
     return show_all
 
 
-def is_latest_chs_run_active() -> bool:
+def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
     """Checks if the latest chs run is active by inspecting the runs registry.
+
+    Args:
+      app_data: ChsAppData instance.
 
     Returns:
       True if the latest run is active, False otherwise.
     """
     try:
-        latest_run_id = _get_latest_workspace_run_id()
+        latest_run_id = app_data.get_latest_run_id()
         if not latest_run_id:
             return False
 
@@ -269,10 +234,11 @@ def run_action(
         )
 
 
-def analyze_action(run_id: str) -> str:
+def analyze_action(app_data: ChsAppData, run_id: str) -> str:
     """Analyzes results from a specific test run.
 
     Args:
+      app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
 
     Returns:
@@ -283,7 +249,7 @@ def analyze_action(run_id: str) -> str:
     """
 
     logger.debug("Analyzing run_id=%r", run_id)
-    workspaces_base_dir = get_default_workspaces_dir()
+    workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
@@ -297,7 +263,7 @@ def analyze_action(run_id: str) -> str:
 
         # 1. Check if Bill of Health already exists
         if boh_path.exists():
-            _show_results(run_id)
+            _show_results(app_data, run_id)
             return run_id
 
         # 2. If results.latest.json exists (but no BoH), generate BoH
@@ -306,7 +272,7 @@ def analyze_action(run_id: str) -> str:
                 "Found results from this run. Generating Bill of Health..."
             )
             ramble_manager.generate_boh(str(results_json_path))
-            _show_results(run_id)
+            _show_results(app_data, run_id)
             return run_id
 
         # 3. If neither exists, wait for jobs and then analyze
@@ -315,7 +281,7 @@ def analyze_action(run_id: str) -> str:
 
         ramble_manager.analyze_results()
         logger.debug("Analysis complete for run_id=%r", run_id)
-        _show_results(run_id)
+        _show_results(app_data, run_id)
     except (OSError, subprocess.CalledProcessError) as e:
         raise ChsAnalysisException(
             f"CHS analysis failed for run_id={run_id}: {e!r}"
@@ -325,12 +291,15 @@ def analyze_action(run_id: str) -> str:
 
 
 def _show_results(
-    run_id: str | None, tests: str | None = None, resources: str | None = None
+    app_data: ChsAppData,
+    run_id: str | None,
+    tests: str | None = None,
+    resources: str | None = None,
 ) -> None:
     """Show Bill of Health results for a run."""
-    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
+    workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
     if not run_id:
-        run_id = _get_latest_workspace_run_id()
+        run_id = app_data.get_latest_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Showing results for latest run: %s", run_id)
 
@@ -356,10 +325,11 @@ def _show_results(
         viewer.show_summary()
 
 
-def cancel_action(run_id: str) -> str:
+def cancel_action(app_data: ChsAppData, run_id: str) -> str:
     """Cancels jobs for a specific test run.
 
     Args:
+      app_data: ChsAppData instance.
       run_id: The ID of the test run to cancel.
 
     Returns:
@@ -369,7 +339,7 @@ def cancel_action(run_id: str) -> str:
       click.ClickException: If an error occurs during CHS job cancellation.
     """
     logger.debug("Canceling run_id=%r", run_id)
-    workspaces_base_dir = get_default_workspaces_dir()
+    workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
@@ -395,6 +365,7 @@ def cancel_action(run_id: str) -> str:
 def cli(ctx: click.Context, verbose: bool) -> None:
     """Cluster Health Scanner (CHS) Tool."""
     ctx.ensure_object(dict)
+    ctx.obj["app_data"] = ChsAppData()
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
         logger.debug("Debug mode enabled.")
@@ -477,7 +448,9 @@ def list_command(
     help="The machine type of the cluster nodes (e.g., a3-high).",
     callback=non_empty_str_callback,
 )
+@click.pass_obj
 def run(
+    obj,
     *,
     suite: str | None,
     scheduler: str,
@@ -504,7 +477,8 @@ def run(
       A tuple containing the suite name, scheduler name, a list of
       test names, workspace name, workspaces base directory, and job ids.
     """
-    if is_latest_chs_run_active():
+    app_data = obj["app_data"]
+    if is_latest_chs_run_active(app_data):
         raise ChsRunInProgressException(
             "The latest CHS run is still in progress. Please wait for it to"
             " complete or cancel it before submitting a new run."
@@ -555,7 +529,7 @@ def run(
         )
 
     workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
-    workspaces_base_dir = get_default_workspaces_dir()
+    workspaces_base_dir = app_data.get_workspaces_dir()
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
@@ -578,87 +552,61 @@ def run(
         logger.info("No Job IDs captured (running locally?)")
 
     # Automatically trigger analysis
-    analyze_action(workspace_name)
+    analyze_action(app_data, workspace_name)
 
     return result
-
-
-def _get_latest_workspace_run_id() -> str:
-    """Finds and returns the most recent run_id from the workspaces directory.
-
-    Returns:
-      The run_id of the most recently created workspace.
-
-    Raises:
-      click.ClickException: If workspaces directory does not exist or has no
-        valid runs.
-    """
-    workspaces_dir = pathlib.Path(get_default_workspaces_dir())
-    if not workspaces_dir.exists():
-        raise WorkspaceNotFoundException("No workspaces directory found.")
-
-    valid_runs = []
-    date_format = "%Y-%m-%d_%H.%M.%S.%f"
-    for d in workspaces_dir.iterdir():
-        if d.is_dir():
-            try:
-                parsed_time = datetime.datetime.strptime(d.name, date_format)
-                valid_runs.append((parsed_time, d))
-            except ValueError:
-                continue
-
-    if not valid_runs:
-        raise NoPreviousRunsFoundException("No previous runs found.")
-
-    # Sort by the parsed datetime to find the latest
-    latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
-    return latest_dir.name
 
 
 @cli.command()
 @handle_chs_exceptions
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
-def analyze(run_id: str | None) -> str:
+@click.pass_obj
+def analyze(obj, run_id: str | None) -> str:
     """Analyze results from a test run.
 
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
 
     Args:
+      obj: Click object containing app_data.
       run_id: The ID of the test run to analyze.
 
     Returns:
       The run_id of the analyzed test run.
     """
+    app_data = obj["app_data"]
     if not run_id:
-        run_id = _get_latest_workspace_run_id()
+        run_id = app_data.get_latest_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Analyzing latest run: %s", run_id)
 
-    return analyze_action(run_id)
+    return analyze_action(app_data, run_id)
 
 
 @cli.command()
 @handle_chs_exceptions
 @click.argument("run_id", required=False, callback=non_empty_str_callback)
-def cancel(run_id: str | None) -> str:
+@click.pass_obj
+def cancel(obj, run_id: str | None) -> str:
     """Cancel running jobs for a test run.
 
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
 
     Args:
+      obj: Click object containing app_data.
       run_id: The ID of the test run to cancel.
 
     Returns:
       The run_id of the canceled test run.
     """
+    app_data = obj["app_data"]
     if not run_id:
-        run_id = _get_latest_workspace_run_id()
+        run_id = app_data.get_latest_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Canceling latest run: %s", run_id)
 
-    return cancel_action(run_id)
+    return cancel_action(app_data, run_id)
 
 
 @cli.command()
@@ -676,15 +624,16 @@ def cancel(run_id: str | None) -> str:
     help="Comma-separated list of resource names to show details for.",
     callback=non_empty_str_callback,
 )
+@click.pass_obj
 def results(
-    run_id: str | None, tests: str | None, resources: str | None
+    obj, run_id: str | None, tests: str | None, resources: str | None
 ) -> None:
     """Show Bill of Health results for a run.
 
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
     """
-    _show_results(run_id, tests, resources)
+    _show_results(obj["app_data"], run_id, tests, resources)
 
 
 def main() -> None:
