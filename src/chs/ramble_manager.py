@@ -11,19 +11,22 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sysconfig
+import time
 from typing import Any
 import chs
-from chs.exceptions import ChsException
+from chs.exceptions import (
+    ChsException,
+)
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 import click
 from google.protobuf.json_format import MessageToJson
 import platformdirs
-import time
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -186,6 +189,7 @@ class RambleManager:
         capture_output: bool = False,
         env: dict[str, str] | None = None,
         error_context: str | None = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         """Runs a Ramble subcommand in the workspace context.
 
@@ -199,6 +203,8 @@ class RambleManager:
           capture_output: Whether to capture stdout/stderr.
           env: A dictionary of environment variables to add to the command
             execution.
+          check: If True, raises a ChsException if the command returns a
+            non-zero exit code.
 
         Returns:
           The CompletedProcess object from subprocess.run.
@@ -210,7 +216,7 @@ class RambleManager:
         exec_cmd = self._prepare_ramble_command(cmd)
         return self._execute_shell_command(
             exec_cmd,
-            check=True,
+            check=check,
             cwd=self.path,
             capture_output=capture_output,
             env=env,
@@ -586,6 +592,129 @@ class RambleManager:
             return entry.get("scheduler", "slurm")
         return "slurm"
 
+    def _get_application_names(self, results_data: dict[str, Any]) -> set[str]:
+        """Extracts unique application names from results data.
+
+        Args:
+            results_data: The dictionary containing the Ramble results.
+
+        Returns:
+            A set of application names found in the results.
+        """
+        app_names = set()
+        for experiment in results_data.get("experiments", []):
+            app_name = experiment.get("application_name")
+            if app_name:
+                app_names.add(app_name)
+        return app_names
+
+    def _get_success_criteria_mapping(
+        self, names: set[str], key_type: str = "applications"
+    ) -> dict[str, dict[str, str]]:
+        """Fetches success criteria mapping for a set of names.
+
+        Args:
+            names: A set of names (applications or workflow_managers).
+            key_type: The type of keys ("applications" or "workflow_managers").
+
+        Returns:
+            A dictionary mapping names to their success criteria mapping
+            (which maps criteria names to FOM regexes).
+        """
+        mapping_result = {}
+
+        for name in names:
+            item_mapping = {}
+            try:
+                process = self._execute_ramble_command(
+                    subcommand="info",
+                    args=[
+                        "--type",
+                        key_type,
+                        name,
+                        "--attrs",
+                        "success_criteria",
+                        "-v",
+                    ],
+                    capture_output=True,
+                    env={"TQDM_DISABLE": "1", "TERM": "dumb"},
+                    check=False,
+                )
+
+                if process.returncode == 3:
+                    logger.debug(
+                        "No success criteria mapping found for %s %s"
+                        " (ramble info exit code 3).",
+                        key_type,
+                        name,
+                    )
+                    continue
+                elif process.returncode != 0:
+                    logger.warning(
+                        "Fetching success criteria for %s %s "
+                        "failed with exit code %s. "
+                        "Continuing without success criteria.",
+                        key_type,
+                        name,
+                        process.returncode,
+                    )
+                    continue
+
+                output = process.stdout
+                if "success_criteria" not in output:
+                    continue
+
+                parts = output.split("success_criteria #")
+                if len(parts) < 2:
+                    continue
+
+                yaml_content = parts[1].strip()
+                if yaml_content.startswith("####################"):
+                    yaml_content = yaml_content[20:].strip()
+
+                def quote_formula(match):
+                    return match.group(1) + json.dumps(match.group(2).strip())
+
+                yaml_content = re.sub(
+                    r"^(\s*formula:\s*)(.*)$",
+                    quote_formula,
+                    yaml_content,
+                    flags=re.MULTILINE,
+                )
+
+                criteria_defs = yaml.safe_load(yaml_content)
+                if not isinstance(criteria_defs, dict):
+                    continue
+
+                for criteria_name, definition in criteria_defs.items():
+                    if isinstance(definition, dict):
+                        item_mapping[criteria_name] = definition
+
+                if item_mapping:
+                    mapping_result[name] = item_mapping
+
+                logger.debug(
+                    "Success criteria mapping for %s %s: %s",
+                    key_type,
+                    name,
+                    item_mapping,
+                )
+
+            except (
+                yaml.YAMLError,
+                Exception,
+            ) as e:
+                logger.warning(
+                    "Fetching success criteria for %s %s "
+                    "failed with error: %s. "
+                    "Continuing without success criteria.",
+                    key_type,
+                    name,
+                    e,
+                )
+
+        return mapping_result
+
     def analyze_results(self) -> str:
         """Analyzes and stores the results of the Ramble experiments.
 
@@ -603,7 +732,13 @@ class RambleManager:
         logger.debug("Analyzing experiments in %s...", self.path)
         self._execute_ramble_command(
             subcommand="workspace",
-            args=["analyze", "-f", "json"],
+            args=[
+                "analyze",
+                "-f",
+                "json",
+                "--fom-origin-types",
+                "application",
+            ],
             capture_output=True,
             env={"TQDM_DISABLE": "1", "TERM": "dumb"},
             error_context="Failed to analyze results",
@@ -632,10 +767,28 @@ class RambleManager:
         output_dir = workspace_dir / "chs-results"
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        try:
+            with open(results_json_path, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error("Error reading JSON results: %s", e)
+            data = {}
+
+        app_names = self._get_application_names(data)
+
+        app_mapping = self._get_success_criteria_mapping(
+            app_names, "applications"
+        )
+
+        success_criteria_mapping = {
+            "applications": app_mapping,
+        }
+
         boh_generator = BOHGenerator(
             results_json_path,
             base_log_dir=str(output_dir),
             cluster_type=self.get_scheduler_type(),
+            success_criteria_mapping=success_criteria_mapping,
         )
         logger.debug("Generating Bill of Health from %s", results_json_path)
         boh = boh_generator.generate()

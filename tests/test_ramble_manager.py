@@ -377,6 +377,12 @@ class TestRambleManager(unittest.TestCase):
                                         self.assertNotIn("on", cmd_list)
                                         # Verify env is passed for analyze
                                         if "analyze" in cmd_list:
+                                            self.assertIn(
+                                                "--fom-origin-types", cmd_list
+                                            )
+                                            self.assertIn(
+                                                "application", cmd_list
+                                            )
                                             self.assertEqual(
                                                 kwargs["env"]["TQDM_DISABLE"],
                                                 "1",
@@ -476,6 +482,7 @@ class TestRambleManager(unittest.TestCase):
                             results_json_path,
                             base_log_dir=output_path,
                             cluster_type="slurm",
+                            success_criteria_mapping={"applications": {}},
                         )
                         mock_boh_gen.return_value.generate.assert_called_once()
                         mock_ignore_patterns.assert_called_once_with("chs-*")
@@ -500,6 +507,65 @@ class TestRambleManager(unittest.TestCase):
         with mock.patch.object(manager, "_monitor_jobs") as mock_monitor:
             manager.wait_for_jobs(poll_interval=1)
             mock_monitor.assert_called_once_with(1)
+
+    def test_get_application_names(self):
+        """Test extraction of unique application names from results."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        results_data = {
+            "experiments": [
+                {"application_name": "app1"},
+                {"application_name": "app2"},
+                {"application_name": "app1"},  # Duplicate
+                {},  # Missing name
+            ]
+        }
+        app_names = manager._get_application_names(results_data)
+        self.assertEqual(app_names, {"app1", "app2"})
+
+    def test_get_success_criteria_mapping(self):
+        """Test fetching and parsing of success criteria mapping."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_output = """
+success_criteria # ####################
+mycriteria:
+  fom_name: 'metric1'
+  formula: >= 10
+"""
+        self.mock_run.return_value.stdout = mock_output
+
+        with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
+            mock_exec.return_value.stdout = mock_output
+            mock_exec.return_value.returncode = 0
+
+            mapping = manager._get_success_criteria_mapping({"myapp"})
+
+            self.assertIn("myapp", mapping)
+            self.assertEqual(
+                mapping["myapp"]["mycriteria"]["fom_name"], "metric1"
+            )
+            self.assertEqual(mapping["myapp"]["mycriteria"]["formula"], ">= 10")
+
+            mock_exec.assert_called_once()
+            args, kwargs = mock_exec.call_args
+            self.assertEqual(kwargs["subcommand"], "info")
+            self.assertIn("myapp", kwargs["args"])
+
+    def test_get_success_criteria_mapping_formula_quoting(self):
+        """Test that formulas with quotes are handled by regex replacement."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        # Raw output that needs formula quoting
+        mock_output = """
+success_criteria #
+mycriteria:
+  fom_name: 'metric1'
+  formula: >= 10
+"""
+        with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
+            mock_exec.return_value.stdout = mock_output
+            mock_exec.return_value.returncode = 0
+            mapping = manager._get_success_criteria_mapping({"myapp"})
+
+            self.assertEqual(mapping["myapp"]["mycriteria"]["formula"], ">= 10")
 
 
 if __name__ == "__main__":

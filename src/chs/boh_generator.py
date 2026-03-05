@@ -1,13 +1,18 @@
 """Generates Bill of Health from Ramble JSON results."""
 
 from datetime import datetime, timezone
+import fnmatch
 import json
+import logging
 import os
+import re
 from typing import Any
 import uuid
 
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
+
+logger = logging.getLogger(__name__)
 
 
 class BOHGenerator:
@@ -18,6 +23,9 @@ class BOHGenerator:
         file_path: str,
         base_log_dir: str | None = None,
         cluster_type: str = "slurm",
+        success_criteria_mapping: (
+            dict[str, dict[str, dict[str, str]]] | None
+        ) = None,
     ):
         self.file_path = file_path
         self.base_log_dir = base_log_dir
@@ -27,6 +35,7 @@ class BOHGenerator:
             "nccl-tests": self._extract_nccl_info,
             "nvidia-dcgm": self._extract_dcgm_info,
         }
+        self.success_criteria_mapping = success_criteria_mapping or {}
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()
@@ -58,6 +67,120 @@ class BOHGenerator:
 
             metrics.append(metric)
         return metrics
+
+    def _parse_formula(
+        self, formula: str, validation: pb.ValidationCriteria
+    ) -> None:
+        """Parses Ramble formula to populate comparator and expected value."""
+        # Clean up formula structure
+        formula = formula.replace("{value}", "").strip()
+        ops = [
+            (">=", pb.Comparator.COMPARATOR_GTE),
+            ("<=", pb.Comparator.COMPARATOR_LTE),
+            ("==", pb.Comparator.COMPARATOR_EQ),
+            ("!=", pb.Comparator.COMPARATOR_NE),
+            (">", pb.Comparator.COMPARATOR_GT),
+            ("<", pb.Comparator.COMPARATOR_LT),
+        ]
+
+        found_op = None
+        found_val = None
+
+        for op_str, op_enum in ops:
+            if formula.startswith(op_str):
+                found_op = op_enum
+                found_val = formula[len(op_str) :].strip()
+                break
+
+        if found_op:
+            validation.comparator = found_op
+            # Try to parse value as number, bool, or string
+            if found_val.lower() == "true":
+                validation.expected_value.bool_value = True
+            elif found_val.lower() == "false":
+                validation.expected_value.bool_value = False
+            else:
+                try:
+                    validation.expected_value.number_value = float(found_val)
+                except ValueError:
+                    # Strip quotes if present
+                    if (
+                        found_val.startswith('"') and found_val.endswith('"')
+                    ) or (
+                        found_val.startswith("'") and found_val.endswith("'")
+                    ):
+                        found_val = found_val[1:-1]
+                    validation.expected_value.string_value = found_val
+
+    def _process_success_criteria(
+        self,
+        test_result: pb.TestResult,
+        experiment: dict[str, Any],
+        metrics_map: dict[str, pb.Metric],
+    ) -> None:
+        """Processes success criteria and attaches them to metrics.
+
+        Args:
+            test_result: The TestResult proto to update.
+            experiment: The experiment dictionary from Ramble results.
+            metrics_map: A map of metric keys to Metric proto objects.
+        """
+        success_criteria = experiment.get("SUCCESS_CRITERIA", {})
+        application_name = experiment.get("application_name")
+
+        app_mappings = self.success_criteria_mapping.get("applications", {})
+
+        app_mapping = app_mappings.get(application_name, {})
+
+        for criteria_key, status in success_criteria.items():
+            simple_name = criteria_key.split("::")[-1]
+
+            validation = pb.ValidationCriteria()
+            fom_regex_or_def = app_mapping.get(simple_name)
+            if not fom_regex_or_def:
+                fom_regex_or_def = app_mapping.get(simple_name.strip("{}"))
+
+            if isinstance(fom_regex_or_def, dict):
+                fom_regex = fom_regex_or_def.get("fom_name")
+                formula = fom_regex_or_def.get("formula")
+                if formula:
+                    self._parse_formula(formula, validation)
+            else:
+                fom_regex = fom_regex_or_def
+
+            if fom_regex:
+                logger.debug(
+                    "Criteria '%s' mapped to pattern '%s'",
+                    simple_name,
+                    fom_regex,
+                )
+            else:
+                logger.debug("Criteria '%s' has no mapping found", simple_name)
+
+            matched_any_metric = False
+            if fom_regex:
+                try:
+                    pattern = re.compile(fom_regex)
+                except re.error:
+                    pattern = None
+
+                for metric_key, metric in metrics_map.items():
+                    is_match = False
+                    if pattern and pattern.fullmatch(metric_key):
+                        is_match = True
+                    if not is_match and fnmatch.fnmatch(metric_key, fom_regex):
+                        is_match = True
+
+                    if is_match:
+                        metric.validation_criteria.CopyFrom(validation)
+                        matched_any_metric = True
+
+            if not matched_any_metric:
+                logger.debug(
+                    "No metrics matched for criteria '%s' " "(pattern: '%s').",
+                    simple_name,
+                    fom_regex,
+                )
 
     def _extract_nccl_info(
         self, exp_name: str, workload_name: str
@@ -114,8 +237,7 @@ class BOHGenerator:
             with open(self.file_path, "r") as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            # TODO: Replace print statements with proper logging statements
-            print(f"Error reading JSON results: {e}")
+            logger.error("Error reading JSON results: %s", e)
             return self.report
 
         self.report.report_id = data.get("workspace_hash", str(uuid.uuid4()))
@@ -138,6 +260,7 @@ class BOHGenerator:
             test_result.result_status = self._get_result_status(
                 exp.get("SUCCESS_CRITERIA", {})
             )
+            metrics_map = {}
 
             tags = exp.get("TAGS", [])
             if tags:
@@ -189,6 +312,11 @@ class BOHGenerator:
                     foms = ctx.get("foms", [])
                     metrics = self._parse_foms(foms)
                     test_result.metrics.extend(metrics)
+
+            for metric in test_result.metrics:
+                metrics_map[metric.key] = metric
+
+            self._process_success_criteria(test_result, exp, metrics_map)
 
             self.report.test_results.append(test_result)
 

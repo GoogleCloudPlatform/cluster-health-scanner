@@ -1,3 +1,4 @@
+import logging
 import unittest
 from unittest.mock import patch
 import subprocess
@@ -6,6 +7,7 @@ from chs.schedulers.slurm import SlurmScheduler
 
 class TestSlurmScheduler(unittest.TestCase):
     def setUp(self):
+        logging.disable(logging.CRITICAL)
         self.scheduler = SlurmScheduler()
 
     @patch("subprocess.run")

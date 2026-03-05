@@ -2,11 +2,13 @@
 
 import datetime
 import json
+import logging
 import os
 import tempfile
 import unittest
 from unittest import mock
 
+import chs.boh_generator
 from chs.boh_generator import BOHGenerator
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -14,6 +16,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 
 class TestBOHGenerator(unittest.TestCase):
     def setUp(self):
+        logging.disable(logging.CRITICAL)
         self.maxDiff = None
         self.test_dir = tempfile.TemporaryDirectory()
         self.test_json_path = os.path.join(self.test_dir.name, "results.json")
@@ -247,14 +250,14 @@ class TestBOHGenerator(unittest.TestCase):
             list(report.test_results[1].target_resource_ids), ["node1", "node2"]
         )
 
-    @mock.patch("builtins.print")
-    def test_generate_file_error(self, mock_print):
+    def test_generate_file_error(self):
         """Test error handling for missing input file."""
-        generator = BOHGenerator("non_existent_file.json")
-        report = generator.generate()
-        self.assertIsInstance(report, pb.BillOfHealth)
-        self.assertEqual(len(report.test_results), 0)
-        mock_print.assert_called_once()
+        with mock.patch.object(chs.boh_generator, "logger") as mock_logger:
+            generator = BOHGenerator("non_existent_file.json")
+            report = generator.generate()
+            self.assertIsInstance(report, pb.BillOfHealth)
+            self.assertEqual(len(report.test_results), 0)
+            mock_logger.error.assert_called_once()
 
     def test_ignore_cluster_health_diagnostics(self):
         """Test that cluster_health_diagnostics experiment is ignored."""
@@ -323,6 +326,146 @@ class TestBOHGenerator(unittest.TestCase):
         )
         self.assertEqual(name, "generic_test")
         self.assertEqual(level, "workload")
+
+    def test_parse_formula(self):
+        """Test parsing of Ramble formulas."""
+        generator = BOHGenerator(self.test_json_path)
+        test_cases = [
+            (">= 10", pb.Comparator.COMPARATOR_GTE, 10.0),
+            ("<= 5.5", pb.Comparator.COMPARATOR_LTE, 5.5),
+            ("== true", pb.Comparator.COMPARATOR_EQ, True),
+            ("!= false", pb.Comparator.COMPARATOR_NE, False),
+            ("> 100", pb.Comparator.COMPARATOR_GT, 100.0),
+            ("< 0", pb.Comparator.COMPARATOR_LT, 0.0),
+            ('== "passed"', pb.Comparator.COMPARATOR_EQ, "passed"),
+            ("!= 'failed'", pb.Comparator.COMPARATOR_NE, "failed"),
+            (
+                ">= {value} 10",
+                pb.Comparator.COMPARATOR_GTE,
+                10.0,
+            ),  # Test {value} strip
+        ]
+
+        for formula, expected_op, expected_val in test_cases:
+            validation = pb.ValidationCriteria()
+            generator._parse_formula(formula, validation)
+            self.assertEqual(
+                validation.comparator, expected_op, f"Failed for {formula}"
+            )
+            if isinstance(expected_val, bool):
+                self.assertEqual(
+                    validation.expected_value.bool_value, expected_val
+                )
+            elif isinstance(expected_val, (int, float)):
+                self.assertEqual(
+                    validation.expected_value.number_value, expected_val
+                )
+            else:
+                self.assertEqual(
+                    validation.expected_value.string_value, expected_val
+                )
+
+    def test_process_success_criteria_exact_match(self):
+        """Test success criteria mapping with exact name match."""
+        success_criteria_mapping = {
+            "applications": {
+                "myapp": {
+                    "mycriteria": {"fom_name": "metric1", "formula": ">= 10"}
+                }
+            }
+        }
+        generator = BOHGenerator(
+            self.test_json_path,
+            success_criteria_mapping=success_criteria_mapping,
+        )
+
+        test_result = pb.TestResult()
+        experiment = {
+            "application_name": "myapp",
+            "SUCCESS_CRITERIA": {"criteria::mycriteria": "PASSED"},
+        }
+        metric1 = pb.Metric(key="metric1")
+        metrics_map = {"metric1": metric1}
+
+        generator._process_success_criteria(
+            test_result, experiment, metrics_map
+        )
+
+        self.assertEqual(
+            metric1.validation_criteria.comparator, pb.Comparator.COMPARATOR_GTE
+        )
+        self.assertEqual(
+            metric1.validation_criteria.expected_value.number_value, 10.0
+        )
+
+    def test_process_success_criteria_regex_match(self):
+        """Test success criteria mapping with regex match."""
+        success_criteria_mapping = {
+            "applications": {
+                "myapp": {
+                    "mycriteria": {"fom_name": "metric.*", "formula": "== true"}
+                }
+            }
+        }
+        generator = BOHGenerator(
+            self.test_json_path,
+            success_criteria_mapping=success_criteria_mapping,
+        )
+
+        test_result = pb.TestResult()
+        experiment = {
+            "application_name": "myapp",
+            "SUCCESS_CRITERIA": {"mycriteria": "PASSED"},
+        }
+        metric1 = pb.Metric(key="metric1")
+        metric2 = pb.Metric(key="other")
+        metrics_map = {"metric1": metric1, "other": metric2}
+
+        generator._process_success_criteria(
+            test_result, experiment, metrics_map
+        )
+
+        self.assertEqual(
+            metric1.validation_criteria.comparator, pb.Comparator.COMPARATOR_EQ
+        )
+        self.assertTrue(metric1.validation_criteria.expected_value.bool_value)
+        self.assertEqual(
+            metric2.validation_criteria.comparator,
+            pb.Comparator.COMPARATOR_UNSPECIFIED,
+        )
+
+    def test_process_success_criteria_strip_braces(self):
+        """Test success criteria mapping where braces are stripped."""
+        success_criteria_mapping = {
+            "applications": {
+                "myapp": {
+                    "mycriteria": {"fom_name": "metric1", "formula": "!= 0"}
+                }
+            }
+        }
+        generator = BOHGenerator(
+            self.test_json_path,
+            success_criteria_mapping=success_criteria_mapping,
+        )
+
+        test_result = pb.TestResult()
+        experiment = {
+            "application_name": "myapp",
+            "SUCCESS_CRITERIA": {"{mycriteria}": "PASSED"},
+        }
+        metric1 = pb.Metric(key="metric1")
+        metrics_map = {"metric1": metric1}
+
+        generator._process_success_criteria(
+            test_result, experiment, metrics_map
+        )
+
+        self.assertEqual(
+            metric1.validation_criteria.comparator, pb.Comparator.COMPARATOR_NE
+        )
+        self.assertEqual(
+            metric1.validation_criteria.expected_value.number_value, 0.0
+        )
 
 
 if __name__ == "__main__":

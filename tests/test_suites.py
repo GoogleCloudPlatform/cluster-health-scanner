@@ -1,3 +1,4 @@
+import logging
 import unittest
 import os
 import tempfile
@@ -8,6 +9,7 @@ from chs.exceptions import SuiteNotFoundException
 
 class TestSuites(unittest.TestCase):
     def setUp(self):
+        logging.disable(logging.CRITICAL)
         self.test_dir = tempfile.TemporaryDirectory()
         self.suites_path = os.path.join(self.test_dir.name, "suites.yaml")
 
