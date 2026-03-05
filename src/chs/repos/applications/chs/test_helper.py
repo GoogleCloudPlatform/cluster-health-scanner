@@ -67,7 +67,7 @@ podAntiAffinity:
             ):
                 # Update destination with source values (source takes precedence)
                 for k, v in src_dict[src_key].items():
-                    if k not in dst_dict[dst_key]:
+                    if k not in dst_dict[dst_key] or not dst_dict[dst_key][k]:
                         dst_dict[dst_key][k] = v
             elif isinstance(src_dict[src_key], list) and isinstance(
                 dst_dict[dst_key], list
