@@ -258,7 +258,7 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
             raise WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
 
         workspace_path = pathlib.Path(ramble_manager.path)
-        boh_path = workspace_path / "chs-results" / "bill_of_health.json"
+        boh_path = workspace_path / "bill_of_health.json"
         results_json_path = workspace_path / "results.latest.json"
 
         # 1. Check if Bill of Health already exists
@@ -303,14 +303,10 @@ def _show_results(
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Showing results for latest run: %s", run_id)
 
-    current_dir_path = (
-        workspaces_dir / run_id / "chs-results" / "bill_of_health.json"
-    )
-    if current_dir_path.exists():
-        boh_path = current_dir_path
-    else:
+    boh_path = workspaces_dir / run_id / "bill_of_health.json"
+    if not boh_path.exists():
         raise BillOfHealthNotFoundException(
-            f"Could not find bill of health at {current_dir_path}. "
+            f"Could not find bill of health at {boh_path}. "
             f"Have you run 'chs analyze {run_id}'?"
         )
 
@@ -634,6 +630,29 @@ def results(
     will be used.
     """
     _show_results(obj["app_data"], run_id, tests, resources)
+
+
+@cli.group()
+def configure() -> None:
+    """Configure CHS settings."""
+    pass
+
+
+@configure.command("bucket")
+@click.option(
+    "--name",
+    "bucket_name",
+    required=False,
+    default="chs-results",
+    help="GCS bucket name for storing results",
+)
+@click.pass_context
+def set_bucket_command(ctx: click.Context, bucket_name: str) -> None:
+    """Sets the GCS bucket for storing results."""
+    app_data = ctx.obj["app_data"]
+    # TODO: Create bucket if it doesn't exist
+    app_data.set_bucket(bucket_name)
+    click.echo(f"GCS bucket set to: {bucket_name}")
 
 
 def main() -> None:

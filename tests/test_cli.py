@@ -824,7 +824,7 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
 
         # Create BOH file
-        run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
+        run_dir = os.path.join(workspaces_dir, "my_run_id")
         os.makedirs(run_dir)
         boh_path = os.path.join(run_dir, "bill_of_health.json")
         with open(boh_path, "w") as f:
@@ -862,12 +862,10 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.path = workspace_dir
 
         def mock_generate_boh(results_path):
-            run_results_dir = os.path.join(workspace_dir, "chs-results")
-            os.makedirs(run_results_dir, exist_ok=True)
-            boh_file = os.path.join(run_results_dir, "bill_of_health.json")
+            boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")
-            return run_results_dir
+            return workspace_dir
 
         self.mock_rm_instance.generate_boh.side_effect = mock_generate_boh
 
@@ -897,12 +895,10 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.path = workspace_dir
 
         def mock_analyze_results():
-            run_results_dir = os.path.join(workspace_dir, "chs-results")
-            os.makedirs(run_results_dir, exist_ok=True)
-            boh_file = os.path.join(run_results_dir, "bill_of_health.json")
+            boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")
-            return run_results_dir
+            return workspace_dir
 
         self.mock_rm_instance.analyze_results.side_effect = mock_analyze_results
 
@@ -945,7 +941,7 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
 
         # Create BOH file
-        run_dir = os.path.join(workspaces_dir, "my_run_id", "chs-results")
+        run_dir = os.path.join(workspaces_dir, "my_run_id")
         os.makedirs(run_dir)
         with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
             f.write("{}")
@@ -989,7 +985,7 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
         # Create BOH file
-        run_dir = os.path.join(workspaces_dir, "latest_run", "chs-results")
+        run_dir = os.path.join(workspaces_dir, "latest_run")
         os.makedirs(run_dir)
         with open(os.path.join(run_dir, "bill_of_health.json"), "w") as f:
             f.write("{}")
@@ -1122,6 +1118,22 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["results"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("No runs", result.output)
+
+    def test_configure_bucket_command(self):
+        """Test 'configure bucket' command."""
+        result = self.runner.invoke(
+            cli.cli, ["configure", "bucket", "--name", "my-bucket"]
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.mock_app_data.set_bucket.assert_called_once_with("my-bucket")
+        self.assertIn("GCS bucket set to: my-bucket", result.output)
+
+        # Test default bucket name
+        self.mock_app_data.set_bucket.reset_mock()
+        result = self.runner.invoke(cli.cli, ["configure", "bucket"])
+        self.assertEqual(result.exit_code, 0)
+        self.mock_app_data.set_bucket.assert_called_once_with("chs-results")
+        self.assertIn("GCS bucket set to: chs-results", result.output)
 
     @mock.patch("chs.cli.RambleManager")
     def test_analyze_command_workspace_not_found(self, mock_rm_cls):

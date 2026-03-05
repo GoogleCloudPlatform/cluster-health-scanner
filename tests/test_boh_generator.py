@@ -467,6 +467,30 @@ class TestBOHGenerator(unittest.TestCase):
             metric1.validation_criteria.expected_value.number_value, 0.0
         )
 
+    def test_generate_metadata_relative_log(self):
+        """Test extraction of tags and log files with relative path."""
+        log_path = os.path.join(self.test_dir.name, "experiments/log1.out")
+        data = {
+            "experiments": [
+                {
+                    "name": "exp1",
+                    "TAGS": ["tag1", "tag2"],
+                    "RAMBLE_VARIABLES": {"log_file": log_path},
+                }
+            ]
+        }
+        self._write_json(data)
+
+        generator = BOHGenerator(
+            self.test_json_path, base_log_dir=self.test_dir.name
+        )
+        report = generator.generate()
+
+        metadata = report.test_results[0].metadata
+        self.assertEqual(
+            metadata.fields["log_file"].string_value, "experiments/log1.out"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

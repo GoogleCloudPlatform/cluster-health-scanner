@@ -275,9 +275,7 @@ class BOHGenerator:
             # update it after the followup PR on uploading logs to bucket.
             if log_file:
                 if self.base_log_dir:
-                    workspace_dir = os.path.dirname(self.file_path)
-                    rel_path = os.path.relpath(log_file, workspace_dir)
-                    log_file = os.path.join(self.base_log_dir, rel_path)
+                    log_file = os.path.relpath(log_file, self.base_log_dir)
                 test_result.metadata.fields["log_file"].string_value = log_file
             else:
                 test_result.metadata.fields["log_file"].string_value = ""

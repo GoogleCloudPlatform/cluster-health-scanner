@@ -12,7 +12,6 @@ import logging
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sysconfig
 import time
@@ -715,8 +714,6 @@ class RambleManager:
         """
 
         workspace_dir = pathlib.Path(self._path)
-        output_dir = workspace_dir / "chs-results"
-        output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             with open(results_json_path, "r") as f:
@@ -737,7 +734,7 @@ class RambleManager:
 
         boh_generator = BOHGenerator(
             results_json_path,
-            base_log_dir=str(output_dir),
+            base_log_dir=str(workspace_dir),
             cluster_type=self.get_scheduler_type(),
             success_criteria_mapping=success_criteria_mapping,
         )
@@ -745,35 +742,9 @@ class RambleManager:
         boh = boh_generator.generate()
         logger.debug("Bill of Health generated successfully.")
 
-        boh_path = output_dir / "bill_of_health.json"
+        boh_path = workspace_dir / "bill_of_health.json"
         with open(boh_path, "w") as f:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
-
-        experiments_dir = os.path.join(self.path, "experiments")
-        src_experiments = os.path.abspath(experiments_dir)
-        dst_experiments = os.path.abspath(output_dir / "experiments")
-
-        if src_experiments == dst_experiments:
-            logger.debug(
-                "Experiments directory is already in the output directory. "
-                "Skipping copy."
-            )
-        elif os.path.exists(experiments_dir):
-            shutil.copytree(
-                experiments_dir,
-                dst_experiments,
-                dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns("chs-*"),
-            )
-            logger.debug(
-                "Copied experiments from %s to %s",
-                experiments_dir,
-                dst_experiments,
-            )
-        else:
-            logger.debug(
-                "No experiments directory found at %s", experiments_dir
-            )
 
         # Cleanup jobs after successful analysis
         try:
@@ -782,7 +753,7 @@ class RambleManager:
         except Exception as e:
             logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
-        return str(output_dir)
+        return str(workspace_dir)
 
     def cleanup_workspace(self) -> None:
         # TODO: Implement the logic for this method.

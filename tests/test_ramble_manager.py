@@ -2,7 +2,6 @@
 
 import logging
 import os
-import pathlib
 import subprocess
 import sysconfig
 import tempfile
@@ -295,50 +294,22 @@ class TestRambleManager(unittest.TestCase):
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
             self.mock_app_data.get_run.return_value = {"scheduler": "gke"}
             with mock.patch("chs.ramble_manager.get_scheduler"):
-                with mock.patch("shutil.copytree") as mock_copytree:
-                    with mock.patch.object(
-                        manager, "cancel_experiments"
-                    ) as mock_cancel:
-                        with mock.patch(
-                            "shutil.ignore_patterns"
-                        ) as mock_ignore_patterns:
-                            with mock.patch("builtins.open", mock.mock_open()):
-                                with mock.patch(
-                                    "os.getcwd", return_value="/home/user"
-                                ):
-                                    with mock.patch("pathlib.Path.mkdir"):
-                                        self.mock_os_path_exists.side_effect = (
-                                            lambda p: True
-                                        )
+                with mock.patch.object(
+                    manager, "cancel_experiments"
+                ) as mock_cancel:
+                    with mock.patch("builtins.open", mock.mock_open()):
+                        with mock.patch("os.getcwd", return_value="/home/user"):
+                            with mock.patch("pathlib.Path.mkdir"):
+                                self.mock_os_path_exists.side_effect = (
+                                    lambda p: True
+                                )
 
-                                        manager.analyze_results()
+                                manager.analyze_results()
 
-                                        mock_boh_gen.assert_called_once()
-                                        _, kwargs = mock_boh_gen.call_args
-                                        self.assertEqual(
-                                            kwargs["cluster_type"], "gke"
-                                        )
-                                        mock_ignore_patterns.assert_called_once_with(
-                                            "chs-*"
-                                        )
-                                        mock_copytree.assert_called_once()
-                                        args, kwargs = mock_copytree.call_args
-                                        self.assertEqual(
-                                            args[0],
-                                            f"{self.tmp_dir}/ws1/experiments",
-                                        )
-                                        self.assertEqual(
-                                            args[1],
-                                            pathlib.Path(
-                                                f"{self.tmp_dir}/ws1/chs-results/experiments"
-                                            ),
-                                        )
-                                        self.assertTrue(kwargs["dirs_exist_ok"])
-                                        self.assertEqual(
-                                            kwargs.get("ignore"),
-                                            mock_ignore_patterns.return_value,
-                                        )
-                                        mock_cancel.assert_called_once()
+                                mock_boh_gen.assert_called_once()
+                                _, kwargs = mock_boh_gen.call_args
+                                self.assertEqual(kwargs["cluster_type"], "gke")
+                                mock_cancel.assert_called_once()
 
     def test_analyze_results(self):
         """Test analyze_results generates BoH and copies experiments."""
@@ -348,72 +319,42 @@ class TestRambleManager(unittest.TestCase):
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            with mock.patch("shutil.copytree") as mock_copytree:
-                with mock.patch.object(
-                    manager, "cancel_experiments"
-                ) as mock_cancel:
-                    with mock.patch(
-                        "shutil.ignore_patterns"
-                    ) as mock_ignore_patterns:
-                        with mock.patch("builtins.open", mock.mock_open()):
-                            with mock.patch(
-                                "os.getcwd", return_value="/home/user"
-                            ):
-                                with mock.patch("pathlib.Path.mkdir"):
-                                    self.mock_os_path_exists.side_effect = (
-                                        lambda p: True
+            with mock.patch.object(
+                manager, "cancel_experiments"
+            ) as mock_cancel:
+                with mock.patch("builtins.open", mock.mock_open()):
+                    with mock.patch("os.getcwd", return_value="/home/user"):
+                        with mock.patch("pathlib.Path.mkdir"):
+                            self.mock_os_path_exists.side_effect = (
+                                lambda p: True
+                            )
+
+                            output_path = manager.analyze_results()
+
+                            for call_args in self.mock_run.call_args_list:
+                                args, kwargs = call_args
+                                cmd_list = args[0]
+                                self.assertNotIn("on", cmd_list)
+                                # Verify env is passed for analyze
+                                if "analyze" in cmd_list:
+                                    self.assertIn(
+                                        "--fom-origin-types", cmd_list
+                                    )
+                                    self.assertIn("application", cmd_list)
+                                    self.assertEqual(
+                                        kwargs["env"]["TQDM_DISABLE"],
+                                        "1",
+                                    )
+                                    self.assertEqual(
+                                        kwargs["env"]["TERM"], "dumb"
                                     )
 
-                                    output_path = manager.analyze_results()
-
-                                    for (
-                                        call_args
-                                    ) in self.mock_run.call_args_list:
-                                        args, kwargs = call_args
-                                        cmd_list = args[0]
-                                        self.assertNotIn("on", cmd_list)
-                                        # Verify env is passed for analyze
-                                        if "analyze" in cmd_list:
-                                            self.assertIn(
-                                                "--fom-origin-types", cmd_list
-                                            )
-                                            self.assertIn(
-                                                "application", cmd_list
-                                            )
-                                            self.assertEqual(
-                                                kwargs["env"]["TQDM_DISABLE"],
-                                                "1",
-                                            )
-                                            self.assertEqual(
-                                                kwargs["env"]["TERM"], "dumb"
-                                            )
-
-                                    self.assertEqual(
-                                        output_path,
-                                        f"{self.tmp_dir}/ws1/chs-results",
-                                    )
-                                    mock_boh_gen.return_value.generate.assert_called_once()
-                                    mock_ignore_patterns.assert_called_once_with(
-                                        "chs-*"
-                                    )
-                                    mock_copytree.assert_called_once()
-                                    args, kwargs = mock_copytree.call_args
-                                    self.assertEqual(
-                                        args[0],
-                                        f"{self.tmp_dir}/ws1/experiments",
-                                    )
-                                    self.assertEqual(
-                                        args[1],
-                                        pathlib.Path(
-                                            f"{self.tmp_dir}/ws1/chs-results/experiments"
-                                        ),
-                                    )
-                                    self.assertTrue(kwargs["dirs_exist_ok"])
-                                    self.assertEqual(
-                                        kwargs.get("ignore"),
-                                        mock_ignore_patterns.return_value,
-                                    )
-                                    mock_cancel.assert_called_once()
+                            self.assertEqual(
+                                output_path,
+                                f"{self.tmp_dir}/ws1",
+                            )
+                            mock_boh_gen.return_value.generate.assert_called_once()
+                            mock_cancel.assert_called_once()
 
     def test_analyze_results_skip_copy_same_dir(self):
         """Test analyze_results skips copy if src and dst are same."""
@@ -423,32 +364,28 @@ class TestRambleManager(unittest.TestCase):
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator"):
-            with mock.patch("shutil.copytree") as mock_copytree:
-                with mock.patch("builtins.open", mock.mock_open()):
-                    with mock.patch("os.getcwd", return_value=self.tmp_dir):
-                        with mock.patch(
-                            "chs.ramble_manager.os.path.abspath"
-                        ) as mock_abspath:
-                            self.mock_os_path_exists.side_effect = (
-                                lambda p: True
+            with mock.patch("builtins.open", mock.mock_open()):
+                with mock.patch("os.getcwd", return_value=self.tmp_dir):
+                    with mock.patch(
+                        "chs.ramble_manager.os.path.abspath"
+                    ) as mock_abspath:
+                        self.mock_os_path_exists.side_effect = lambda p: True
+
+                        def side_effect(p):
+                            return str(p)
+
+                        mock_abspath.side_effect = side_effect
+
+                        with mock.patch.object(
+                            manager, "cancel_experiments"
+                        ) as mock_cancel:
+                            output_path = manager.analyze_results()
+
+                            self.assertEqual(
+                                output_path,
+                                f"{self.tmp_dir}/ws1",
                             )
-
-                            def side_effect(p):
-                                return str(p)
-
-                            mock_abspath.side_effect = side_effect
-
-                            with mock.patch.object(
-                                manager, "cancel_experiments"
-                            ) as mock_cancel:
-                                output_path = manager.analyze_results()
-
-                                self.assertEqual(
-                                    output_path,
-                                    f"{self.tmp_dir}/ws1/chs-results",
-                                )
-                                mock_copytree.assert_called_once()
-                                mock_cancel.assert_called_once()
+                            mock_cancel.assert_called_once()
 
     def test_generate_boh(self):
         """Test generate_boh generates BoH and copies experiments."""
@@ -458,44 +395,23 @@ class TestRambleManager(unittest.TestCase):
         results_json_path = f"{self.tmp_dir}/ws1/results.latest.json"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            with mock.patch("shutil.copytree") as mock_copytree:
-                with mock.patch(
-                    "shutil.ignore_patterns"
-                ) as mock_ignore_patterns:
-                    with mock.patch.object(
-                        manager, "cancel_experiments"
-                    ) as mock_cancel:
-                        with mock.patch("os.getcwd", return_value="/home/user"):
-                            self.mock_os_path_exists.side_effect = (
-                                lambda p: True
-                            )
+            with mock.patch.object(
+                manager, "cancel_experiments"
+            ) as mock_cancel:
+                with mock.patch("os.getcwd", return_value="/home/user"):
+                    self.mock_os_path_exists.side_effect = lambda p: True
 
-                        output_path = manager.generate_boh(results_json_path)
+                    output_path = manager.generate_boh(results_json_path)
 
-                        self.assertEqual(
-                            output_path, f"{self.tmp_dir}/ws1/chs-results"
-                        )
-                        mock_boh_gen.assert_called_once_with(
-                            results_json_path,
-                            base_log_dir=output_path,
-                            cluster_type="slurm",
-                            success_criteria_mapping={"applications": {}},
-                        )
-                        mock_boh_gen.return_value.generate.assert_called_once()
-                        mock_ignore_patterns.assert_called_once_with("chs-*")
-                        mock_copytree.assert_called_once()
-                        args, kwargs = mock_copytree.call_args
-                        self.assertEqual(
-                            args[0], f"{self.tmp_dir}/ws1/experiments"
-                        )
-                        self.assertEqual(
-                            args[1],
-                            pathlib.Path(
-                                f"{self.tmp_dir}/ws1/chs-results/experiments"
-                            ),
-                        )
-                        self.assertTrue(kwargs["dirs_exist_ok"])
-                        mock_cancel.assert_called_once()
+                    self.assertEqual(output_path, f"{self.tmp_dir}/ws1")
+                    mock_boh_gen.assert_called_once_with(
+                        results_json_path,
+                        base_log_dir=f"{self.tmp_dir}/ws1",
+                        cluster_type="slurm",
+                        success_criteria_mapping={"applications": {}},
+                    )
+                    mock_boh_gen.return_value.generate.assert_called_once()
+                    mock_cancel.assert_called_once()
 
     def test_wait_for_jobs(self):
         """Test wait_for_jobs calls _monitor_jobs."""
