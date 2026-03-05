@@ -19,7 +19,7 @@ from chs.schedulers.slurm import SlurmScheduler  # noqa: E402
 class TestJobMonitoring(unittest.TestCase):
     def setUp(self):
         self.mock_run_command = MagicMock()
-        with patch("os.path.exists", return_value=True):
+        with patch("os.path.exists", return_value=True), patch("os.makedirs"):
             self.manager = RambleManager(
                 base_dir="/tmp/test_workspaces",
                 workspace_name="test_run",
@@ -34,7 +34,11 @@ class TestJobMonitoring(unittest.TestCase):
     @patch(
         "builtins.open",
         new_callable=mock_open,
-        read_data="apiVersion: v1\nkind: Service\nmetadata:\n  name: service-1\n---\napiVersion: jobset.x-k8s.io/v1alpha2\nkind: JobSet\nmetadata:\n  name: job-123",
+        read_data=(
+            "apiVersion: v1\nkind: Service\nmetadata:\n  name: service-1\n---\n"
+            "apiVersion: jobset.x-k8s.io/v1alpha2\n"
+            "kind: JobSet\nmetadata:\n  name: job-123"
+        ),
     )
     @patch("os.path.exists")
     def test_map_jobs_to_log_paths(
