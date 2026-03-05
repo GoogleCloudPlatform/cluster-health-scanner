@@ -188,14 +188,6 @@ class Chs(ExecutableApplication):
                 },
             )
 
-            # Filter out any keys starting with "application::" as they are reserved
-            # by Ramble and can cause validation errors in sub-experiments.
-            test_vars = {
-                k: v
-                for k, v in test_vars.items()
-                if not k.startswith("application::")
-            }
-
             # Update test_vars with per-test variables
             if test.variables:
                 test_vars.update(test.variables)
