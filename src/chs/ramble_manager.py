@@ -12,12 +12,15 @@ import logging
 import os
 import pathlib
 import re
+import shutil
+
 import subprocess
 import sysconfig
 import time
 from typing import Any
 import chs
 from chs.exceptions import (
+    ChsArchiveException,
     ChsException,
 )
 from chs.boh_generator import BOHGenerator
@@ -700,6 +703,7 @@ class RambleManager:
                 "chs analyze command failed. Recheck the run id and try "
                 "rerunning the command."
             )
+        self._cleanup_inputs_dir()
         return self.generate_boh(results_json_path)
 
     def generate_boh(self, results_json_path: str) -> str:
@@ -714,6 +718,23 @@ class RambleManager:
         """
 
         workspace_dir = pathlib.Path(self._path)
+
+        try:
+            with open(results_json_path, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error("Error reading JSON results: %s", e)
+            data = {}
+
+        app_names = self._get_application_names(data)
+
+        app_mapping = self._get_success_criteria_mapping(
+            app_names, "applications"
+        )
+
+        success_criteria_mapping = {
+            "applications": app_mapping,
+        }
 
         try:
             with open(results_json_path, "r") as f:
@@ -753,7 +774,59 @@ class RambleManager:
         except Exception as e:
             logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
+        self.archive_and_upload_workspace()
+
         return str(workspace_dir)
+
+    def archive_and_upload_workspace(self) -> None:
+        """Archives workspace artifacts and uploads to GCS."""
+        bucket_name = self._app_data.get_bucket()
+        if not bucket_name:
+            logger.warning(
+                "No GCS bucket configured. Skipping workspace archival."
+            )
+            return
+
+        upload_url = (
+            f"gs://{bucket_name}/workspaces/{self._workspace_name}.tar.gz"
+        )
+        logger.info("Archiving workspace to %s", upload_url)
+
+        try:
+            # TODO: Add gcloud pre-flight check
+            self._execute_ramble_command(
+                "workspace",
+                [
+                    "archive",
+                    "-t",
+                    "--upload-url",
+                    upload_url,
+                    "--archive-pattern",
+                    "bill_of_health.json",
+                    "--archive-pattern",
+                    "internal.log",
+                ],
+                capture_output=True,
+                error_context="Failed to archive workspace",
+            )
+            logger.info("Workspace archived and uploaded successfully.")
+
+        except ChsException as e:
+            raise ChsArchiveException(
+                f"Failed to archive and upload workspace: {e}"
+            ) from e
+
+    def _cleanup_inputs_dir(self) -> None:
+        """Deletes the inputs directory in the workspace."""
+        inputs_dir = os.path.join(self.path, "inputs")
+        if os.path.exists(inputs_dir):
+            logger.debug("Deleting inputs directory: %s", inputs_dir)
+            try:
+                shutil.rmtree(inputs_dir)
+            except OSError as e:
+                logger.warning(
+                    "Failed to delete inputs directory %s: %s", inputs_dir, e
+                )
 
     def cleanup_workspace(self) -> None:
         # TODO: Implement the logic for this method.

@@ -47,3 +47,7 @@ class UnsupportedSchedulerException(ChsException):
 
 class SuiteNotFoundException(ChsException):
     """Raised when a specific test suite is not found."""
+
+
+class ChsArchiveException(ChsException):
+    """Raised for errors during workspace archival."""
