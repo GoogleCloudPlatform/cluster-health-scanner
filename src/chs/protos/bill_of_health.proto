@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package cluster_health_scanner.protos;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Enum representing the result status of a test or metric.
+enum ResultStatus {
+  RESULT_STATUS_UNKNOWN = 0;
+  RESULT_STATUS_SUCCESS = 1;
+  RESULT_STATUS_FAILED = 2;
+  RESULT_STATUS_CANCELLED = 3;
+  RESULT_STATUS_TIMEOUT = 4;
+}
+
+// The operator used to compare Metric.value and the expected value.
+enum Comparator {
+  COMPARATOR_UNSPECIFIED = 0;
+  COMPARATOR_EQ = 1;
+  COMPARATOR_NE = 2;
+  COMPARATOR_GT = 3;
+  COMPARATOR_GTE = 4;
+  COMPARATOR_LT = 5;
+  COMPARATOR_LTE = 6;
+  COMPARATOR_RANGE = 7;
+  COMPARATOR_IN = 8;
+  COMPARATOR_NOT_IN = 9;
+  COMPARATOR_CONTAINS = 10;
+}
+
+// Message representing the Bill of Health report.
+message BillOfHealth {
+  string report_id = 1;
+  string chs_version = 2;
+  google.protobuf.Timestamp created_at = 3;
+  SystemInfo system_info = 4;
+  repeated TestResult test_results = 5;
+  google.protobuf.Struct metadata = 6;
+}
+
+// Message describing the system under test.
+message SystemInfo {
+  string type = 1;
+  repeated ResourceEntity entities = 2;
+  google.protobuf.Struct metadata = 3;
+}
+
+// Message representing a specific resource entity (e.g., Node, Slice).
+message ResourceEntity {
+  string id = 1;
+  string type = 2;
+  repeated ResourceEntity sub_entities = 3;
+  google.protobuf.Struct metadata = 4;
+}
+
+// Message representing the result of a specific test.
+message TestResult {
+  string test_name = 1;
+  string test_level = 2;
+  ResultStatus result_status = 3;
+  repeated string target_resource_ids = 4;
+  repeated Metric metrics = 5;
+  google.protobuf.Struct metadata = 6;
+  repeated ValidationCriteria validation_criteria = 7;
+}
+
+// Message representing a single metric or Figure of Merit (FOM).
+message Metric {
+  string key = 1;
+  google.protobuf.Value value = 2;
+  string unit = 3;
+  ValidationCriteria validation_criteria = 4;
+  google.protobuf.Struct metadata = 5;
+}
+
+// Message defining the criteria for validating a metric.
+message ValidationCriteria {
+  Comparator comparator = 1;
+  oneof values {
+    // Value for EQ, NE, GT, GTE, LT, LTE, CONTAINS.
+    google.protobuf.Value expected_value = 2;
+    // Range for COMPARATOR_RANGE.
+    Range range_values = 3;
+    // Set for COMPARATOR_IN or COMPARATOR_NOT_IN.
+    ValueSet set_values = 4;
+  }
+  string name = 5;
+  ResultStatus result_status = 6;
+}
+
+// Message defining a range of values.
+message Range {
+  google.protobuf.Value min_value = 1;
+  google.protobuf.Value max_value = 2;
+}
+
+// Message defining a set of values.
+message ValueSet {
+  repeated google.protobuf.Value items = 1;
+}
