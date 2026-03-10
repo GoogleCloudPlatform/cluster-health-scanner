@@ -240,7 +240,7 @@ class BOHGenerator:
             logger.error("Error reading JSON results: %s", e)
             return self.report
 
-        self.report.report_id = data.get("workspace_hash", str(uuid.uuid4()))
+        self.report.report_id = data.get("workspace_name", str(uuid.uuid4()))
         self.report.chs_version = "1.0.0"
         self.report.created_at.CopyFrom(self._get_timestamp())
         # TODO: Fetch and add system info

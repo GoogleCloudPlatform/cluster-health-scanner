@@ -76,7 +76,7 @@ class TestBOHGenerator(unittest.TestCase):
 
     def test_generate_basic(self):
         """Test basic report generation with minimal data."""
-        data = {"workspace_hash": "test_hash", "experiments": []}
+        data = {"workspace_name": "test_hash", "experiments": []}
         self._write_json(data)
 
         generator = BOHGenerator(self.test_json_path)
