@@ -11,9 +11,6 @@ import logging
 import os
 import pathlib
 import subprocess
-import importlib.resources as pkg_resources
-
-import chs.repos.applications.chs
 from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite_tests
 
@@ -28,6 +25,7 @@ from chs.exceptions import (
     NoPreviousRunsFoundException,
     UnsupportedSchedulerException,
     WorkspaceNotFoundException,
+    SuiteNotFoundException,
 )
 from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
@@ -486,11 +484,16 @@ def run(
             suite = "lite"
 
         # Load tests for the suite
-        # Load tests for the suite
-        with pkg_resources.path(
-            chs.repos.applications.chs, "configs"
-        ) as configs_dir:
-            resolved_tests = load_suite_tests(suite, str(configs_dir))
+        project_root = pathlib.Path(__file__).parent.parent.parent
+        configs_dir = project_root
+        suites_path = configs_dir / "suites.yaml"
+
+        if not suites_path.exists():
+            raise SuiteNotFoundException(
+                f"suites.yaml not found at {suites_path}"
+            )
+
+        resolved_tests = load_suite_tests(suite, str(configs_dir))
         test_names = [
             t.get("name", str(t)) if isinstance(t, dict) else str(t)
             for t in resolved_tests
