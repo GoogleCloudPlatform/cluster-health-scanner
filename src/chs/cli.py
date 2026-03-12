@@ -140,8 +140,9 @@ def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
         if not latest_run_id:
             return False
 
+        workspaces_dir = get_default_workspaces_dir()
         ramble_manager = RambleManager(
-            base_dir="", workspace_name=latest_run_id
+            base_dir=workspaces_dir, workspace_name=latest_run_id
         )
         if ramble_manager.check_jobs_running():
             logger.warning(
