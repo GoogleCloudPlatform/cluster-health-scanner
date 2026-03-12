@@ -35,15 +35,14 @@ class SlurmScheduler(BaseScheduler):
         if self._resolved_nodes is not None:
             return self._resolved_nodes
 
-        provided = [
-            arg
-            for arg in [self.nodes_arg, self.nodelist_arg, self.partition_arg]
-            if arg is not None
-        ]
-        if len(provided) > 1:
+        if (
+            bool(self.nodes_arg)
+            + bool(self.nodelist_arg)
+            + bool(self.partition_arg)
+        ) > 1:
             raise click.UsageError(
-                "Only one of --nodes, --nodelist, or --partition can be "
-                "provided."
+                "Only one of --nodes, --nodelist, or "
+                "--partition can be provided."
             )
 
         if self.nodes_arg:
@@ -65,8 +64,7 @@ class SlurmScheduler(BaseScheduler):
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 raise click.ClickException(f"Failed to expand nodelist: {e}")
 
-        # If partition is given or nothing is given (all free nodes)
-        sinfo_cmd = ["sinfo", "-t", "idle", "-h", "-o", "%N"]
+        sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
         if self.partition_arg:
             sinfo_cmd.extend(["-p", self.partition_arg])
 
@@ -81,25 +79,11 @@ class SlurmScheduler(BaseScheduler):
             raise click.ClickException(f"Failed to get free nodes: {e}")
 
         if not output:
-            self._resolved_nodes = []
-            return self._resolved_nodes
+            return []
 
-        all_nodes = []
-        for line in output.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out2 = subprocess.run(
-                    ["scontrol", "show", "hostname", line],
-                    text=True,
-                    check=True,
-                    capture_output=True,
-                ).stdout.strip()
-                if out2:
-                    all_nodes.extend([n for n in out2.split("\n") if n])
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                logger.warning("Failed to expand nodes %s: %s", line, e)
+        all_nodes = [
+            line.strip() for line in output.split("\n") if line.strip()
+        ]
 
         self._resolved_nodes = all_nodes
         return self._resolved_nodes
@@ -113,9 +97,7 @@ class SlurmScheduler(BaseScheduler):
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with slurm_template.yaml")
 
-        import chs.schedulers
-
-        with pkg_resources.path(chs.schedulers, "slurm_template.yaml") as p:
+        with pkg_resources.path("chs.schedulers", "slurm_template.yaml") as p:
             with open(p, "r") as f:
                 template_content = f.read()
 

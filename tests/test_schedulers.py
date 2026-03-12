@@ -44,17 +44,14 @@ class TestSlurmScheduler(unittest.TestCase):
     def test_get_nodes_under_test_partition_arg(self, mock_run, mock_logger):
         """Tests get_nodes_under_test with partition argument."""
         scheduler = SlurmScheduler(partition="p1")
-        mock_run.side_effect = [
-            mock.Mock(stdout="node-[1-2]"),
-            mock.Mock(stdout="node-1\nnode-2"),
-        ]
+        # sinfo -N natively outputs uncompressed extended hostnames
+        mock_run.return_value.stdout = "node-1\nnode-2\n"
 
         nodes = scheduler.get_nodes_under_test()
 
         self.assertEqual(nodes, ["node-1", "node-2"])
-        self.assertEqual(mock_run.call_count, 2)
+        mock_run.assert_called_once()
         self.assertIn("sinfo", mock_run.call_args_list[0][0][0])
-        self.assertIn("scontrol", mock_run.call_args_list[1][0][0])
 
     def test_parse_job_ids(self, mock_logger):
         scheduler = SlurmScheduler()

@@ -629,7 +629,7 @@ class TestCli(unittest.TestCase):
         mock_scheduler.name = "gke"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_get_scheduler.return_value = mock_scheduler
-
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         result = self.runner.invoke(
             cli.cli,
             [

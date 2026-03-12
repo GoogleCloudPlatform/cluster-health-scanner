@@ -14,19 +14,7 @@ import subprocess
 from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite_tests
 
-from chs.exceptions import (
-    BillOfHealthNotFoundException,
-    ChsAnalysisException,
-    ChsCancellationException,
-    ChsException,
-    ChsExecutionException,
-    ChsRunInProgressException,
-    NoNodesProvidedException,
-    NoPreviousRunsFoundException,
-    UnsupportedSchedulerException,
-    WorkspaceNotFoundException,
-    SuiteNotFoundException,
-)
+from chs import exceptions as ex
 from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
@@ -43,7 +31,7 @@ def handle_chs_exceptions(f):
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
-        except ChsException as e:
+        except ex.ChsException as e:
             raise click.ClickException(str(e)) from e
 
     return wrapper
@@ -149,7 +137,7 @@ def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
                 "The latest CHS run ('%s') is still active.", latest_run_id
             )
             return True
-    except (NoPreviousRunsFoundException, WorkspaceNotFoundException):
+    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         return False
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Could not check for active CHS runs: %s", e)
@@ -179,9 +167,8 @@ def run_action(
     tests: list[str] | None,
     workspace_name: str,
     workspaces_base_dir: str,
-    ramble_manager: type[RambleManager],
     machine_type: str,
-) -> tuple[str, str, list[str] | None, str, str, list[str]]:
+) -> list[str]:
     """Validates parameters and orchestrates test suite execution.
 
     Args:
@@ -190,17 +177,13 @@ def run_action(
       tests: An optional list of names of specific tests to run.
       workspace_name: The name of the test workspace.
       workspaces_base_dir: The base directory for workspaces.
-      ramble_manager: The class to use for RambleManager.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
 
     Returns:
-      A tuple containing the suite name, scheduler name, a list of test
-      names, workspace name, and workspaces base directory, and submitted job
-      IDs.
-
+      A list of submitted job IDs.
 
     Raises:
-      click.ClickException: If an error occurs during CHS execution.
+      ChsExecutionException: If an error occurs during CHS execution.
     """
 
     logger.debug(
@@ -210,7 +193,7 @@ def run_action(
         tests,
     )
 
-    ramble_manager = ramble_manager(workspaces_base_dir, workspace_name)
+    ramble_manager = RambleManager(workspaces_base_dir, workspace_name)
 
     try:
         ramble_manager.create_workspace()
@@ -221,16 +204,9 @@ def run_action(
         ramble_manager.setup_workspace()
         job_ids = ramble_manager.execute_experiments()
     except (OSError, subprocess.CalledProcessError) as e:
-        raise ChsExecutionException(f"CHS execution failed: {e!r}") from e
+        raise ex.ChsExecutionException(f"CHS execution failed: {e!r}") from e
     else:
-        return (
-            suite,
-            scheduler_obj.name,
-            tests,
-            workspace_name,
-            workspaces_base_dir,
-            job_ids,
-        )
+        return job_ids
 
 
 def analyze_action(app_data: ChsAppData, run_id: str) -> str:
@@ -252,10 +228,9 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
+    if not os.path.exists(ramble_manager.path):
+        raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
     try:
-        if not os.path.exists(ramble_manager.path):
-            raise WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
-
         workspace_path = pathlib.Path(ramble_manager.path)
         boh_path = workspace_path / "bill_of_health.json"
         results_json_path = workspace_path / "results.latest.json"
@@ -282,7 +257,7 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
         logger.debug("Analysis complete for run_id=%r", run_id)
         _show_results(app_data, run_id)
     except (OSError, subprocess.CalledProcessError) as e:
-        raise ChsAnalysisException(
+        raise ex.ChsAnalysisException(
             f"CHS analysis failed for run_id={run_id}: {e!r}"
         ) from e
 
@@ -304,7 +279,7 @@ def _show_results(
 
     boh_path = workspaces_dir / run_id / "bill_of_health.json"
     if not boh_path.exists():
-        raise BillOfHealthNotFoundException(
+        raise ex.BillOfHealthNotFoundException(
             f"Could not find bill of health at {boh_path}. "
             f"Have you run 'chs analyze {run_id}'?"
         )
@@ -347,7 +322,7 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
         logger.debug("Cancellation complete for run_id=%r", run_id)
         logger.info("Jobs for run %s have been canceled.", run_id)
     except (OSError, subprocess.CalledProcessError) as e:
-        raise ChsCancellationException(
+        raise ex.ChsCancellationException(
             f"CHS cancellation failed for run_id={run_id}: {e!r}"
         ) from e
 
@@ -474,25 +449,17 @@ def run(
     """
     app_data = obj["app_data"]
     if is_latest_chs_run_active(app_data):
-        raise ChsRunInProgressException(
+        raise ex.ChsRunInProgressException(
             "The latest CHS run is still in progress. Please wait for it to"
             " complete or cancel it before submitting a new run."
         )
 
-    # Resolve tests from suite if not provided
     if not tests:
         if not suite:
             suite = "lite"
 
-        # Load tests for the suite
         project_root = pathlib.Path(__file__).parent.parent.parent
         configs_dir = project_root
-        suites_path = configs_dir / "suites.yaml"
-
-        if not suites_path.exists():
-            raise SuiteNotFoundException(
-                f"suites.yaml not found at {suites_path}"
-            )
 
         resolved_tests = load_suite_tests(suite, str(configs_dir))
         test_names = [
@@ -505,7 +472,7 @@ def run(
         )
         parsed_tests = resolved_tests
     else:
-        # Tests provided explicitly
+        # TODO: Validate input tests with supported tests
         parsed_tests = _parse_str_to_list(tests)
         if not suite:
             suite = "custom"
@@ -521,10 +488,10 @@ def run(
     if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
         nodes_under_test = scheduler_obj.get_nodes_under_test()
         if not nodes_under_test:
-            raise NoNodesProvidedException("No nodes provided to run on.")
+            raise ex.NoNodesProvidedException("No nodes provided to run on.")
     else:
         # TODO: Add support for other schedulers.
-        raise UnsupportedSchedulerException(
+        raise ex.UnsupportedSchedulerException(
             "Only Slurm and GKE schedulers are supported."
         )
 
@@ -534,27 +501,32 @@ def run(
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
-    result = run_action(
+    job_ids = run_action(
         suite=suite,
         scheduler_obj=scheduler_obj,
         tests=parsed_tests,
         workspace_name=workspace_name,
         workspaces_base_dir=workspaces_base_dir,
-        ramble_manager=RambleManager,
         machine_type=machine_type,
     )
+    if not job_ids:
+        raise ex.JobSubmissionFailureException("Job submission failed.")
 
     logger.info("Run submitted successfully.")
     logger.info("Request ID (Workspace Name): %s", workspace_name)
-    if result[5]:  # job_ids
-        logger.info("Job IDs: %s", ", ".join(result[5]))
-    else:
-        logger.info("No Job IDs captured (running locally?)")
+    logger.info("Job IDs: %s", ", ".join(job_ids))
 
     # Automatically trigger analysis
     analyze_action(app_data, workspace_name)
 
-    return result
+    return (
+        suite,
+        scheduler_obj.name,
+        parsed_tests,
+        workspace_name,
+        workspaces_base_dir,
+        job_ids,
+    )
 
 
 @cli.command()

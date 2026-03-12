@@ -19,10 +19,7 @@ import sysconfig
 import time
 from typing import Any
 import chs
-from chs.exceptions import (
-    ChsArchiveException,
-    ChsException,
-)
+from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
@@ -172,7 +169,7 @@ class RambleManager:
                     )
                     if error_context:
                         msg = f"{error_context}. {msg}"
-                    raise ChsException(msg)
+                    raise ex.ChsException(msg)
 
                 return process
 
@@ -183,7 +180,7 @@ class RambleManager:
             )
             if error_context:
                 msg = f"{error_context}: {msg}"
-            raise ChsException(msg)
+            raise ex.ChsException(msg)
 
     def _execute_ramble_command(
         self,
@@ -699,7 +696,7 @@ class RambleManager:
         results_json_path = os.path.join(self.path, "results.latest.json")
 
         if not os.path.exists(results_json_path):
-            raise ChsException(
+            raise ex.ChsException(
                 "chs analyze command failed. Recheck the run id and try "
                 "rerunning the command."
             )
@@ -718,23 +715,6 @@ class RambleManager:
         """
 
         workspace_dir = pathlib.Path(self._path)
-
-        try:
-            with open(results_json_path, "r") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.error("Error reading JSON results: %s", e)
-            data = {}
-
-        app_names = self._get_application_names(data)
-
-        app_mapping = self._get_success_criteria_mapping(
-            app_names, "applications"
-        )
-
-        success_criteria_mapping = {
-            "applications": app_mapping,
-        }
 
         try:
             with open(results_json_path, "r") as f:
@@ -811,8 +791,8 @@ class RambleManager:
             )
             logger.info("Workspace archived and uploaded successfully.")
 
-        except ChsException as e:
-            raise ChsArchiveException(
+        except ex.ChsException as e:
+            raise ex.ChsArchiveException(
                 f"Failed to archive and upload workspace: {e}"
             ) from e
 

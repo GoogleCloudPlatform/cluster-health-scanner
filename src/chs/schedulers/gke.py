@@ -8,7 +8,6 @@ import re
 import subprocess
 import click
 
-import chs.schedulers
 from chs.schedulers.base import BaseScheduler
 
 logger = logging.getLogger(__name__)
@@ -96,8 +95,7 @@ class GKEScheduler(BaseScheduler):
     ) -> None:
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with gke_template.yaml")
-
-        with pkg_resources.path(chs.schedulers, "gke_template.yaml") as p:
+        with pkg_resources.path("chs.schedulers", "gke_template.yaml") as p:
             with open(p, "r") as f:
                 template_content = f.read()
 
@@ -107,7 +105,6 @@ class GKEScheduler(BaseScheduler):
             nodes_str = "[]"
 
         if tests:
-            # Compact JSON representation for tests
             tests_str = json.dumps(tests)
         else:
             tests_str = "[]"
@@ -126,22 +123,40 @@ class GKEScheduler(BaseScheduler):
         """Checks if the given jobs are still running."""
         if not job_ids:
             logger.warning(
-                "No job IDs provided to check. Proceeding with analyzing "
-                "logs. Did chs run submit jobs?"
+                "No job IDs provided to check. Did chs run submit jobs?"
             )
             return False
 
-        still_running = False
-        for job_id in job_ids:
-            try:
-                result = subprocess.run(
-                    ["kubectl", "get", "jobset", job_id, "-o", "json"],
-                    text=True,
-                    check=True,
-                    capture_output=True,
-                )
+        try:
+            # Pass all job IDs at once and ignore ones that were already deleted
+            cmd = (
+                ["kubectl", "get", "jobset"]
+                + job_ids
+                + ["-o", "json", "--ignore-not-found"]
+            )
+            result = subprocess.run(
+                cmd,
+                text=True,
+                check=True,
+                capture_output=True,
+            )
 
-                job_data = json.loads(result.stdout)
+            # If stdout is empty, no jobs were found (all completed and deleted)
+            if not result.stdout.strip():
+                return False
+
+            data = json.loads(result.stdout)
+
+            # If a single item is returned, it's not wrapped in a List
+            items = (
+                data.get("items", [data])
+                if data.get("kind") == "List"
+                else [data]
+            )
+
+            still_running = False
+
+            for job_data in items:
                 conditions = job_data.get("status", {}).get("conditions", [])
 
                 completed = False
@@ -161,15 +176,15 @@ class GKEScheduler(BaseScheduler):
 
                 if not completed and not failed:
                     still_running = True
-                    logger.debug("JobSet %s is still running.", job_id)
-            except subprocess.CalledProcessError:
-                # If JobSet is not found, assume it's no longer running (job
-                # completed)
-                pass
-            except (json.JSONDecodeError, AttributeError, TypeError) as e:
-                logger.warning(
-                    "Failed to check status for JobSet %s: %s", job_id, e
-                )
+                    logger.debug(
+                        "JobSet %s is still running.",
+                        job_data.get("metadata", {}).get("name", "Unknown"),
+                    )
+
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to run kubectl get jobset: %s", e.stderr)
+        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+            logger.warning("Failed to parse status for JobSets: %s", e)
 
         return still_running
 
@@ -261,7 +276,6 @@ class GKEScheduler(BaseScheduler):
 
     def parse_job_ids(self, output: str) -> list[str]:
         """Parses job IDs from the experiment execution output."""
-        # Match kubectl apply output for JobSets.
         regex = (
             r"jobset[\.a-zA-Z0-9-]*?/"
             r"([a-zA-Z0-9.-]+)\s+(?:created|configured|unchanged)"

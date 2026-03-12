@@ -29,13 +29,13 @@ def load_suite_tests(suite_name: str, configs_dir: str) -> list[str]:
         with open(suites_path, "r") as f:
             suites_data = yaml.safe_load(f) or {}
 
-        for suite in suites_data.get("suites", []):
+        suites = suites_data.get("suites", [])
+
+        for suite in suites:
             if suite.get("name") == suite_name:
                 return suite.get("tests", [])
 
-        available_suites = [
-            s.get("name") for s in suites_data.get("suites", [])
-        ]
+        available_suites = [s.get("name") for s in suites]
         raise SuiteNotFoundException(
             f"Suite '{suite_name}' not found in suites.yaml. "
             f"Available suites: {', '.join(available_suites)}"
