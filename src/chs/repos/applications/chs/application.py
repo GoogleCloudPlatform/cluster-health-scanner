@@ -227,5 +227,15 @@ class Chs(ExecutableApplication):
                 self.experiment_set.render_chained_experiments(
                     application_name, "standard", context
                 )
+            elif test.name == "nvidia-smi":
+                application_name = "nvidia-smi"
+                experiment_name = self.expander.experiment_name
+
+                context = TestHelper.nvidia_smi_test(
+                    test_vars, experiment_name, configs
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "local", context
+                )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

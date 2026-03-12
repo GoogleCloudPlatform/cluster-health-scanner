@@ -138,6 +138,31 @@ podAntiAffinity:
         ]
 
     @staticmethod
+    def nvidia_smi_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "slurm")
+        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+
+        if scheduler == "slurm":
+            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
+
+        experiment_template_name = f"{experiment_name}-nvidia-smi-{{node}}"
+
+        context_dict = {
+            "variables": ctx_vars,
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "nvidia-smi"
+        )
+        return create_context_from_dict(experiment_template_name, context_dict)
+
+    @staticmethod
     def dcgm_test(variables, experiment_name, configs):
         ctx_vars = copy.deepcopy(variables)
         scheduler = ctx_vars.get("scheduler", "slurm")
@@ -147,13 +172,6 @@ podAntiAffinity:
 
         modifiers = []
         if scheduler == "slurm":
-            ctx_vars.update(
-                {
-                    "process_per_node": "1",
-                    "n_nodes": 1,
-                    "n_ranks": "{n_nodes}*{process_per_node}",
-                }
-            )
             ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
         elif scheduler == "gke":
             TestHelper._k8s_gpu_settings(

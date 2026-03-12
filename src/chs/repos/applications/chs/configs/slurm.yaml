@@ -41,6 +41,11 @@ a3-ultra:
       gpu_affinity: "0:1:2:3:4:5:6:7"
       cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111"
       mem_affinity: "0:0:0:0:1:1:1:1"
+  nvidia-smi:
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
 a3-high:
   nccl-tests:
     modifiers: [{name: "nccl-linker"}, {name: "pyxis-enroot"}]
@@ -118,6 +123,11 @@ a4:
   nvidia-dcgm:
     variables:
       diag_level: [1,2]
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nvidia-smi:
+    variables:
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1

@@ -71,6 +71,16 @@ a3-ultra:
       n_nodes: 1
       mpi_command: ""
 
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
 a4:
   variables:
     gpu_subnet_prefix: rdma
@@ -140,6 +150,16 @@ a4:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
       processes_per_node: 1
       n_ranks: 1
       n_nodes: 1
