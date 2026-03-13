@@ -217,5 +217,15 @@ class Chs(ExecutableApplication):
                 self.experiment_set.render_chained_experiments(
                     application_name, "diag", context
                 )
+            elif test.name == "stream":
+                application_name = "nvidia-stream"
+                experiment_name = self.expander.experiment_name
+
+                context = TestHelper.stream_test(
+                    test_vars, experiment_name, configs
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "standard", context
+                )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")
