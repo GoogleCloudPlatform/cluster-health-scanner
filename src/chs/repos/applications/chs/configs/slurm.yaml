@@ -1,16 +1,18 @@
 a3-ultra:
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
     env_vars:
       set:
         NCCL_NET: gIB
-        OMPI_MCA_btl_tcp_if_include: enp0s19
-        OMPI_MCA_btl: tcp,self
+        NCCL_SOCKET_IFNAME: enp0s19,enp192s20
+        LD_LIBRARY_PATH: "/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
     variables:
-      container_name: nccl-plugin-gib-diagnostic:v1.1.0
-      container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
-      srun_args: "--mpi=pmix --export=ALL --container-workdir /third_party/nccl-tests/build/ --container-image {container_path} --container-mounts \"/usr/local/gib,/var/tmp\" --container-writable --wait=60"
-      nccl-tests_path: "/third_party/nccl-tests/build/"
+      container_name: pytorch:24.09-py3
+      container_uri: "docker://nvcr.io#nvidia/pytorch:24.09-py3"
+      srun_args: "--mpi=pmi2 --export=ALL --container-workdir {nccl_tests_build_dir}/build/ --container-image {container_path} --container-mounts \"/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/usr/local/gib\" --container-writable --wait=60"
+      nccl-tests_path: "{nccl_tests_build_dir}/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
