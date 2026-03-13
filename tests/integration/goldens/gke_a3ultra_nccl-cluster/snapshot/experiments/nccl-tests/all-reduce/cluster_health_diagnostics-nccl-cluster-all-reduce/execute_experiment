@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "nccl-tests" = "chs" ]; then
+    echo "Skipping JobSet submission for nccl-tests scaffolding experiment."
+    echo "Submitted cluster_health_diagnostics-nccl-cluster-all-reduce at $(date)" > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/jobset.yaml"
+echo "Submitted cluster_health_diagnostics-nccl-cluster-all-reduce at $(date)" > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out
+

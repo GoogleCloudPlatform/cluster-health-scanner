@@ -4,6 +4,7 @@ This module defines the CLI structure using click and provides the
 logic for handling subcommands such as listing resources.
 """
 
+import dataclasses
 import datetime
 import functools
 import json
@@ -11,21 +12,32 @@ import logging
 import os
 import pathlib
 import subprocess
+from contextlib import contextmanager
 from typing import Any
-from chs.utils.app_data import ChsAppData
-from chs.utils.suites import load_suite_tests
+
+import click
 
 from chs import exceptions as ex
-from contextlib import contextmanager
-
-
 from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
-import click
+from chs.utils.app_data import ChsAppData
+from chs.utils.suites import load_suite_tests
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class RunExecutionResult:
+    """Structured result of a CHS test suite run."""
+
+    suite: str
+    scheduler_name: str
+    tests: list[dict[str, Any]] | list[str] | None
+    workspace_name: str
+    workspaces_base_dir: str
+    job_ids: list[str] | None
 
 
 def handle_chs_exceptions(f):
@@ -181,7 +193,8 @@ def run_action(
     workspace_name: str,
     workspaces_base_dir: str,
     machine_type: str,
-) -> list[str]:
+    dry_run: bool = False,
+) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
     Args:
@@ -191,9 +204,10 @@ def run_action(
       workspace_name: The name of the test workspace.
       workspaces_base_dir: The base directory for workspaces.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
+      dry_run: Set up the workspace but do not execute experiments.
 
     Returns:
-      A list of submitted job IDs.
+      A list of submitted job IDs, or None if dry_run is True.
 
     Raises:
       ChsExecutionException: If an error occurs during CHS execution.
@@ -216,13 +230,15 @@ def run_action(
                 scheduler_obj, tests, machine_type=machine_type
             )
             ramble_manager.setup_workspace()
-            job_ids = ramble_manager.execute_experiments()
+            if dry_run:
+                logger.info("Setup complete. Skipping experiment execution.")
+                return None
+
+            return ramble_manager.execute_experiments()
         except (OSError, subprocess.CalledProcessError) as e:
             raise ex.ChsExecutionException(
                 f"CHS execution failed: {e!r}"
             ) from e
-        else:
-            return job_ids
 
 
 def analyze_action(app_data: ChsAppData, run_id: str) -> str:
@@ -437,6 +453,11 @@ def list_command(
     help="The machine type of the cluster nodes (e.g., a3-high).",
     callback=non_empty_str_callback,
 )
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Set up the workspace but do not execute experiments or analyze.",
+)
 @click.pass_obj
 def run(
     obj,
@@ -449,7 +470,8 @@ def run(
     nodepool: str | None,
     partition: str | None,
     machine_type: str,
-) -> tuple[str, str, list[dict[str, Any]] | None, str, str, list[str]]:
+    dry_run: bool,
+) -> RunExecutionResult:
     """Command to run a test suite.
 
     Args:
@@ -461,10 +483,10 @@ def run(
       nodepool: GKE node pool to run on.
       partition: Slurm partition to run on.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
+      dry_run: Set up the workspace but do not execute experiments or analyze.
 
     Returns:
-      A tuple containing the suite name, scheduler name, a list of
-      test definitions, workspace name, workspaces base directory, and job ids.
+      A RunExecutionResult object containing details of the run.
     """
     app_data = obj["app_data"]
     if is_latest_chs_run_active(app_data):
@@ -531,25 +553,35 @@ def run(
         workspace_name=workspace_name,
         workspaces_base_dir=workspaces_base_dir,
         machine_type=machine_type,
+        dry_run=dry_run,
     )
+    logger.info("Request ID (Workspace Name): %s", workspace_name)
+
+    result = RunExecutionResult(
+        suite=suite,
+        scheduler_name=scheduler_obj.name,
+        tests=parsed_tests,
+        workspace_name=workspace_name,
+        workspaces_base_dir=workspaces_base_dir,
+        job_ids=job_ids,
+    )
+
+    if dry_run:
+        logger.info("Dry run completed. Workspace setup is ready.")
+        return result
+
     if not job_ids:
-        raise ex.JobSubmissionFailureException("Job submission failed.")
+        raise ex.JobSubmissionFailureException(
+            f"Job submission failed for workspace: {workspace_name}"
+        )
 
     logger.info("Run submitted successfully.")
-    logger.info("Request ID (Workspace Name): %s", workspace_name)
     logger.info("Job IDs: %s", ", ".join(job_ids))
 
     # Automatically trigger analysis
     analyze_action(app_data, workspace_name)
 
-    return (
-        suite,
-        scheduler_obj.name,
-        parsed_tests,
-        workspace_name,
-        workspaces_base_dir,
-        job_ids,
-    )
+    return result
 
 
 @cli.command()

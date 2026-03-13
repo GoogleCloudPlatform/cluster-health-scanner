@@ -49,7 +49,7 @@ class _CommandErrorTestCase:
 class _RunCommandTestCase:
     name: str
     args_list: list[str]
-    expected_return: tuple[str, str, list | None, str, str, list[str]]
+    expected_return: cli.RunExecutionResult
 
 
 @dataclasses.dataclass
@@ -326,13 +326,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "slurm",
-                    ["nccl-cluster", "nccl-pairwise", "dcgm"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="slurm",
+                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -349,13 +349,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}, {"name": "t2"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -372,13 +372,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -395,13 +395,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -418,13 +418,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -441,13 +441,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}, {"name": "t2"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -464,13 +464,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}, {"name": "t2"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -487,13 +487,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    [{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -510,13 +510,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["nccl-cluster", "nccl-pairwise", "dcgm"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
         ]
@@ -533,9 +533,7 @@ class TestCli(unittest.TestCase):
 
                 self.mock_scheduler.name = "slurm"
 
-                expected_return_list = list(case.expected_return)
-                expected_return_list[1] = "slurm"
-                case.expected_return = tuple(expected_return_list)
+                case.expected_return.scheduler_name = "slurm"
 
                 result = self.runner.invoke(
                     cli.cli,
@@ -559,8 +557,10 @@ class TestCli(unittest.TestCase):
                 args, kwargs = (
                     self.mock_rm_instance.configure_workspace.call_args
                 )
-                self.assertEqual(args[0].name, case.expected_return[1])
-                self.assertEqual(args[1], case.expected_return[2])
+                self.assertEqual(
+                    args[0].name, case.expected_return.scheduler_name
+                )
+                self.assertEqual(args[1], case.expected_return.tests)
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()

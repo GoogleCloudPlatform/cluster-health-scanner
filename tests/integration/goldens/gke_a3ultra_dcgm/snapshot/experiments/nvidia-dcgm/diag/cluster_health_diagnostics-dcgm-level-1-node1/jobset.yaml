@@ -1,0 +1,95 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: nvidia-dcgm-diag-cluster-health-diagnostics-<HASH>
+  namespace: default
+
+
+spec:
+  ttlSecondsAfterFinished: 86400
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+  replicatedJobs:
+    - name: w
+      template:
+        spec:
+          parallelism: 1
+          completions: 1
+          template:
+            metadata:
+
+              annotations:
+                networking.gke.io/default-interface: 'eth0'
+                networking.gke.io/interfaces: |
+                  [
+                    {"interfaceName":"eth0","network":"default"},
+                    {"interfaceName":"eth2","network":"rdma-0"},
+                    {"interfaceName":"eth3","network":"rdma-1"},
+                    {"interfaceName":"eth4","network":"rdma-2"},
+                    {"interfaceName":"eth5","network":"rdma-3"},
+                    {"interfaceName":"eth6","network":"rdma-4"},
+                    {"interfaceName":"eth7","network":"rdma-5"},
+                    {"interfaceName":"eth8","network":"rdma-6"},
+                    {"interfaceName":"eth9","network":"rdma-7"}
+                  ]
+            spec:
+              restartPolicy: Never
+              nodeSelector:
+                cloud.google.com/gke-nodepool: <GKE_NODEPOOL>
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                            - node1
+                podAntiAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchExpressions:
+                      - key: jobset.sigs.k8s.io/jobset-name
+                        operator: Exists
+                    topologyKey: "kubernetes.io/hostname"
+              tolerations:
+                - key: "nvidia.com/gpu"
+                  operator: "Exists"
+                  effect: "NoSchedule"
+              volumes:
+                - name: shared-memory
+                  emptyDir:
+                    medium: "Memory"
+              containers:
+              - name: standard-container
+                stdin: true
+                tty: true
+                image: "nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9"
+                securityContext:
+                  privileged: true
+                resources:
+                  limits:
+                    nvidia.com/gpu: 8
+                env:
+                - name: MY_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                command:
+                - bash
+                - -c
+                - |
+                  export NODE_RANK=$JOB_COMPLETION_INDEX
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node1"
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node1"
+                  cd "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node1"
+                  rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node1/cluster_health_diagnostics-dcgm-level-1-node1.out"
+                  touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node1/cluster_health_diagnostics-dcgm-level-1-node1.out"
+                  nvidia-smi -pm 1 || true
+                  dcgmi diag -r 1 
+                volumeMounts:
+                  - name: shared-memory
+                    mountPath: /dev/shm
+              restartPolicy: Never
+

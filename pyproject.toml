@@ -17,6 +17,13 @@ dependencies = [
     "pre_commit",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-mock",
+    "pyyaml",
+]
+
 [project.scripts]
 chs = "chs.main:main"
 
@@ -47,6 +54,9 @@ exclude = [
 
     # Auto-generated files
     "*_pb2.py",
+
+    # Test snapshots
+    "tests/integration/goldens",
 ]
 
 # Same as Black.
