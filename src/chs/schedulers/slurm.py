@@ -64,7 +64,7 @@ class SlurmScheduler(BaseScheduler):
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 raise click.ClickException(f"Failed to expand nodelist: {e}")
 
-        sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
+        sinfo_cmd = ["sinfo", "-t", "idle,idle~,idle#", "-N", "-h", "-o", "%N"]
         if self.partition_arg:
             sinfo_cmd.extend(["-p", self.partition_arg])
 

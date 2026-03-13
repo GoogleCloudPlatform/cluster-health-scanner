@@ -194,7 +194,7 @@ class RambleManager:
         """Runs a Ramble subcommand in the workspace context.
 
         This is a wrapper around _execute_shell_command that prepends
-        'ramble -w self.path' to the command and sets cwd to self.path.
+        'ramble -d -w self.path' to the command and sets cwd to self.path.
 
         Args:
           subcommand: The Ramble subcommand to execute (e.g., 'workspace',
@@ -212,7 +212,7 @@ class RambleManager:
         Raises:
           click.ClickException: If the Ramble command fails.
         """
-        cmd = ["ramble", "-w", self.path, subcommand] + args
+        cmd = ["ramble", "-d", "-w", self.path, subcommand] + args
         exec_cmd = self._prepare_ramble_command(cmd)
         return self._execute_shell_command(
             exec_cmd,
@@ -230,7 +230,7 @@ class RambleManager:
           click.ClickException: If the workspace creation command fails.
         """
         logger.debug("Creating workspace at: %s", self.path)
-        cmd = ["ramble", "workspace", "create", "-a", "-d", self.path]
+        cmd = ["ramble", "-d", "workspace", "create", "-a", "-d", self.path]
         exec_cmd = self._prepare_ramble_command(cmd)
         self._execute_shell_command(
             exec_cmd,

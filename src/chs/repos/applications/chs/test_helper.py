@@ -56,32 +56,17 @@ podAntiAffinity:
                     dst_dict[dst_key] = {}
                 else:
                     dst_dict[dst_key] = []
-
-            # If both are lists, append src_list to dst_list (or vice versa? Tests usually specific)
-            # Actually, common configs are defaults. Test vars override.
-            # So if dst has variable, keep it. If not, take src.
-            # But lists like 'modifiers' we likely want to extend.
-
             if isinstance(src_dict[src_key], dict) and isinstance(
                 dst_dict[dst_key], dict
             ):
-                # Update destination with source values (source takes precedence)
                 for k, v in src_dict[src_key].items():
                     if k not in dst_dict[dst_key] or not dst_dict[dst_key][k]:
                         dst_dict[dst_key][k] = v
             elif isinstance(src_dict[src_key], list) and isinstance(
                 dst_dict[dst_key], list
             ):
-                # For lists (modifiers), we extend?
-                # Usually we want common modifiers + test modifiers.
-                # So append src to dst? No, usually prepend defaults?
-                # Actually, duplicate modifiers might differ.
-                # Let's assume extending is safe for modifiers.
                 dst_dict[dst_key].extend(src_dict[src_key])
             else:
-                # Type mismatch or scalar.
-                # If dst has it, keep it. If not, take src.
-                # But we handled 'not in dst' above.
                 pass
 
         mt_config = configs[machine_type]

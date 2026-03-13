@@ -87,9 +87,6 @@ class Chs(ExecutableApplication):
     maintainers("bytetwin")
 
     variable("tests", default=[], description="Specific tests to run")
-    variable(
-        "machine_type", default="a3-ultra", description="Machine type to test"
-    )
 
     tags("chs-diagnostics")
 
@@ -103,7 +100,7 @@ class Chs(ExecutableApplication):
     variable(
         "machine_type",
         default="",
-        description="Machine type for the suite",
+        description="Machine type to test",
         values=["a3-high", "a3-ultra", "a4"],
     )
 
@@ -185,6 +182,7 @@ class Chs(ExecutableApplication):
                     "jobset_template",
                     "mpi_command",
                     "container_image",
+                    "srun_args",
                 },
             )
 

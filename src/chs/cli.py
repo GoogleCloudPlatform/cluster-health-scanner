@@ -128,7 +128,7 @@ def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
         if not latest_run_id:
             return False
 
-        workspaces_dir = get_default_workspaces_dir()
+        workspaces_dir = app_data.get_workspaces_dir()
         ramble_manager = RambleManager(
             base_dir=workspaces_dir, workspace_name=latest_run_id
         )
@@ -458,8 +458,7 @@ def run(
         if not suite:
             suite = "lite"
 
-        project_root = pathlib.Path(__file__).parent.parent.parent
-        configs_dir = project_root
+        configs_dir = pathlib.Path(__file__).parent
 
         resolved_tests = load_suite_tests(suite, str(configs_dir))
         test_names = [
