@@ -78,3 +78,33 @@ a3-high:
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
+a4:
+  nccl-tests:
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    env_vars:
+      set:
+        NCCL_NET: gIB
+        NCCL_SOCKET_IFNAME: enp0s19,enp192s20
+        LD_LIBRARY_PATH: "/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+    variables:
+      container_name: pytorch:24.09-py3
+      container_uri: "docker://nvcr.io#nvidia/pytorch:24.09-py3"
+      srun_args: "--mpi=pmi2 --export=ALL --container-workdir {nccl_tests_build_dir}/build/ --container-image {container_path} --container-mounts \"/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/usr/local/gib\" --container-writable --wait=60"
+      nccl-tests_path: "{nccl_tests_build_dir}/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
+    success_criteria:
+      avg_bus_bw:
+        mode: fom_comparison
+        fom_name: "Avg. Bus Bandwidth"
+        formula: "{value} > 80"
+      out_of_bounds_values:
+        mode: fom_comparison
+        fom_name: "Out of bounds values"
+        formula: "{value} == 0"
+  nvidia-dcgm:
+    variables:
+      diag_level: [1,2]
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
