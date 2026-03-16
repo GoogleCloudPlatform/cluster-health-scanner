@@ -237,5 +237,15 @@ class Chs(ExecutableApplication):
                 self.experiment_set.render_chained_experiments(
                     application_name, "local", context
                 )
+            elif test.name == "gemm":
+                application_name = "nvidia-gemm"
+                experiment_name = self.expander.experiment_name
+
+                context = TestHelper.gemm_test(
+                    test_vars, experiment_name, configs
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "check", context
+                )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

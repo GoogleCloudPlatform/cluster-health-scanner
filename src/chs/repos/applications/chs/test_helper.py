@@ -218,3 +218,30 @@ podAntiAffinity:
             context_dict, configs, machine_type, "nvidia-stream"
         )
         return create_context_from_dict(experiment_template_name, context_dict)
+
+    @staticmethod
+    def gemm_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "slurm")
+        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+
+        modifiers = []
+        if scheduler == "slurm":
+            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
+
+        experiment_template_name = f"{experiment_name}-gemm-{{node}}"
+
+        context_dict = {
+            "variables": ctx_vars,
+            "modifiers": modifiers,
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "nvidia-gemm"
+        )
+        return create_context_from_dict(experiment_template_name, context_dict)
