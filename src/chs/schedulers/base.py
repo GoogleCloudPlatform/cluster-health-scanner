@@ -24,6 +24,14 @@ class BaseScheduler(abc.ABC):
         """The name of the scheduler."""
         pass
 
+    def get_extra_env(self) -> dict[str, str]:
+        """Returns extra environment variables for the scheduler.
+
+        Returns:
+            A dictionary of extra environment variables.
+        """
+        return {}
+
     @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:
         """Determine which nodes to test based on provided parameters."""

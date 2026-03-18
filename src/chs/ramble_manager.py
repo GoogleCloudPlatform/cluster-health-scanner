@@ -214,12 +214,17 @@ class RambleManager:
         """
         cmd = ["ramble", "-d", "-w", self.path, subcommand] + args
         exec_cmd = self._prepare_ramble_command(cmd)
+
+        merged_env = env.copy() if env else {}
+        if hasattr(self, "_scheduler"):
+            merged_env.update(self._scheduler.get_extra_env())
+
         return self._execute_shell_command(
             exec_cmd,
             check=check,
             cwd=self.path,
             capture_output=capture_output,
-            env=env,
+            env=merged_env,
             error_context=error_context,
         )
 

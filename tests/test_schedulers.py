@@ -81,6 +81,32 @@ class TestSlurmScheduler(unittest.TestCase):
         mock_run.return_value.stdout = ""
         self.assertFalse(scheduler.check_jobs_running(["123"]))
 
+    @mock.patch("os.makedirs")
+    @mock.patch("os.path.exists")
+    @mock.patch("os.path.expanduser")
+    def test_ensure_enroot_directories(
+        self, mock_expanduser, mock_exists, mock_makedirs, mock_logger
+    ):
+        """Test _ensure_enroot_directories creates missing paths."""
+        scheduler = SlurmScheduler()
+        mock_expanduser.return_value = "/home/user"
+        mock_exists.side_effect = [False, False]  # Both don't exist
+
+        scheduler._ensure_enroot_directories()
+
+        self.assertEqual(mock_makedirs.call_count, 2)
+        mock_makedirs.assert_any_call("/home/user/.enroot/run", exist_ok=True)
+        mock_makedirs.assert_any_call("/home/user/.enroot/cache", exist_ok=True)
+
+    @mock.patch("os.path.expanduser")
+    def test_get_extra_env(self, mock_expanduser, mock_logger):
+        """Test get_extra_env returns expected variables."""
+        scheduler = SlurmScheduler()
+        mock_expanduser.return_value = "/home/user"
+        env = scheduler.get_extra_env()
+        self.assertEqual(env["ENROOT_RUNTIME_PATH"], "/home/user/.enroot/run")
+        self.assertEqual(env["ENROOT_CACHE_PATH"], "/home/user/.enroot/cache")
+
 
 class TestDefaultScheduler(unittest.TestCase):
     """Tests for DefaultScheduler."""

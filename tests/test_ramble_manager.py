@@ -176,12 +176,27 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
         self.assertEqual(kwargs["env"].get("TERM"), "dumb")
 
+    def test_setup_workspace_with_scheduler_env(self):
+        """Test setup_workspace merges extra env from scheduler."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.get_extra_env.return_value = {"EXTRA_VAR": "value"}
+        manager._scheduler = mock_scheduler
+
+        manager.setup_workspace()
+
+        self.mock_run.assert_called_once()
+        _, kwargs = self.mock_run.call_args
+        self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
+        self.assertEqual(kwargs["env"].get("EXTRA_VAR"), "value")
+
     def test_execute_experiments(self):
         """Test execute_experiments executes correct ramble on command."""
 
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "mock_scheduler"
+        mock_scheduler.get_extra_env.return_value = {}
         mock_scheduler.parse_job_ids.return_value = ["123"]
         manager._scheduler = mock_scheduler
 
@@ -329,6 +344,7 @@ class TestRambleManager(unittest.TestCase):
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         manager._scheduler = mock.Mock()
         manager._scheduler.name = "slurm"
+        manager._scheduler.get_extra_env.return_value = {}
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
@@ -378,6 +394,7 @@ class TestRambleManager(unittest.TestCase):
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         manager._scheduler = mock.Mock()
         manager._scheduler.name = "slurm"
+        manager._scheduler.get_extra_env.return_value = {}
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator"):

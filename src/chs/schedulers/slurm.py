@@ -21,6 +21,22 @@ logger = logging.getLogger(__name__)
 class SlurmScheduler(BaseScheduler):
     """Slurm scheduler implementation."""
 
+    @property
+    def _enroot_paths(self) -> dict[str, str]:
+        """Dictionary of Enroot paths, allowing environment overrides."""
+        # TODO: Find a more robust way to manage enroot paths.
+        base = os.getenv(
+            "ENROOT_BASE", os.path.join(os.path.expanduser("~"), ".enroot")
+        )
+        return {
+            "ENROOT_RUNTIME_PATH": os.getenv(
+                "ENROOT_RUNTIME_PATH", os.path.join(base, "run")
+            ),
+            "ENROOT_CACHE_PATH": os.getenv(
+                "ENROOT_CACHE_PATH", os.path.join(base, "cache")
+            ),
+        }
+
     def __init__(
         self,
         nodes: str | None = None,
@@ -95,12 +111,29 @@ class SlurmScheduler(BaseScheduler):
         self._resolved_nodes = all_nodes
         return self._resolved_nodes
 
+    def _ensure_enroot_directories(self) -> None:
+        """Ensures that Enroot runtime and cache directories exist."""
+        for d in self._enroot_paths.values():
+            if not os.path.exists(d):
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    logger.debug("Created Enroot directory: %s", d)
+                except OSError as e:
+                    logger.warning(
+                        "Failed to create Enroot directory %s: %s", d, e
+                    )
+
+    def get_extra_env(self) -> dict[str, str]:
+        """Returns extra environment variables for the scheduler."""
+        return self._enroot_paths
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
+        self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with slurm_template.yaml")
 
