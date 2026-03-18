@@ -130,6 +130,26 @@ class ChsAppData:
                 f"Failed to create workspaces directory at {workspaces_dir}"
             ) from e
 
+    def get_images_dir(self) -> str | None:
+        """Returns the default images directory path, creating if necessary.
+
+        Returns:
+          The path to the images directory as a string, or None if it cannot
+          be created.
+        """
+        try:
+            images_dir = self._data_dir / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug("Using images directory: %s", images_dir)
+            return str(images_dir)
+        except OSError as e:
+            logger.warning(
+                "Failed to create images directory at %s: %s. ",
+                self._data_dir / "images",
+                e,
+            )
+            return None
+
     def get_latest_run_id(self) -> str:
         """Finds and returns the most recent run_id from the workspaces.
 

@@ -64,6 +64,18 @@ class TestChsAppData(unittest.TestCase):
         ):
             self.app_data.get_latest_run_id()
 
+    def test_get_images_dir(self):
+        images_dir = self.app_data.get_images_dir()
+        expected_dir = pathlib.Path(self.test_dir.name) / "images"
+        self.assertEqual(images_dir, str(expected_dir))
+        self.assertTrue(expected_dir.exists())
+
+    @mock.patch("pathlib.Path.mkdir")
+    def test_get_images_dir_failure(self, mock_mkdir):
+        mock_mkdir.side_effect = OSError("Permission denied")
+        images_dir = self.app_data.get_images_dir()
+        self.assertIsNone(images_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

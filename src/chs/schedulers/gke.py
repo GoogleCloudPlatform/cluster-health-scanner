@@ -7,7 +7,11 @@ import os
 import re
 import subprocess
 import click
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
+
 
 from chs.schedulers.base import BaseScheduler
 
@@ -23,7 +27,9 @@ class GKEScheduler(BaseScheduler):
         nodelist: str | None = None,
         nodepool: str | None = None,
         partition: str | None = None,
+        app_data: "ChsAppData | None" = None,
     ):
+        super().__init__(app_data)
         self.nodes_arg = nodes
         self.nodepool_arg = nodepool
         self._resolved_nodes: list[str] | None = None

@@ -6,6 +6,12 @@ import os
 import shutil
 
 import chs
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
+
+
 from chs.schedulers.base import BaseScheduler
 
 logger = logging.getLogger(__name__)
@@ -17,7 +23,8 @@ class DefaultScheduler(BaseScheduler):
     bare metal default).
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, app_data: "ChsAppData | None" = None):
+        super().__init__(app_data)
         self._name = name
 
     @property
@@ -30,8 +37,7 @@ class DefaultScheduler(BaseScheduler):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        suite: str,
-        tests: list[str] | None,
+        tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
         with pkg_resources.path(chs, "ramble.yaml") as p:

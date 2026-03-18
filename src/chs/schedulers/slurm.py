@@ -6,7 +6,11 @@ import os
 import re
 import subprocess
 import json
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
+
 
 from chs.schedulers.base import BaseScheduler
 import click
@@ -22,7 +26,9 @@ class SlurmScheduler(BaseScheduler):
         nodes: str | None = None,
         nodelist: str | None = None,
         partition: str | None = None,
+        app_data: "ChsAppData | None" = None,
     ):
+        super().__init__(app_data)
         self.nodes_arg = nodes
         self.nodelist_arg = nodelist
         self.partition_arg = partition
@@ -114,10 +120,15 @@ class SlurmScheduler(BaseScheduler):
         else:
             tests_str = "[]"
 
+        images_dir_value = (
+            self._app_data and self._app_data.get_images_dir()
+        ) or "{workload_input_dir}"
+
         rendered_content = template_content.format(
             nodes=nodes_str,
             machine_type=machine_type,
             tests=tests_str,
+            images_dir=images_dir_value,
         )
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:

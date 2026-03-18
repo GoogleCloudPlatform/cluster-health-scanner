@@ -11,6 +11,7 @@ ramble:
     machine_type: {machine_type}
     tests: {tests}
     scheduler: slurm
+    container_dir: {images_dir}
 
   applications:
     chs:

@@ -30,6 +30,7 @@ rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnos
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info"
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
 if [ -d "/usr/local/gib/scripts" ]; then
     NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
 fi
@@ -37,9 +38,8 @@ export LD_LIBRARY_PATH="/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRA
 export NCCL_NET=gIB;
 export NCCL_SOCKET_IFNAME=enp0s19,enp192s20;
 export NCCL_TESTS_SPLIT_MASK="";
-scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
 if [ ! -d "<WORKSPACE_ROOT>/inputs/nccl-tests-master/build" ]; then
-  srun -N 1 --ntasks=1 --container-mounts="<WORKSPACE_ROOT>/inputs:<WORKSPACE_ROOT>/inputs" --container-image="<WORKSPACE_ROOT>/inputs/nccl-tests/all-reduce/pytorch:24.09-py3.sqsh" bash -c "git clone https://github.com/NVIDIA/nccl-tests.git <WORKSPACE_ROOT>/inputs/nccl-tests-master && cd <WORKSPACE_ROOT>/inputs/nccl-tests-master && git checkout master && make MPI=1 CC=mpicc CXX=mpicxx -j"
+  srun -N 1 --ntasks=1 --container-mounts="<WORKSPACE_ROOT>/inputs:<WORKSPACE_ROOT>/inputs" --container-image="<HOME_DIR>/.local/share/chs/images/pytorch:24.09-py3.sqsh" bash -c "git clone https://github.com/NVIDIA/nccl-tests.git <WORKSPACE_ROOT>/inputs/nccl-tests-master && cd <WORKSPACE_ROOT>/inputs/nccl-tests-master && git checkout master && make MPI=1 CC=mpicc CXX=mpicxx -j"
 fi >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out" 2>&1
-srun --mpi=pmi2 --export=ALL --container-workdir <WORKSPACE_ROOT>/inputs/nccl-tests-master/build/ --container-image <WORKSPACE_ROOT>/inputs/nccl-tests/all-reduce/pytorch:24.09-py3.sqsh --container-mounts "/var/tmp:/var/tmp,<WORKSPACE_ROOT>/inputs/nccl-tests-master:<WORKSPACE_ROOT>/inputs/nccl-tests-master,/usr/local/gib" --container-writable --wait=60 bash -c "export LD_LIBRARY_PATH=/usr/local/gib/lib64:${LD_LIBRARY_PATH}; ./all_reduce_perf -b 256M -e 8G -f 2 -g 1 -w 5 --iters 100 -c 1" >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out" 2>&1
+srun --mpi=pmi2 --export=ALL --container-workdir <WORKSPACE_ROOT>/inputs/nccl-tests-master/build/ --container-image <HOME_DIR>/.local/share/chs/images/pytorch:24.09-py3.sqsh --container-mounts "/var/tmp:/var/tmp,<WORKSPACE_ROOT>/inputs/nccl-tests-master:<WORKSPACE_ROOT>/inputs/nccl-tests-master,/usr/local/gib" --container-writable --wait=60 bash -c "export LD_LIBRARY_PATH=/usr/local/gib/lib64:${LD_LIBRARY_PATH}; ./all_reduce_perf -b 256M -e 8G -f 2 -g 1 -w 5 --iters 100 -c 1" >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_script_end_time

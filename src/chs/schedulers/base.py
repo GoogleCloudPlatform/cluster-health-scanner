@@ -1,11 +1,22 @@
 """Base scheduler module."""
 
 import abc
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
 
 
 class BaseScheduler(abc.ABC):
     """Base class for cluster schedulers."""
+
+    def __init__(self, app_data: "ChsAppData | None" = None):
+        """Initializes the scheduler.
+
+        Args:
+          app_data: ChsAppData instance or None.
+        """
+        self._app_data = app_data
 
     @property
     @abc.abstractmethod

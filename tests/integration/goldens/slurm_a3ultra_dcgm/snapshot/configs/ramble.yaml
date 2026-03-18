@@ -11,6 +11,7 @@ ramble:
     machine_type: a3-ultra
     tests: [{"name": "dcgm"}]
     scheduler: slurm
+    container_dir: <HOME_DIR>/.local/share/chs/images
 
   applications:
     chs:

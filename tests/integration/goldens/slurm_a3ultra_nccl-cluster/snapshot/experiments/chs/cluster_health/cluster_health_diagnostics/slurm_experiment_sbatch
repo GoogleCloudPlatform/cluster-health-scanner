@@ -20,10 +20,10 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluste
 
 rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
 touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
-rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
-touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
 rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
 touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
+rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
+touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
 scontrol show config > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config
 echo 'Initiating cluster health diagnostics for a3-ultra' >> "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_script_end_time

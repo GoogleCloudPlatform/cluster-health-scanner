@@ -213,6 +213,7 @@ class TestRambleManager(unittest.TestCase):
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "mock_scheduler"
+        self.mock_app_data.get_images_dir.return_value = "/tmp/images"
 
         with mock.patch("os.makedirs"):
             manager.configure_workspace(
@@ -223,6 +224,11 @@ class TestRambleManager(unittest.TestCase):
             )
 
         self.assertEqual(mock_scheduler.write_ramble_config.call_count, 2)
+        mock_scheduler.write_ramble_config.assert_called_with(
+            workspace_config_dir=mock.ANY,
+            tests=None,
+            machine_type="a3-high",
+        )
 
     def test_check_jobs_running_true(self):
         """Test check_jobs_running returns True when jobs are running."""

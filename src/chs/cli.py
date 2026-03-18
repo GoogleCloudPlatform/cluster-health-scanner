@@ -528,6 +528,7 @@ def run(
         nodelist=nodelist,
         nodepool=nodepool,
         partition=partition,
+        app_data=app_data,
     )
 
     if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
