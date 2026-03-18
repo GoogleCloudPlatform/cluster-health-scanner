@@ -49,7 +49,7 @@ class _CommandErrorTestCase:
 class _RunCommandTestCase:
     name: str
     args_list: list[str]
-    expected_return: tuple[str, str, list[str] | None, str, str, list[str]]
+    expected_return: tuple[str, str, list | None, str, str, list[str]]
 
 
 @dataclasses.dataclass
@@ -352,7 +352,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1", "t2"],
+                    [{"name": "t1"}, {"name": "t2"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],
@@ -375,7 +375,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1"],
+                    [{"name": "t1"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],
@@ -398,7 +398,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1"],
+                    [{"name": "t1"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],
@@ -421,7 +421,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1"],
+                    [{"name": "t1"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],
@@ -444,7 +444,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1", "t2"],
+                    [{"name": "t1"}, {"name": "t2"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],
@@ -467,7 +467,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1", "t2"],
+                    [{"name": "t1"}, {"name": "t2"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],
@@ -490,7 +490,7 @@ class TestCli(unittest.TestCase):
                 expected_return=(
                     "suite1",
                     "mock_scheduler",
-                    ["t1", "t2", "t3"],
+                    [{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
                     MOCK_WORKSPACE_NAME,
                     mock_default_dir,
                     ["job1"],

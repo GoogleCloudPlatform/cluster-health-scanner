@@ -1,6 +1,7 @@
 """Base scheduler module."""
 
 import abc
+from typing import Any
 
 
 class BaseScheduler(abc.ABC):
@@ -21,7 +22,7 @@ class BaseScheduler(abc.ABC):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        tests: list[str] | None,
+        tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.

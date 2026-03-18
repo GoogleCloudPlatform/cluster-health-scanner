@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import json
+from typing import Any
 
 from chs.schedulers.base import BaseScheduler
 import click
@@ -91,7 +92,7 @@ class SlurmScheduler(BaseScheduler):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        tests: list[str] | None,
+        tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
         nodes = self.get_nodes_under_test()

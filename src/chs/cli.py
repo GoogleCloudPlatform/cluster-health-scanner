@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 import subprocess
+from typing import Any
 from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite_tests
 
@@ -176,7 +177,7 @@ def run_action(
     *,
     suite: str,
     scheduler_obj: BaseScheduler,
-    tests: list[str] | None,
+    tests: list[dict[str, Any]] | None,
     workspace_name: str,
     workspaces_base_dir: str,
     machine_type: str,
@@ -186,7 +187,7 @@ def run_action(
     Args:
       suite: Name of the test suite to run.
       scheduler_obj: Scheduler object to use.
-      tests: An optional list of names of specific tests to run.
+      tests: An optional list of test definitions to run.
       workspace_name: The name of the test workspace.
       workspaces_base_dir: The base directory for workspaces.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
@@ -448,7 +449,7 @@ def run(
     nodepool: str | None,
     partition: str | None,
     machine_type: str,
-) -> tuple[str, str, list[str] | None, str, str, list[str]]:
+) -> tuple[str, str, list[dict[str, Any]] | None, str, str, list[str]]:
     """Command to run a test suite.
 
     Args:
@@ -463,7 +464,7 @@ def run(
 
     Returns:
       A tuple containing the suite name, scheduler name, a list of
-      test names, workspace name, workspaces base directory, and job ids.
+      test definitions, workspace name, workspaces base directory, and job ids.
     """
     app_data = obj["app_data"]
     if is_latest_chs_run_active(app_data):
@@ -490,7 +491,12 @@ def run(
         parsed_tests = resolved_tests
     else:
         # TODO: Validate input tests with supported tests
-        parsed_tests = _parse_str_to_list(tests)
+        parsed_tests_strs = _parse_str_to_list(tests)
+        parsed_tests = (
+            [{"name": t} for t in parsed_tests_strs]
+            if parsed_tests_strs
+            else []
+        )
         if not suite:
             suite = "custom"
 

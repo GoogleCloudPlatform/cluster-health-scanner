@@ -1,13 +1,14 @@
 import logging
 import pathlib
 import yaml
+from typing import Any
 
 from chs.exceptions import SuiteNotFoundException
 
 logger = logging.getLogger(__name__)
 
 
-def load_suite_tests(suite_name: str, configs_dir: str) -> list[str]:
+def load_suite_tests(suite_name: str, configs_dir: str) -> list[dict[str, Any]]:
     """Loads a list of tests for a given suite from suites.yaml.
 
     Args:
@@ -15,7 +16,7 @@ def load_suite_tests(suite_name: str, configs_dir: str) -> list[str]:
         configs_dir: The directory containing suites.yaml.
 
     Returns:
-        A list of test names corresponding to the suite.
+        A list of test definitions corresponding to the suite.
 
     Raises:
         SuiteNotFoundException: If the suite is not found in suites.yaml.
