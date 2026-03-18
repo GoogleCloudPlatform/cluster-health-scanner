@@ -81,7 +81,11 @@ podAntiAffinity:
 
     @staticmethod
     def _nccl_context(
-        variables, experiment_name, configs, nodes_list, is_pairwise=False
+        variables,
+        experiment_name,
+        configs,
+        nodes_list,
+        test_type="nccl-cluster",
     ):
         ctx_vars = copy.deepcopy(variables)
         machine_type = ctx_vars.get("machine_type", "a3-ultra")
@@ -95,10 +99,12 @@ podAntiAffinity:
         elif scheduler == "gke":
             TestHelper._k8s_gpu_settings(ctx_vars, sched_nodes_str)
 
-        if is_pairwise:
+        if test_type == "nccl-pairwise":
             experiment_name = (
                 f"{experiment_name}-{nodes_list[0]}-{nodes_list[1]}"
             )
+        elif test_type == "nccl-single-node":
+            experiment_name = f"{experiment_name}-{nodes_list[0]}"
 
         context_dict = {
             "variables": ctx_vars,
@@ -124,15 +130,14 @@ podAntiAffinity:
 
             if i == len(all_nodes) - 1:
                 node_groups.append([all_nodes[-2], all_nodes[-1]])
-
-            is_pairwise = True
+        elif test_type == "nccl-single-node":
+            node_groups = [[n] for n in all_nodes]
         else:
             node_groups = [all_nodes]
-            is_pairwise = False
 
         return [
             TestHelper._nccl_context(
-                variables, experiment_name, configs, nodes, is_pairwise
+                variables, experiment_name, configs, nodes, test_type
             )
             for nodes in node_groups
         ]

@@ -1,41 +1,36 @@
 suites:
 - name: lite
   tests:
+  - name: nvidia-smi
   - name: dcgm
     variables:
-      diag_level: [1]
-  - name: nccl-cluster
+      diag_level: [2]
+  - name: gemm
+    workloads: [check]
+  - name: nccl-single-node
     workloads: [all-gather, all-reduce]
     variables:
-      begin_message_size: 1K
+      begin_message_size: 256M
       end_message_size: 8G
 - name: standard
   tests:
+  - name: nvidia-smi
   - name: dcgm
     variables:
       diag_level: [3]
+  - name: stream
   - name: nccl-cluster
-    workloads: [all-gather, all-reduce]
+    workloads: [all-gather, all-reduce, all-to-all]
     variables:
-      begin_message_size: 2G
+      begin_message_size: 256M
       end_message_size: 8G
   - name: nccl-pairwise
-    workloads: [all-gather, all-reduce]
+    workloads: [all-gather, all-reduce, all-to-all]
     variables:
-      begin_message_size: 2G
+      begin_message_size: 256M
       end_message_size: 8G
-- name: extensive
+- name: burn-in
   tests:
   - name: dcgm
     variables:
       diag_level: [4]
-  - name: nccl-cluster
-    workloads: [all-gather, all-reduce]
-    variables:
-      begin_message_size: 2G
-      end_message_size: 16G
-  - name: nccl-pairwise
-    workloads: [all-gather, all-reduce]
-    variables:
-      begin_message_size: 2G
-      end_message_size: 16G

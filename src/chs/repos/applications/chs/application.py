@@ -159,7 +159,11 @@ class Chs(ExecutableApplication):
             if test.variables:
                 test_vars.update(test.variables)
 
-            if test.name in ["nccl-cluster", "nccl-pairwise"]:
+            if test.name in [
+                "nccl-cluster",
+                "nccl-pairwise",
+                "nccl-single-node",
+            ]:
                 workloads = (
                     test.workloads
                     if test.workloads
@@ -208,13 +212,15 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "gemm":
                 application_name = "nvidia-gemm"
-                experiment_name = self.expander.experiment_name
+                workloads = test.workloads if test.workloads else ["check"]
 
-                context = TestHelper.gemm_test(
-                    test_vars, experiment_name, configs
-                )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "check", context
-                )
+                for workload in workloads:
+                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    context = TestHelper.gemm_test(
+                        test_vars, experiment_name, configs
+                    )
+                    self.experiment_set.render_chained_experiments(
+                        application_name, workload, context
+                    )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")
