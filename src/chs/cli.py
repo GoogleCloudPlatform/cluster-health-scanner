@@ -15,6 +15,9 @@ from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite_tests
 
 from chs import exceptions as ex
+from contextlib import contextmanager
+
+
 from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
@@ -35,6 +38,15 @@ def handle_chs_exceptions(f):
             raise click.ClickException(str(e)) from e
 
     return wrapper
+
+
+@contextmanager
+def archive_workspace(ramble_manager: RambleManager):
+    """Context manager to ensure workspace is archived even in error cases."""
+    try:
+        yield
+    finally:
+        ramble_manager.archive()
 
 
 def non_empty_str_callback(
@@ -195,18 +207,21 @@ def run_action(
 
     ramble_manager = RambleManager(workspaces_base_dir, workspace_name)
 
-    try:
-        ramble_manager.create_workspace()
-        ramble_manager.add_custom_repository()
-        ramble_manager.configure_workspace(
-            scheduler_obj, tests, machine_type=machine_type
-        )
-        ramble_manager.setup_workspace()
-        job_ids = ramble_manager.execute_experiments()
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ex.ChsExecutionException(f"CHS execution failed: {e!r}") from e
-    else:
-        return job_ids
+    with archive_workspace(ramble_manager):
+        try:
+            ramble_manager.create_workspace()
+            ramble_manager.add_custom_repository()
+            ramble_manager.configure_workspace(
+                scheduler_obj, tests, machine_type=machine_type
+            )
+            ramble_manager.setup_workspace()
+            job_ids = ramble_manager.execute_experiments()
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ex.ChsExecutionException(
+                f"CHS execution failed: {e!r}"
+            ) from e
+        else:
+            return job_ids
 
 
 def analyze_action(app_data: ChsAppData, run_id: str) -> str:
@@ -230,38 +245,40 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
 
     if not os.path.exists(ramble_manager.path):
         raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
-    try:
-        workspace_path = pathlib.Path(ramble_manager.path)
-        boh_path = workspace_path / "bill_of_health.json"
-        results_json_path = workspace_path / "results.latest.json"
 
-        # 1. Check if Bill of Health already exists
-        if boh_path.exists():
+    with archive_workspace(ramble_manager):
+        try:
+            workspace_path = pathlib.Path(ramble_manager.path)
+            boh_path = workspace_path / "bill_of_health.json"
+            results_json_path = workspace_path / "results.latest.json"
+
+            # 1. Check if Bill of Health already exists
+            if boh_path.exists():
+                _show_results(app_data, run_id)
+                return run_id
+
+            # 2. If results.latest.json exists (but no BoH), generate BoH
+            if results_json_path.exists():
+                logger.info(
+                    "Found results from this run. Generating Bill of Health..."
+                )
+                ramble_manager.generate_boh(str(results_json_path))
+                _show_results(app_data, run_id)
+                return run_id
+
+            # 3. If neither exists, wait for jobs and then analyze
+            logger.debug(f"Waiting for jobs for {run_id}...")
+            ramble_manager.wait_for_jobs()
+
+            ramble_manager.analyze_results()
+            logger.debug("Analysis complete for run_id=%r", run_id)
             _show_results(app_data, run_id)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ex.ChsAnalysisException(
+                f"CHS analysis failed for run_id={run_id}: {e!r}"
+            ) from e
+        else:
             return run_id
-
-        # 2. If results.latest.json exists (but no BoH), generate BoH
-        if results_json_path.exists():
-            logger.info(
-                "Found results from this run. Generating Bill of Health..."
-            )
-            ramble_manager.generate_boh(str(results_json_path))
-            _show_results(app_data, run_id)
-            return run_id
-
-        # 3. If neither exists, wait for jobs and then analyze
-        logger.debug(f"Waiting for jobs for {run_id}...")
-        ramble_manager.wait_for_jobs()
-
-        ramble_manager.analyze_results()
-        logger.debug("Analysis complete for run_id=%r", run_id)
-        _show_results(app_data, run_id)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ex.ChsAnalysisException(
-            f"CHS analysis failed for run_id={run_id}: {e!r}"
-        ) from e
-
-    return run_id
 
 
 def _show_results(
@@ -313,20 +330,21 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
-    try:
-        if not ramble_manager.check_jobs_running():
-            logger.info("No jobs for run %s are currently running.", run_id)
+    with archive_workspace(ramble_manager):
+        try:
+            if not ramble_manager.check_jobs_running():
+                logger.info("No jobs for run %s are currently running.", run_id)
+                return run_id
+
+            ramble_manager.cancel_experiments()
+            logger.debug("Cancellation complete for run_id=%r", run_id)
+            logger.info("Jobs for run %s have been canceled.", run_id)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ex.ChsCancellationException(
+                f"CHS cancellation failed for run_id={run_id}: {e!r}"
+            ) from e
+        else:
             return run_id
-
-        ramble_manager.cancel_experiments()
-        logger.debug("Cancellation complete for run_id=%r", run_id)
-        logger.info("Jobs for run %s have been canceled.", run_id)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ex.ChsCancellationException(
-            f"CHS cancellation failed for run_id={run_id}: {e!r}"
-        ) from e
-
-    return run_id
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})

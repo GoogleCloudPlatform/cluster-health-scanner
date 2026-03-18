@@ -564,6 +564,7 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
+                self.mock_rm_instance.archive.assert_called_once()
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data, MOCK_WORKSPACE_NAME
                 )
@@ -576,6 +577,7 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["analyze", "some_run_id"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Analysis failed", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
@@ -586,6 +588,7 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["cancel", "some_run_id"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     def test_results_command_no_boh(self):
         """Test `results` command when bill_of_health.json is not found."""
@@ -596,6 +599,44 @@ class TestCli(unittest.TestCase):
             result = self.runner.invoke(cli.cli, ["results"])
             self.assertEqual(result.exit_code, 1)
             self.assertIn("Could not find bill of health", result.output)
+
+    def test_archive_workspace_context_manager_success(self):
+        """Test archive_workspace calling archival on success."""
+        mock_rm = mock.Mock()
+        with cli.archive_workspace(mock_rm):
+            pass
+        mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_failure(self):
+        """Test archive_workspace calling archival on failure."""
+        mock_rm = mock.Mock()
+        with self.assertRaises(ValueError):
+            with cli.archive_workspace(mock_rm):
+                raise ValueError("test error")
+        mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_archive_failure(self):
+        """Test archive_workspace raising ChsArchiveException when BOH fails."""
+        mock_rm = mock.Mock()
+        mock_rm.archive.side_effect = exceptions.ChsArchiveException("boh fail")
+        with self.assertRaises(exceptions.ChsArchiveException):
+            with cli.archive_workspace(mock_rm):
+                pass
+        mock_rm.archive.assert_called_once()
+
+    def test_run_action_chs_exception(self):
+        """Test that run_action handles ChsException and archives."""
+        self.mock_scheduler.name = "slurm"
+        self.mock_rm_instance.create_workspace.side_effect = (
+            exceptions.ChsException("Mock failure")
+        )
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "-sch", "slurm", "--machine-type", "a3-high"],
+        )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Mock failure", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     def test_run_action_exception_handling(self):
         """Test that run_action wraps exceptions in ClickException."""
@@ -615,6 +656,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("CHS execution failed", result.output)
         self.assertIn("Permission denied", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     @mock.patch("chs.cli.get_scheduler")
     @mock.patch("chs.cli.analyze_action", autospec=True)
@@ -910,6 +952,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.mock_rm_instance.wait_for_jobs.assert_called_once()
         self.mock_rm_instance.analyze_results.assert_called_once()
+        self.mock_rm_instance.archive.assert_called_once()
         mock_results_viewer.assert_called_once()
 
     def test_analyze_command_errors(self):

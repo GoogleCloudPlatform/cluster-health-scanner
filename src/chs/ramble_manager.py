@@ -754,12 +754,48 @@ class RambleManager:
         except Exception as e:
             logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
-        self.archive_and_upload_workspace()
-
         return str(workspace_dir)
+
+    def archive_and_upload_boh(self) -> None:
+        """Archives Bill of Health and uploads to GCS."""
+        boh_path = os.path.join(self.path, "bill_of_health.json")
+        if not os.path.exists(boh_path):
+            logger.warning(
+                "Bill of Health file %s does not exist. Skipping BOH archival.",
+                boh_path,
+            )
+            return
+
+        bucket_name = self._app_data.get_bucket()
+        if not bucket_name:
+            logger.warning("No GCS bucket configured. Skipping BOH archival.")
+            return
+
+        upload_url = (
+            f"gs://{bucket_name}/bills_of_health/{self._workspace_name}.json"
+        )
+        logger.info("Uploading Bill of Health to %s", upload_url)
+
+        try:
+            self._execute_shell_command(
+                ["gcloud", "storage", "cp", boh_path, upload_url],
+                error_context="Failed to upload Bill of Health",
+            )
+            logger.info("Bill of Health uploaded successfully.")
+        except Exception as e:
+            raise ex.ChsArchiveException(
+                f"Unexpected error during BOH archival: {e}"
+            ) from e
 
     def archive_and_upload_workspace(self) -> None:
         """Archives workspace artifacts and uploads to GCS."""
+        if not os.path.exists(self.path):
+            logger.warning(
+                "Workspace path %s does not exist. Skipping archival.",
+                self.path,
+            )
+            return
+
         bucket_name = self._app_data.get_bucket()
         if not bucket_name:
             logger.warning(
@@ -791,10 +827,19 @@ class RambleManager:
             )
             logger.info("Workspace archived and uploaded successfully.")
 
-        except ex.ChsException as e:
-            raise ex.ChsArchiveException(
-                f"Failed to archive and upload workspace: {e}"
-            ) from e
+        except (ex.ChsException, Exception) as e:
+            logger.warning(
+                "Non-fatal failure while archiving and uploading "
+                "the workspace: %s",
+                e,
+            )
+
+    def archive(self) -> None:
+        """Orchestrates archival and upload of BoH and workspace."""
+        try:
+            self.archive_and_upload_boh()
+        finally:
+            self.archive_and_upload_workspace()
 
     def _cleanup_inputs_dir(self) -> None:
         """Deletes the inputs directory in the workspace."""
