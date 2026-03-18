@@ -137,6 +137,12 @@ class GkeJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="app_workdir",
+        default="",
+        description="Optional working directory override defaults to experiment dir",
+    )
+
+    workflow_manager_variable(
         name="container_resources_yaml",
         default="",
         description="Raw YAML for container resources (e.g. nvidia.com/gpu)",
@@ -210,6 +216,7 @@ class GkeJobset(WorkflowManagerBase):
         raw_cmd = re.sub(r'>>\s*"[^"]+"\s*2>&1', "", raw_cmd)
 
         experiment_run_dir = expander.expand_var_name("experiment_run_dir")
+        app_workdir = expander.expand_var_name("app_workdir")
 
         container_work_dir = expander.expand_var_name("container_work_dir")
         workspace_dir = expander.expand_var_name("workspace_dir")
@@ -220,6 +227,9 @@ class GkeJobset(WorkflowManagerBase):
             experiment_run_dir = experiment_run_dir.replace(
                 workspace_dir, container_work_dir
             )
+            app_workdir = app_workdir.replace(workspace_dir, container_work_dir)
+
+        workdir = app_workdir if app_workdir else experiment_run_dir
 
         indented_mpi_command = raw_cmd.replace("\n", "\n" + (" " * 20))
         indented_standard_command = raw_cmd.replace("\n", "\n" + (" " * 18))
@@ -279,6 +289,7 @@ class GkeJobset(WorkflowManagerBase):
             "indented_mpi_command": indented_mpi_command,
             "indented_standard_command": indented_standard_command,
             "container_experiment_run_dir": experiment_run_dir,
+            "workdir": workdir,
             "container_resources_section": c_res,
             "container_security_context_section": c_sec,
             "ssh_private_key_indented": textwrap.indent(priv_key, "    "),

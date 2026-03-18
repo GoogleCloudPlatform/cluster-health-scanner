@@ -24,7 +24,7 @@ class NvidiaStream(ExecutableApplication):
 
     executable(
         "execute",
-        "stream-gpu-test.sh "
+        "./stream-gpu-test.sh "
         "--n {n_elements} "
         "--gpu-affinity {gpu_affinity} "
         "--cpu-affinity {cpu_affinity} "

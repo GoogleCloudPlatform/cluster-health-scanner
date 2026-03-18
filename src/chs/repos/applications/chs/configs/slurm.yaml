@@ -49,7 +49,7 @@ a3-ultra:
       n_nodes: 1
       container_name: "hpc-benchmarks:25.09"
       container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
-      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:/logs --wait=60"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
       gpu_affinity: "0:1:2:3:4:5:6:7"
       cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
       mem_affinity: "0:0:0:0:1:1:1:1"
@@ -164,7 +164,7 @@ a4:
       n_nodes: 1
       container_name: "hpc-benchmarks:25.09"
       container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
-      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:/logs --wait=60"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
       gpu_affinity: "0:1:2:3:4:5:6:7"
       cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
       mem_affinity: "0:0:0:0:1:1:1:1"

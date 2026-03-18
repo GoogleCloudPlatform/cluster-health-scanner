@@ -78,12 +78,12 @@ class NvidiaGemm(ExecutableApplication):
     executable(
         "execute_perf",
         template=[
-            "gemm_tests.sh "
+            "./gemm_tests.sh "
             "--gpu-affinity {gpu_affinity} "
             "--cpu-affinity {cpu_affinity} "
             "--mem-affinity {mem_affinity} "
-            '--params "--mode=perf --type={type} --m={m} --n={n} --k={k} --iter={iter} --warmup={warmup}"',
-            'sh -c \'if [ -z "$SLURM_PROCID" ] || [ "$SLURM_PROCID" -eq 0 ]; then ./gemm_parse_results.sh --list --stats /logs/{experiment_name}.out; fi\'',
+            '--params "--mode=perf --type={type} --m={m} --n={n} --k={k} --iter={iter} --warmup={warmup}" | tee {experiment_run_dir}/{experiment_name}_local.out',
+            'sh -c \'RANK="${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK:-0}}"; if [ "$RANK" -eq 0 ]; then ./gemm_parse_results.sh --list --stats {experiment_run_dir}/{experiment_name}_local.out; fi\'',
         ],
         use_mpi=True,
     )
@@ -91,12 +91,12 @@ class NvidiaGemm(ExecutableApplication):
     executable(
         "execute_check",
         template=[
-            "gemm_tests.sh "
+            "./gemm_tests.sh "
             "--gpu-affinity {gpu_affinity} "
             "--cpu-affinity {cpu_affinity} "
             "--mem-affinity {mem_affinity} "
-            '--params "--mode=check --type={type} --m={m} --n={n} --k={k} --iter={iter}"',
-            'sh -c \'if [ -z "$SLURM_PROCID" ] || [ "$SLURM_PROCID" -eq 0 ]; then ./gemm_parse_results.sh --correctness --list --stats /logs/{experiment_name}.out; fi\'',
+            '--params "--mode=check --type={type} --m={m} --n={n} --k={k} --iter={iter}" | tee {experiment_run_dir}/{experiment_name}_local.out',
+            'sh -c \'RANK="${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK:-0}}"; if [ "$RANK" -eq 0 ]; then ./gemm_parse_results.sh --correctness --list --stats {experiment_run_dir}/{experiment_name}_local.out; fi\'',
         ],
         use_mpi=True,
     )
