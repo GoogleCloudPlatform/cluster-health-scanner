@@ -1,19 +1,17 @@
-import sys
 import unittest
 from unittest.mock import MagicMock, patch, mock_open
 
-# Mock problematic imports before importing RambleManager
-sys.modules["chs.boh_generator"] = MagicMock()
-sys.modules["chs.protos"] = MagicMock()
-sys.modules["chs.protos.bill_of_health_pb2"] = MagicMock()
+# Standard mocks for problematic imports
+MOCK_MODULES = {
+    "chs.boh_generator": MagicMock(),
+    "chs.protos": MagicMock(),
+    "chs.protos.bill_of_health_pb2": MagicMock(),
+}
 
-# Re-import to ensure mocks are used if it was already imported?
-# unittest loader might have tried.
-# Safe strategy: keep these mocks active.
-
-from chs.ramble_manager import RambleManager  # noqa: E402
-from chs.schedulers.gke import GKEScheduler  # noqa: E402
-from chs.schedulers.slurm import SlurmScheduler  # noqa: E402
+with patch.dict("sys.modules", MOCK_MODULES):
+    from chs.ramble_manager import RambleManager  # noqa: E402
+    from chs.schedulers.gke import GKEScheduler  # noqa: E402
+    from chs.schedulers.slurm import SlurmScheduler  # noqa: E402
 
 
 class TestJobMonitoring(unittest.TestCase):

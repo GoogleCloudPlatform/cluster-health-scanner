@@ -438,15 +438,21 @@ class TestRambleManager(unittest.TestCase):
                     with mock.patch("os.getcwd", return_value="/home/user"):
                         self.mock_os_path_exists.side_effect = lambda p: True
 
-                        output_path = manager.generate_boh(results_json_path)
+                        # Mock PluginManager in core for Base PR isolation
+                        with mock.patch(
+                            "chs.core.plugin_manager.PluginManager"
+                        ):
+                            output_path = manager.generate_boh(
+                                results_json_path
+                            )
 
-                        self.assertEqual(output_path, f"{self.tmp_dir}/ws1")
-                        mock_boh_gen.assert_called_once_with(
-                            results_json_path,
-                            base_log_dir=f"{self.tmp_dir}/ws1",
-                            cluster_type="slurm",
-                            success_criteria_mapping={"applications": {}},
-                        )
+                            self.assertEqual(output_path, f"{self.tmp_dir}/ws1")
+                            mock_boh_gen.assert_called_once_with(
+                                results_json_path,
+                                base_log_dir=f"{self.tmp_dir}/ws1",
+                                cluster_type="slurm",
+                                success_criteria_mapping={"applications": {}},
+                            )
                         mock_boh_gen.return_value.generate.assert_called_once()
                         mock_cancel.assert_called_once()
                         mock_archive.assert_not_called()

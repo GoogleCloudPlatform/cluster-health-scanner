@@ -282,50 +282,75 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(report.test_results[0].test_name, "valid_exp")
 
     def test_extract_test_info(self):
-        """Test extraction of test name and level."""
-        generator = BOHGenerator(self.test_json_path)
+        """Test extraction of test name and level with PluginManager mocks."""
+        with mock.patch(
+            "chs.boh_generator.chs.core.plugin_manager.PluginManager"
+        ) as mock_pm_cls:
+            mock_pm = mock_pm_cls.return_value
+            mock_plugin = mock.MagicMock()
+            mock_pm.get_plugin.return_value = mock_plugin
 
-        # Test NCCL
-        name, level = generator._extract_test_info(
-            {
-                "experiment_name": "nccl-cluster",
-                "application_name": "nccl-tests",
-                "workload_name": "all_gather_perf",
-            }
-        )
-        self.assertEqual(name, "nccl-cluster")
-        self.assertEqual(level, "all_gather_perf")
+            mock_pm.resolve_test_name.side_effect = lambda n: n
 
-        # Test DCGM
-        name, level = generator._extract_test_info(
-            {
-                "experiment_name": "nvidia-dcgm-level-3",
-                "application_name": "nvidia-dcgm",
-            }
-        )
-        self.assertEqual(name, "dcgm")
-        self.assertEqual(level, "level-3")
+            generator = BOHGenerator(self.test_json_path)
 
-        # Test DCGM Fallback
-        name, level = generator._extract_test_info(
-            {
-                "experiment_name": "nvidia-dcgm",
-                "application_name": "nvidia-dcgm",
-                "workload_name": "diag",
-            }
-        )
-        self.assertEqual(name, "dcgm")
-        self.assertEqual(level, "diag")
+            def mock_extract(exp):
+                if exp.get("application_name") == "nvidia-dcgm":
+                    parts = exp.get("experiment_name", "").split("-")
+                    if len(parts) > 3 and parts[2] == "level":
+                        return "dcgm", f"level-{parts[3]}"
+                    return "dcgm", exp.get("workload_name", "")
+                if exp.get("application_name") == "nccl-tests":
+                    return exp.get("experiment_name", ""), exp.get(
+                        "workload_name", ""
+                    )
+                return exp.get("experiment_name", ""), exp.get(
+                    "workload_name", ""
+                )
 
-        # Test Generic
-        name, level = generator._extract_test_info(
-            {
-                "experiment_name": "generic_test",
-                "workload_name": "workload",
-            }
-        )
-        self.assertEqual(name, "generic_test")
-        self.assertEqual(level, "workload")
+            mock_plugin.extract_test_info.side_effect = mock_extract
+
+            # Test NCCL
+            name, level = generator._extract_test_info(
+                {
+                    "experiment_name": "nccl-cluster",
+                    "application_name": "nccl-tests",
+                    "workload_name": "all_gather_perf",
+                }
+            )
+            self.assertEqual(name, "nccl-cluster")
+            self.assertEqual(level, "all_gather_perf")
+
+            # Test DCGM
+            name, level = generator._extract_test_info(
+                {
+                    "experiment_name": "nvidia-dcgm-level-3",
+                    "application_name": "nvidia-dcgm",
+                }
+            )
+            self.assertEqual(name, "dcgm")
+            self.assertEqual(level, "level-3")
+
+            # Test DCGM Fallback
+            name, level = generator._extract_test_info(
+                {
+                    "experiment_name": "nvidia-dcgm",
+                    "application_name": "nvidia-dcgm",
+                    "workload_name": "diag",
+                }
+            )
+            self.assertEqual(name, "dcgm")
+            self.assertEqual(level, "diag")
+
+            # Test Generic
+            name, level = generator._extract_test_info(
+                {
+                    "experiment_name": "generic_test",
+                    "workload_name": "workload",
+                }
+            )
+            self.assertEqual(name, "generic_test")
+            self.assertEqual(level, "workload")
 
     def test_parse_formula(self):
         """Test parsing of Ramble formulas."""

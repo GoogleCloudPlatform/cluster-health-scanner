@@ -175,7 +175,59 @@ The Review Agent (and other Gemini-based dev tools) uses the files in the `.gemi
 
 Contributors are encouraged to keep these files updated as the project evolves, as the quality of the AI's feedback directly depends on the accuracy of this documentation.
 
-## 6. Resources
+## 7. Adding Plugins (Directory-Based)
+
+For better scalability and organization, CHS uses a directory-based plugin architecture. Each plugin should be its own Python package.
+
+### 1. Create the Plugin Directory
+
+Create a new directory in `src/chs/plugins/` (e.g., `src/chs/plugins/my_test/`). Ensure it contains an `__init__.py` file.
+
+### 2. Implement the Components
+
+You can split your plugin into multiple files for better organization:
+
+*   `src/chs/plugins/my_test/renderer.py`: Visualization logic (Rich renderables).
+*   `src/chs/plugins/my_test/extractor.py`: Logic for extracting test metadata/metrics.
+*   `src/chs/plugins/my_test/__init__.py`: Plugin registration and core class.
+
+### 3. Implement the Plugin Class
+
+In `src/chs/plugins/my_test/__init__.py`, define a class inheriting from `TestPlugin`. You can import logic from your sub-modules:
+
+```python
+from chs.core.plugin_base import TestPlugin
+from .renderer import MyTestRenderer
+from .extractor import MyTestExtractor
+
+class MyTestPlugin(TestPlugin, MyTestRenderer, MyTestExtractor):
+    """A plugin that combines renderer and extractor components."""
+    pass
+```
+
+Alternative: Just implement everything in one class in `__init__.py`.
+
+### 4. Register the Plugin
+
+In `src/chs/plugins/my_test/__init__.py`, define the `__chs_plugin__` dictionary:
+
+```python
+from .plugin import MyTestPlugin
+
+__chs_plugin__ = {
+    "test_name": "my-test",
+    "plugin": MyTestPlugin,
+}
+```
+
+> [!NOTE]
+> The `test_name` is used as a prefix to match against the raw Ramble experiment name. If multiple plugins match, the longest prefix wins.
+
+### 5. Future Extensibility
+
+By using a directory-based structure, you can easily add other abstractions (e.g., `data_processors`, `validators`) as separate files within the plugin package, keeping the codebase clean and modular.
+
+## 8. Resources
 
 *   [Style Guide](.gemini/styleguide.md): Coding standards and conventions.
 *   [README](README.md): Project overview and usage instructions.

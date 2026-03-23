@@ -654,7 +654,10 @@ def cancel(obj, run_id: str | None) -> str:
 )
 @click.pass_obj
 def results(
-    obj, run_id: str | None, tests: str | None, resources: str | None
+    obj,
+    run_id: str | None,
+    tests: str | None,
+    resources: str | None,
 ) -> None:
     """Show Bill of Health results for a run.
 
