@@ -1,3 +1,4 @@
+from copy import deepcopy
 import sys
 import os
 import spack.util.spack_yaml as yaml
@@ -80,7 +81,7 @@ class Chs(ExecutableApplication):
         "machine_type",
         default="",
         description="Machine type to test",
-        values=["a3-high", "a3-ultra", "a4"],
+        values=["a3-high", "a3-ultra", "a4", "a3-mega"],
     )
 
     executable(
@@ -185,7 +186,7 @@ class Chs(ExecutableApplication):
                 experiment_name = self.expander.experiment_name
 
                 context = TestHelper.dcgm_test(
-                    test_vars, experiment_name, configs
+                    test_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "diag", context
@@ -195,7 +196,7 @@ class Chs(ExecutableApplication):
                 experiment_name = self.expander.experiment_name
 
                 context = TestHelper.stream_test(
-                    test_vars, experiment_name, configs
+                    test_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "standard", context
@@ -205,7 +206,7 @@ class Chs(ExecutableApplication):
                 experiment_name = self.expander.experiment_name
 
                 context = TestHelper.nvidia_smi_test(
-                    test_vars, experiment_name, configs
+                    test_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "local", context
@@ -217,7 +218,7 @@ class Chs(ExecutableApplication):
                 for workload in workloads:
                     experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
                     context = TestHelper.gemm_test(
-                        test_vars, experiment_name, configs
+                        test_vars, experiment_name, deepcopy(configs)
                     )
                     self.experiment_set.render_chained_experiments(
                         application_name, workload, context

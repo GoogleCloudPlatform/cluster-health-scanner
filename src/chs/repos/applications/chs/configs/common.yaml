@@ -3,8 +3,12 @@ a3-ultra:
     gpus_per_node: 8
     processes_per_node: "{gpus_per_node}"
     n_ranks: "{processes_per_node}*{n_nodes}"
-
 a4:
+  variables:
+    gpus_per_node: 8
+    processes_per_node: "{gpus_per_node}"
+    n_ranks: "{processes_per_node}*{n_nodes}"
+a3-mega:
   variables:
     gpus_per_node: 8
     processes_per_node: "{gpus_per_node}"

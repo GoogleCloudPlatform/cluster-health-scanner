@@ -93,6 +93,9 @@ podAntiAffinity:
         ctx_vars["nodes"] = nodes_list
         ctx_vars["n_nodes"] = len(nodes_list)
         sched_nodes_str = TestHelper._get_nccl_nodes_str(scheduler, nodes_list)
+        context_dict = {
+            "variables": ctx_vars,
+        }
         if scheduler == "slurm":
             ctx_vars["extra_sbatch_headers"] = f"#SBATCH -w {sched_nodes_str}"
 
@@ -105,10 +108,9 @@ podAntiAffinity:
             )
         elif test_type == "nccl-single-node":
             experiment_name = f"{experiment_name}-{nodes_list[0]}"
-
-        context_dict = {
-            "variables": ctx_vars,
-        }
+            context_dict.setdefault("env_vars", {}).setdefault("set", {})[
+                "NCCL_NET"
+            ] = "Socket"
 
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nccl-tests"
@@ -137,7 +139,11 @@ podAntiAffinity:
 
         return [
             TestHelper._nccl_context(
-                variables, experiment_name, configs, nodes, test_type
+                variables,
+                experiment_name,
+                copy.deepcopy(configs),
+                nodes,
+                test_type,
             )
             for nodes in node_groups
         ]
@@ -207,7 +213,9 @@ podAntiAffinity:
 
         modifiers = []
         if scheduler == "slurm":
-            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
+            ctx_vars["extra_sbatch_headers"] = (
+                "#SBATCH -w {node}\n#SBATCH --gpu-bind=single:1"
+            )
         elif scheduler == "gke":
             TestHelper._k8s_gpu_settings(
                 ctx_vars, TestHelper._yaml_block(" - {node}", 12)

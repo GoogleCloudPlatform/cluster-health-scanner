@@ -40,7 +40,7 @@ class NcclTestCompiler(BasicModifier):
 
     modifier_variable(
         "nccl_tests_build_dir",
-        default="{workspace_inputs}/nccl-tests-{nccl_tests_ref}",
+        default="{workspace_shared}/nccl-tests-{nccl_tests_ref}",
         description="Directory to clone and build nccl-tests",
         modes=["standard"],
     )
@@ -54,21 +54,56 @@ class NcclTestCompiler(BasicModifier):
 
     modifier_variable(
         "nccl_tests_build_command",
-        default="git clone {nccl_tests_url} {nccl_tests_build_dir} && cd {nccl_tests_build_dir} && git checkout {nccl_tests_ref} && make {nccl_tests_make_args}",
+        default="[ ! -d {nccl_tests_build_dir} ] && git clone {nccl_tests_url} {nccl_tests_build_dir}; cd {nccl_tests_build_dir} && git checkout {nccl_tests_ref} && make {nccl_tests_make_args}",
         description="The core commands to clone and build nccl-tests",
         modes=["standard"],
     )
 
     modifier_variable(
         "nccl_tests_build_wrapper",
-        default='srun -N 1 --ntasks=1 --container-mounts="{workspace_inputs}:{workspace_inputs}" --container-image="{container_path}" bash -c "{nccl_tests_build_command}"',
+        default='srun -N 1 --ntasks=1 --container-mounts="{workspace_shared}:{workspace_shared}" --container-image="{container_path}" bash -c "{nccl_tests_build_command}"',
         description="Execution wrapper for the build command (defaults to srun with container mounts)",
         modes=["standard"],
     )
 
     build_script = """
-if [ ! -d "{nccl_tests_build_dir}/build" ]; then
-  {nccl_tests_build_wrapper}
+LOCK_DIR="{nccl_tests_build_dir}.lock"
+SUCCESS_FILE="{nccl_tests_build_dir}/.success"
+FAIL_FILE="{nccl_tests_build_dir}.failed"
+
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "Acquired build lock. Starting compilation..."
+  if [ ! -f "$SUCCESS_FILE" ]; then
+    {nccl_tests_build_wrapper}
+    BUILD_STATUS=$?
+    if [ $BUILD_STATUS -eq 0 ]; then
+      echo "Compilation successful."
+      touch "$SUCCESS_FILE"
+    else
+      echo "Compilation failed with exit code $BUILD_STATUS!"
+      touch "$FAIL_FILE"
+      rmdir "$LOCK_DIR"
+      exit $BUILD_STATUS
+    fi
+  fi
+  rmdir "$LOCK_DIR"
+else
+  echo "Waiting for another node to finish compiling..."
+  wait_time=0
+  max_wait=1800
+  while [ ! -f "$SUCCESS_FILE" ]; do
+    if [ -f "$FAIL_FILE" ]; then
+      echo "Another node failed to compile NCCL tests. Aborting."
+      exit 1
+    fi
+    if [ $wait_time -ge $max_wait ]; then
+      echo "Timeout waiting for compile lock. Aborting."
+      exit 1
+    fi
+    sleep 5
+    wait_time=$((wait_time + 5))
+  done
+  echo "Compilation finished by another node. Proceeding."
 fi
 """
 

@@ -1,0 +1,2 @@
+description: "Tests the 'dcgm' test against a slurm scheduler for a3-mega"
+command: ["run", "--tests", "dcgm", "--scheduler", "slurm", "--machine-type", "a3-mega", "--nodes", "node1,node2", "--dry-run"]

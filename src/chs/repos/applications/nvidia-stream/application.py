@@ -62,12 +62,22 @@ class NvidiaStream(ExecutableApplication):
         workloads=["standard"],
     )
 
-    device_regex = r"Device\s+(?P<device_id>[0-9]+):\s+.*?=\s+(?P<peak_bw>[0-9]+\.[0-9]+)\s+GB/s\s+PEAK"
+    device_regex = r"(?P<device_id>[0-9]+):\s+Device\s+[0-9]+:\s+.*?=\s+(?P<peak_bw>[0-9]+\.[0-9]+)\s+GB/s\s+PEAK"
+
+    function_regex = r"(?P<device_id>[0-9]+):\s+(?P<function>Copy|Scale|Add|Triad):\s+(?P<rate>[0-9]+\.[0-9]+)\s+(?P<avg_time>[0-9]+\.[0-9]+)\s+(?P<min_time>[0-9]+\.[0-9]+)\s+(?P<max_time>[0-9]+\.[0-9]+)"
 
     figure_of_merit_context(
-        "device",
-        regex=device_regex,
-        output_format="Device {device_id}",
+        "function",
+        regex=function_regex,
+        output_format="Device {device_id} {function}",
+    )
+
+    figure_of_merit(
+        "Device id",
+        fom_regex=function_regex,
+        group_name="device_id",
+        units="",
+        contexts=["function"],
     )
 
     figure_of_merit(
@@ -75,15 +85,7 @@ class NvidiaStream(ExecutableApplication):
         fom_regex=device_regex,
         group_name="peak_bw",
         units="GB/s",
-        contexts=["device"],
-    )
-
-    function_regex = r"(?P<function>Copy|Scale|Add|Triad):\s+(?P<rate>[0-9]+\.[0-9]+)\s+(?P<avg_time>[0-9]+\.[0-9]+)\s+(?P<min_time>[0-9]+\.[0-9]+)\s+(?P<max_time>[0-9]+\.[0-9]+)"
-
-    figure_of_merit_context(
-        "function",
-        regex=function_regex,
-        output_format="{function}",
+        contexts=["function"],
     )
 
     figure_of_merit(
