@@ -564,7 +564,6 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
-                self.mock_rm_instance.archive.assert_called_once()
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data, MOCK_WORKSPACE_NAME
                 )

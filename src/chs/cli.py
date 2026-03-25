@@ -54,12 +54,18 @@ def handle_chs_exceptions(f):
 
 
 @contextmanager
-def archive_workspace(ramble_manager: RambleManager):
+def archive_workspace(
+    ramble_manager: RambleManager, *, on_success: bool = True
+):
     """Context manager to ensure workspace is archived even in error cases."""
     try:
         yield
-    finally:
+    except Exception:
         ramble_manager.archive()
+        raise
+    else:
+        if on_success:
+            ramble_manager.archive()
 
 
 def non_empty_str_callback(
@@ -222,7 +228,7 @@ def run_action(
 
     ramble_manager = RambleManager(workspaces_base_dir, workspace_name)
 
-    with archive_workspace(ramble_manager):
+    with archive_workspace(ramble_manager, on_success=False):
         try:
             ramble_manager.create_workspace()
             ramble_manager.add_custom_repository()
@@ -263,7 +269,7 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
     if not os.path.exists(ramble_manager.path):
         raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
 
-    with archive_workspace(ramble_manager):
+    with archive_workspace(ramble_manager, on_success=True):
         try:
             workspace_path = pathlib.Path(ramble_manager.path)
             boh_path = workspace_path / "bill_of_health.json"
@@ -347,7 +353,7 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
-    with archive_workspace(ramble_manager):
+    with archive_workspace(ramble_manager, on_success=True):
         try:
             if not ramble_manager.check_jobs_running():
                 logger.info("No jobs for run %s are currently running.", run_id)
