@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from chs.core.plugin_manager import PluginManager
+from chs import exceptions as ex
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +33,20 @@ class ResultsViewer:
                 except json_format.ParseError:
                     # Fallback to TextProto (in case it was written as such)
                     text_format.Parse(content, self.boh)
+        except FileNotFoundError as e:
+            logger.error(
+                "Bill of Health file not found at %s: %s", self.boh_path, e
+            )
+            raise ex.BillOfHealthNotFoundException(
+                f"Bill of Health file not found at {self.boh_path}: {e}"
+            ) from e
         except Exception as e:
             logger.error(
-                "Error loading Bill of Health from %s: %s", self.boh_path, e
+                "Error parsing Bill of Health from %s: %s", self.boh_path, e
             )
-            self.console.print(
-                f"[bold red]Error loading Bill of Health:[/bold red] {e}"
-            )
+            raise ex.BillOfHealthLoadException(
+                f"Error parsing Bill of Health from {self.boh_path}: {e}"
+            ) from e
 
     def _filter_results(
         self, tests: list[str] | None = None, resources: list[str] | None = None

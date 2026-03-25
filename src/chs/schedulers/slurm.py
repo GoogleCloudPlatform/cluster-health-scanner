@@ -13,8 +13,9 @@ if TYPE_CHECKING:
 
 
 from chs.schedulers.base import BaseScheduler
-from chs.exceptions import NetworkDiscoveryException
 import click
+
+from chs import exceptions as ex
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ class SlurmScheduler(BaseScheduler):
             return interfaces
 
         except Exception as e:
-            raise NetworkDiscoveryException(
+            raise ex.NetworkDiscoveryException(
                 f"Unexpected error during network discovery: {e}"
             ) from e
 
@@ -137,7 +138,9 @@ class SlurmScheduler(BaseScheduler):
                 self._resolved_nodes = [n for n in output.split("\n") if n]
                 return self._resolved_nodes
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                raise click.ClickException(f"Failed to expand nodelist: {e}")
+                raise ex.ChsSchedulerException(
+                    f"Failed to expand nodelist: {e}"
+                ) from e
 
         sinfo_cmd = ["sinfo", "-t", "idle,idle~,idle#", "-N", "-h", "-o", "%N"]
         if self.partition_arg:
@@ -151,7 +154,9 @@ class SlurmScheduler(BaseScheduler):
                 capture_output=True,
             ).stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            raise click.ClickException(f"Failed to get free nodes: {e}")
+            raise ex.ChsSchedulerException(
+                f"Failed to get free nodes: {e}"
+            ) from e
 
         if not output:
             return []
@@ -171,9 +176,9 @@ class SlurmScheduler(BaseScheduler):
                     os.makedirs(d, exist_ok=True)
                     logger.debug("Created Enroot directory: %s", d)
                 except OSError as e:
-                    logger.warning(
-                        "Failed to create Enroot directory %s: %s", d, e
-                    )
+                    raise ex.ChsSchedulerException(
+                        f"Failed to create Enroot directory {d}: {e}"
+                    ) from e
 
     def get_extra_env(self) -> dict[str, str]:
         """Returns extra environment variables for the scheduler."""
@@ -204,7 +209,7 @@ class SlurmScheduler(BaseScheduler):
 
         tcp_interfaces = self._discover_network_interfaces()
         if not tcp_interfaces:
-            raise NetworkDiscoveryException(
+            raise ex.NetworkDiscoveryException(
                 "Network discovery failed on Slurm. "
                 "Could not identify required TCP interfaces."
             )
@@ -322,6 +327,6 @@ class SlurmScheduler(BaseScheduler):
             logger.warning("scancel command not found. Cannot cancel jobs.")
         except subprocess.CalledProcessError as e:
             logger.error("Failed to cancel jobs. Error: %s", e.stderr)
-            raise click.ClickException(
+            raise ex.ChsCancellationException(
                 f"Failed to cancel jobs: {e.stderr}"
             ) from e

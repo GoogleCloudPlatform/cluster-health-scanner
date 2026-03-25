@@ -25,6 +25,10 @@ class ChsAnalysisException(ChsException):
     """Raised for errors during results analysis."""
 
 
+class BillOfHealthLoadException(ChsException):
+    """Raised when the bill_of_health.json file cannot be loaded or parsed."""
+
+
 class BillOfHealthNotFoundException(ChsException):
     """Raised when the bill_of_health.json file is not found."""
 
@@ -47,6 +51,10 @@ class NoNodesProvidedException(ChsException):
 
 class UnsupportedSchedulerException(ChsException):
     """Raised when an unsupported scheduler is specified."""
+
+
+class ChsSchedulerException(ChsException):
+    """Raised for general scheduler-specific issues like argument errors."""
 
 
 class SuiteNotFoundException(ChsException):

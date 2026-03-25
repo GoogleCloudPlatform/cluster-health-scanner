@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from chs.results_viewer import ResultsViewer
+from chs import exceptions as ex
 from rich.console import Console
 
 
@@ -59,28 +60,19 @@ class TestResultsViewer(unittest.TestCase):
 
     def test_init_file_not_found(self):
         """Test initialization with missing file."""
-        with mock.patch.object(Console, "print") as mock_print:
-            viewer = ResultsViewer("non_existent.json")
-            self.assertEqual(viewer.boh.report_id, "")
-            mock_print.assert_called()
-            self.assertIn(
-                "Error loading Bill of Health", mock_print.call_args[0][0]
-            )
+        with self.assertRaises(ex.BillOfHealthNotFoundException):
+            ResultsViewer("non_existent.json")
 
     def test_init_invalid_json(self):
         """Test initialization with invalid JSON."""
-        with mock.patch.object(Console, "print") as mock_print:
-            viewer = ResultsViewer(self.invalid_json_path)
-            self.assertEqual(viewer.boh.report_id, "")
-            mock_print.assert_called()
+        with self.assertRaises(ex.BillOfHealthLoadException):
+            ResultsViewer(self.invalid_json_path)
 
     @mock.patch.object(Console, "print")
     def test_show_summary_no_data(self, mock_print):
         """Test show_summary with no data."""
-        viewer = ResultsViewer("non_existent.json")
-        viewer.show_summary()
-        # Should safely return without crashing, error printed in init
-        pass
+        with self.assertRaises(ex.BillOfHealthNotFoundException):
+            ResultsViewer("non_existent.json")
 
     @mock.patch.object(Console, "print")
     def test_show_summary_valid(self, mock_print):
