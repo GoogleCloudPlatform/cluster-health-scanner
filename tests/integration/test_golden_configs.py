@@ -1,5 +1,6 @@
 import os
 import pathlib
+import shutil
 import pytest
 import yaml
 from chs.cli import cli
@@ -101,16 +102,53 @@ def test_golden_config(test_case, tmp_path, mock_cluster_env, mocker):
     ), "Expected exactly one workspace to be generated"
     workspace_path = generated_workspaces[0]
 
+    def normalize_content(content):
+        return sorted(
+            line.rstrip() for line in content.splitlines() if line.strip()
+        )
+
     scrubber = WorkspaceScrubber(str(workspace_path))
+    temp_snapshot_dir = tmp_path / "temp_snapshot"
+    scrubber.extract_and_scrub(str(temp_snapshot_dir))
+
     update_goldens = os.environ.get("UPDATE_GOLDENS") == "1"
 
     if update_goldens:
-        scrubber.extract_and_scrub(str(snapshot_dir))
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        for golden_item in sorted(snapshot_dir.rglob("*"), reverse=True):
+            rel_path = golden_item.relative_to(snapshot_dir)
+            temp_item = temp_snapshot_dir / rel_path
+
+            if (
+                not temp_item.exists()
+                or golden_item.is_dir() != temp_item.is_dir()
+            ):
+                if golden_item.is_file():
+                    golden_item.unlink()
+                elif golden_item.is_dir():
+                    shutil.rmtree(golden_item)
+
+        for new_file in temp_snapshot_dir.rglob("*"):
+            if not new_file.is_file():
+                continue
+
+            rel_path = new_file.relative_to(temp_snapshot_dir)
+            golden_file = snapshot_dir / rel_path
+
+            if golden_file.exists():
+                new_content = new_file.read_text()
+                old_content = golden_file.read_text()
+                if normalize_content(new_content) == normalize_content(
+                    old_content
+                ):
+                    continue
+
+            golden_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(new_file, golden_file)
+
         assert snapshot_dir.exists()
         return
-
-    temp_snapshot_dir = tmp_path / "temp_snapshot"
-    scrubber.extract_and_scrub(str(temp_snapshot_dir))
 
     assert snapshot_dir.exists(), (
         f"Golden snapshot not found for {test_case}. "
@@ -133,11 +171,6 @@ def test_golden_config(test_case, tmp_path, mock_cluster_env, mocker):
     assert set(current_files.keys()) == set(
         golden_files.keys()
     ), "Mismatch in generated snapshot files"
-
-    def normalize_content(content):
-        return sorted(
-            line.rstrip() for line in content.splitlines() if line.strip()
-        )
 
     # Verify content exactly (pytest will show clear diffs on failure)
     for rel_path, current_content in current_files.items():
