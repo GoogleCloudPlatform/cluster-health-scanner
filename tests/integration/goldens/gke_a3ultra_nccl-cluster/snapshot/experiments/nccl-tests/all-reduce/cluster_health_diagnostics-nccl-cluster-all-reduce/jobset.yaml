@@ -32,19 +32,9 @@ spec:
             metadata:
 
               annotations:
-                networking.gke.io/default-interface: 'eth0'
+                networking.gke.io/default-interface: eth0
                 networking.gke.io/interfaces: |
-                  [
-                    {"interfaceName":"eth0","network":"default"},
-                    {"interfaceName":"eth2","network":"rdma-0"},
-                    {"interfaceName":"eth3","network":"rdma-1"},
-                    {"interfaceName":"eth4","network":"rdma-2"},
-                    {"interfaceName":"eth5","network":"rdma-3"},
-                    {"interfaceName":"eth6","network":"rdma-4"},
-                    {"interfaceName":"eth7","network":"rdma-5"},
-                    {"interfaceName":"eth8","network":"rdma-6"},
-                    {"interfaceName":"eth9","network":"rdma-7"}
-                  ]
+                  [{"interfaceName": "eth0", "network": "default"}, {"interfaceName": "eth1", "network": "gpu-net-1"}]
             spec:
               restartPolicy: Never
               nodeSelector:
@@ -138,14 +128,14 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
-                    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
-                    export NCCL_NET=gIB;
-                    export NCCL_TESTS_SPLIT_MASK="";
-                    export OMPI_ALLOW_RUN_AS_ROOT=1;
                     nvidia-smi -pm 1 || true
                     if [ -d "/usr/local/gib/scripts" ]; then
                         NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
                     fi
+                    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
+                    export NCCL_NET=gIB;
+                    export NCCL_TESTS_SPLIT_MASK="";
+                    export OMPI_ALLOW_RUN_AS_ROOT=1;
                     mpirun -n 16 -N 8 \
                       --hostfile /tmp/hostfile --bind-to none \
                       --mca btl self,tcp --mca btl_tcp_if_include eth0 \

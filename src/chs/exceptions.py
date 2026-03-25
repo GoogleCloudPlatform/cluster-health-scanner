@@ -55,3 +55,7 @@ class SuiteNotFoundException(ChsException):
 
 class ChsArchiveException(ChsException):
     """Raised for errors during workspace archival."""
+
+
+class NetworkDiscoveryException(ChsException):
+    """Raised when network discovery fails to find required networks."""

@@ -24,10 +24,10 @@
 
 cd "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics"
 
-rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
-touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
 rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
 touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
+rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
+touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
 rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
 touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
 scontrol show config > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config

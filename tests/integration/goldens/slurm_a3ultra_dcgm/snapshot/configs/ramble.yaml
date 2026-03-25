@@ -12,6 +12,8 @@ ramble:
     tests: [{"name": "dcgm"}]
     scheduler: slurm
     container_dir: <HOME_DIR>/.local/share/chs/images
+    tcp_interfaces: |
+      enp0s1,enp0s2
 
   applications:
     chs:

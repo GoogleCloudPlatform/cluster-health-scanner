@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 
 from chs.schedulers.base import BaseScheduler
+from chs.exceptions import NetworkDiscoveryException
 import click
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,57 @@ class SlurmScheduler(BaseScheduler):
     @property
     def name(self) -> str:
         return "slurm"
+
+    def _run_srun(self, args: list[str], timeout: int = 30) -> str:
+        """Runs a command via srun and returns filtered output."""
+        cmd = ["srun", "-N1", "-n1"]
+        if self.partition_arg:
+            cmd.extend(["-p", self.partition_arg])
+        cmd.extend(args)
+        result = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=timeout,
+        )
+        return result.stdout.strip()
+
+    def _discover_network_interfaces(self) -> list[str]:
+        """
+        Discovers physical network interfaces from the routing table.
+        Uses the default route interface as an anchor to find siblings.
+        """
+        try:
+            default_out = self._run_srun(["ip", "route", "show", "default"])
+            anchor_match = re.search(r"dev\s+(\S+)", default_out)
+
+            prefix = ""
+            if anchor_match and (
+                m := re.match(r"^[a-zA-Z]+", anchor_match.group(1))
+            ):
+                prefix = m.group(0)
+                logger.debug("Anchor interface prefix: %s", prefix)
+
+            route_out = self._run_srun(["ip", "route", "show"])
+            all_ifaces = set(re.findall(r"dev\s+(\S+)", route_out))
+            excluded = ("docker", "veth", "br-", "lo")
+            interfaces = sorted(
+                [
+                    iface
+                    for iface in all_ifaces
+                    if not iface.startswith(excluded)
+                    and (prefix and iface.startswith(prefix))
+                ]
+            )
+
+            logger.info("Detected network interfaces: %r", interfaces)
+            return interfaces
+
+        except Exception as e:
+            raise NetworkDiscoveryException(
+                f"Unexpected error during network discovery: {e}"
+            ) from e
 
     def get_nodes_under_test(self) -> list[str]:
         if self._resolved_nodes is not None:
@@ -136,8 +188,10 @@ class SlurmScheduler(BaseScheduler):
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with slurm_template.yaml")
-
-        with pkg_resources.path("chs.schedulers", "slurm_template.yaml") as p:
+        template_path = pkg_resources.files("chs.schedulers").joinpath(
+            "slurm_template.yaml"
+        )
+        with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
                 template_content = f.read()
 
@@ -146,12 +200,16 @@ class SlurmScheduler(BaseScheduler):
         else:
             nodes_str = "[]"
 
-        if tests:
-            # Compact JSON representation for tests to avoid issues with
-            # newlines
-            tests_str = json.dumps(tests)
-        else:
-            tests_str = "[]"
+        tests_str = json.dumps(tests) if tests else "[]"
+
+        tcp_interfaces = self._discover_network_interfaces()
+        if not tcp_interfaces:
+            raise NetworkDiscoveryException(
+                "Network discovery failed on Slurm. "
+                "Could not identify required TCP interfaces."
+            )
+
+        tcp_interfaces_str = ",".join(tcp_interfaces)
 
         images_dir_value = (
             self._app_data and self._app_data.get_images_dir()
@@ -162,6 +220,7 @@ class SlurmScheduler(BaseScheduler):
             machine_type=machine_type,
             tests=tests_str,
             images_dir=images_dir_value,
+            tcp_interfaces=tcp_interfaces_str,
         )
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:

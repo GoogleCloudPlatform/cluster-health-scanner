@@ -24,10 +24,10 @@
 
 cd "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2"
 
-rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_config"
-touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_config"
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_job_info"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_job_info"
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_config"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_config"
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/cluster_health_diagnostics-dcgm-level-1-node2.out"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/cluster_health_diagnostics-dcgm-level-1-node2.out"
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/cluster_health_diagnostics-dcgm-level-1-node2/.slurm_config

@@ -1,20 +1,9 @@
 a3-ultra:
   variables:
-    gpu_subnet_prefix: rdma
     pod_annotations_yaml: |
-      networking.gke.io/default-interface: 'eth0'
+      networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
-        [
-          \{"interfaceName":"eth0","network":"default"\},
-          \{"interfaceName":"eth2","network":"{gpu_subnet_prefix}-0"\},
-          \{"interfaceName":"eth3","network":"{gpu_subnet_prefix}-1"\},
-          \{"interfaceName":"eth4","network":"{gpu_subnet_prefix}-2"\},
-          \{"interfaceName":"eth5","network":"{gpu_subnet_prefix}-3"\},
-          \{"interfaceName":"eth6","network":"{gpu_subnet_prefix}-4"\},
-          \{"interfaceName":"eth7","network":"{gpu_subnet_prefix}-5"\},
-          \{"interfaceName":"eth8","network":"{gpu_subnet_prefix}-6"\},
-          \{"interfaceName":"eth9","network":"{gpu_subnet_prefix}-7"\}
-        ]
+        {all_interfaces_json}
     node_selector_yaml: "cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
@@ -116,21 +105,10 @@ a3-ultra:
       k: 16384
 a4:
   variables:
-    gpu_subnet_prefix: rdma
     pod_annotations_yaml: |
-      networking.gke.io/default-interface: 'eth0'
+      networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
-        [
-          \{"interfaceName":"eth0","network":"default"\},
-          \{"interfaceName":"eth2","network":"{gpu_subnet_prefix}-0"\},
-          \{"interfaceName":"eth3","network":"{gpu_subnet_prefix}-1"\},
-          \{"interfaceName":"eth4","network":"{gpu_subnet_prefix}-2"\},
-          \{"interfaceName":"eth5","network":"{gpu_subnet_prefix}-3"\},
-          \{"interfaceName":"eth6","network":"{gpu_subnet_prefix}-4"\},
-          \{"interfaceName":"eth7","network":"{gpu_subnet_prefix}-5"\},
-          \{"interfaceName":"eth8","network":"{gpu_subnet_prefix}-6"\},
-          \{"interfaceName":"eth9","network":"{gpu_subnet_prefix}-7"\}
-        ]
+        {all_interfaces_json}
     node_selector_yaml: "cloud.google.com/gke-nodepool: a4-highgpu-8g-a4-pool"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"

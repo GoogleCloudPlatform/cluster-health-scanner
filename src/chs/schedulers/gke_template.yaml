@@ -11,7 +11,9 @@ ramble:
     n_ranks: 1
     machine_type: {machine_type}
     tests: {tests}
-    gpu_subnet_prefix: 'rdma'
+    default_interface_name: {default_interface_name}
+    all_interfaces_json: |
+      {all_interfaces_json}
 
   applications:
     chs:

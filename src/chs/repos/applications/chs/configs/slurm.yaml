@@ -4,7 +4,7 @@ a3-ultra:
     env_vars:
       set:
         NCCL_NET: gIB
-        NCCL_SOCKET_IFNAME: enp0s19,enp192s20
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
         LD_LIBRARY_PATH: "/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
     variables:
       container_name: pytorch:24.09-py3
@@ -119,7 +119,7 @@ a4:
     env_vars:
       set:
         NCCL_NET: gIB
-        NCCL_SOCKET_IFNAME: enp0s19,enp192s20
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
         LD_LIBRARY_PATH: "/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
     variables:
       container_name: pytorch:24.09-py3

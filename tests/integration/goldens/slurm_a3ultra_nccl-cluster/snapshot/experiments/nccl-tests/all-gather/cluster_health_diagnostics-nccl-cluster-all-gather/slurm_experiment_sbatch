@@ -22,18 +22,19 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/clu
 
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_config"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_config"
-rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
-touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_job_info"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_job_info"
-scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_config
+rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
+touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
 if [ -d "/usr/local/gib/scripts" ]; then
     NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
 fi
 export LD_LIBRARY_PATH="/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH";
 export NCCL_NET=gIB;
-export NCCL_SOCKET_IFNAME=enp0s19,enp192s20;
+export NCCL_SOCKET_IFNAME="enp0s1,enp0s2
+";
 export NCCL_TESTS_SPLIT_MASK="";
+scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_config
 if [ ! -d "<WORKSPACE_ROOT>/inputs/nccl-tests-master/build" ]; then
   srun -N 1 --ntasks=1 --container-mounts="<WORKSPACE_ROOT>/inputs:<WORKSPACE_ROOT>/inputs" --container-image="<HOME_DIR>/.local/share/chs/images/pytorch:24.09-py3.sqsh" bash -c "git clone https://github.com/NVIDIA/nccl-tests.git <WORKSPACE_ROOT>/inputs/nccl-tests-master && cd <WORKSPACE_ROOT>/inputs/nccl-tests-master && git checkout master && make MPI=1 CC=mpicc CXX=mpicxx -j"
 fi >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out" 2>&1

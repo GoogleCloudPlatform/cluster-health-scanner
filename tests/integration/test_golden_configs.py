@@ -25,8 +25,44 @@ def mock_cluster_env(tmp_path, monkeypatch):
     hardware checks."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    mock_script = "#!/bin/bash\nexit 0\n"
-    for mock_bin in ["enroot", "unsquashfs"]:
+
+    mock_script = (
+        "#!/bin/bash\n"
+        'cmd=$(basename "$0")\n'
+        'case "$cmd" in\n'
+        "  srun)\n"
+        '    if [[ "$*" == *"ip route show default"* ]]; then\n'
+        '      echo "default via 10.0.0.1 dev enp0s1"\n'
+        '    elif [[ "$*" == *"ip route show"* ]]; then\n'
+        '      echo -e "10.0.0.0/24 dev enp0s1 proto kernel scope link '
+        "src 10.0.0.2\n10.1.0.0/24 dev enp0s2 proto kernel scope link "
+        'src 10.1.0.2"\n'
+        "    else\n"
+        "      exit 0\n"
+        "    fi\n"
+        "    ;;\n"
+        "  kubectl)\n"
+        '    if [[ "$*" == *"get networks.networking.gke.io"* ]]; then\n'
+        '      echo \'{"items": [{"metadata": {"name": "default"}, '
+        '"spec": {"type": "L3"}}, {"metadata": {"name": "gpu-net-1"}, '
+        '"spec": {"type": "Device"}}]}\'\n'
+        "    else\n"
+        "      exit 0\n"
+        "    fi\n"
+        "    ;;\n"
+        "  *)\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "esac\n"
+    )
+    for mock_bin in [
+        "enroot",
+        "unsquashfs",
+        "srun",
+        "kubectl",
+        "sinfo",
+        "scontrol",
+    ]:
         mock_path = bin_dir / mock_bin
         mock_path.write_text(mock_script)
         mock_path.chmod(0o755)
