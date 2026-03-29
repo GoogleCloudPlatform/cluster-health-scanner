@@ -1,0 +1,2 @@
+description: "Tests the 'stream' test against a gke scheduler for a3-ultra"
+command: ["run", "--tests", "stream", "--scheduler", "gke", "--machine-type", "a3-ultra", "--nodes", "node1,node2", "--dry-run"]

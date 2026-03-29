@@ -1,0 +1,32 @@
+#!/bin/bash
+#SBATCH --exclusive
+#SBATCH --gpus-per-node 8
+#SBATCH --ntasks-per-node 8
+#SBATCH -J nvidia-smi_local_cluster_health_diagnostics-nvidia-smi-node1
+#SBATCH -N 1
+#SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/slurm-%j.err
+#SBATCH -o <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/slurm-%j.out
+#SBATCH -w node1
+
+# ****************************************************
+# * Workflow manager: slurm
+# * Execution script is: <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/slurm_experiment_sbatch
+# * If this file is not the same as the above path, it is unlikely that this script
+# * is used when `ramble on` executes experiments.
+# ****************************************************
+
+
+cd <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1
+
+scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/hostfile
+
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/.slurm_job_info"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/.slurm_job_info"
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/cluster_health_diagnostics-nvidia-smi-node1.out"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/cluster_health_diagnostics-nvidia-smi-node1.out"
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/.slurm_config"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/.slurm_config"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/.slurm_config
+nvidia-smi -q >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/cluster_health_diagnostics-nvidia-smi-node1.out" 2>&1
+date +%s > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/.slurm_script_end_time
+

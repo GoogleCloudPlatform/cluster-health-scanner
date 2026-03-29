@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --exclusive
+#SBATCH --ntasks-per-node 1
+#SBATCH -J chs_cluster_health_cluster_health_diagnostics
+#SBATCH -N 1
+#SBATCH -e <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/slurm-%j.err
+#SBATCH -o <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/slurm-%j.out
+
+# ****************************************************
+# * Workflow manager: slurm
+# * Execution script is: <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/slurm_experiment_sbatch
+# * If this file is not the same as the above path, it is unlikely that this script
+# * is used when `ramble on` executes experiments.
+# ****************************************************
+
+
+cd <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics
+
+scontrol show hostnames > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/hostfile
+
+rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
+touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config"
+rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
+touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_job_info"
+rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
+touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
+scontrol show config > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_config
+echo 'Initiating cluster health diagnostics for a3-ultra' >> "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out" 2>&1
+date +%s > <WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/.slurm_script_end_time
+

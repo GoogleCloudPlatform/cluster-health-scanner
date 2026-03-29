@@ -1,0 +1,81 @@
+#!/bin/bash
+# This is a template execution script for
+# running the execute pipeline.
+#
+# Variables surrounded by curly braces will be expanded
+# when generating a specific execution script.
+# Some example variables are:
+#   - experiment_run_dir (Will be replaced with the experiment directory)
+#   - command (Will be replaced with the command to run the experiment)
+#   - log_dir (Will be replaced with the logs directory)
+#   - experiment_name (Will be replaced with the name of the experiment)
+#   - workload_run_dir (Will be replaced with the directory of the workload
+#   - application_name (Will be replaced with the name of the application)
+#   - n_nodes (Will be replaced with the required number of nodes)
+#   Any experiment parameters will be available as variables as well.
+
+# ****************************************************
+# * Workflow manager: slurm
+# * Execution script is: <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/slurm_experiment_sbatch
+# * If this file is not the same as the above path, it is unlikely that this script
+# * is used when `ramble on` executes experiments.
+# ****************************************************
+
+
+cd "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce"
+
+rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config"
+touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config"
+rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
+touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
+rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info"
+touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
+if [ -d "/usr/local/gib/scripts" ]; then
+    NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
+fi
+export LD_LIBRARY_PATH="/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH";
+export NCCL_NET=gIB;
+export NCCL_SOCKET_IFNAME="enp0s1,enp0s2
+";
+export NCCL_TESTS_SPLIT_MASK="";
+LOCK_DIR="<WORKSPACE_ROOT>/shared/nccl-tests-master.lock"
+SUCCESS_FILE="<WORKSPACE_ROOT>/shared/nccl-tests-master/.success"
+FAIL_FILE="<WORKSPACE_ROOT>/shared/nccl-tests-master.failed"
+
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "Acquired build lock. Starting compilation..."
+  if [ ! -f "$SUCCESS_FILE" ]; then
+    srun -N 1 --ntasks=1 --container-mounts="<WORKSPACE_ROOT>/shared:<WORKSPACE_ROOT>/shared" --container-image="<HOME_DIR>/.local/share/chs/images/pytorch:24.09-py3.sqsh" bash -c "[ ! -d <WORKSPACE_ROOT>/shared/nccl-tests-master ] && git clone https://github.com/NVIDIA/nccl-tests.git <WORKSPACE_ROOT>/shared/nccl-tests-master; cd <WORKSPACE_ROOT>/shared/nccl-tests-master && git checkout master && make MPI=1 CC=mpicc CXX=mpicxx -j"
+    BUILD_STATUS=$?
+    if [ $BUILD_STATUS -eq 0 ]; then
+      echo "Compilation successful."
+      touch "$SUCCESS_FILE"
+    else
+      echo "Compilation failed with exit code $BUILD_STATUS!"
+      touch "$FAIL_FILE"
+      rmdir "$LOCK_DIR"
+      exit $BUILD_STATUS
+    fi
+  fi
+  rmdir "$LOCK_DIR"
+else
+  echo "Waiting for another node to finish compiling..."
+  wait_time=0
+  max_wait=1800
+  while [ ! -f "$SUCCESS_FILE" ]; do
+    if [ -f "$FAIL_FILE" ]; then
+      echo "Another node failed to compile NCCL tests. Aborting."
+      exit 1
+    fi
+    if [ $wait_time -ge $max_wait ]; then
+      echo "Timeout waiting for compile lock. Aborting."
+      exit 1
+    fi
+    sleep 5
+    wait_time=$((wait_time + 5))
+  done
+  echo "Compilation finished by another node. Proceeding."
+fi >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out" 2>&1
+srun --mpi=pmi2 --export=ALL --container-workdir <WORKSPACE_ROOT>/shared/nccl-tests-master/build/ --container-image <HOME_DIR>/.local/share/chs/images/pytorch:24.09-py3.sqsh --container-mounts "/var/tmp:/var/tmp,<WORKSPACE_ROOT>/shared/nccl-tests-master:<WORKSPACE_ROOT>/shared/nccl-tests-master,/usr/local/gib" --container-writable --wait=60 bash -c "export LD_LIBRARY_PATH=/usr/local/gib/lib64:${LD_LIBRARY_PATH}; ./all_reduce_perf -b 256M -e 8G -f 2 -g 1 -w 5 --iters 100 -c 1" >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out" 2>&1
+date +%s > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_script_end_time

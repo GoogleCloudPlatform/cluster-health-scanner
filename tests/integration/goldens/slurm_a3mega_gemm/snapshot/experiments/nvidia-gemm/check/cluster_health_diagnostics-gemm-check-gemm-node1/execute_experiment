@@ -1,0 +1,36 @@
+#!/bin/bash
+# This is a template execution script for
+# running the execute pipeline.
+#
+# Variables surrounded by curly braces will be expanded
+# when generating a specific execution script.
+# Some example variables are:
+#   - experiment_run_dir (Will be replaced with the experiment directory)
+#   - command (Will be replaced with the command to run the experiment)
+#   - log_dir (Will be replaced with the logs directory)
+#   - experiment_name (Will be replaced with the name of the experiment)
+#   - workload_run_dir (Will be replaced with the directory of the workload
+#   - application_name (Will be replaced with the name of the application)
+#   - n_nodes (Will be replaced with the required number of nodes)
+#   Any experiment parameters will be available as variables as well.
+
+# ****************************************************
+# * Workflow manager: slurm
+# * Execution script is: <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/slurm_experiment_sbatch
+# * If this file is not the same as the above path, it is unlikely that this script
+# * is used when `ramble on` executes experiments.
+# ****************************************************
+
+
+cd "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1"
+
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/cluster_health_diagnostics-gemm-check-gemm-node1.out"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/cluster_health_diagnostics-gemm-check-gemm-node1.out"
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/.slurm_job_info"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/.slurm_job_info"
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/.slurm_config"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/.slurm_config"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/.slurm_config
+srun --cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image <HOME_DIR>/.local/share/chs/images/hpc-benchmarks:25.09.sqsh --container-writable --container-mounts <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1:<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1 --wait=60 ./gemm_tests.sh --gpu-affinity 0:1:2:3:4:5:6:7 --cpu-affinity 0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103 --mem-affinity 0:0:0:0:1:1:1:1 --params "--mode=check --type=fp64 --m=16384 --n=16384 --k=16384 --iter=32" | tee <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/cluster_health_diagnostics-gemm-check-gemm-node1_local.out >> "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/cluster_health_diagnostics-gemm-check-gemm-node1.out" 2>&1
+srun --cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image <HOME_DIR>/.local/share/chs/images/hpc-benchmarks:25.09.sqsh --container-writable --container-mounts <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1:<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1 --wait=60 sh -c 'RANK="${SLURM_PROCID:-${OMPI_COMM_WORLD_RANK:-0}}"; if [ "$RANK" -eq 0 ]; then ./gemm_parse_results.sh --correctness --list --stats <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/cluster_health_diagnostics-gemm-check-gemm-node1_local.out; fi' >> "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/cluster_health_diagnostics-gemm-check-gemm-node1.out" 2>&1
+date +%s > <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node1/.slurm_script_end_time
