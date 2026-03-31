@@ -692,6 +692,8 @@ class RambleManager:
                 "-f",
                 "json",
                 "--fom-origin-types",
+                "modifier",
+                "--fom-origin-types",
                 "application",
             ],
             capture_output=True,

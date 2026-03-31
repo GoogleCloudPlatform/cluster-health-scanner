@@ -372,6 +372,7 @@ class TestRambleManager(unittest.TestCase):
                                     self.assertIn(
                                         "--fom-origin-types", cmd_list
                                     )
+                                    self.assertIn("modifier", cmd_list)
                                     self.assertIn("application", cmd_list)
                                     self.assertEqual(
                                         kwargs["env"]["TQDM_DISABLE"],
