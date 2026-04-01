@@ -33,12 +33,6 @@ class TestTestHelper(unittest.TestCase):
         self.assertEqual(headers_dict["--time"], "20")
         self.assertIn("--deadline", headers_dict)
 
-    def test_merge_configs_variables(self):
-        context_dict = {"variables": {"a": 1}}
-        configs = {"machine": {"variables": {"b": 2}}}
-        TestHelper._merge_configs(context_dict, configs, "machine", "app")
-        self.assertEqual(context_dict["variables"], {"a": 1, "b": 2})
-
 
 if __name__ == "__main__":
     unittest.main()

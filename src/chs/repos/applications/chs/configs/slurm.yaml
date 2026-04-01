@@ -61,6 +61,11 @@ a3-mega:
         mode: fom_comparison
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
+  nvidia-smi:
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
 a3-ultra:
   nccl-tests:
     modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
