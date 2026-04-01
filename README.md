@@ -127,6 +127,7 @@ Executes a test suite on a specified cluster.
 -   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
 -   `--nodepool`: GKE node pool to run on.
 -   `--partition`: Slurm partition to run on.
+-   `--dry-run`: Set up the workspace but do not execute experiments or analyze.
 
 **Example:**
 ```bash
@@ -193,8 +194,23 @@ The `bill_of_health.json` contains a `log_file` field for every test, pointing t
 
 **Example Log File Path:**
 `log_file: "/usr/local/google/home/user/.local/share/cluster-health-scanner/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
+#### 4. `cancel`
+Cancels running jobs for a specific test run.
 
-#### 4. `results`
+**Arguments:**
+-   `RUN_ID` (Optional): The ID (Workspace Name) of the run to cancel.
+    *   *Default:* The most recent run.
+
+**Example:**
+```bash
+# Cancel the latest run
+chs cancel
+
+# Cancel a specific run
+chs cancel 2026-03-30_10.30.00.123456
+```
+
+#### 5. `results`
 Displays the Bill of Health results in the terminal.
 
 **Arguments:**
@@ -212,6 +228,21 @@ chs results
 
 # Show details for specific tests
 chs results --tests nccl-cluster
+```
+
+#### 6. `configure`
+Configure CHS settings.
+
+**Commands:**
+-   `bucket`: Sets the GCS bucket for storing results.
+
+**Options:**
+-   `--name`: GCS bucket name (default: `chs-results`).
+
+**Example:**
+```bash
+# Set the GCS bucket name
+chs configure bucket --name my-results-bucket
 ```
 
 ## Configuration
