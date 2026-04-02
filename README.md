@@ -107,7 +107,7 @@ Lists available resources (suites, tests, schedulers).
 **Example:**
 ```bash
 chs list --suites
-chs list --tests --from-suite a3-ultra
+chs list --tests --from-suite lite
 ```
 
 #### 2. `run`
@@ -116,13 +116,14 @@ Executes a test suite on a specified cluster.
 **Arguments:**
 -   `--scheduler` / `-sch` **(Required)**: The scheduler to use.
     *   *Supported values:* `slurm`, `gke`.
--   `--machine-type` **(Required)**: The machine type of the cluster nodes (e.g., `a3-ultra`, `a3-high`).
-    *   *Supported value:* `a3-ultra`.
--   `--suite` / `-s`: Name of the Ramble application/suite to run.
-    *   *Default:* `a3-ultra`
+-   `--machine-type` **(Required)**: The machine type of the cluster nodes.
+    *   *Supported values:* `a3-ultra`, `a3-mega`, `a4`.
+-   `--suite` / `-s`: Name of the test suite to run.
+    *   *Default:* `lite`.
+    *   *Supported values:* `lite`, `standard`, `burn-in`.
 -   `--tests` / `-t`: Comma-separated list of specific tests to run.
-    *   *Default (if not provided):* `nccl-cluster,nccl-pairwise,dcgm`
-    *   *Supported values:* `nccl-cluster`, `nccl-pairwise`, `dcgm`.
+    *   *Default (if not provided):* Loads tests from the selected suite.
+    *   *Supported values:* `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`.
 -   `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
 -   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
 -   `--nodepool`: GKE node pool to run on.
@@ -138,10 +139,10 @@ chs run --scheduler gke --machine-type a3-ultra
 chs run --scheduler slurm --machine-type a3-ultra --nodes node-01,node-02
 
 # Run specific tests
-chs run --scheduler slurm --machine-type a3-high --tests nccl-cluster
+chs run --scheduler slurm --machine-type a3-mega --tests nccl-cluster
 
 # Run on GKE with a specific node pool
-chs run --scheduler gke --machine-type a3-high --nodepool my-node-pool
+chs run --scheduler gke --machine-type a3-mega --nodepool my-node-pool
 ```
 
 **Output:**
