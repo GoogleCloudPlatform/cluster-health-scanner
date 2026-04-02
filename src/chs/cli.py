@@ -329,10 +329,7 @@ def _show_results(
     parsed_tests = _parse_str_to_list(tests)
     parsed_resources = _parse_str_to_list(resources)
 
-    if parsed_tests or parsed_resources:
-        viewer.show_details(tests=parsed_tests, resources=parsed_resources)
-    else:
-        viewer.show_summary()
+    viewer.show_details(tests=parsed_tests, resources=parsed_resources)
 
 
 def cancel_action(app_data: ChsAppData, run_id: str) -> str:

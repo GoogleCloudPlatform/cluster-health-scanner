@@ -995,7 +995,9 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         mock_results_viewer.assert_called_once()
-        mock_results_viewer.return_value.show_summary.assert_called_once()
+        mock_results_viewer.return_value.show_details.assert_called_once_with(
+            tests=None, resources=None
+        )
 
         # Test with tests flag
         mock_results_viewer.reset_mock()

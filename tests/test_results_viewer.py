@@ -69,21 +69,6 @@ class TestResultsViewer(unittest.TestCase):
             ResultsViewer(self.invalid_json_path)
 
     @mock.patch.object(Console, "print")
-    def test_show_summary_no_data(self, mock_print):
-        """Test show_summary with no data."""
-        with self.assertRaises(ex.BillOfHealthNotFoundException):
-            ResultsViewer("non_existent.json")
-
-    @mock.patch.object(Console, "print")
-    def test_show_summary_valid(self, mock_print):
-        """Test show_summary with valid data."""
-        viewer = ResultsViewer(self.valid_json_path)
-        viewer.show_summary()
-        self.assertTrue(mock_print.called)
-        # Check if Table or specific strings are printed
-        # (hard to check exact output with rich)
-
-    @mock.patch.object(Console, "print")
     def test_show_details_all(self, mock_print):
         """Test show_details showing all tests."""
         viewer = ResultsViewer(self.valid_json_path)

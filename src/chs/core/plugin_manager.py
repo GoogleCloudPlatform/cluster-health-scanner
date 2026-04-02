@@ -70,7 +70,7 @@ class PluginManager:
         for registered_name in sorted(
             self._plugins.keys(), key=len, reverse=True
         ):
-            if test_name.startswith(registered_name):
+            if registered_name in test_name:
                 return registered_name
         return None
 

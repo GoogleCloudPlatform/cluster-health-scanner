@@ -8,13 +8,6 @@ class TestPlugin(ABC):
     """Plugin for visualization and data extraction lifecycle."""
 
     @abstractmethod
-    def render_summary(
-        self, test_results: list[pb.TestResult]
-    ) -> RenderableType:
-        """Returns a Renderable for summary views aggregating across nodes."""
-        pass
-
-    @abstractmethod
     def render_detail(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
