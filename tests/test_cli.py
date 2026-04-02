@@ -128,25 +128,17 @@ class TestCli(unittest.TestCase):
         )
         self.assertIsNone(cli.non_empty_str_callback(ctx, param, None))
 
-    @mock.patch("chs.cli.logger")
-    def test_list_tests_implementation_hint(self, mock_logger):
-        """Test _list_tests prints hint when listing all tests."""
-        cli._list_tests(from_suite=None, tests_flag=True)
-        mock_logger.info.assert_any_call(
-            "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        )
+    def test_list_tests_implementation_hint(self):
+        """Test _get_tests_list returns hint when listing all tests."""
+        lines = cli._get_tests_list(from_suite=None, tests_flag=True)
+        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
+        self.assertIn(hint, lines)
 
-    @mock.patch("chs.cli.logger")
-    def test_list_tests_implementation_no_hint(self, mock_logger):
-        """Test _list_tests does not print hint when filtering by suite."""
-        cli._list_tests(from_suite="suite1", tests_flag=True)
-        hint_message = "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        self.assertTrue(
-            all(
-                hint_message not in call.args
-                for call in mock_logger.info.call_args_list
-            )
-        )
+    def test_list_tests_implementation_no_hint(self):
+        """Test _get_tests_list does not return hint when filtering by suite."""
+        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
+        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
+        self.assertNotIn(hint, lines)
 
     @mock.patch.object(cli, "list_action", autospec=True)
     def test_list_command(self, mock_list_action):
@@ -1047,9 +1039,9 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.mock_app_data_cls.assert_called_once()
 
-    @mock.patch.object(cli, "_list_schedulers", autospec=True)
-    @mock.patch.object(cli, "_list_tests", autospec=True)
-    @mock.patch.object(cli, "_list_suites", autospec=True)
+    @mock.patch.object(cli, "_get_schedulers_list", autospec=True)
+    @mock.patch.object(cli, "_get_tests_list", autospec=True)
+    @mock.patch.object(cli, "_get_suites_list", autospec=True)
     def test_list_action(
         self,
         mock_suites,
@@ -1128,6 +1120,9 @@ class TestCli(unittest.TestCase):
                 expected_schedulers_calls=1,
             ),
         ]
+        mock_suites.return_value = ["suite1"]
+        mock_tests.return_value = ["test1"]
+        mock_schedulers.return_value = ["sch1"]
         for case in test_cases:
             with self.subTest(case.name):
                 mock_suites.reset_mock()

@@ -19,6 +19,7 @@ import click
 
 from chs import exceptions as ex
 from chs.ramble_manager import RambleManager
+from chs import resources
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
@@ -83,30 +84,46 @@ def non_empty_str_callback(
     return stripped_value
 
 
-def _list_suites() -> None:
-    """Lists available suites."""
-    # TODO: Replace with actual suite listing logic
-    logger.info("Listed suites.")
+def _get_suites_list() -> list[str]:
+    """Returns lines for available suites."""
+    suites = list(resources.SUPPORTED_SUITES.keys())
+    if suites:
+        lines = ["Available Suites:"]
+        lines.extend(f"  - {s}" for s in suites)
+        return lines
+    return ["No suites found."]
 
 
-def _list_tests(from_suite: str | None, tests_flag: bool) -> None:
-    """Lists available tests, potentially filtered by suite."""
+def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
+    """Returns lines for available tests."""
     if from_suite:
-        # TODO: Add logic to list tests for a specific suite
-        logger.info("Listed tests for suite: %r", from_suite)
+        tests = resources.SUPPORTED_SUITES.get(from_suite, [])
     else:
-        # TODO: Add logic to list all tests
-        if tests_flag:
-            logger.info(
-                "  (Hint: Use --from-suite <suite_name> to filter tests)"
-            )
-        logger.info("Listed tests.")
+        tests = resources.SUPPORTED_TESTS
+
+    if tests:
+        lines = []
+        if from_suite:
+            lines.append(f"Available Tests for suite '{from_suite}':")
+        else:
+            lines.append("Available Tests:")
+            if tests_flag:
+                lines.append(
+                    "  (Hint: Use --from-suite <suite_name> to filter tests)"
+                )
+        lines.extend(f"  - {t}" for t in tests)
+        return lines
+    return ["No tests found."]
 
 
-def _list_schedulers() -> None:
-    """Lists available schedulers."""
-    # TODO: Replace with actual scheduler listing logic
-    logger.info("Listed schedulers.")
+def _get_schedulers_list() -> list[str]:
+    """Returns lines for available schedulers."""
+    schedulers = resources.SUPPORTED_SCHEDULERS
+    if schedulers:
+        lines = ["Supported Schedulers:"]
+        lines.extend(f"  - {s}" for s in schedulers)
+        return lines
+    return ["No schedulers found."]
 
 
 def list_action(
@@ -136,12 +153,26 @@ def list_action(
         from_suite,
     )
     show_all = not (suites or tests or schedulers)
+    all_lines = []
+
     if suites or show_all:
-        _list_suites()
+        all_lines.extend(_get_suites_list())
+        all_lines.append("")
+
     if tests or show_all:
-        _list_tests(from_suite, tests)
+        all_lines.extend(_get_tests_list(from_suite, tests))
+        all_lines.append("")
+
     if schedulers or show_all:
-        _list_schedulers()
+        all_lines.extend(_get_schedulers_list())
+        all_lines.append("")
+
+    if all_lines and not all_lines[-1]:
+        all_lines.pop()
+
+    if all_lines:
+        logger.info("\n".join(all_lines))
+
     return show_all
 
 
