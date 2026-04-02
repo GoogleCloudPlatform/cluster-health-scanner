@@ -56,13 +56,19 @@ gcloud container clusters get-credentials {cluster_name} \
 
 Clone CHS from Gerrit's develop branch
 
+**Clone using HTTPS:**
+
 ```bash
-#Clone using https
 git clone -b develop https://cluster-toolkit.googlesource.com/cluster-health-scanner
+```
 
-#Clone using sso
+**Clone using SSO:**
+
+```bash
 git clone -b develop https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
+```
 
+```bash
 cd cluster-health-scanner
 ```
 
@@ -110,7 +116,24 @@ chs list --suites
 chs list --tests --from-suite lite
 ```
 
-#### 2. `run`
+#### 2. `configure`
+Configure CHS settings.
+
+*Note: Configuring a GCS bucket is optional. Setting a bucket allows CHS to upload reports and archives to GCS for persistence and sharing.*
+
+**Commands:**
+-   `bucket`: Sets the GCS bucket for storing results.
+
+**Options:**
+-   `--name`: GCS bucket name (default: `chs-results`).
+
+**Example:**
+```bash
+# Set the GCS bucket name
+chs configure bucket --name my-results-bucket
+```
+
+#### 3. `run`
 Executes a test suite on a specified cluster.
 
 **Arguments:**
@@ -130,19 +153,61 @@ Executes a test suite on a specified cluster.
 -   `--partition`: Slurm partition to run on.
 -   `--dry-run`: Set up the workspace but do not execute experiments or analyze.
 
-**Example:**
+### Supported Suites and Tests
+
+Below are the details of the supported test suites and the tests included in each suite, along with a brief description of each test.
+
+#### Test Descriptions
+
+-   **`nvidia-smi`**: Basic GPU health check (presence, visibility, and status).
+-   **`dcgm`**: Diagnostics using NVIDIA Data Center GPU Manager.
+-   **`gemm`**: Matrix multiplication performance test.
+-   **`stream`**: Sustainable memory bandwidth measurement.
+-   **`nccl-single-node`**: NCCL performance tests on a single node.
+-   **`nccl-cluster`**: NCCL performance tests across all nodes in the cluster.
+-   **`nccl-pairwise`**: NCCL performance tests between pairs of nodes.
+
+#### Suite Composition
+
+-   **`lite`**: Designed for quick verification.
+    -   Included tests: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`
+-   **`standard`**: Comprehensive health check.
+    -   Included tests: `nvidia-smi`, `dcgm`, `stream`, `nccl-cluster`, `nccl-pairwise`
+-   **`burn-in`**: Focused on stress testing.
+    -   Included tests: `dcgm` (with higher diagnostic levels)
+
+**Examples:**
+
+#### GKE Examples
+
 ```bash
-# Run all tests for GKE provisioned a3-ultra machine
+# Run the lite suite (default) on a3-ultra machine
 chs run --scheduler gke --machine-type a3-ultra
 
-# Run the default a3-ultra suite on Slurm with specific nodes
+# Run the lite suite on a specific node pool
+chs run --scheduler gke --machine-type a3-ultra --nodepool my-node-pool
+
+# Run the lite suite on specific nodes
+chs run --scheduler gke --machine-type a3-ultra --nodes node-01,node-02
+
+# Run specific tests on specific nodes
+chs run --scheduler gke --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+```
+
+#### Slurm Examples
+
+```bash
+# Run the lite suite (default) on a3-ultra machine
+chs run --scheduler slurm --machine-type a3-ultra
+
+# Run the lite suite on a specific partition
+chs run --scheduler slurm --machine-type a3-ultra --partition my-partition
+
+# Run the lite suite on specific nodes
 chs run --scheduler slurm --machine-type a3-ultra --nodes node-01,node-02
 
-# Run specific tests
-chs run --scheduler slurm --machine-type a3-mega --tests nccl-cluster
-
-# Run on GKE with a specific node pool
-chs run --scheduler gke --machine-type a3-mega --nodepool my-node-pool
+# Run specific tests on specific nodes
+chs run --scheduler slurm --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 **Output:**
@@ -150,7 +215,7 @@ Upon successful submission, CHS provides:
 -   **Request ID**: The name of the created workspace (timestamp-based).
 -   **Job IDs**: The Slurm job IDs for the submitted tests.
 
-#### 3. `analyze`
+#### 4. `analyze`
 Analyzes the results of a test run and generates a Bill of Health.
 
 **Arguments:**
@@ -195,7 +260,7 @@ The `bill_of_health.json` contains a `log_file` field for every test, pointing t
 
 **Example Log File Path:**
 `log_file: "/usr/local/google/home/user/.local/share/cluster-health-scanner/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
-#### 4. `cancel`
+#### 5. `cancel`
 Cancels running jobs for a specific test run.
 
 **Arguments:**
@@ -211,7 +276,7 @@ chs cancel
 chs cancel 2026-03-30_10.30.00.123456
 ```
 
-#### 5. `results`
+#### 6. `results`
 Displays the Bill of Health results in the terminal.
 
 **Arguments:**
@@ -231,20 +296,6 @@ chs results
 chs results --tests nccl-cluster
 ```
 
-#### 6. `configure`
-Configure CHS settings.
-
-**Commands:**
--   `bucket`: Sets the GCS bucket for storing results.
-
-**Options:**
--   `--name`: GCS bucket name (default: `chs-results`).
-
-**Example:**
-```bash
-# Set the GCS bucket name
-chs configure bucket --name my-results-bucket
-```
 
 ## Configuration
 
