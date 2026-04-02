@@ -25,6 +25,7 @@ from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite_tests
+from chs import validators
 
 logger = logging.getLogger(__name__)
 
@@ -67,21 +68,6 @@ def archive_workspace(
     else:
         if on_success:
             ramble_manager.archive()
-
-
-def non_empty_str_callback(
-    ctx: click.Context, param: click.Parameter, value: str | None
-) -> str | None:
-    """Click callback to validate that if a string value is provided, it is not
-    empty."""
-    if value is None:
-        return None
-    stripped_value = value.strip()
-    if not stripped_value:
-        raise click.BadParameter(
-            "cannot be an empty string.", ctx=ctx, param=param
-        )
-    return stripped_value
 
 
 def _get_suites_list() -> list[str]:
@@ -220,6 +206,33 @@ def _parse_str_to_list(value: str | None) -> list[str] | None:
     if value is None:
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _validate_run_args(
+    scheduler: str, machine_type: str, tests: str | None, suite: str | None
+) -> None:
+    """Validates core run arguments against supported lists.
+
+    Args:
+      scheduler: Name of the scheduler.
+      machine_type: Machine type string.
+      tests: Comma-separated list of tests, or None.
+      suite: Suite name, or None.
+
+    Raises:
+      ex.ChsValidationError: If validation fails.
+    """
+    validator = validators.ProjectConfigValidator()
+    errors = validator.validate(
+        {
+            "scheduler": scheduler,
+            "machine_type": machine_type,
+            "suite": suite,
+            "tests": _parse_str_to_list(tests),
+        }
+    )
+    if errors:
+        raise ex.ChsValidationError("\n".join(errors))
 
 
 def run_action(
@@ -418,7 +431,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     "--from-suite",
     metavar="SUITE_NAME",
     help="Specify the suite to list tests from (only used with --tests)",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 def list_command(
     *, suites: bool, tests: bool, schedulers: bool, from_suite: str | None
@@ -446,46 +459,46 @@ def list_command(
     "--suite",
     "-s",
     help="Name of the test suite to run",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--scheduler",
     "-sch",
     required=True,
     help="Scheduler to use (e.g., slurm, gke)",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--tests",
     "-t",
     help="Comma-separated list of specific tests to run (optional)",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodes",
     help="Comma-separated list of individual nodes to run on",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodelist",
     help="Slurm node list pattern to run on (e.g., node-[1-3])",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodepool",
     help="GKE node pool to run on",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--partition",
     help="Slurm partition to run on",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--machine-type",
     required=True,
     help="The machine type of the cluster nodes (e.g., a3-high).",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--dry-run",
@@ -528,6 +541,8 @@ def run(
             "The latest CHS run is still in progress. Please wait for it to"
             " complete or cancel it before submitting a new run."
         )
+
+    _validate_run_args(scheduler, machine_type, tests, suite)
 
     if not tests:
         if not suite:
@@ -621,7 +636,9 @@ def run(
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.argument(
+    "run_id", required=False, callback=validators.validate_non_empty_string
+)
 @click.pass_obj
 def analyze(obj, run_id: str | None) -> str:
     """Analyze results from a test run.
@@ -647,7 +664,9 @@ def analyze(obj, run_id: str | None) -> str:
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.argument(
+    "run_id", required=False, callback=validators.validate_non_empty_string
+)
 @click.pass_obj
 def cancel(obj, run_id: str | None) -> str:
     """Cancel running jobs for a test run.
@@ -673,18 +692,20 @@ def cancel(obj, run_id: str | None) -> str:
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.argument(
+    "run_id", required=False, callback=validators.validate_non_empty_string
+)
 @click.option(
     "--tests",
     "-t",
     help="Comma-separated list of test names to show details for.",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--resources",
     "-r",
     help="Comma-separated list of resource names to show details for.",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.pass_obj
 def results(

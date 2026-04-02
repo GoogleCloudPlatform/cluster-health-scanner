@@ -24,12 +24,8 @@
 
 cd "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce"
 
-rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info"
-touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info"
-rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
-touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
-rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config"
-touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config"
+rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
+touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
 export NCCL_FASTRAK_CTRL_DEV=enp0s12;
 export NCCL_FASTRAK_IFNAME=enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0;
 export NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY=/dev/aperture_devices;

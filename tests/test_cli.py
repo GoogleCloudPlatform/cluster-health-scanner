@@ -11,7 +11,6 @@ from unittest import mock
 
 from chs import cli
 from chs import exceptions
-import click
 from click import testing
 import shutil
 import tempfile
@@ -104,29 +103,38 @@ class TestCli(unittest.TestCase):
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
-    def test_non_empty_str_callback(self):
-        """Test non_empty_str_callback raises BadParameter on empty string."""
-        ctx = mock.Mock(spec=click.Context)
-        ctx.command = mock.Mock()
-        param = mock.Mock(spec=click.Parameter)
-        with self.assertRaisesRegex(
-            click.BadParameter, "cannot be an empty string"
-        ):
-            cli.non_empty_str_callback(ctx, param, "")
-
-        with self.assertRaisesRegex(
-            click.BadParameter, "cannot be an empty string"
-        ):
-            cli.non_empty_str_callback(ctx, param, " ")
-
-        self.assertEqual(
-            cli.non_empty_str_callback(ctx, param, "  valid  "), "valid"
+        # Mock resources to allow test dummy values
+        self.enterContext(
+            mock.patch(
+                "chs.resources.SUPPORTED_MACHINE_TYPES",
+                new=["a3-ultra", "a4", "a3-mega", "a3-high"],
+            )
         )
-
-        self.assertEqual(
-            cli.non_empty_str_callback(ctx, param, "valid"), "valid"
+        self.enterContext(
+            mock.patch(
+                "chs.resources.SUPPORTED_SUITES",
+                new={
+                    "lite": [],
+                    "standard": [],
+                    "burn-in": [],
+                    "suite1": [],
+                    "s1": [],
+                },
+            )
         )
-        self.assertIsNone(cli.non_empty_str_callback(ctx, param, None))
+        self.enterContext(
+            mock.patch(
+                "chs.resources.MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE",
+                new={
+                    "slurm": {
+                        "a3-high": ["t1", "t2", "t3"],
+                    },
+                    "gke": {
+                        "a3-high": ["t1", "t2", "t3"],
+                    },
+                },
+            )
+        )
 
     def test_list_tests_implementation_hint(self):
         """Test _get_tests_list returns hint when listing all tests."""
@@ -730,7 +738,7 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_output="Only Slurm and GKE schedulers are supported",
+                expected_output="Scheduler 'unknown' is not supported",
             ),
             _CommandErrorTestCase(
                 name="missing_scheduler",

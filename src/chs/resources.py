@@ -57,3 +57,62 @@ SUPPORTED_SUITES = {
     ],
     "burn-in": ["dcgm"],
 }
+
+# TODO: Create a single source of truth for all resources.
+MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
+    "slurm": {
+        "a3-mega": [
+            "dcgm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
+            "stream",
+            "nvidia-smi",
+            "gemm",
+        ],
+        "a3-ultra": [
+            "dcgm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
+            "stream",
+            "nvidia-smi",
+            "gemm",
+        ],
+        "a4": [
+            "dcgm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
+            "stream",
+            "nvidia-smi",
+            "gemm",
+        ],
+    },
+    "gke": {
+        "a3-mega": [
+            "dcgm",
+            "stream",
+            "nvidia-smi",
+            "gemm",
+        ],
+        "a3-ultra": [
+            "dcgm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
+            "stream",
+            "nvidia-smi",
+            "gemm",
+        ],
+        "a4": [
+            "dcgm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
+            "stream",
+            "nvidia-smi",
+            "gemm",
+        ],
+    },
+}

@@ -21,12 +21,8 @@ cd <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostic
 
 scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/hostfile
 
-rm -f "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_job_info"
-touch "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_job_info"
-rm -f "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/cluster_health_diagnostics-stream-node1.out"
-touch "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/cluster_health_diagnostics-stream-node1.out"
-rm -f "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_config"
-touch "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_config"
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/cluster_health_diagnostics-stream-node1.out"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/cluster_health_diagnostics-stream-node1.out"
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_config
 srun -l --container-workdir /workspace --container-image <HOME_DIR>/.local/share/chs/images/hpc-benchmarks:25.09.sqsh --container-writable --wait=60 ./stream-gpu-test.sh --n 300653184 --gpu-affinity  --cpu-affinity 0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103 --mem-affinity 0:0:0:0:1:1:1:1 >> "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/cluster_health_diagnostics-stream-node1.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node1/.slurm_script_end_time

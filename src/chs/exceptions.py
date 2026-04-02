@@ -5,6 +5,10 @@ class ChsException(Exception):
     """Base exception class for all CHS-related errors."""
 
 
+class ChsValidationError(ChsException):
+    """Raised when configuration or arguments fail validation."""
+
+
 class NoPreviousRunsFoundException(ChsException):
     """Raised when no previous CHS runs are found."""
 
