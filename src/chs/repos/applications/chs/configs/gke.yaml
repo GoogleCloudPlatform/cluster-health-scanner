@@ -50,7 +50,7 @@ a3-ultra:
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -155,7 +155,7 @@ a4:
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -232,7 +232,7 @@ a3-mega:
     container_security_context_yaml: |
       privileged: true
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
