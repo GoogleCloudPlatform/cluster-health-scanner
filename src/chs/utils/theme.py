@@ -4,6 +4,9 @@ from rich.table import Table
 CHS_HEADER_STYLE = "bold cyan"
 CHS_WARNING_STYLE = "yellow"
 CHS_TITLE_STYLE = "bold"
+CHS_SUCCESS_STYLE = "green"
+CHS_FAILURE_STYLE = "red"
+CHS_NEUTRAL_STYLE = "dim"
 
 
 def create_styled_table(
