@@ -132,5 +132,11 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
             "nvidia-smi",
             "gemm",
         ],
+        "a4x": [
+            "dcgm",
+            "nvidia-smi",
+            "stream",
+            "gemm",
+        ],
     },
 }

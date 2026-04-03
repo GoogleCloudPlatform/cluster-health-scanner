@@ -284,3 +284,84 @@ a3-mega:
       m: 16384
       n: 16384
       k: 16384
+a4x:
+  variables:
+    pod_annotations_yaml: |
+      networking.gke.io/default-interface: {default_interface_name}
+      networking.gke.io/interfaces: |
+        {all_interfaces_json}
+    node_selector_yaml: "cloud.google.com/gke-accelerator: nvidia-gb200"
+    tolerations_yaml: |
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: present
+        effect: NoSchedule
+      - key: kubernetes.io/arch
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+    extra_volumes_yaml: |
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+    extra_volume_mounts_yaml: |
+      - name: shared-memory
+        mountPath: /dev/shm
+    container_resources_yaml: |
+      limits:
+        nvidia.com/gpu: {gpus_per_node}
+    container_security_context_yaml: |
+      privileged: true
+      runAsUser: 0
+  nvidia-dcgm:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "2800000000"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      processes_per_node: "{gpus_per_node}"
+      n_ranks: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 51200
+      n: 51200
+      k: 51200
