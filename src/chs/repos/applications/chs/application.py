@@ -81,7 +81,7 @@ class Chs(ExecutableApplication):
         "machine_type",
         default="",
         description="Machine type to test",
-        values=["a3-high", "a3-ultra", "a4", "a3-mega"],
+        values=["a3-high", "a3-ultra", "a4", "a3-mega", "a4x"],
     )
 
     executable(

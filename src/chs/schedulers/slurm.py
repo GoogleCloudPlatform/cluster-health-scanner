@@ -56,7 +56,7 @@ class SlurmScheduler(BaseScheduler):
     def name(self) -> str:
         return "slurm"
 
-    def _run_srun(self, args: list[str], timeout: int = 30) -> str:
+    def _run_srun(self, args: list[str], timeout: int = 300) -> str:
         """Runs a command via srun and returns filtered output."""
         cmd = ["srun", "-N1", "-n1"]
         if self.partition_arg:

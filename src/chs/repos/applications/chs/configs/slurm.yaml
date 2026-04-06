@@ -191,3 +191,45 @@ a4:
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
+a4x:
+  nvidia-dcgm:
+    modifiers: [{name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nvidia-stream:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: hpc-benchmarks:25.09
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "-l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60"
+      n_elements: "2800000000"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+  nvidia-gemm:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: "hpc-benchmarks:25.09"
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 51200
+      n: 51200
+      k: 51200
+  nvidia-smi:
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
