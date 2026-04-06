@@ -18,13 +18,13 @@ import subprocess
 import sysconfig
 import time
 from typing import Any
-import chs
+import click
+from google.protobuf.json_format import MessageToJson
+
 from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
-import click
-from google.protobuf.json_format import MessageToJson
 from chs.utils.app_data import ChsAppData
 import yaml
 
@@ -249,6 +249,7 @@ class RambleManager:
         Raises:
           click.ClickException: If the repository addition command fails.
         """
+        import chs
 
         logger.debug("Adding custom CHS repository to workspace...")
         with pkg_resources.path(chs, "repos") as p:

@@ -1,7 +1,7 @@
 from rich.console import Group
 from rich.text import Text
 
-from chs.utils.theme import create_styled_table
+from chs.utils import create_styled_table
 
 from dataclasses import dataclass
 from chs.protos import bill_of_health_pb2 as pb

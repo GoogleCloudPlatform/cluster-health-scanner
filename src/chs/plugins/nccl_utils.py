@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from chs.protos import bill_of_health_pb2 as pb
-from chs.utils.theme import create_styled_table, CHS_HEADER_STYLE
+from chs.utils import create_styled_table, CHS_HEADER_STYLE
 from rich.table import Table
 
 BYTES_PER_GB = 1024**3

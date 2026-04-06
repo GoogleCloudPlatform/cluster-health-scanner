@@ -1,11 +1,11 @@
 """Module for displaying Bill of Health results in the terminal."""
 
 import logging
-from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
 
+from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
 

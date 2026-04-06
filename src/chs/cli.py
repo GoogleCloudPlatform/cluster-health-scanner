@@ -17,15 +17,17 @@ from typing import Any
 
 import click
 
-from chs import exceptions as ex
-from chs.ramble_manager import RambleManager
-from chs import resources
-from chs.results_viewer import ResultsViewer
-from chs.schedulers import get_scheduler
-from chs.schedulers.base import BaseScheduler
-from chs.utils.app_data import ChsAppData
-from chs.utils.suites import load_suite_tests
-from chs import validators
+from chs import (
+    BaseScheduler,
+    ChsAppData,
+    RambleManager,
+    ResultsViewer,
+    exceptions as ex,
+    get_scheduler,
+    load_suite_tests,
+    resources,
+    validators,
+)
 
 logger = logging.getLogger(__name__)
 

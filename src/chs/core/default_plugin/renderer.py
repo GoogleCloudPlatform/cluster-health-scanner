@@ -2,7 +2,7 @@ from chs.protos import bill_of_health_pb2 as pb
 from rich.console import RenderableType, Group
 from rich.panel import Panel
 from rich.text import Text
-from chs.utils.theme import create_styled_table
+from chs.utils import create_styled_table
 
 
 class DefaultRenderer:

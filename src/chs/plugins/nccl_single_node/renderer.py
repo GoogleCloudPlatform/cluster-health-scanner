@@ -6,7 +6,7 @@ from chs.plugins.nccl_utils import (
     get_peak_metrics,
     create_nccl_table,
 )
-from chs.utils.theme import CHS_WARNING_STYLE, CHS_TITLE_STYLE
+from chs.utils import CHS_WARNING_STYLE, CHS_TITLE_STYLE
 
 
 class NcclSingleNodeRenderer(DefaultRenderer):
