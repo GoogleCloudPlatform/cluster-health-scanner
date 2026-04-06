@@ -48,6 +48,9 @@ TESTS_FOR_MACHINE_TYPE = {
         "stream",
         "nvidia-smi",
         "gemm",
+        "nccl-cluster",
+        "nccl-pairwise",
+        "nccl-single-node",
     ],
 }
 
@@ -99,6 +102,9 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
             "stream",
             "nvidia-smi",
             "gemm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
         ],
     },
     "gke": {
