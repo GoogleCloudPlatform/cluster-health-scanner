@@ -1,3 +1,4 @@
+from copy import deepcopy
 import sys
 import os
 import spack.util.spack_yaml as yaml
@@ -27,7 +28,6 @@ class TestsModel:
         self.tests = tests
 
 
-# Helper classes to support Ramble's CommentedMap/Seq in eval
 class CommentedMap(dict):
     pass
 
@@ -37,47 +37,27 @@ class CommentedSeq(list):
 
 
 def parse_tests_config(raw_input) -> TestsModel:
-    try:
-        data = raw_input
-        if isinstance(raw_input, str):
-            # Basic safety check: if it looks like a list, try eval
-            # This is still risky but matches previous logic without ruamel dependency complexity
-            # ideally we should use json.loads if we ensure input is json
-            try:
-                import json
+    data = raw_input
+    if isinstance(raw_input, str):
+        context = {
+            "__builtins__": {},
+            "CommentedMap": CommentedMap,
+            "CommentedSeq": CommentedSeq,
+        }
+        data = eval(raw_input, context)
 
-                data = json.loads(raw_input)
-            except json.JSONDecodeError:
-                # Fallback to eval if it's a python string representation (e.g. from Ramble)
-                context = {
-                    "__builtins__": {},
-                    "CommentedMap": CommentedMap,
-                    "CommentedSeq": CommentedSeq,
-                }
-                data = eval(raw_input, context)
+    if isinstance(data, list):
+        cleaned_data = [
+            TestModel(
+                name=item.get("name"),
+                workloads=item.get("workloads"),
+                variables=item.get("variables"),
+            )
+            for item in data
+        ]
+        return TestsModel(tests=cleaned_data)
 
-        # If data is a list of strings, convert to list of dicts
-        if isinstance(data, list):
-            cleaned_data = []
-            for item in data:
-                if isinstance(item, str):
-                    cleaned_data.append(TestModel(name=item))
-                elif isinstance(item, dict):
-                    cleaned_data.append(
-                        TestModel(
-                            name=item.get("name"),
-                            workloads=item.get("workloads"),
-                            variables=item.get("variables"),
-                        )
-                    )
-            return TestsModel(tests=cleaned_data)
-
-        return TestsModel(tests=[])
-
-    except Exception as e:
-        logger.error(f"Failed to parse tests configuration: {e}")
-        # Re-raise to be caught by caller
-        raise e
+    return TestsModel(tests=[])
 
 
 class Chs(ExecutableApplication):
@@ -87,9 +67,6 @@ class Chs(ExecutableApplication):
     maintainers("bytetwin")
 
     variable("tests", default=[], description="Specific tests to run")
-    variable(
-        "machine_type", default="a3-ultra", description="Machine type to test"
-    )
 
     tags("chs-diagnostics")
 
@@ -103,8 +80,8 @@ class Chs(ExecutableApplication):
     variable(
         "machine_type",
         default="",
-        description="Machine type for the suite",
-        values=["a3-high", "a3-ultra", "a4"],
+        description="Machine type to test",
+        values=["a3-high", "a3-ultra", "a4", "a3-mega", "a4x"],
     )
 
     executable(
@@ -151,14 +128,7 @@ class Chs(ExecutableApplication):
                     slurm_configs = yaml.load(f) or {}
                 self._deep_merge(configs, slurm_configs)
 
-        # Try to expand tests variable
         tests_str = self.expander.expand_var_name("tests", typed=True)
-        # Handle empty list from Ramble
-        if hasattr(tests_str, "__len__") and len(tests_str) == 0:
-            tests_str = None
-        if isinstance(tests_str, str) and tests_str.strip() == "[]":
-            tests_str = None
-
         if not tests_str:
             logger.warn(
                 f"No tests defined for {self.name}. Skipping experiments generation."
@@ -166,16 +136,14 @@ class Chs(ExecutableApplication):
             return
 
         try:
-            tests_config = parse_tests_config(
-                str(tests_str) if isinstance(tests_str, str) else tests_str
-            )
+            tests_config = parse_tests_config(tests_str)
         except Exception as e:
             logger.error(f"Failed to parse tests configuration: {e}")
-            return
+            raise ChsExecutionException(
+                f"Failed to parse tests configuration: {e}"
+            ) from e
 
         for test in tests_config.tests:
-            # Merge per-test variables with workspace variables, giving precedence to test variables
-            # Create a context with merged variables
             test_vars = self.non_reserved_variables(
                 workspace,
                 remove_keys={
@@ -185,14 +153,18 @@ class Chs(ExecutableApplication):
                     "jobset_template",
                     "mpi_command",
                     "container_image",
+                    "srun_args",
                 },
             )
 
-            # Update test_vars with per-test variables
             if test.variables:
                 test_vars.update(test.variables)
 
-            if test.name in ["nccl-cluster", "nccl-pairwise"]:
+            if test.name in [
+                "nccl-cluster",
+                "nccl-pairwise",
+                "nccl-single-node",
+            ]:
                 workloads = (
                     test.workloads
                     if test.workloads
@@ -214,10 +186,42 @@ class Chs(ExecutableApplication):
                 experiment_name = self.expander.experiment_name
 
                 context = TestHelper.dcgm_test(
-                    test_vars, experiment_name, configs
+                    test_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "diag", context
                 )
+            elif test.name == "stream":
+                application_name = "nvidia-stream"
+                experiment_name = self.expander.experiment_name
+
+                context = TestHelper.stream_test(
+                    test_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "standard", context
+                )
+            elif test.name == "nvidia-smi":
+                application_name = "nvidia-smi"
+                experiment_name = self.expander.experiment_name
+
+                context = TestHelper.nvidia_smi_test(
+                    test_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "local", context
+                )
+            elif test.name == "gemm":
+                application_name = "nvidia-gemm"
+                workloads = test.workloads if test.workloads else ["check"]
+
+                for workload in workloads:
+                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    context = TestHelper.gemm_test(
+                        test_vars, experiment_name, deepcopy(configs)
+                    )
+                    self.experiment_set.render_chained_experiments(
+                        application_name, workload, context
+                    )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

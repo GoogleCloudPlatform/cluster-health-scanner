@@ -44,7 +44,8 @@ spec:
                 - |
                   export NODE_RANK=$JOB_COMPLETION_INDEX
                   mkdir -p "{container_experiment_run_dir}"
-                  cd "{container_experiment_run_dir}"
+                  mkdir -p "{workdir}"
+                  cd "{workdir}"
                   {indented_standard_command}
 {standard_volume_mounts_section}
               restartPolicy: Never

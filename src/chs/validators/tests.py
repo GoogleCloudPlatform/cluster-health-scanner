@@ -3,6 +3,8 @@
 from typing import Any
 from chs import resources
 from chs.validators.base import Validator
+from chs.validators.machine_type import MachineTypeValidator
+from chs.validators.scheduler import SchedulerValidator
 
 
 class TestsValidator(Validator):
@@ -21,18 +23,27 @@ class TestsValidator(Validator):
         """
         tests = config.get("tests")
         machine_type = config.get("machine_type")
-        if not tests:
+        scheduler = config.get("scheduler")
+
+        if (
+            (scheduler and SchedulerValidator().validate(config))
+            or (machine_type and MachineTypeValidator().validate(config))
+            or (not tests)
+        ):
             return []
         supported_tests = resources.SUPPORTED_TESTS
-        if machine_type:
-            supported_tests = resources.TESTS_FOR_MACHINE_TYPE.get(
-                machine_type, []
+        if scheduler and machine_type:
+            tests_map = resources.MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE.get(
+                scheduler
             )
+            if tests_map:
+                supported_tests = tests_map.get(machine_type, [])
         invalid_tests = [t for t in tests if t not in supported_tests]
         if invalid_tests:
             msg = f"Tests {invalid_tests} are not supported"
-            if machine_type:
-                msg += f" for machine type '{machine_type}'"
+            if scheduler and machine_type:
+                msg += f" for scheduler '{scheduler}' "
+                msg += f"and machine type '{machine_type}'"
             msg += f". Supported tests: {', '.join(supported_tests)}"
             return [msg]
         return []

@@ -1,20 +1,9 @@
 a3-ultra:
   variables:
-    gpu_subnet_prefix: rdma
     pod_annotations_yaml: |
-      networking.gke.io/default-interface: 'eth0'
+      networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
-        [
-          \{"interfaceName":"eth0","network":"default"\},
-          \{"interfaceName":"eth2","network":"{gpu_subnet_prefix}-0"\},
-          \{"interfaceName":"eth3","network":"{gpu_subnet_prefix}-1"\},
-          \{"interfaceName":"eth4","network":"{gpu_subnet_prefix}-2"\},
-          \{"interfaceName":"eth5","network":"{gpu_subnet_prefix}-3"\},
-          \{"interfaceName":"eth6","network":"{gpu_subnet_prefix}-4"\},
-          \{"interfaceName":"eth7","network":"{gpu_subnet_prefix}-5"\},
-          \{"interfaceName":"eth8","network":"{gpu_subnet_prefix}-6"\},
-          \{"interfaceName":"eth9","network":"{gpu_subnet_prefix}-7"\}
-        ]
+        {all_interfaces_json}
     node_selector_yaml: "cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
@@ -61,7 +50,7 @@ a3-ultra:
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -71,23 +60,54 @@ a3-ultra:
       n_nodes: 1
       mpi_command: ""
 
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "1500000000"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      processes_per_node: 8
+      n_ranks: 8
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3:4:5:6:7"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+      type: "fp64"
+      iter: 32
+      m: 16384
+      n: 16384
+      k: 16384
 a4:
   variables:
-    gpu_subnet_prefix: rdma
     pod_annotations_yaml: |
-      networking.gke.io/default-interface: 'eth0'
+      networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
-        [
-          \{"interfaceName":"eth0","network":"default"\},
-          \{"interfaceName":"eth2","network":"{gpu_subnet_prefix}-0"\},
-          \{"interfaceName":"eth3","network":"{gpu_subnet_prefix}-1"\},
-          \{"interfaceName":"eth4","network":"{gpu_subnet_prefix}-2"\},
-          \{"interfaceName":"eth5","network":"{gpu_subnet_prefix}-3"\},
-          \{"interfaceName":"eth6","network":"{gpu_subnet_prefix}-4"\},
-          \{"interfaceName":"eth7","network":"{gpu_subnet_prefix}-5"\},
-          \{"interfaceName":"eth8","network":"{gpu_subnet_prefix}-6"\},
-          \{"interfaceName":"eth9","network":"{gpu_subnet_prefix}-7"\}
-        ]
+        {all_interfaces_json}
     node_selector_yaml: "cloud.google.com/gke-nodepool: a4-highgpu-8g-a4-pool"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
@@ -135,7 +155,7 @@ a4:
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -144,3 +164,123 @@ a4:
       n_ranks: 1
       n_nodes: 1
       mpi_command: ""
+
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "1500000000"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      processes_per_node: 8
+      n_ranks: 8
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3:4:5:6:7"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+      type: "fp64emu"
+      iter: 32
+      m: 32768
+      n: 32768
+      k: 32768
+
+a3-mega:
+  variables:
+    pod_annotations_yaml: |
+      networking.gke.io/default-interface: {default_interface_name}
+      networking.gke.io/interfaces: |
+        {all_interfaces_json}
+    node_selector_yaml: "cloud.google.com/gke-nodepool: a3-megagpu-8g-a3megagpupool"
+    tolerations_yaml: |
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    extra_volumes_yaml: |
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+    extra_volume_mounts_yaml: |
+      - name: shared-memory
+        mountPath: /dev/shm
+    container_resources_yaml: |
+      limits:
+        nvidia.com/gpu: 8
+    container_security_context_yaml: |
+      privileged: true
+  nvidia-dcgm:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "300653184"
+      cpu_affinity: "0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      processes_per_node: 8
+      n_ranks: 8
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3:4:5:6:7"
+      cpu_affinity: "0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+      type: "fp64"
+      iter: 32
+      m: 16384
+      n: 16384
+      k: 16384

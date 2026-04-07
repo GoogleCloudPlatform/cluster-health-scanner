@@ -6,9 +6,9 @@ import json
 import logging
 import os
 import re
+import chs.core.plugin_manager
 from typing import Any
 import uuid
-
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -31,11 +31,8 @@ class BOHGenerator:
         self.base_log_dir = base_log_dir
         self.cluster_type = cluster_type
         self.report = pb.BillOfHealth()
-        self._extractors = {
-            "nccl-tests": self._extract_nccl_info,
-            "nvidia-dcgm": self._extract_dcgm_info,
-        }
         self.success_criteria_mapping = success_criteria_mapping or {}
+        self.pm = chs.core.plugin_manager.PluginManager()
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()
@@ -47,23 +44,29 @@ class BOHGenerator:
         metrics = []
         for fom in foms:
             key = fom.get("name", "unknown")
-            val = str(fom.get("value", ""))
+            raw_val = fom.get("value")
             unit = fom.get("units", "")
 
             metric = pb.Metric(key=key)
             if unit:
                 metric.unit = unit
 
-            lower_val = val.lower()
-            if lower_val == "true":
-                metric.value.bool_value = True
-            elif lower_val == "false":
-                metric.value.bool_value = False
-            else:
-                try:
-                    metric.value.number_value = float(val)
-                except ValueError:
-                    metric.value.string_value = val
+            if isinstance(raw_val, bool):
+                metric.value.bool_value = raw_val
+            elif isinstance(raw_val, (int, float)):
+                metric.value.number_value = float(raw_val)
+            elif raw_val is not None:
+                val = str(raw_val)
+                lower_val = val.lower()
+                if lower_val == "true":
+                    metric.value.bool_value = True
+                elif lower_val == "false":
+                    metric.value.bool_value = False
+                else:
+                    try:
+                        metric.value.number_value = float(val)
+                    except ValueError:
+                        metric.value.string_value = val
 
             metrics.append(metric)
         return metrics
@@ -182,36 +185,18 @@ class BOHGenerator:
                     fom_regex,
                 )
 
-    def _extract_nccl_info(
-        self, exp_name: str, workload_name: str
-    ) -> tuple[str, str]:
-        """Extractor for NCCL tests."""
-        if "nccl-cluster" in exp_name:
-            return "nccl-cluster", workload_name
-        if "nccl-pairwise" in exp_name:
-            return "nccl-pairwise", workload_name
-        return exp_name, workload_name
-
-    def _extract_dcgm_info(
-        self, exp_name: str, workload_name: str
-    ) -> tuple[str, str]:
-        """Extractor for DCGM tests."""
-        parts = exp_name.split("-")
-        if len(parts) > 3 and parts[2] == "level":
-            return "dcgm", f"level-{parts[3]}"
-        return "dcgm", workload_name
-
-    def _extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str]:
-        """Extracts test name and level from experiment data."""
+    def _extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
+        """Extracts test name and level, delegating to plugins if available."""
         exp_name = exp.get("experiment_name", "test_name_unidentified")
         app_name = exp.get("application_name", "")
-        workload_name = exp.get("workload_name", "")
 
-        extractor = self._extractors.get(app_name)
-        if extractor:
-            return extractor(exp_name, workload_name)
+        resolved_name = self.pm.resolve_test_name(exp_name)
+        if resolved_name is None and app_name:
+            resolved_name = self.pm.resolve_test_name(app_name)
 
-        return exp_name, workload_name
+        plugin = self.pm.get_plugin(resolved_name or exp_name)
+
+        return plugin.extract_test_info(exp)
 
     def _get_result_status(self, success_criteria: dict[str, str]) -> int:
         """Maps experiment success criteria to ResultStatus."""
@@ -240,7 +225,7 @@ class BOHGenerator:
             logger.error("Error reading JSON results: %s", e)
             return self.report
 
-        self.report.report_id = data.get("workspace_hash", str(uuid.uuid4()))
+        self.report.report_id = data.get("workspace_name", str(uuid.uuid4()))
         self.report.chs_version = "1.0.0"
         self.report.created_at.CopyFrom(self._get_timestamp())
         # TODO: Fetch and add system info
@@ -254,9 +239,15 @@ class BOHGenerator:
                 continue
 
             test_result = pb.TestResult()
-            test_result.test_name, test_result.test_level = (
-                self._extract_test_info(exp)
-            )
+            desc = ""
+            (
+                test_result.test_name,
+                test_result.test_level,
+                desc,
+            ) = self._extract_test_info(exp)
+
+            if desc:
+                test_result.metadata.fields["description"].string_value = desc
             test_result.result_status = self._get_result_status(
                 exp.get("SUCCESS_CRITERIA", {})
             )
@@ -287,28 +278,23 @@ class BOHGenerator:
                 nodes = ramble_raw_vars.get("nodes", [])
                 test_result.target_resource_ids.extend(nodes)
 
-            # Only including default (null) and the last context.
             contexts = exp.get("CONTEXTS", [])
             if contexts:
-                # Default Context
-                default_ctx = next(
-                    (c for c in contexts if c.get("name") == "null"),
-                    None,
-                )
+                resolved_name = self.pm.resolve_test_name(test_result.test_name)
+                plugin = self.pm.get_plugin(resolved_name)
 
-                # Last Context (if different from default)
-                last_ctx = contexts[-1]
-
-                contexts_to_process = []
-                if default_ctx:
-                    contexts_to_process.append(default_ctx)
-
-                if last_ctx and last_ctx != default_ctx:
-                    contexts_to_process.append(last_ctx)
+                contexts_to_process = plugin.get_required_contexts(contexts)
 
                 for ctx in contexts_to_process:
                     foms = ctx.get("foms", [])
                     metrics = self._parse_foms(foms)
+
+                    ctx_name = ctx.get("name", "unknown")
+                    for metric in metrics:
+                        metric.metadata.fields[
+                            "context"
+                        ].string_value = ctx_name
+
                     test_result.metrics.extend(metrics)
 
             for metric in test_result.metrics:

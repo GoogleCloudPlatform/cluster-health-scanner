@@ -18,16 +18,13 @@ import subprocess
 import sysconfig
 import time
 from typing import Any
-import chs
-from chs.exceptions import (
-    ChsArchiveException,
-    ChsException,
-)
+import click
+from google.protobuf.json_format import MessageToJson
+
+from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
-import click
-from google.protobuf.json_format import MessageToJson
 from chs.utils.app_data import ChsAppData
 import yaml
 
@@ -172,7 +169,7 @@ class RambleManager:
                     )
                     if error_context:
                         msg = f"{error_context}. {msg}"
-                    raise ChsException(msg)
+                    raise ex.ChsException(msg)
 
                 return process
 
@@ -183,7 +180,7 @@ class RambleManager:
             )
             if error_context:
                 msg = f"{error_context}: {msg}"
-            raise ChsException(msg)
+            raise ex.ChsException(msg)
 
     def _execute_ramble_command(
         self,
@@ -197,7 +194,7 @@ class RambleManager:
         """Runs a Ramble subcommand in the workspace context.
 
         This is a wrapper around _execute_shell_command that prepends
-        'ramble -w self.path' to the command and sets cwd to self.path.
+        'ramble -d -w self.path' to the command and sets cwd to self.path.
 
         Args:
           subcommand: The Ramble subcommand to execute (e.g., 'workspace',
@@ -215,14 +212,19 @@ class RambleManager:
         Raises:
           click.ClickException: If the Ramble command fails.
         """
-        cmd = ["ramble", "-w", self.path, subcommand] + args
+        cmd = ["ramble", "-d", "-w", self.path, subcommand] + args
         exec_cmd = self._prepare_ramble_command(cmd)
+
+        merged_env = env.copy() if env else {}
+        if hasattr(self, "_scheduler"):
+            merged_env.update(self._scheduler.get_extra_env())
+
         return self._execute_shell_command(
             exec_cmd,
             check=check,
             cwd=self.path,
             capture_output=capture_output,
-            env=env,
+            env=merged_env,
             error_context=error_context,
         )
 
@@ -233,7 +235,7 @@ class RambleManager:
           click.ClickException: If the workspace creation command fails.
         """
         logger.debug("Creating workspace at: %s", self.path)
-        cmd = ["ramble", "workspace", "create", "-a", "-d", self.path]
+        cmd = ["ramble", "-d", "workspace", "create", "-a", "-d", self.path]
         exec_cmd = self._prepare_ramble_command(cmd)
         self._execute_shell_command(
             exec_cmd,
@@ -247,6 +249,7 @@ class RambleManager:
         Raises:
           click.ClickException: If the repository addition command fails.
         """
+        import chs
 
         logger.debug("Adding custom CHS repository to workspace...")
         with pkg_resources.path(chs, "repos") as p:
@@ -690,6 +693,8 @@ class RambleManager:
                 "-f",
                 "json",
                 "--fom-origin-types",
+                "modifier",
+                "--fom-origin-types",
                 "application",
             ],
             capture_output=True,
@@ -699,7 +704,7 @@ class RambleManager:
         results_json_path = os.path.join(self.path, "results.latest.json")
 
         if not os.path.exists(results_json_path):
-            raise ChsException(
+            raise ex.ChsException(
                 "chs analyze command failed. Recheck the run id and try "
                 "rerunning the command."
             )
@@ -718,23 +723,6 @@ class RambleManager:
         """
 
         workspace_dir = pathlib.Path(self._path)
-
-        try:
-            with open(results_json_path, "r") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.error("Error reading JSON results: %s", e)
-            data = {}
-
-        app_names = self._get_application_names(data)
-
-        app_mapping = self._get_success_criteria_mapping(
-            app_names, "applications"
-        )
-
-        success_criteria_mapping = {
-            "applications": app_mapping,
-        }
 
         try:
             with open(results_json_path, "r") as f:
@@ -774,12 +762,48 @@ class RambleManager:
         except Exception as e:
             logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
-        self.archive_and_upload_workspace()
-
         return str(workspace_dir)
+
+    def archive_and_upload_boh(self) -> None:
+        """Archives Bill of Health and uploads to GCS."""
+        boh_path = os.path.join(self.path, "bill_of_health.json")
+        if not os.path.exists(boh_path):
+            logger.warning(
+                "Bill of Health file %s does not exist. Skipping BOH archival.",
+                boh_path,
+            )
+            return
+
+        bucket_name = self._app_data.get_bucket()
+        if not bucket_name:
+            logger.warning("No GCS bucket configured. Skipping BOH archival.")
+            return
+
+        upload_url = (
+            f"gs://{bucket_name}/bills_of_health/{self._workspace_name}.json"
+        )
+        logger.info("Uploading Bill of Health to %s", upload_url)
+
+        try:
+            self._execute_shell_command(
+                ["gcloud", "storage", "cp", boh_path, upload_url],
+                error_context="Failed to upload Bill of Health",
+            )
+            logger.info("Bill of Health uploaded successfully.")
+        except Exception as e:
+            raise ex.ChsArchiveException(
+                f"Unexpected error during BOH archival: {e}"
+            ) from e
 
     def archive_and_upload_workspace(self) -> None:
         """Archives workspace artifacts and uploads to GCS."""
+        if not os.path.exists(self.path):
+            logger.warning(
+                "Workspace path %s does not exist. Skipping archival.",
+                self.path,
+            )
+            return
+
         bucket_name = self._app_data.get_bucket()
         if not bucket_name:
             logger.warning(
@@ -811,10 +835,19 @@ class RambleManager:
             )
             logger.info("Workspace archived and uploaded successfully.")
 
-        except ChsException as e:
-            raise ChsArchiveException(
-                f"Failed to archive and upload workspace: {e}"
-            ) from e
+        except (ex.ChsException, Exception) as e:
+            logger.warning(
+                "Non-fatal failure while archiving and uploading "
+                "the workspace: %s",
+                e,
+            )
+
+    def archive(self) -> None:
+        """Orchestrates archival and upload of BoH and workspace."""
+        try:
+            self.archive_and_upload_boh()
+        finally:
+            self.archive_and_upload_workspace()
 
     def _cleanup_inputs_dir(self) -> None:
         """Deletes the inputs directory in the workspace."""

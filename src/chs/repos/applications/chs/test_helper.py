@@ -56,32 +56,17 @@ podAntiAffinity:
                     dst_dict[dst_key] = {}
                 else:
                     dst_dict[dst_key] = []
-
-            # If both are lists, append src_list to dst_list (or vice versa? Tests usually specific)
-            # Actually, common configs are defaults. Test vars override.
-            # So if dst has variable, keep it. If not, take src.
-            # But lists like 'modifiers' we likely want to extend.
-
             if isinstance(src_dict[src_key], dict) and isinstance(
                 dst_dict[dst_key], dict
             ):
-                # Update destination with source values (source takes precedence)
                 for k, v in src_dict[src_key].items():
                     if k not in dst_dict[dst_key] or not dst_dict[dst_key][k]:
                         dst_dict[dst_key][k] = v
             elif isinstance(src_dict[src_key], list) and isinstance(
                 dst_dict[dst_key], list
             ):
-                # For lists (modifiers), we extend?
-                # Usually we want common modifiers + test modifiers.
-                # So append src to dst? No, usually prepend defaults?
-                # Actually, duplicate modifiers might differ.
-                # Let's assume extending is safe for modifiers.
                 dst_dict[dst_key].extend(src_dict[src_key])
             else:
-                # Type mismatch or scalar.
-                # If dst has it, keep it. If not, take src.
-                # But we handled 'not in dst' above.
                 pass
 
         mt_config = configs[machine_type]
@@ -96,7 +81,11 @@ podAntiAffinity:
 
     @staticmethod
     def _nccl_context(
-        variables, experiment_name, configs, nodes_list, is_pairwise=False
+        variables,
+        experiment_name,
+        configs,
+        nodes_list,
+        test_type="nccl-cluster",
     ):
         ctx_vars = copy.deepcopy(variables)
         machine_type = ctx_vars.get("machine_type", "a3-ultra")
@@ -104,20 +93,24 @@ podAntiAffinity:
         ctx_vars["nodes"] = nodes_list
         ctx_vars["n_nodes"] = len(nodes_list)
         sched_nodes_str = TestHelper._get_nccl_nodes_str(scheduler, nodes_list)
+        context_dict = {
+            "variables": ctx_vars,
+        }
         if scheduler == "slurm":
             ctx_vars["extra_sbatch_headers"] = f"#SBATCH -w {sched_nodes_str}"
 
         elif scheduler == "gke":
             TestHelper._k8s_gpu_settings(ctx_vars, sched_nodes_str)
 
-        if is_pairwise:
+        if test_type == "nccl-pairwise":
             experiment_name = (
                 f"{experiment_name}-{nodes_list[0]}-{nodes_list[1]}"
             )
-
-        context_dict = {
-            "variables": ctx_vars,
-        }
+        elif test_type == "nccl-single-node":
+            experiment_name = f"{experiment_name}-{nodes_list[0]}"
+            context_dict.setdefault("env_vars", {}).setdefault("set", {})[
+                "NCCL_NET"
+            ] = "Socket"
 
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nccl-tests"
@@ -139,18 +132,46 @@ podAntiAffinity:
 
             if i == len(all_nodes) - 1:
                 node_groups.append([all_nodes[-2], all_nodes[-1]])
-
-            is_pairwise = True
+        elif test_type == "nccl-single-node":
+            node_groups = [[n] for n in all_nodes]
         else:
             node_groups = [all_nodes]
-            is_pairwise = False
 
         return [
             TestHelper._nccl_context(
-                variables, experiment_name, configs, nodes, is_pairwise
+                variables,
+                experiment_name,
+                copy.deepcopy(configs),
+                nodes,
+                test_type,
             )
             for nodes in node_groups
         ]
+
+    @staticmethod
+    def nvidia_smi_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "slurm")
+        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+
+        if scheduler == "slurm":
+            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
+
+        experiment_template_name = f"{experiment_name}-nvidia-smi-{{node}}"
+
+        context_dict = {
+            "variables": ctx_vars,
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "nvidia-smi"
+        )
+        return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
     def dcgm_test(variables, experiment_name, configs):
@@ -162,13 +183,6 @@ podAntiAffinity:
 
         modifiers = []
         if scheduler == "slurm":
-            ctx_vars.update(
-                {
-                    "process_per_node": "1",
-                    "n_nodes": 1,
-                    "n_ranks": "{n_nodes}*{process_per_node}",
-                }
-            )
             ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
         elif scheduler == "gke":
             TestHelper._k8s_gpu_settings(
@@ -186,5 +200,61 @@ podAntiAffinity:
         }
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nvidia-dcgm"
+        )
+        return create_context_from_dict(experiment_template_name, context_dict)
+
+    @staticmethod
+    def stream_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "slurm")
+        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+
+        modifiers = []
+        if scheduler == "slurm":
+            ctx_vars["extra_sbatch_headers"] = (
+                "#SBATCH -w {node}\n#SBATCH --gpu-bind=single:1"
+            )
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
+
+        experiment_template_name = f"{experiment_name}-stream-{{node}}"
+
+        context_dict = {
+            "variables": ctx_vars,
+            "modifiers": modifiers,
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "nvidia-stream"
+        )
+        return create_context_from_dict(experiment_template_name, context_dict)
+
+    @staticmethod
+    def gemm_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "slurm")
+        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+
+        modifiers = []
+        if scheduler == "slurm":
+            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
+
+        experiment_template_name = f"{experiment_name}-gemm-{{node}}"
+
+        context_dict = {
+            "variables": ctx_vars,
+            "modifiers": modifiers,
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "nvidia-gemm"
         )
         return create_context_from_dict(experiment_template_name, context_dict)

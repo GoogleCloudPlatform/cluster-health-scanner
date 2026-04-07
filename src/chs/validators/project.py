@@ -3,6 +3,10 @@
 from typing import Any
 
 from chs.validators.base import Validator
+from chs.validators.machine_type import MachineTypeValidator
+from chs.validators.scheduler import SchedulerValidator
+from chs.validators.suite import SuiteValidator
+from chs.validators.tests import TestsValidator
 
 
 class ProjectConfigValidator(Validator):
@@ -11,12 +15,15 @@ class ProjectConfigValidator(Validator):
     Aggregates errors from all provided validators.
     """
 
-    def __init__(self, validators: list[Validator]):
-        """Initialize with a list of validators.
+    def __init__(self):
+        """Initialize with a list of validators."""
 
-        Args:
-            validators: List of Validator instances to run.
-        """
+        validators = [
+            SchedulerValidator(),
+            MachineTypeValidator(),
+            SuiteValidator(),
+            TestsValidator(),
+        ]
         self.validators = validators
 
     def validate(self, config: dict[str, Any]) -> list[str]:

@@ -24,9 +24,7 @@ class SuiteValidator(Validator):
         """
         suite = config.get("suite")
 
-        if suite is None:
-            return ["'suite' is missing in the configuration."]
-        if suite in resources.SUPPORTED_SUITES:
+        if suite is None or suite in resources.SUPPORTED_SUITES:
             return []
         return [
             f"Suite '{suite}' is not supported. "

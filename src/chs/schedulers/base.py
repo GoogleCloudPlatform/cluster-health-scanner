@@ -1,16 +1,36 @@
 """Base scheduler module."""
 
 import abc
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
 
 
 class BaseScheduler(abc.ABC):
     """Base class for cluster schedulers."""
+
+    def __init__(self, app_data: "ChsAppData | None" = None):
+        """Initializes the scheduler.
+
+        Args:
+          app_data: ChsAppData instance or None.
+        """
+        self._app_data = app_data
 
     @property
     @abc.abstractmethod
     def name(self) -> str:
         """The name of the scheduler."""
         pass
+
+    def get_extra_env(self) -> dict[str, str]:
+        """Returns extra environment variables for the scheduler.
+
+        Returns:
+            A dictionary of extra environment variables.
+        """
+        return {}
 
     @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:
@@ -21,7 +41,7 @@ class BaseScheduler(abc.ABC):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        tests: list[str] | None,
+        tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.

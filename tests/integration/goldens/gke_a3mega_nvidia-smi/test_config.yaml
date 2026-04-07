@@ -1,0 +1,2 @@
+description: "Tests the 'nvidia-smi' test against a gke scheduler for a3-mega"
+command: ["run", "--tests", "nvidia-smi", "--scheduler", "gke", "--machine-type", "a3-mega", "--nodes", "node1,node2", "--dry-run"]

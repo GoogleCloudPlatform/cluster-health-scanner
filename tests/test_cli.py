@@ -11,7 +11,6 @@ from unittest import mock
 
 from chs import cli
 from chs import exceptions
-import click
 from click import testing
 import shutil
 import tempfile
@@ -49,7 +48,7 @@ class _CommandErrorTestCase:
 class _RunCommandTestCase:
     name: str
     args_list: list[str]
-    expected_return: tuple[str, str, list[str] | None, str, str, list[str]]
+    expected_return: cli.RunExecutionResult
 
 
 @dataclasses.dataclass
@@ -104,49 +103,50 @@ class TestCli(unittest.TestCase):
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
-    def test_non_empty_str_callback(self):
-        """Test non_empty_str_callback raises BadParameter on empty string."""
-        ctx = mock.Mock(spec=click.Context)
-        ctx.command = mock.Mock()
-        param = mock.Mock(spec=click.Parameter)
-        with self.assertRaisesRegex(
-            click.BadParameter, "cannot be an empty string"
-        ):
-            cli.non_empty_str_callback(ctx, param, "")
-
-        with self.assertRaisesRegex(
-            click.BadParameter, "cannot be an empty string"
-        ):
-            cli.non_empty_str_callback(ctx, param, " ")
-
-        self.assertEqual(
-            cli.non_empty_str_callback(ctx, param, "  valid  "), "valid"
-        )
-
-        self.assertEqual(
-            cli.non_empty_str_callback(ctx, param, "valid"), "valid"
-        )
-        self.assertIsNone(cli.non_empty_str_callback(ctx, param, None))
-
-    @mock.patch("chs.cli.logger")
-    def test_list_tests_implementation_hint(self, mock_logger):
-        """Test _list_tests prints hint when listing all tests."""
-        cli._list_tests(from_suite=None, tests_flag=True)
-        mock_logger.info.assert_any_call(
-            "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        )
-
-    @mock.patch("chs.cli.logger")
-    def test_list_tests_implementation_no_hint(self, mock_logger):
-        """Test _list_tests does not print hint when filtering by suite."""
-        cli._list_tests(from_suite="suite1", tests_flag=True)
-        hint_message = "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        self.assertTrue(
-            all(
-                hint_message not in call.args
-                for call in mock_logger.info.call_args_list
+        # Mock resources to allow test dummy values
+        self.enterContext(
+            mock.patch(
+                "chs.resources.SUPPORTED_MACHINE_TYPES",
+                new=["a3-ultra", "a4", "a3-mega", "a3-high"],
             )
         )
+        self.enterContext(
+            mock.patch(
+                "chs.resources.SUPPORTED_SUITES",
+                new={
+                    "lite": [],
+                    "standard": [],
+                    "burn-in": [],
+                    "suite1": [],
+                    "s1": [],
+                },
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.resources.MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE",
+                new={
+                    "slurm": {
+                        "a3-high": ["t1", "t2", "t3"],
+                    },
+                    "gke": {
+                        "a3-high": ["t1", "t2", "t3"],
+                    },
+                },
+            )
+        )
+
+    def test_list_tests_implementation_hint(self):
+        """Test _get_tests_list returns hint when listing all tests."""
+        lines = cli._get_tests_list(from_suite=None, tests_flag=True)
+        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
+        self.assertIn(hint, lines)
+
+    def test_list_tests_implementation_no_hint(self):
+        """Test _get_tests_list does not return hint when filtering by suite."""
+        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
+        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
+        self.assertNotIn(hint, lines)
 
     @mock.patch.object(cli, "list_action", autospec=True)
     def test_list_command(self, mock_list_action):
@@ -326,13 +326,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "slurm",
-                    ["nccl-cluster", "nccl-pairwise", "dcgm"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="slurm",
+                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -349,13 +349,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1", "t2"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -372,13 +372,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -395,13 +395,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -418,13 +418,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -441,13 +441,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1", "t2"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -464,13 +464,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1", "t2"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -487,13 +487,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["t1", "t2", "t3"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=[{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
             _RunCommandTestCase(
@@ -510,13 +510,13 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_return=(
-                    "suite1",
-                    "mock_scheduler",
-                    ["nccl-cluster", "nccl-pairwise", "dcgm"],
-                    MOCK_WORKSPACE_NAME,
-                    mock_default_dir,
-                    ["job1"],
+                expected_return=cli.RunExecutionResult(
+                    suite="suite1",
+                    scheduler_name="mock_scheduler",
+                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspaces_base_dir=mock_default_dir,
+                    job_ids=["job1"],
                 ),
             ),
         ]
@@ -533,9 +533,7 @@ class TestCli(unittest.TestCase):
 
                 self.mock_scheduler.name = "slurm"
 
-                expected_return_list = list(case.expected_return)
-                expected_return_list[1] = "slurm"
-                case.expected_return = tuple(expected_return_list)
+                case.expected_return.scheduler_name = "slurm"
 
                 result = self.runner.invoke(
                     cli.cli,
@@ -559,8 +557,10 @@ class TestCli(unittest.TestCase):
                 args, kwargs = (
                     self.mock_rm_instance.configure_workspace.call_args
                 )
-                self.assertEqual(args[0].name, case.expected_return[1])
-                self.assertEqual(args[1], case.expected_return[2])
+                self.assertEqual(
+                    args[0].name, case.expected_return.scheduler_name
+                )
+                self.assertEqual(args[1], case.expected_return.tests)
                 self.assertEqual(kwargs["machine_type"], "a3-high")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
@@ -576,6 +576,7 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["analyze", "some_run_id"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Analysis failed", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
@@ -586,6 +587,7 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["cancel", "some_run_id"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     def test_results_command_no_boh(self):
         """Test `results` command when bill_of_health.json is not found."""
@@ -596,6 +598,44 @@ class TestCli(unittest.TestCase):
             result = self.runner.invoke(cli.cli, ["results"])
             self.assertEqual(result.exit_code, 1)
             self.assertIn("Could not find bill of health", result.output)
+
+    def test_archive_workspace_context_manager_success(self):
+        """Test archive_workspace calling archival on success."""
+        mock_rm = mock.Mock()
+        with cli.archive_workspace(mock_rm):
+            pass
+        mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_failure(self):
+        """Test archive_workspace calling archival on failure."""
+        mock_rm = mock.Mock()
+        with self.assertRaises(ValueError):
+            with cli.archive_workspace(mock_rm):
+                raise ValueError("test error")
+        mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_archive_failure(self):
+        """Test archive_workspace raising ChsArchiveException when BOH fails."""
+        mock_rm = mock.Mock()
+        mock_rm.archive.side_effect = exceptions.ChsArchiveException("boh fail")
+        with self.assertRaises(exceptions.ChsArchiveException):
+            with cli.archive_workspace(mock_rm):
+                pass
+        mock_rm.archive.assert_called_once()
+
+    def test_run_action_chs_exception(self):
+        """Test that run_action handles ChsException and archives."""
+        self.mock_scheduler.name = "slurm"
+        self.mock_rm_instance.create_workspace.side_effect = (
+            exceptions.ChsException("Mock failure")
+        )
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "-sch", "slurm", "--machine-type", "a3-high"],
+        )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Mock failure", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     def test_run_action_exception_handling(self):
         """Test that run_action wraps exceptions in ClickException."""
@@ -615,6 +655,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("CHS execution failed", result.output)
         self.assertIn("Permission denied", result.output)
+        self.mock_rm_instance.archive.assert_called_once()
 
     @mock.patch("chs.cli.get_scheduler")
     @mock.patch("chs.cli.analyze_action", autospec=True)
@@ -629,7 +670,7 @@ class TestCli(unittest.TestCase):
         mock_scheduler.name = "gke"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_get_scheduler.return_value = mock_scheduler
-
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         result = self.runner.invoke(
             cli.cli,
             [
@@ -697,7 +738,7 @@ class TestCli(unittest.TestCase):
                     "--machine-type",
                     "a3-high",
                 ],
-                expected_output="Only Slurm and GKE schedulers are supported",
+                expected_output="Scheduler 'unknown' is not supported",
             ),
             _CommandErrorTestCase(
                 name="missing_scheduler",
@@ -910,6 +951,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.mock_rm_instance.wait_for_jobs.assert_called_once()
         self.mock_rm_instance.analyze_results.assert_called_once()
+        self.mock_rm_instance.archive.assert_called_once()
         mock_results_viewer.assert_called_once()
 
     def test_analyze_command_errors(self):
@@ -953,7 +995,9 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         mock_results_viewer.assert_called_once()
-        mock_results_viewer.return_value.show_summary.assert_called_once()
+        mock_results_viewer.return_value.show_details.assert_called_once_with(
+            tests=None, resources=None
+        )
 
         # Test with tests flag
         mock_results_viewer.reset_mock()
@@ -1003,9 +1047,9 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.mock_app_data_cls.assert_called_once()
 
-    @mock.patch.object(cli, "_list_schedulers", autospec=True)
-    @mock.patch.object(cli, "_list_tests", autospec=True)
-    @mock.patch.object(cli, "_list_suites", autospec=True)
+    @mock.patch.object(cli, "_get_schedulers_list", autospec=True)
+    @mock.patch.object(cli, "_get_tests_list", autospec=True)
+    @mock.patch.object(cli, "_get_suites_list", autospec=True)
     def test_list_action(
         self,
         mock_suites,
@@ -1084,6 +1128,9 @@ class TestCli(unittest.TestCase):
                 expected_schedulers_calls=1,
             ),
         ]
+        mock_suites.return_value = ["suite1"]
+        mock_tests.return_value = ["test1"]
+        mock_schedulers.return_value = ["sch1"]
         for case in test_cases:
             with self.subTest(case.name):
                 mock_suites.reset_mock()

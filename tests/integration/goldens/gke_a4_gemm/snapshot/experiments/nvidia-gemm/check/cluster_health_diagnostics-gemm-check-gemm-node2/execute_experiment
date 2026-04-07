@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "nvidia-gemm" = "chs" ]; then
+    echo "Skipping JobSet submission for nvidia-gemm scaffolding experiment."
+    echo "Submitted cluster_health_diagnostics-gemm-check-gemm-node2 at $(date)" > <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node2/cluster_health_diagnostics-gemm-check-gemm-node2.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node2/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node2/jobset.yaml"
+echo "Submitted cluster_health_diagnostics-gemm-check-gemm-node2 at $(date)" > <WORKSPACE_ROOT>/experiments/nvidia-gemm/check/cluster_health_diagnostics-gemm-check-gemm-node2/cluster_health_diagnostics-gemm-check-gemm-node2.out
+

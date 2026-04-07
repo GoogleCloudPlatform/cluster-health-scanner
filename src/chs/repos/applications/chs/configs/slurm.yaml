@@ -1,16 +1,81 @@
+a3-mega:
+  nvidia-dcgm:
+    modifiers: [{name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nvidia-stream:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: hpc-benchmarks:25.09
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "-l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60"
+      n_elements: "300653184"
+      cpu_affinity: "0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+  nvidia-gemm:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: "hpc-benchmarks:25.09"
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
+      gpu_affinity: "0:1:2:3:4:5:6:7"
+      cpu_affinity: "0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+      type: "fp64"
+      iter: 32
+      m: 16384
+      n: 16384
+      k: 16384
+  nccl-tests:
+    modifiers: [{name: "nccl-tcpxo"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    env_vars:
+      set:
+        NCCL_FASTRAK_CTRL_DEV: enp0s12
+        NCCL_FASTRAK_IFNAME: enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0
+        NCCL_SOCKET_IFNAME: enp0s12
+        NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: /dev/aperture_devices
+    variables:
+      container_name: pytorch:24.09-py3
+      container_uri: "docker://nvcr.io#nvidia/pytorch:24.09-py3"
+      nccl_tests_build_dir: "{workspace_shared}/nccl-tests-{nccl_tests_ref}"
+      srun_args: "--mpi=pmi2 --export=ALL --container-workdir {nccl_tests_build_dir}/build/ --container-image {container_path} --container-mounts \"/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/var/lib/tcpxo/lib64/\" --container-writable --wait=60"
+      nccl-tests_path: "{nccl_tests_build_dir}/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
+    success_criteria:
+      avg_bus_bw:
+        mode: fom_comparison
+        fom_name: "Avg. Bus Bandwidth"
+        formula: "{value} > 80"
+      out_of_bounds_values:
+        mode: fom_comparison
+        fom_name: "Out of bounds values"
+        formula: "{value} == 0"
 a3-ultra:
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
     env_vars:
       set:
         NCCL_NET: gIB
-        OMPI_MCA_btl_tcp_if_include: enp0s19
-        OMPI_MCA_btl: tcp,self
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
+        LD_LIBRARY_PATH: "/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
     variables:
-      container_name: nccl-plugin-gib-diagnostic:v1.1.0
-      container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
-      srun_args: "--mpi=pmix --export=ALL --container-workdir /third_party/nccl-tests/build/ --container-image {container_path} --container-mounts \"/usr/local/gib,/var/tmp\" --container-writable --wait=60"
-      nccl-tests_path: "/third_party/nccl-tests/build/"
+      container_name: pytorch:24.09-py3
+      container_uri: "docker://nvcr.io#nvidia/pytorch:24.09-py3"
+      nccl_tests_build_dir: "{workspace_shared}/nccl-tests-{nccl_tests_ref}"
+      srun_args: "--mpi=pmi2 --export=ALL --container-workdir {nccl_tests_build_dir}/build/ --container-image {container_path} --container-mounts \"/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/usr/local/gib\" --container-writable --wait=60"
+      nccl-tests_path: "{nccl_tests_build_dir}/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
@@ -21,58 +86,182 @@ a3-ultra:
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
   nvidia-dcgm:
+    modifiers: [{name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
-      process_per_node: 1
+      processes_per_node: 1
       n_nodes: 1
-a3-high:
+  nvidia-stream:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: hpc-benchmarks:25.09
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "-l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60"
+      n_elements: "1500000000"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+  nvidia-gemm:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: "hpc-benchmarks:25.09"
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
+      gpu_affinity: "0:1:2:3:4:5:6:7"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+      type: "fp64"
+      iter: 32
+      m: 20480
+      n: 20480
+      k: 20480
+  nvidia-smi:
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+a4:
   nccl-tests:
-    modifiers: [{name: "nccl-linker"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
     env_vars:
       set:
-        OMPI_MCA_btl: tcp,self
-        USE_TCPX: "yes"
-        UDS_PATH: "/run/tcpx-${SLURM_JOB_ID}"
-        NCCL_NET: "GPUDirectTCPX_v7"
-        NCCL_SOCKET_IFNAME: "enp0s12"
-        NCCL_GPUDIRECTTCPX_CTRL_DEV: "enp0s12"
-        NCCL_GPUDIRECTTCPX_SOCKET_IFNAME: "enp6s0,enp12s0,enp134s0,enp140s0"
-        NCCL_CROSS_NIC: "0"
-        NCCL_ALGO: "Ring"
-        NCCL_PROTO: "Simple"
-        NCCL_NSOCKS_PERTHREAD: "4"
-        NCCL_SOCKET_NTHREADS: "1"
-        NCCL_DYNAMIC_CHUNK_SIZE: "524288"
-        NCCL_P2P_NET_CHUNKSIZE: "524288"
-        NCCL_P2P_PCI_CHUNKSIZE: "524288"
-        NCCL_P2P_NVL_CHUNKSIZE: "1048576"
-        NCCL_BUFFSIZE: "4194304"
-        CUDA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
-        NCCL_NET_GDR_LEVEL: "PIX"
-        NCCL_P2P_PXN_LEVEL: "0"
-        NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX: "/run/tcpx-${SLURM_JOB_ID}"
-        NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS: "500000"
-        NCCL_GPUDIRECTTCPX_TX_BINDINGS: "enp6s0:8-21,112-125;enp12s0:8-21,112-125;enp134s0:60-73,164-177;enp140s0:60-73,164-177"
-        NCCL_GPUDIRECTTCPX_RX_BINDINGS: "enp6s0:22-35,126-139;enp12s0:22-35,126-139;enp134s0:74-87,178-191;enp140s0:74-87,178-191"
+        NCCL_NET: gIB
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
+        LD_LIBRARY_PATH: "/usr/local/gib/lib64:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
     variables:
-      processes_per_node: {gpus_per_node}
-      container_name: nccl-plugin-gpudirecttcpx-dev:v3.1.9
-      container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-dev:v3.1.9-2.19.4-12.0"
-      nccl-tests_path: "/third_party/nccl-tests/build/"
-      srun_args: "--mpi=pmix --cpu-bind=none --container-workdir /third_party/nccl-tests/build/ --export=ALL --container-image {container_path} --container-mounts \"/var/tmp,/var/lib/tcpx/lib64,/run/tcpx-${SLURM_JOB_ID}\" --container-writable --wait=60"
+      container_name: pytorch:24.09-py3
+      container_uri: "docker://nvcr.io#nvidia/pytorch:24.09-py3"
+      srun_args: "--mpi=pmi2 --export=ALL --container-workdir {nccl_tests_build_dir}/build/ --container-image {container_path} --container-mounts \"/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/usr/local/gib\" --container-writable --wait=60"
+      nccl-tests_path: "{nccl_tests_build_dir}/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
         fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 30"
+        formula: "{value} > 80"
       out_of_bounds_values:
         mode: fom_comparison
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
   nvidia-dcgm:
+    modifiers: [{name: "dcgm-fom"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
-      process_per_node: 1
+      processes_per_node: 1
       n_nodes: 1
+  nvidia-stream:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: hpc-benchmarks:25.09
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "-l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60"
+      n_elements: "2040000000"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+  nvidia-gemm:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: "hpc-benchmarks:25.09"
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
+      gpu_affinity: "0:1:2:3:4:5:6:7"
+      cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
+      mem_affinity: "0:0:0:0:1:1:1:1"
+      type: "fp64emu"
+      iter: 32
+      m: 32768
+      n: 32768
+      k: 32768
+  nvidia-smi:
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+a4x:
+  nvidia-dcgm:
+    modifiers: [{name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nvidia-stream:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: hpc-benchmarks:25.09
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "-l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60"
+      n_elements: "2800000000"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+  nvidia-gemm:
+    modifiers: [{name: "pyxis-enroot"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: "hpc-benchmarks:25.09"
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:25.09"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 51200
+      n: 51200
+      k: 51200
+  nvidia-smi:
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nccl-tests:
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    env_vars:
+      set:
+        OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
+        LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
+        NCCL_NET: gIB
+    variables:
+      container_name: nccl-plugin-gib-diagnostic-v1.1.0
+      container_uri: "docker://us-docker.pkg.dev#kernel-net-team/clouda4-nccl-dev/nccl-plugin-gib-diagnostic-arm64:v1.1.0"
+      srun_args: >-
+        --mpi=pmix
+        --container-workdir /third_party/nccl-tests/build/
+        --container-env {container_env_vars}
+        --container-image {container_path}
+        --container-mounts "/usr/local/gib,/var/tmp"
+        --container-writable
+        --wait=60
+        --kill-on-bad-exit=1
+      nccl-tests_path: "{nccl_tests_build_dir}/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
+    success_criteria:
+      avg_bus_bw:
+        mode: fom_comparison
+        fom_name: "Avg. Bus Bandwidth"
+        formula: "{value} > 80"
+      out_of_bounds_values:
+        mode: fom_comparison
+        fom_name: "Out of bounds values"
+        formula: "{value} == 0"

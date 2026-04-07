@@ -6,9 +6,16 @@ import os
 import re
 import subprocess
 import json
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
+
 
 from chs.schedulers.base import BaseScheduler
 import click
+
+from chs import exceptions as ex
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +23,30 @@ logger = logging.getLogger(__name__)
 class SlurmScheduler(BaseScheduler):
     """Slurm scheduler implementation."""
 
+    @property
+    def _enroot_paths(self) -> dict[str, str]:
+        """Dictionary of Enroot paths, allowing environment overrides."""
+        # TODO: Find a more robust way to manage enroot paths.
+        base = os.getenv(
+            "ENROOT_BASE", os.path.join(os.path.expanduser("~"), ".enroot")
+        )
+        return {
+            "ENROOT_RUNTIME_PATH": os.getenv(
+                "ENROOT_RUNTIME_PATH", os.path.join(base, "run")
+            ),
+            "ENROOT_CACHE_PATH": os.getenv(
+                "ENROOT_CACHE_PATH", os.path.join(base, "cache")
+            ),
+        }
+
     def __init__(
         self,
         nodes: str | None = None,
         nodelist: str | None = None,
         partition: str | None = None,
+        app_data: "ChsAppData | None" = None,
     ):
+        super().__init__(app_data)
         self.nodes_arg = nodes
         self.nodelist_arg = nodelist
         self.partition_arg = partition
@@ -31,19 +56,69 @@ class SlurmScheduler(BaseScheduler):
     def name(self) -> str:
         return "slurm"
 
+    def _run_srun(self, args: list[str], timeout: int = 300) -> str:
+        """Runs a command via srun and returns filtered output."""
+        cmd = ["srun", "-N1", "-n1"]
+        if self.partition_arg:
+            cmd.extend(["-p", self.partition_arg])
+        cmd.extend(args)
+        result = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=timeout,
+        )
+        return result.stdout.strip()
+
+    def _discover_network_interfaces(self) -> list[str]:
+        """
+        Discovers physical network interfaces from the routing table.
+        Uses the default route interface as an anchor to find siblings.
+        """
+        try:
+            default_out = self._run_srun(["ip", "route", "show", "default"])
+            anchor_match = re.search(r"dev\s+(\S+)", default_out)
+
+            prefix = ""
+            if anchor_match and (
+                m := re.match(r"^[a-zA-Z]+", anchor_match.group(1))
+            ):
+                prefix = m.group(0)
+                logger.debug("Anchor interface prefix: %s", prefix)
+
+            route_out = self._run_srun(["ip", "route", "show"])
+            all_ifaces = set(re.findall(r"dev\s+(\S+)", route_out))
+            excluded = ("docker", "veth", "br-", "lo")
+            interfaces = sorted(
+                [
+                    iface
+                    for iface in all_ifaces
+                    if not iface.startswith(excluded)
+                    and (prefix and iface.startswith(prefix))
+                ]
+            )
+
+            logger.info("Detected network interfaces: %r", interfaces)
+            return interfaces
+
+        except Exception as e:
+            raise ex.NetworkDiscoveryException(
+                f"Unexpected error during network discovery: {e}"
+            ) from e
+
     def get_nodes_under_test(self) -> list[str]:
         if self._resolved_nodes is not None:
             return self._resolved_nodes
 
-        provided = [
-            arg
-            for arg in [self.nodes_arg, self.nodelist_arg, self.partition_arg]
-            if arg is not None
-        ]
-        if len(provided) > 1:
+        if (
+            bool(self.nodes_arg)
+            + bool(self.nodelist_arg)
+            + bool(self.partition_arg)
+        ) > 1:
             raise click.UsageError(
-                "Only one of --nodes, --nodelist, or --partition can be "
-                "provided."
+                "Only one of --nodes, --nodelist, or "
+                "--partition can be provided."
             )
 
         if self.nodes_arg:
@@ -63,10 +138,11 @@ class SlurmScheduler(BaseScheduler):
                 self._resolved_nodes = [n for n in output.split("\n") if n]
                 return self._resolved_nodes
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                raise click.ClickException(f"Failed to expand nodelist: {e}")
+                raise ex.ChsSchedulerException(
+                    f"Failed to expand nodelist: {e}"
+                ) from e
 
-        # If partition is given or nothing is given (all free nodes)
-        sinfo_cmd = ["sinfo", "-t", "idle", "-h", "-o", "%N"]
+        sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
         if self.partition_arg:
             sinfo_cmd.extend(["-p", self.partition_arg])
 
@@ -78,44 +154,49 @@ class SlurmScheduler(BaseScheduler):
                 capture_output=True,
             ).stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            raise click.ClickException(f"Failed to get free nodes: {e}")
+            raise ex.ChsSchedulerException(
+                f"Failed to get free nodes: {e}"
+            ) from e
 
         if not output:
-            self._resolved_nodes = []
-            return self._resolved_nodes
+            return []
 
-        all_nodes = []
-        for line in output.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out2 = subprocess.run(
-                    ["scontrol", "show", "hostname", line],
-                    text=True,
-                    check=True,
-                    capture_output=True,
-                ).stdout.strip()
-                if out2:
-                    all_nodes.extend([n for n in out2.split("\n") if n])
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                logger.warning("Failed to expand nodes %s: %s", line, e)
+        all_nodes = [
+            line.strip() for line in output.split("\n") if line.strip()
+        ]
 
         self._resolved_nodes = all_nodes
         return self._resolved_nodes
 
+    def _ensure_enroot_directories(self) -> None:
+        """Ensures that Enroot runtime and cache directories exist."""
+        for d in self._enroot_paths.values():
+            if not os.path.exists(d):
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    logger.debug("Created Enroot directory: %s", d)
+                except OSError as e:
+                    raise ex.ChsSchedulerException(
+                        f"Failed to create Enroot directory {d}: {e}"
+                    ) from e
+
+    def get_extra_env(self) -> dict[str, str]:
+        """Returns extra environment variables for the scheduler."""
+        return self._enroot_paths
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        tests: list[str] | None,
+        tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
+        self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with slurm_template.yaml")
-
-        import chs.schedulers
-
-        with pkg_resources.path(chs.schedulers, "slurm_template.yaml") as p:
+        template_path = pkg_resources.files("chs.schedulers").joinpath(
+            "slurm_template.yaml"
+        )
+        with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
                 template_content = f.read()
 
@@ -124,17 +205,27 @@ class SlurmScheduler(BaseScheduler):
         else:
             nodes_str = "[]"
 
-        if tests:
-            # Compact JSON representation for tests to avoid issues with
-            # newlines
-            tests_str = json.dumps(tests)
-        else:
-            tests_str = "[]"
+        tests_str = json.dumps(tests) if tests else "[]"
+
+        tcp_interfaces = self._discover_network_interfaces()
+        if not tcp_interfaces:
+            raise ex.NetworkDiscoveryException(
+                "Network discovery failed on Slurm. "
+                "Could not identify required TCP interfaces."
+            )
+
+        tcp_interfaces_str = ",".join(tcp_interfaces)
+
+        images_dir_value = (
+            self._app_data and self._app_data.get_images_dir()
+        ) or "{workload_input_dir}"
 
         rendered_content = template_content.format(
             nodes=nodes_str,
             machine_type=machine_type,
             tests=tests_str,
+            images_dir=images_dir_value,
+            tcp_interfaces=tcp_interfaces_str,
         )
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
@@ -236,6 +327,6 @@ class SlurmScheduler(BaseScheduler):
             logger.warning("scancel command not found. Cannot cancel jobs.")
         except subprocess.CalledProcessError as e:
             logger.error("Failed to cancel jobs. Error: %s", e.stderr)
-            raise click.ClickException(
+            raise ex.ChsCancellationException(
                 f"Failed to cancel jobs: {e.stderr}"
             ) from e

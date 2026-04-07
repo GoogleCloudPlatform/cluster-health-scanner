@@ -11,11 +11,7 @@ import os
 import pathlib
 from typing import Any
 
-from chs.exceptions import (
-    NoPreviousRunsFoundException,
-    WorkspaceCreationException,
-    WorkspaceNotFoundException,
-)
+import chs.exceptions as ex
 import platformdirs
 
 logger = logging.getLogger(__name__)
@@ -130,9 +126,29 @@ class ChsAppData:
             logger.debug("Using workspaces directory: %s", workspaces_dir)
             return str(workspaces_dir)
         except OSError as e:
-            raise WorkspaceCreationException(
+            raise ex.WorkspaceCreationException(
                 f"Failed to create workspaces directory at {workspaces_dir}"
             ) from e
+
+    def get_images_dir(self) -> str | None:
+        """Returns the default images directory path, creating if necessary.
+
+        Returns:
+          The path to the images directory as a string, or None if it cannot
+          be created.
+        """
+        try:
+            images_dir = self._data_dir / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug("Using images directory: %s", images_dir)
+            return str(images_dir)
+        except OSError as e:
+            logger.warning(
+                "Failed to create images directory at %s: %s. ",
+                self._data_dir / "images",
+                e,
+            )
+            return None
 
     def get_latest_run_id(self) -> str:
         """Finds and returns the most recent run_id from the workspaces.
@@ -146,22 +162,21 @@ class ChsAppData:
         """
         workspaces_dir = pathlib.Path(self.get_workspaces_dir())
         if not workspaces_dir.exists():
-            raise WorkspaceNotFoundException("No workspaces directory found.")
+            raise ex.WorkspaceNotFoundException(
+                "No workspaces directory found."
+            )
 
         valid_runs = []
         date_format = "%Y-%m-%d_%H.%M.%S.%f"
         for d in workspaces_dir.iterdir():
             if d.is_dir():
                 try:
-                    parsed_time = datetime.datetime.strptime(
-                        d.name, date_format
-                    )
-                    valid_runs.append((parsed_time, d))
+                    datetime.datetime.strptime(d.name, date_format)
+                    valid_runs.append(d.name)
                 except ValueError:
                     continue
 
         if not valid_runs:
-            raise NoPreviousRunsFoundException("No previous runs found.")
+            raise ex.NoPreviousRunsFoundException("No previous runs found.")
 
-        latest_time, latest_dir = max(valid_runs, key=lambda item: item[0])
-        return latest_dir.name
+        return max(valid_runs)

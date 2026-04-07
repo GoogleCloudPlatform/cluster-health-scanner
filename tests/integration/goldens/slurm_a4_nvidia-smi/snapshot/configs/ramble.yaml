@@ -1,0 +1,25 @@
+ramble:
+  variants:
+    workflow_manager: slurm
+  config:
+    overwrite_inventories: True
+  variables:
+    nodes: ["node1", "node2"]
+    n_nodes: 1
+    processes_per_node: 1
+    n_ranks: 1
+    machine_type: a4
+    tests: [{"name": "nvidia-smi"}]
+    scheduler: slurm
+    container_dir: <HOME_DIR>/.local/share/chs/images
+    tcp_interfaces: |
+      enp0s1,enp0s2
+
+  applications:
+    chs:
+      workloads:
+        cluster_health:
+          experiments:
+            cluster_health_diagnostics:
+              variables:
+                placeholder: "true"

@@ -7,9 +7,15 @@ import os
 import re
 import subprocess
 import click
+from typing import Any, TYPE_CHECKING
+from collections import defaultdict
 
-import chs.schedulers
+if TYPE_CHECKING:
+    from chs.utils.app_data import ChsAppData
+
+
 from chs.schedulers.base import BaseScheduler
+from chs.exceptions import NetworkDiscoveryException
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +29,9 @@ class GKEScheduler(BaseScheduler):
         nodelist: str | None = None,
         nodepool: str | None = None,
         partition: str | None = None,
+        app_data: "ChsAppData | None" = None,
     ):
+        super().__init__(app_data)
         self.nodes_arg = nodes
         self.nodepool_arg = nodepool
         self._resolved_nodes: list[str] | None = None
@@ -43,6 +51,75 @@ class GKEScheduler(BaseScheduler):
     def name(self) -> str:
         return "gke"
 
+    def _run_kubectl(self, args: list[str]) -> str:
+        """Runs a kubectl command and returns filtered output."""
+        cmd = ["kubectl"] + args
+        result = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def _discover_networks(self) -> tuple[list[str], list[str]]:
+        """Discovers all network names using kubectl and groups them by type.
+
+        Returns:
+            A tuple of (l3_networks, device_networks).
+            L3 networks have 'default' first.
+        """
+        args = ["get", "networks.networking.gke.io", "-o", "json"]
+        try:
+            output = self._run_kubectl(args)
+            if not output:
+                return [], []
+            data = json.loads(output)
+            items = data.get("items", [])
+            if not isinstance(items, list):
+                logger.debug(
+                    "Unexpected network discovery output format: "
+                    "'items' is not a list"
+                )
+                return [], []
+
+            networks = defaultdict(list)
+
+            for item in items:
+                metadata = item.get("metadata", {})
+                spec = item.get("spec", {})
+                name = metadata.get("name")
+                net_type = spec.get("type")
+
+                if name and net_type:
+                    networks[net_type].append(name)
+
+            l3_networks = networks["L3"]
+            device_networks = networks["Device"]
+
+            if "default" not in l3_networks:
+                logger.warning(
+                    "Default L3 network not found. Discovered L3: %s",
+                    ", ".join(l3_networks) or "none",
+                )
+                return [], []
+            l3_networks.sort(key=lambda n: (n != "default", n))
+            device_networks.sort()
+
+            logger.debug(
+                "Discovered L3 networks: %s, Device networks: %s",
+                l3_networks,
+                device_networks,
+            )
+            return l3_networks, device_networks
+
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse network discovery JSON: %s", e)
+            return [], []
+        except Exception as e:
+            logger.warning("Unexpected error during network discovery: %s", e)
+            return [], []
+
     def get_nodes_under_test(self) -> list[str]:
         if self._resolved_nodes is not None:
             return self._resolved_nodes
@@ -54,30 +131,17 @@ class GKEScheduler(BaseScheduler):
             return self._resolved_nodes
 
         try:
-            cmd = [
-                "kubectl",
-                "get",
-                "nodes",
-            ]
+            args = ["get", "nodes"]
             if self.nodepool_arg:
-                cmd.extend(
+                args.extend(
                     ["-l", f"cloud.google.com/gke-nodepool={self.nodepool_arg}"]
                 )
             else:
-                cmd.extend(["-l", "cloud.google.com/gke-nodepool!=system"])
+                args.extend(["-l", "cloud.google.com/gke-nodepool!=system"])
 
-            cmd.extend(
-                [
-                    "-o",
-                    "jsonpath={.items[*].metadata.name}",
-                ]
-            )
-            output = subprocess.run(
-                cmd,
-                text=True,
-                check=True,
-                capture_output=True,
-            ).stdout.strip()
+            args.extend(["-o", "jsonpath={.items[*].metadata.name}"])
+
+            output = self._run_kubectl(args)
             self._resolved_nodes = [n for n in output.split() if n]
             logger.debug("Resolved nodes: %s", self._resolved_nodes)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
@@ -91,13 +155,15 @@ class GKEScheduler(BaseScheduler):
     def write_ramble_config(
         self,
         workspace_config_dir: str,
-        tests: list[str] | None,
+        tests: list[dict[str, Any]] | None,
         machine_type: str,
     ) -> None:
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with gke_template.yaml")
-
-        with pkg_resources.path(chs.schedulers, "gke_template.yaml") as p:
+        template_path = pkg_resources.files("chs.schedulers").joinpath(
+            "gke_template.yaml"
+        )
+        with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
                 template_content = f.read()
 
@@ -106,16 +172,29 @@ class GKEScheduler(BaseScheduler):
         else:
             nodes_str = "[]"
 
-        if tests:
-            # Compact JSON representation for tests
-            tests_str = json.dumps(tests)
-        else:
-            tests_str = "[]"
+        tests_str = json.dumps(tests) if tests else "[]"
+
+        l3_networks, device_networks = self._discover_networks()
+        if not l3_networks or not device_networks:
+            raise NetworkDiscoveryException(
+                "Network discovery failed on GKE. "
+                "Could not identify L3 or Device networks."
+            )
+        all_networks = l3_networks + device_networks
+        all_interfaces = [
+            {"interfaceName": f"eth{i}", "network": net_name}
+            for i, net_name in enumerate(all_networks)
+        ]
+
+        default_interface_name = "eth0"
+        all_interfaces_json = json.dumps(all_interfaces)
 
         rendered_content = template_content.format(
             nodes=nodes_str,
             machine_type=machine_type,
             tests=tests_str,
+            default_interface_name=default_interface_name,
+            all_interfaces_json=all_interfaces_json,
         )
         logger.debug("Configuration: %r", rendered_content)
 
@@ -126,22 +205,35 @@ class GKEScheduler(BaseScheduler):
         """Checks if the given jobs are still running."""
         if not job_ids:
             logger.warning(
-                "No job IDs provided to check. Proceeding with analyzing "
-                "logs. Did chs run submit jobs?"
+                "No job IDs provided to check. Did chs run submit jobs?"
             )
             return False
 
-        still_running = False
-        for job_id in job_ids:
-            try:
-                result = subprocess.run(
-                    ["kubectl", "get", "jobset", job_id, "-o", "json"],
-                    text=True,
-                    check=True,
-                    capture_output=True,
-                )
+        try:
+            # Pass all job IDs at once and ignore ones that were already deleted
+            args = (
+                ["get", "jobset"]
+                + job_ids
+                + ["-o", "json", "--ignore-not-found"]
+            )
+            output = self._run_kubectl(args)
 
-                job_data = json.loads(result.stdout)
+            # If stdout is empty, no jobs were found (all completed and deleted)
+            if not output:
+                return False
+
+            data = json.loads(output)
+
+            # If a single item is returned, it's not wrapped in a List
+            items = (
+                data.get("items", [data])
+                if data.get("kind") == "List"
+                else [data]
+            )
+
+            still_running = False
+
+            for job_data in items:
                 conditions = job_data.get("status", {}).get("conditions", [])
 
                 completed = False
@@ -161,15 +253,15 @@ class GKEScheduler(BaseScheduler):
 
                 if not completed and not failed:
                     still_running = True
-                    logger.debug("JobSet %s is still running.", job_id)
-            except subprocess.CalledProcessError:
-                # If JobSet is not found, assume it's no longer running (job
-                # completed)
-                pass
-            except (json.JSONDecodeError, AttributeError, TypeError) as e:
-                logger.warning(
-                    "Failed to check status for JobSet %s: %s", job_id, e
-                )
+                    logger.debug(
+                        "JobSet %s is still running.",
+                        job_data.get("metadata", {}).get("name", "Unknown"),
+                    )
+
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to run kubectl get jobset: %s", e.stderr)
+        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+            logger.warning("Failed to parse status for JobSets: %s", e)
 
         return still_running
 
@@ -178,13 +270,13 @@ class GKEScheduler(BaseScheduler):
         statuses = {}
         for job_id in job_ids:
             try:
-                result = subprocess.run(
-                    ["kubectl", "get", "jobset", job_id, "-o", "json"],
-                    text=True,
-                    check=True,
-                    capture_output=True,
-                )
-                job_data = json.loads(result.stdout)
+                args = ["get", "jobset", job_id, "-o", "json"]
+                output = self._run_kubectl(args)
+                if not output:
+                    statuses[job_id] = "UNKNOWN"
+                    continue
+
+                job_data = json.loads(output)
                 conditions = job_data.get("status", {}).get("conditions", [])
 
                 status = "RUNNING"  # Default if exists but not complete/failed
@@ -205,10 +297,6 @@ class GKEScheduler(BaseScheduler):
 
             except subprocess.CalledProcessError:
                 # JobSet not found, likely deleted or never existed.
-                # In CHS context, if we are polling, it might mean it finished
-                # and was cleaned up? But persistent JobSets should stay until
-                # deleted. If it's missing, let's mark as UNKNOWN or COMPLETED?
-                # safer to say UNKNOWN if we expected it to be there.
                 statuses[job_id] = "UNKNOWN"
             except (json.JSONDecodeError, AttributeError, TypeError) as e:
                 logger.warning(
@@ -224,8 +312,7 @@ class GKEScheduler(BaseScheduler):
         try:
             # Find the head pod (rank 0)
             # This logic mirrors batch_wait.tpl
-            cmd = [
-                "kubectl",
+            args = [
                 "get",
                 "pods",
                 "-l",
@@ -233,10 +320,7 @@ class GKEScheduler(BaseScheduler):
                 "-o",
                 "jsonpath={.items[0].metadata.name}",
             ]
-            result = subprocess.run(
-                cmd, text=True, check=True, capture_output=True
-            )
-            head_pod = result.stdout.strip()
+            head_pod = self._run_kubectl(args)
 
             if not head_pod:
                 logger.warning("Head pod not found for JobSet %s.", job_id)
@@ -261,7 +345,6 @@ class GKEScheduler(BaseScheduler):
 
     def parse_job_ids(self, output: str) -> list[str]:
         """Parses job IDs from the experiment execution output."""
-        # Match kubectl apply output for JobSets.
         regex = (
             r"jobset[\.a-zA-Z0-9-]*?/"
             r"([a-zA-Z0-9.-]+)\s+(?:created|configured|unchanged)"
@@ -275,9 +358,9 @@ class GKEScheduler(BaseScheduler):
             return
 
         for job_id in job_ids:
-            cmd = ["kubectl", "delete", "jobset", job_id]
             try:
-                subprocess.run(cmd, capture_output=True, text=True, check=True)
+                args = ["delete", "jobset", job_id]
+                self._run_kubectl(args)
                 logger.debug("Successfully deleted JobSet: %s", job_id)
             except FileNotFoundError:
                 logger.warning("kubectl command not found. Cannot cancel jobs.")

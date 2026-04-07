@@ -5,6 +5,10 @@ class ChsException(Exception):
     """Base exception class for all CHS-related errors."""
 
 
+class ChsValidationError(ChsException):
+    """Raised when configuration or arguments fail validation."""
+
+
 class NoPreviousRunsFoundException(ChsException):
     """Raised when no previous CHS runs are found."""
 
@@ -25,8 +29,16 @@ class ChsAnalysisException(ChsException):
     """Raised for errors during results analysis."""
 
 
+class BillOfHealthLoadException(ChsException):
+    """Raised when the bill_of_health.json file cannot be loaded or parsed."""
+
+
 class BillOfHealthNotFoundException(ChsException):
     """Raised when the bill_of_health.json file is not found."""
+
+
+class JobSubmissionFailureException(ChsException):
+    """Raised when job submission fails."""
 
 
 class ChsCancellationException(ChsException):
@@ -45,9 +57,17 @@ class UnsupportedSchedulerException(ChsException):
     """Raised when an unsupported scheduler is specified."""
 
 
+class ChsSchedulerException(ChsException):
+    """Raised for general scheduler-specific issues like argument errors."""
+
+
 class SuiteNotFoundException(ChsException):
     """Raised when a specific test suite is not found."""
 
 
 class ChsArchiveException(ChsException):
     """Raised for errors during workspace archival."""
+
+
+class NetworkDiscoveryException(ChsException):
+    """Raised when network discovery fails to find required networks."""

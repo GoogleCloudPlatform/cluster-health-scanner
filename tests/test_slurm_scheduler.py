@@ -1,6 +1,7 @@
 import logging
 import unittest
 from unittest.mock import patch
+import os
 import subprocess
 from chs.schedulers.slurm import SlurmScheduler
 
@@ -56,6 +57,17 @@ class TestSlurmScheduler(unittest.TestCase):
     def test_check_jobs_running_false(self, mock_run):
         mock_run.return_value.stdout = ""
         self.assertFalse(self.scheduler.check_jobs_running(["123"]))
+
+    def test_get_extra_env(self):
+        """Test get_extra_env returns expected Enroot paths."""
+        env = self.scheduler.get_extra_env()
+        home = os.path.expanduser("~")
+        self.assertEqual(
+            env["ENROOT_RUNTIME_PATH"], os.path.join(home, ".enroot", "run")
+        )
+        self.assertEqual(
+            env["ENROOT_CACHE_PATH"], os.path.join(home, ".enroot", "cache")
+        )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ This module defines the CLI structure using click and provides the
 logic for handling subcommands such as listing resources.
 """
 
+import dataclasses
 import datetime
 import functools
 import json
@@ -11,31 +12,36 @@ import logging
 import os
 import pathlib
 import subprocess
-import importlib.resources as pkg_resources
+from contextlib import contextmanager
+from typing import Any
 
-import chs.repos.applications.chs
-from chs.utils.app_data import ChsAppData
-from chs.utils.suites import load_suite_tests
-
-from chs.exceptions import (
-    BillOfHealthNotFoundException,
-    ChsAnalysisException,
-    ChsCancellationException,
-    ChsException,
-    ChsExecutionException,
-    ChsRunInProgressException,
-    NoNodesProvidedException,
-    NoPreviousRunsFoundException,
-    UnsupportedSchedulerException,
-    WorkspaceNotFoundException,
-)
-from chs.ramble_manager import RambleManager
-from chs.results_viewer import ResultsViewer
-from chs.schedulers import get_scheduler
-from chs.schedulers.base import BaseScheduler
 import click
 
+from chs import (
+    BaseScheduler,
+    ChsAppData,
+    RambleManager,
+    ResultsViewer,
+    exceptions as ex,
+    get_scheduler,
+    load_suite_tests,
+    resources,
+    validators,
+)
+
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class RunExecutionResult:
+    """Structured result of a CHS test suite run."""
+
+    suite: str
+    scheduler_name: str
+    tests: list[dict[str, Any]] | list[str] | None
+    workspace_name: str
+    workspaces_base_dir: str
+    job_ids: list[str] | None
 
 
 def handle_chs_exceptions(f):
@@ -45,51 +51,67 @@ def handle_chs_exceptions(f):
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
-        except ChsException as e:
+        except ex.ChsException as e:
             raise click.ClickException(str(e)) from e
 
     return wrapper
 
 
-def non_empty_str_callback(
-    ctx: click.Context, param: click.Parameter, value: str | None
-) -> str | None:
-    """Click callback to validate that if a string value is provided, it is not
-    empty."""
-    if value is None:
-        return None
-    stripped_value = value.strip()
-    if not stripped_value:
-        raise click.BadParameter(
-            "cannot be an empty string.", ctx=ctx, param=param
-        )
-    return stripped_value
-
-
-def _list_suites() -> None:
-    """Lists available suites."""
-    # TODO: Replace with actual suite listing logic
-    logger.info("Listed suites.")
-
-
-def _list_tests(from_suite: str | None, tests_flag: bool) -> None:
-    """Lists available tests, potentially filtered by suite."""
-    if from_suite:
-        # TODO: Add logic to list tests for a specific suite
-        logger.info("Listed tests for suite: %r", from_suite)
+@contextmanager
+def archive_workspace(
+    ramble_manager: RambleManager, *, on_success: bool = True
+):
+    """Context manager to ensure workspace is archived even in error cases."""
+    try:
+        yield
+    except Exception:
+        ramble_manager.archive()
+        raise
     else:
-        # TODO: Add logic to list all tests
-        if tests_flag:
-            logger.info(
-                "  (Hint: Use --from-suite <suite_name> to filter tests)"
-            )
-        logger.info("Listed tests.")
+        if on_success:
+            ramble_manager.archive()
 
 
-def _list_schedulers() -> None:
-    """Lists available schedulers."""
-    # TODO: Replace with actual scheduler listing logic
-    logger.info("Listed schedulers.")
+def _get_suites_list() -> list[str]:
+    """Returns lines for available suites."""
+    suites = list(resources.SUPPORTED_SUITES.keys())
+    if suites:
+        lines = ["Available Suites:"]
+        lines.extend(f"  - {s}" for s in suites)
+        return lines
+    return ["No suites found."]
+
+
+def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
+    """Returns lines for available tests."""
+    if from_suite:
+        tests = resources.SUPPORTED_SUITES.get(from_suite, [])
+    else:
+        tests = resources.SUPPORTED_TESTS
+
+    if tests:
+        lines = []
+        if from_suite:
+            lines.append(f"Available Tests for suite '{from_suite}':")
+        else:
+            lines.append("Available Tests:")
+            if tests_flag:
+                lines.append(
+                    "  (Hint: Use --from-suite <suite_name> to filter tests)"
+                )
+        lines.extend(f"  - {t}" for t in tests)
+        return lines
+    return ["No tests found."]
+
+
+def _get_schedulers_list() -> list[str]:
+    """Returns lines for available schedulers."""
+    schedulers = resources.SUPPORTED_SCHEDULERS
+    if schedulers:
+        lines = ["Supported Schedulers:"]
+        lines.extend(f"  - {s}" for s in schedulers)
+        return lines
+    return ["No schedulers found."]
 
 
 def list_action(
@@ -119,12 +141,26 @@ def list_action(
         from_suite,
     )
     show_all = not (suites or tests or schedulers)
+    all_lines = []
+
     if suites or show_all:
-        _list_suites()
+        all_lines.extend(_get_suites_list())
+        all_lines.append("")
+
     if tests or show_all:
-        _list_tests(from_suite, tests)
+        all_lines.extend(_get_tests_list(from_suite, tests))
+        all_lines.append("")
+
     if schedulers or show_all:
-        _list_schedulers()
+        all_lines.extend(_get_schedulers_list())
+        all_lines.append("")
+
+    if all_lines and not all_lines[-1]:
+        all_lines.pop()
+
+    if all_lines:
+        logger.info("\n".join(all_lines))
+
     return show_all
 
 
@@ -142,15 +178,16 @@ def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
         if not latest_run_id:
             return False
 
+        workspaces_dir = app_data.get_workspaces_dir()
         ramble_manager = RambleManager(
-            base_dir="", workspace_name=latest_run_id
+            base_dir=workspaces_dir, workspace_name=latest_run_id
         )
         if ramble_manager.check_jobs_running():
             logger.warning(
                 "The latest CHS run ('%s') is still active.", latest_run_id
             )
             return True
-    except (NoPreviousRunsFoundException, WorkspaceNotFoundException):
+    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         return False
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Could not check for active CHS runs: %s", e)
@@ -173,35 +210,59 @@ def _parse_str_to_list(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _validate_run_args(
+    scheduler: str, machine_type: str, tests: str | None, suite: str | None
+) -> None:
+    """Validates core run arguments against supported lists.
+
+    Args:
+      scheduler: Name of the scheduler.
+      machine_type: Machine type string.
+      tests: Comma-separated list of tests, or None.
+      suite: Suite name, or None.
+
+    Raises:
+      ex.ChsValidationError: If validation fails.
+    """
+    validator = validators.ProjectConfigValidator()
+    errors = validator.validate(
+        {
+            "scheduler": scheduler,
+            "machine_type": machine_type,
+            "suite": suite,
+            "tests": _parse_str_to_list(tests),
+        }
+    )
+    if errors:
+        raise ex.ChsValidationError("\n".join(errors))
+
+
 def run_action(
     *,
     suite: str,
     scheduler_obj: BaseScheduler,
-    tests: list[str] | None,
+    tests: list[dict[str, Any]] | None,
     workspace_name: str,
     workspaces_base_dir: str,
-    ramble_manager: type[RambleManager],
     machine_type: str,
-) -> tuple[str, str, list[str] | None, str, str, list[str]]:
+    dry_run: bool = False,
+) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
     Args:
       suite: Name of the test suite to run.
       scheduler_obj: Scheduler object to use.
-      tests: An optional list of names of specific tests to run.
+      tests: An optional list of test definitions to run.
       workspace_name: The name of the test workspace.
       workspaces_base_dir: The base directory for workspaces.
-      ramble_manager: The class to use for RambleManager.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
+      dry_run: Set up the workspace but do not execute experiments.
 
     Returns:
-      A tuple containing the suite name, scheduler name, a list of test
-      names, workspace name, and workspaces base directory, and submitted job
-      IDs.
-
+      A list of submitted job IDs, or None if dry_run is True.
 
     Raises:
-      click.ClickException: If an error occurs during CHS execution.
+      ChsExecutionException: If an error occurs during CHS execution.
     """
 
     logger.debug(
@@ -211,27 +272,25 @@ def run_action(
         tests,
     )
 
-    ramble_manager = ramble_manager(workspaces_base_dir, workspace_name)
+    ramble_manager = RambleManager(workspaces_base_dir, workspace_name)
 
-    try:
-        ramble_manager.create_workspace()
-        ramble_manager.add_custom_repository()
-        ramble_manager.configure_workspace(
-            scheduler_obj, tests, machine_type=machine_type
-        )
-        ramble_manager.setup_workspace()
-        job_ids = ramble_manager.execute_experiments()
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ChsExecutionException(f"CHS execution failed: {e!r}") from e
-    else:
-        return (
-            suite,
-            scheduler_obj.name,
-            tests,
-            workspace_name,
-            workspaces_base_dir,
-            job_ids,
-        )
+    with archive_workspace(ramble_manager, on_success=False):
+        try:
+            ramble_manager.create_workspace()
+            ramble_manager.add_custom_repository()
+            ramble_manager.configure_workspace(
+                scheduler_obj, tests, machine_type=machine_type
+            )
+            ramble_manager.setup_workspace()
+            if dry_run:
+                logger.info("Setup complete. Skipping experiment execution.")
+                return None
+
+            return ramble_manager.execute_experiments()
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ex.ChsExecutionException(
+                f"CHS execution failed: {e!r}"
+            ) from e
 
 
 def analyze_action(app_data: ChsAppData, run_id: str) -> str:
@@ -253,41 +312,42 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
-    try:
-        if not os.path.exists(ramble_manager.path):
-            raise WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
+    if not os.path.exists(ramble_manager.path):
+        raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
 
-        workspace_path = pathlib.Path(ramble_manager.path)
-        boh_path = workspace_path / "bill_of_health.json"
-        results_json_path = workspace_path / "results.latest.json"
+    with archive_workspace(ramble_manager, on_success=True):
+        try:
+            workspace_path = pathlib.Path(ramble_manager.path)
+            boh_path = workspace_path / "bill_of_health.json"
+            results_json_path = workspace_path / "results.latest.json"
 
-        # 1. Check if Bill of Health already exists
-        if boh_path.exists():
+            # 1. Check if Bill of Health already exists
+            if boh_path.exists():
+                _show_results(app_data, run_id)
+                return run_id
+
+            # 2. If results.latest.json exists (but no BoH), generate BoH
+            if results_json_path.exists():
+                logger.info(
+                    "Found results from this run. Generating Bill of Health..."
+                )
+                ramble_manager.generate_boh(str(results_json_path))
+                _show_results(app_data, run_id)
+                return run_id
+
+            # 3. If neither exists, wait for jobs and then analyze
+            logger.debug(f"Waiting for jobs for {run_id}...")
+            ramble_manager.wait_for_jobs()
+
+            ramble_manager.analyze_results()
+            logger.debug("Analysis complete for run_id=%r", run_id)
             _show_results(app_data, run_id)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ex.ChsAnalysisException(
+                f"CHS analysis failed for run_id={run_id}: {e!r}"
+            ) from e
+        else:
             return run_id
-
-        # 2. If results.latest.json exists (but no BoH), generate BoH
-        if results_json_path.exists():
-            logger.info(
-                "Found results from this run. Generating Bill of Health..."
-            )
-            ramble_manager.generate_boh(str(results_json_path))
-            _show_results(app_data, run_id)
-            return run_id
-
-        # 3. If neither exists, wait for jobs and then analyze
-        logger.debug(f"Waiting for jobs for {run_id}...")
-        ramble_manager.wait_for_jobs()
-
-        ramble_manager.analyze_results()
-        logger.debug("Analysis complete for run_id=%r", run_id)
-        _show_results(app_data, run_id)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ChsAnalysisException(
-            f"CHS analysis failed for run_id={run_id}: {e!r}"
-        ) from e
-
-    return run_id
 
 
 def _show_results(
@@ -305,7 +365,7 @@ def _show_results(
 
     boh_path = workspaces_dir / run_id / "bill_of_health.json"
     if not boh_path.exists():
-        raise BillOfHealthNotFoundException(
+        raise ex.BillOfHealthNotFoundException(
             f"Could not find bill of health at {boh_path}. "
             f"Have you run 'chs analyze {run_id}'?"
         )
@@ -315,10 +375,7 @@ def _show_results(
     parsed_tests = _parse_str_to_list(tests)
     parsed_resources = _parse_str_to_list(resources)
 
-    if parsed_tests or parsed_resources:
-        viewer.show_details(tests=parsed_tests, resources=parsed_resources)
-    else:
-        viewer.show_summary()
+    viewer.show_details(tests=parsed_tests, resources=parsed_resources)
 
 
 def cancel_action(app_data: ChsAppData, run_id: str) -> str:
@@ -339,20 +396,21 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     ramble_manager = RambleManager(workspaces_base_dir, run_id)
 
-    try:
-        if not ramble_manager.check_jobs_running():
-            logger.info("No jobs for run %s are currently running.", run_id)
+    with archive_workspace(ramble_manager, on_success=True):
+        try:
+            if not ramble_manager.check_jobs_running():
+                logger.info("No jobs for run %s are currently running.", run_id)
+                return run_id
+
+            ramble_manager.cancel_experiments()
+            logger.debug("Cancellation complete for run_id=%r", run_id)
+            logger.info("Jobs for run %s have been canceled.", run_id)
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ex.ChsCancellationException(
+                f"CHS cancellation failed for run_id={run_id}: {e!r}"
+            ) from e
+        else:
             return run_id
-
-        ramble_manager.cancel_experiments()
-        logger.debug("Cancellation complete for run_id=%r", run_id)
-        logger.info("Jobs for run %s have been canceled.", run_id)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ChsCancellationException(
-            f"CHS cancellation failed for run_id={run_id}: {e!r}"
-        ) from e
-
-    return run_id
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -375,7 +433,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     "--from-suite",
     metavar="SUITE_NAME",
     help="Specify the suite to list tests from (only used with --tests)",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 def list_command(
     *, suites: bool, tests: bool, schedulers: bool, from_suite: str | None
@@ -403,46 +461,51 @@ def list_command(
     "--suite",
     "-s",
     help="Name of the test suite to run",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--scheduler",
     "-sch",
     required=True,
     help="Scheduler to use (e.g., slurm, gke)",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--tests",
     "-t",
     help="Comma-separated list of specific tests to run (optional)",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodes",
     help="Comma-separated list of individual nodes to run on",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodelist",
     help="Slurm node list pattern to run on (e.g., node-[1-3])",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodepool",
     help="GKE node pool to run on",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--partition",
     help="Slurm partition to run on",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--machine-type",
     required=True,
     help="The machine type of the cluster nodes (e.g., a3-high).",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Set up the workspace but do not execute experiments or analyze.",
 )
 @click.pass_obj
 def run(
@@ -456,7 +519,8 @@ def run(
     nodepool: str | None,
     partition: str | None,
     machine_type: str,
-) -> tuple[str, str, list[str] | None, str, str, list[str]]:
+    dry_run: bool,
+) -> RunExecutionResult:
     """Command to run a test suite.
 
     Args:
@@ -468,29 +532,27 @@ def run(
       nodepool: GKE node pool to run on.
       partition: Slurm partition to run on.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
+      dry_run: Set up the workspace but do not execute experiments or analyze.
 
     Returns:
-      A tuple containing the suite name, scheduler name, a list of
-      test names, workspace name, workspaces base directory, and job ids.
+      A RunExecutionResult object containing details of the run.
     """
     app_data = obj["app_data"]
     if is_latest_chs_run_active(app_data):
-        raise ChsRunInProgressException(
+        raise ex.ChsRunInProgressException(
             "The latest CHS run is still in progress. Please wait for it to"
             " complete or cancel it before submitting a new run."
         )
 
-    # Resolve tests from suite if not provided
+    _validate_run_args(scheduler, machine_type, tests, suite)
+
     if not tests:
         if not suite:
             suite = "lite"
 
-        # Load tests for the suite
-        # Load tests for the suite
-        with pkg_resources.path(
-            chs.repos.applications.chs, "configs"
-        ) as configs_dir:
-            resolved_tests = load_suite_tests(suite, str(configs_dir))
+        configs_dir = pathlib.Path(__file__).parent
+
+        resolved_tests = load_suite_tests(suite, str(configs_dir))
         test_names = [
             t.get("name", str(t)) if isinstance(t, dict) else str(t)
             for t in resolved_tests
@@ -501,8 +563,13 @@ def run(
         )
         parsed_tests = resolved_tests
     else:
-        # Tests provided explicitly
-        parsed_tests = _parse_str_to_list(tests)
+        # TODO: Validate input tests with supported tests
+        parsed_tests_strs = _parse_str_to_list(tests)
+        parsed_tests = (
+            [{"name": t} for t in parsed_tests_strs]
+            if parsed_tests_strs
+            else []
+        )
         if not suite:
             suite = "custom"
 
@@ -512,15 +579,16 @@ def run(
         nodelist=nodelist,
         nodepool=nodepool,
         partition=partition,
+        app_data=app_data,
     )
 
     if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
         nodes_under_test = scheduler_obj.get_nodes_under_test()
         if not nodes_under_test:
-            raise NoNodesProvidedException("No nodes provided to run on.")
+            raise ex.NoNodesProvidedException("No nodes provided to run on.")
     else:
         # TODO: Add support for other schedulers.
-        raise UnsupportedSchedulerException(
+        raise ex.UnsupportedSchedulerException(
             "Only Slurm and GKE schedulers are supported."
         )
 
@@ -530,22 +598,37 @@ def run(
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
-    result = run_action(
+    job_ids = run_action(
         suite=suite,
         scheduler_obj=scheduler_obj,
         tests=parsed_tests,
         workspace_name=workspace_name,
         workspaces_base_dir=workspaces_base_dir,
-        ramble_manager=RambleManager,
         machine_type=machine_type,
+        dry_run=dry_run,
+    )
+    logger.info("Request ID (Workspace Name): %s", workspace_name)
+
+    result = RunExecutionResult(
+        suite=suite,
+        scheduler_name=scheduler_obj.name,
+        tests=parsed_tests,
+        workspace_name=workspace_name,
+        workspaces_base_dir=workspaces_base_dir,
+        job_ids=job_ids,
     )
 
+    if dry_run:
+        logger.info("Dry run completed. Workspace setup is ready.")
+        return result
+
+    if not job_ids:
+        raise ex.JobSubmissionFailureException(
+            f"Job submission failed for workspace: {workspace_name}"
+        )
+
     logger.info("Run submitted successfully.")
-    logger.info("Request ID (Workspace Name): %s", workspace_name)
-    if result[5]:  # job_ids
-        logger.info("Job IDs: %s", ", ".join(result[5]))
-    else:
-        logger.info("No Job IDs captured (running locally?)")
+    logger.info("Job IDs: %s", ", ".join(job_ids))
 
     # Automatically trigger analysis
     analyze_action(app_data, workspace_name)
@@ -555,7 +638,9 @@ def run(
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.argument(
+    "run_id", required=False, callback=validators.validate_non_empty_string
+)
 @click.pass_obj
 def analyze(obj, run_id: str | None) -> str:
     """Analyze results from a test run.
@@ -581,7 +666,9 @@ def analyze(obj, run_id: str | None) -> str:
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.argument(
+    "run_id", required=False, callback=validators.validate_non_empty_string
+)
 @click.pass_obj
 def cancel(obj, run_id: str | None) -> str:
     """Cancel running jobs for a test run.
@@ -607,22 +694,27 @@ def cancel(obj, run_id: str | None) -> str:
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument("run_id", required=False, callback=non_empty_str_callback)
+@click.argument(
+    "run_id", required=False, callback=validators.validate_non_empty_string
+)
 @click.option(
     "--tests",
     "-t",
     help="Comma-separated list of test names to show details for.",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--resources",
     "-r",
     help="Comma-separated list of resource names to show details for.",
-    callback=non_empty_str_callback,
+    callback=validators.validate_non_empty_string,
 )
 @click.pass_obj
 def results(
-    obj, run_id: str | None, tests: str | None, resources: str | None
+    obj,
+    run_id: str | None,
+    tests: str | None,
+    resources: str | None,
 ) -> None:
     """Show Bill of Health results for a run.
 

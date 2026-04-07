@@ -82,7 +82,8 @@ spec:
                   export NODE_RANK=$JOB_COMPLETION_INDEX
 
                   mkdir -p "{container_experiment_run_dir}"
-                  cd "{container_experiment_run_dir}"
+                  mkdir -p "{workdir}"
+                  cd "{workdir}"
 
                   if [[ "$JOB_COMPLETION_INDEX" -eq "0" ]]; then
                     echo "Discovering hosts..."
