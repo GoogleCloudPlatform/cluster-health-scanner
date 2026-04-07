@@ -55,7 +55,7 @@ class NvidiaSmiRenderer(DefaultRenderer):
                     driver_version = val
                 elif "cuda" in key:
                     cuda_version = val
-                elif "attached_gpus" in key or "gpu_count" in key:
+                elif "gpu count" in key:
                     try:
                         gpu_count = int(float(val))
                     except ValueError:

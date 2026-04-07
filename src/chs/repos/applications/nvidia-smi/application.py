@@ -16,7 +16,7 @@ class NvidiaSmi(ExecutableApplication):
     workload("local", executables=["execute"])
 
     figure_of_merit(
-        "Driver Version: {driver_version}",
+        "Driver Version",
         fom_regex=r"Driver Version\s*:\s*(?P<driver_version>[0-9.]+)",
         group_name="driver_version",
         units="",
@@ -24,7 +24,7 @@ class NvidiaSmi(ExecutableApplication):
     )
 
     figure_of_merit(
-        "CUDA Version: {cuda_version}",
+        "CUDA Version",
         fom_regex=r"CUDA Version\s*:\s*(?P<cuda_version>[0-9.]+)",
         group_name="cuda_version",
         units="",
@@ -32,7 +32,7 @@ class NvidiaSmi(ExecutableApplication):
     )
 
     figure_of_merit(
-        "GPU Count: {num_gpus}",
+        "GPU Count",
         fom_regex=r"Attached GPUs\s*:\s*(?P<num_gpus>\d+)",
         group_name="num_gpus",
         units="",
