@@ -1,6 +1,6 @@
 a3-mega:
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -86,7 +86,7 @@ a3-ultra:
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -151,7 +151,7 @@ a4:
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -193,7 +193,7 @@ a4:
       n_nodes: 1
 a4x:
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
