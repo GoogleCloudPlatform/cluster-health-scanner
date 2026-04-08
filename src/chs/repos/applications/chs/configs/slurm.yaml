@@ -1,13 +1,13 @@
 a3-mega:
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
   nvidia-stream:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -19,7 +19,7 @@ a3-mega:
       cpu_affinity: "0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103"
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -36,7 +36,7 @@ a3-mega:
       n: 16384
       k: 16384
   nccl-tests:
-    modifiers: [{name: "nccl-tcpxo"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-tcpxo"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         NCCL_FASTRAK_CTRL_DEV: enp0s12
@@ -62,7 +62,7 @@ a3-mega:
         formula: "{value} == 0"
 a3-ultra:
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         NCCL_NET: gIB
@@ -86,14 +86,14 @@ a3-ultra:
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
   nvidia-stream:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -105,7 +105,7 @@ a3-ultra:
       cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -128,7 +128,7 @@ a3-ultra:
       n_nodes: 1
 a4:
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         NCCL_NET: gIB
@@ -151,14 +151,14 @@ a4:
         fom_name: "Out of bounds values"
         formula: "{value} == 0"
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
   nvidia-stream:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -170,7 +170,7 @@ a4:
       cpu_affinity: "0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111"
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -193,14 +193,14 @@ a4:
       n_nodes: 1
 a4x:
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}]
+    modifiers: [{name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
   nvidia-stream:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -212,7 +212,7 @@ a4x:
       cpu_affinity: "0-69:0-69:70-139:70-139"
       mem_affinity: "0:0:1:1"
   nvidia-gemm:
-    modifiers: [{name: "pyxis-enroot"}]
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -234,7 +234,7 @@ a4x:
       processes_per_node: 1
       n_nodes: 1
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"

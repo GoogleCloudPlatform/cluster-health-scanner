@@ -22,7 +22,7 @@ a3-ultra:
     container_security_context_yaml: |
       privileged: true
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
+    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
@@ -50,7 +50,7 @@ a3-ultra:
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -61,7 +61,7 @@ a3-ultra:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
@@ -71,7 +71,7 @@ a3-ultra:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -85,7 +85,7 @@ a3-ultra:
       mem_affinity: "0:0:0:0:1:1:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -127,7 +127,7 @@ a4:
     container_security_context_yaml: |
       privileged: true
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
+    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
@@ -155,7 +155,7 @@ a4:
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -166,7 +166,7 @@ a4:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
@@ -176,7 +176,7 @@ a4:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -190,7 +190,7 @@ a4:
       mem_affinity: "0:0:0:0:1:1:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -232,7 +232,7 @@ a3-mega:
     container_security_context_yaml: |
       privileged: true
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -243,7 +243,7 @@ a3-mega:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
@@ -253,7 +253,7 @@ a3-mega:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -267,7 +267,7 @@ a3-mega:
       mem_affinity: "0:0:0:0:1:1:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
