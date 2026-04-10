@@ -91,13 +91,16 @@ class TestSlurmScheduler(unittest.TestCase):
         """Test _ensure_enroot_directories creates missing paths."""
         scheduler = SlurmScheduler()
         mock_expanduser.return_value = "/home/user"
-        mock_exists.side_effect = [False, False]  # Both don't exist
+        mock_exists.side_effect = [False, False, False]  # All 3 don't exist
 
         scheduler._ensure_enroot_directories()
 
-        self.assertEqual(mock_makedirs.call_count, 2)
+        self.assertEqual(mock_makedirs.call_count, 3)
         mock_makedirs.assert_any_call("/home/user/.enroot/run", exist_ok=True)
         mock_makedirs.assert_any_call("/home/user/.enroot/cache", exist_ok=True)
+        mock_makedirs.assert_any_call(
+            "/home/user/.enroot/.credentials", exist_ok=True
+        )
 
     @mock.patch("os.path.expanduser")
     def test_get_extra_env(self, mock_expanduser, mock_logger):
@@ -107,6 +110,9 @@ class TestSlurmScheduler(unittest.TestCase):
         env = scheduler.get_extra_env()
         self.assertEqual(env["ENROOT_RUNTIME_PATH"], "/home/user/.enroot/run")
         self.assertEqual(env["ENROOT_CACHE_PATH"], "/home/user/.enroot/cache")
+        self.assertEqual(
+            env["ENROOT_CONFIG_CREDENTIALS"], "/home/user/.enroot/.credentials"
+        )
 
     def test_discover_network_interfaces_with_anchor(self, mock_logger):
         """Test _discover_network_interfaces uses default route as anchor."""

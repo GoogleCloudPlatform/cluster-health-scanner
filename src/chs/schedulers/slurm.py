@@ -37,6 +37,9 @@ class SlurmScheduler(BaseScheduler):
             "ENROOT_CACHE_PATH": os.getenv(
                 "ENROOT_CACHE_PATH", os.path.join(base, "cache")
             ),
+            "ENROOT_CONFIG_CREDENTIALS": os.getenv(
+                "ENROOT_CONFIG_CREDENTIALS", os.path.join(base, ".credentials")
+            ),
         }
 
     def __init__(
