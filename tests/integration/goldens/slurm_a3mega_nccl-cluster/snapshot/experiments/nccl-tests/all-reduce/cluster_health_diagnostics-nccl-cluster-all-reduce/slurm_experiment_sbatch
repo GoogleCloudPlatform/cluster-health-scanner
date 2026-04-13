@@ -22,6 +22,8 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/clu
 
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
+export NCCL_DEBUG=INFO;
 export NCCL_FASTRAK_CTRL_DEV=enp0s12;
 export NCCL_FASTRAK_IFNAME=enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0;
 export NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY=/dev/aperture_devices;
@@ -33,7 +35,6 @@ fi
 if [ -d "/var/lib/tcpxo/lib64" ]; then
     NCCL_LIB_DIR=/var/lib/tcpxo/lib64 . /var/lib/tcpxo/lib64/nccl-env-profile.sh
 fi
-scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
 LOCK_DIR="<WORKSPACE_ROOT>/shared/nccl-tests-master.lock"
 SUCCESS_FILE="<WORKSPACE_ROOT>/shared/nccl-tests-master/.success"
 FAIL_FILE="<WORKSPACE_ROOT>/shared/nccl-tests-master.failed"

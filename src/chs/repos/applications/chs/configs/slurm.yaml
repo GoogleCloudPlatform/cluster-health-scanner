@@ -36,13 +36,14 @@ a3-mega:
       n: 16384
       k: 16384
   nccl-tests:
-    modifiers: [{name: "nccl-tcpxo"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "nccl-tcpxo"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         NCCL_FASTRAK_CTRL_DEV: enp0s12
         NCCL_FASTRAK_IFNAME: enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0
         NCCL_SOCKET_IFNAME: enp0s12
         NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: /dev/aperture_devices
+        NCCL_DEBUG: INFO
     variables:
       container_name: pytorch:24.09-py3
       container_uri: "docker://nvcr.io#nvidia/pytorch:24.09-py3"
@@ -62,12 +63,13 @@ a3-mega:
         formula: "{value} == 0"
 a3-ultra:
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         NCCL_NET: gIB
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
+        NCCL_DEBUG: INFO
     variables:
       container_name: nccl-plugin-gib-diagnostic:v1.1.0
       container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
@@ -127,12 +129,13 @@ a3-ultra:
       n_nodes: 1
 a4:
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "nccl-test-compiler"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         NCCL_NET: gIB
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
+        NCCL_DEBUG: INFO
     variables:
       container_name: nccl-plugin-gib-diagnostic:v1.1.0
       container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"

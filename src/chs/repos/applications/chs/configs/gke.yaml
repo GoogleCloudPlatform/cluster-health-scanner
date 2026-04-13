@@ -22,12 +22,13 @@ a3-ultra:
     container_security_context_yaml: |
       privileged: true
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
         CUDA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
         NCCL_NET: gIB
+        NCCL_DEBUG: INFO
     variables:
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
@@ -127,12 +128,13 @@ a4:
     container_security_context_yaml: |
       privileged: true
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
         CUDA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
         NCCL_NET: gIB
+        NCCL_DEBUG: INFO
     variables:
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
