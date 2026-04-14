@@ -18,12 +18,12 @@ Clone the repository from Gerrit:
 
 ```bash
 # Using HTTPS
-git clone -b develop https://cluster-toolkit.googlesource.com/cluster-health-scanner
+git clone -b develop https://cluster-toolkit.googlesource.com/cluster-health-scanner chs
 
 # Using SSO
-git clone -b develop https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
+git clone -b develop https://github.com/GoogleCloudPlatform/cluster-health-scanner.git chs
 
-cd cluster-health-scanner
+cd chs
 ```
 
 ### Environment Setup

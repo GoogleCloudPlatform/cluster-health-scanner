@@ -54,35 +54,17 @@ gcloud container clusters get-credentials {cluster_name} \
 
 ## Installation
 
-Clone CHS from Gerrit's develop branch
-
-**Clone using HTTPS:**
-
-```bash
-git clone -b develop https://cluster-toolkit.googlesource.com/cluster-health-scanner
-```
-
-**Clone using SSO:**
-
-```bash
-git clone -b develop https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
-```
-
-```bash
-cd cluster-health-scanner
-```
-
 To install CHS, it is recommended to use a virtual environment:
 
 ```bash
 # Create a virtual environment
-python3 -m venv venv
+python3 -m venv chs-venv
 
 # Activate the virtual environment
-source venv/bin/activate
+source chs-venv/bin/activate
 
-# Install CHS
-pip install .
+# Install CHS directly from the repository
+pip install git+https://cluster-toolkit.googlesource.com/cluster-health-scanner
 ```
 
 ## Usage
@@ -237,7 +219,7 @@ chs analyze 2023-10-27_10.30.00.123456
 
 **Output Directory Structure:**
 
-Workspaces are created in: `~/.local/share/cluster-health-scanner/workspaces`
+Workspaces are created in: `~/.local/share/chs/workspaces`
 
 The workspace name follows the format: `yyyy-mm-dd_hh.mm.ss.ffffff`
 
@@ -246,7 +228,7 @@ The Bill of Health and experiment logs are located in the `chs-results` director
 This folder is what will be uploaded to GCS.
 
 ```
-~/.local/share/cluster-health-scanner/workspaces/
+~/.local/share/chs/workspaces/
 └── <WORKSPACE_NAME>/            # e.g., 2026-02-13_08.48.45.261141
     └── chs-results/             # Contains Bill of Health and experiment logs
         ├── bill_of_health.json  # The summarized Bill of Health report
@@ -259,7 +241,7 @@ This folder is what will be uploaded to GCS.
 The `bill_of_health.json` contains a `log_file` field for every test, pointing to the absolute path of the log file in the `experiments` directory.
 
 **Example Log File Path:**
-`log_file: "/usr/local/google/home/user/.local/share/cluster-health-scanner/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
+`log_file: "/usr/local/google/home/user/.local/share/chs/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
 #### 5. `cancel`
 Cancels running jobs for a specific test run.
 
@@ -301,11 +283,17 @@ chs results --tests nccl-cluster
 
 ### Workspaces Directory
 CHS stores all run data, configurations, and logs in a dedicated workspaces directory.
--   **Linux**: `~/.local/share/cluster-health-scanner/workspaces`
--   **macOS**: `~/Library/Application Support/cluster-health-scanner/workspaces`
+-   **Linux**: `~/.local/share/chs/workspaces`
+-   **macOS**: `~/Library/Application Support/chs/workspaces`
 
 ### Ramble Integration
 CHS expects a standard Ramble installation. It looks for the Ramble setup script (`setup-env.sh`) relative to the installed `chs` package location (typically inside `site-packages/share/ramble`).
+
+## Known Limitations
+
+-   **A4X on GKE**: NCCL tests are currently not working on A4X machine types within GKE.
+-   **Topological Pairwise Testing**: Topology-aware pairwise testing is not yet implemented.
+-   **GCS Bucket Configuration**: For the `chs configure bucket` command, the specified GCS bucket must already exist; CHS does not create it automatically.
 
 ## Development & TODOs
 
