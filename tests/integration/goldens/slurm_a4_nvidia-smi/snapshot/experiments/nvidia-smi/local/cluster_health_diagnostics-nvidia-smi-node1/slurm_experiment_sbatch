@@ -1,7 +1,9 @@
 #!/bin/bash
+#SBATCH --deadline=<DEADLINE>
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
+#SBATCH --time=10
 #SBATCH -J nvidia-smi_local_cluster_health_diagnostics-nvidia-smi-node1
 #SBATCH -N 1
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node1/slurm-%j.err

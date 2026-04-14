@@ -8,15 +8,15 @@ from chs.exceptions import SuiteNotFoundException
 logger = logging.getLogger(__name__)
 
 
-def load_suite_tests(suite_name: str, configs_dir: str) -> list[dict[str, Any]]:
-    """Loads a list of tests for a given suite from suites.yaml.
+def load_suite(suite_name: str, configs_dir: str) -> dict[str, Any]:
+    """Loads the full suite configuration from suites.yaml.
 
     Args:
         suite_name: The name of the suite to load.
         configs_dir: The directory containing suites.yaml.
 
     Returns:
-        A list of test definitions corresponding to the suite.
+        A dictionary containing the suite configuration.
 
     Raises:
         SuiteNotFoundException: If the suite is not found in suites.yaml.
@@ -34,7 +34,7 @@ def load_suite_tests(suite_name: str, configs_dir: str) -> list[dict[str, Any]]:
 
         for suite in suites:
             if suite.get("name") == suite_name:
-                return suite.get("tests", [])
+                return suite
 
         available_suites = [s.get("name") for s in suites]
         raise SuiteNotFoundException(

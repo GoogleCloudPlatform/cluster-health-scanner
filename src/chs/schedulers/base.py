@@ -43,6 +43,8 @@ class BaseScheduler(abc.ABC):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
+        timeout: int | None = None,
+        deadline: int | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 

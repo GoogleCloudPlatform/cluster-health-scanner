@@ -86,14 +86,16 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
 
-        self.mock_load_suite_tests = self.enterContext(
-            mock.patch("chs.cli.load_suite_tests", autospec=True)
+        self.mock_load_suite = self.enterContext(
+            mock.patch("chs.cli.load_suite", autospec=True)
         )
-        self.mock_load_suite_tests.return_value = [
-            "nccl-cluster",
-            "nccl-pairwise",
-            "dcgm",
-        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                "nccl-cluster",
+                "nccl-pairwise",
+                "dcgm",
+            ]
+        }
         self.mock_app_data_cls = self.enterContext(
             mock.patch("chs.cli.ChsAppData", autospec=True)
         )

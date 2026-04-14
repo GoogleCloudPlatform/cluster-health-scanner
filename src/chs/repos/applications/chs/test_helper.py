@@ -1,4 +1,5 @@
 import copy
+import datetime
 import textwrap
 from ramble.context import create_context_from_dict
 
@@ -42,6 +43,31 @@ podAntiAffinity:
                 [TestHelper._yaml_block(f"- {n}", 12) for n in nodes]
             )
         return ""
+
+    @staticmethod
+    def _get_sbatch_headers(headers_dict):
+        headers = []
+        for k, v in headers_dict.items():
+            if v is not None:
+                if k.startswith("--"):
+                    headers.append(f"#SBATCH {k}={v}")
+                else:
+                    headers.append(f"#SBATCH {k} {v}")
+        return "\n".join(headers)
+
+    @staticmethod
+    def _build_common_sbatch_headers(ctx_vars, nodes_str):
+        headers_dict = {"-w": nodes_str}
+        timeout = ctx_vars.get("timeout")
+
+        headers_dict["--time"] = str(int(timeout) // 60)
+
+        deadline_dt = datetime.datetime.now() + datetime.timedelta(
+            seconds=int(ctx_vars.get("deadline"))
+        )
+        headers_dict["--deadline"] = deadline_dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+        return headers_dict
 
     @staticmethod
     def _merge_configs(context_dict, configs, machine_type, ramble_app_name):
@@ -96,8 +122,17 @@ podAntiAffinity:
         context_dict = {
             "variables": ctx_vars,
         }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "nccl-tests"
+        )
+
         if scheduler == "slurm":
-            ctx_vars["extra_sbatch_headers"] = f"#SBATCH -w {sched_nodes_str}"
+            headers_dict = TestHelper._build_common_sbatch_headers(
+                ctx_vars, sched_nodes_str
+            )
+            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
+                headers_dict
+            )
 
         elif scheduler == "gke":
             TestHelper._k8s_gpu_settings(ctx_vars, sched_nodes_str)
@@ -111,10 +146,6 @@ podAntiAffinity:
             context_dict.setdefault("env_vars", {}).setdefault("set", {})[
                 "NCCL_NET"
             ] = "Socket"
-
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "nccl-tests"
-        )
         return create_context_from_dict(experiment_name, context_dict)
 
     @staticmethod
@@ -156,13 +187,6 @@ podAntiAffinity:
 
         ctx_vars["node"] = ctx_vars.get("nodes")
 
-        if scheduler == "slurm":
-            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
-        elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-
         experiment_template_name = f"{experiment_name}-nvidia-smi-{{node}}"
 
         context_dict = {
@@ -171,6 +195,18 @@ podAntiAffinity:
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nvidia-smi"
         )
+
+        if scheduler == "slurm":
+            headers_dict = TestHelper._build_common_sbatch_headers(
+                ctx_vars, "{node}"
+            )
+            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
+                headers_dict
+            )
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
         return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
@@ -182,13 +218,6 @@ podAntiAffinity:
         ctx_vars["node"] = ctx_vars.get("nodes")
 
         modifiers = []
-        if scheduler == "slurm":
-            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
-        elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-
         experiment_template_name = (
             f"{experiment_name}-dcgm-level-{{diag_level}}-{{node}}"
         )
@@ -201,6 +230,18 @@ podAntiAffinity:
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nvidia-dcgm"
         )
+
+        if scheduler == "slurm":
+            headers_dict = TestHelper._build_common_sbatch_headers(
+                ctx_vars, "{node}"
+            )
+            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
+                headers_dict
+            )
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
         return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
@@ -212,15 +253,6 @@ podAntiAffinity:
         ctx_vars["node"] = ctx_vars.get("nodes")
 
         modifiers = []
-        if scheduler == "slurm":
-            ctx_vars["extra_sbatch_headers"] = (
-                "#SBATCH -w {node}\n#SBATCH --gpu-bind=single:1"
-            )
-        elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-
         experiment_template_name = f"{experiment_name}-stream-{{node}}"
 
         context_dict = {
@@ -230,6 +262,19 @@ podAntiAffinity:
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nvidia-stream"
         )
+
+        if scheduler == "slurm":
+            headers_dict = TestHelper._build_common_sbatch_headers(
+                ctx_vars, "{node}"
+            )
+            headers_dict["--gpu-bind"] = "single:1"
+            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
+                headers_dict
+            )
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
         return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
@@ -241,13 +286,6 @@ podAntiAffinity:
         ctx_vars["node"] = ctx_vars.get("nodes")
 
         modifiers = []
-        if scheduler == "slurm":
-            ctx_vars["extra_sbatch_headers"] = "#SBATCH -w {node}"
-        elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-
         experiment_template_name = f"{experiment_name}-gemm-{{node}}"
 
         context_dict = {
@@ -257,4 +295,16 @@ podAntiAffinity:
         TestHelper._merge_configs(
             context_dict, configs, machine_type, "nvidia-gemm"
         )
+
+        if scheduler == "slurm":
+            headers_dict = TestHelper._build_common_sbatch_headers(
+                ctx_vars, "{node}"
+            )
+            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
+                headers_dict
+            )
+        elif scheduler == "gke":
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
         return create_context_from_dict(experiment_template_name, context_dict)

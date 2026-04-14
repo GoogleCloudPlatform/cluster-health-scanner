@@ -243,6 +243,8 @@ class TestRambleManager(unittest.TestCase):
             workspace_config_dir=mock.ANY,
             tests=None,
             machine_type="a3-high",
+            timeout=None,
+            deadline=None,
         )
 
     def test_check_jobs_running_true(self):

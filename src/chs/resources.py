@@ -140,3 +140,7 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
         ],
     },
 }
+
+# Default timeout and deadline values in seconds
+DEFAULT_TIMEOUT = 600
+DEFAULT_DEADLINE = 2400

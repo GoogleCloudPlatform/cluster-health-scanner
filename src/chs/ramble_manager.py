@@ -265,6 +265,8 @@ class RambleManager:
         scheduler: BaseScheduler,
         tests: list[str] | None,
         machine_type: str,
+        timeout: int | None = None,
+        deadline: int | None = None,
     ) -> None:
         """Configures the Ramble workspace for the CHS run.
 
@@ -272,6 +274,8 @@ class RambleManager:
           scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
           tests: An optional list of names of specific tests to run.
           machine_type: The machine type.
+          timeout: Suite-level timeout in seconds.
+          deadline: Suite-level deadline in seconds.
         """
         self._scheduler = scheduler
 
@@ -287,6 +291,8 @@ class RambleManager:
             workspace_config_dir=workspace_config_dir,
             tests=tests,
             machine_type=machine_type,
+            timeout=timeout,
+            deadline=deadline,
         )
 
     def setup_workspace(self) -> None:

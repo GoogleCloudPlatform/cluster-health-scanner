@@ -192,6 +192,8 @@ class SlurmScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
+        timeout: int | None = None,
+        deadline: int | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -229,7 +231,10 @@ class SlurmScheduler(BaseScheduler):
             tests=tests_str,
             images_dir=images_dir_value,
             tcp_interfaces=tcp_interfaces_str,
+            timeout=timeout,
+            deadline=deadline,
         )
+        logger.debug("Configuration: %r", rendered_content)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             f.write(rendered_content)

@@ -157,6 +157,8 @@ class GKEScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
+        timeout: int | None = None,
+        deadline: int | None = None,
     ) -> None:
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with gke_template.yaml")
@@ -195,6 +197,8 @@ class GKEScheduler(BaseScheduler):
             tests=tests_str,
             default_interface_name=default_interface_name,
             all_interfaces_json=all_interfaces_json,
+            timeout=timeout,
+            deadline=deadline,
         )
         logger.debug("Configuration: %r", rendered_content)
 

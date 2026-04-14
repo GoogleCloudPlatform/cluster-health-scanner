@@ -1,5 +1,7 @@
 suites:
 - name: lite
+  timeout: 600
+  deadline: 2400
   tests:
   - name: nvidia-smi
   - name: dcgm
@@ -13,6 +15,8 @@ suites:
       begin_message_size: 256M
       end_message_size: 8G
 - name: standard
+  timeout: 900
+  deadline: 3000
   tests:
   - name: nvidia-smi
   - name: dcgm

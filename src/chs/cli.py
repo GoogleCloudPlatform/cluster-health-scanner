@@ -24,7 +24,7 @@ from chs import (
     ResultsViewer,
     exceptions as ex,
     get_scheduler,
-    load_suite_tests,
+    load_suite,
     resources,
     validators,
 )
@@ -246,6 +246,8 @@ def run_action(
     workspaces_base_dir: str,
     machine_type: str,
     dry_run: bool = False,
+    timeout: int | None = None,
+    deadline: int | None = None,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -257,6 +259,8 @@ def run_action(
       workspaces_base_dir: The base directory for workspaces.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
       dry_run: Set up the workspace but do not execute experiments.
+      timeout: The timeout for the job in seconds.
+      deadline: The deadline for the job in seconds.
 
     Returns:
       A list of submitted job IDs, or None if dry_run is True.
@@ -279,7 +283,11 @@ def run_action(
             ramble_manager.create_workspace()
             ramble_manager.add_custom_repository()
             ramble_manager.configure_workspace(
-                scheduler_obj, tests, machine_type=machine_type
+                scheduler_obj,
+                tests,
+                machine_type=machine_type,
+                timeout=timeout,
+                deadline=deadline,
             )
             ramble_manager.setup_workspace()
             if dry_run:
@@ -546,13 +554,30 @@ def run(
 
     _validate_run_args(scheduler, machine_type, tests, suite)
 
+    timeout = resources.DEFAULT_TIMEOUT
+    deadline = resources.DEFAULT_DEADLINE
+
     if not tests:
         if not suite:
             suite = "lite"
 
         configs_dir = pathlib.Path(__file__).parent
 
-        resolved_tests = load_suite_tests(suite, str(configs_dir))
+        suite_cfg = load_suite(suite, str(configs_dir))
+        resolved_tests = suite_cfg.get("tests", [])
+        try:
+            timeout = int(suite_cfg.get("timeout"))
+        except (ValueError, TypeError):
+            pass  # nothing to do here, as the default value will be used
+
+        try:
+            deadline = int(suite_cfg.get("deadline"))
+        except (ValueError, TypeError):
+            pass  # nothing to do here, as the default value will be used
+
+        timeout = max(timeout, resources.DEFAULT_TIMEOUT)
+        deadline = max(deadline, timeout + 600)
+
         test_names = [
             t.get("name", str(t)) if isinstance(t, dict) else str(t)
             for t in resolved_tests
@@ -597,6 +622,7 @@ def run(
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
+
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
     job_ids = run_action(
         suite=suite,
@@ -606,6 +632,8 @@ def run(
         workspaces_base_dir=workspaces_base_dir,
         machine_type=machine_type,
         dry_run=dry_run,
+        timeout=timeout,
+        deadline=deadline,
     )
     logger.info("Request ID (Workspace Name): %s", workspace_name)
 
