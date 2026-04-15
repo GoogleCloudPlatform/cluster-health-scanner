@@ -76,6 +76,26 @@ class TestChsAppData(unittest.TestCase):
         images_dir = self.app_data.get_images_dir()
         self.assertIsNone(images_dir)
 
+    def test_update_run_status_success(self):
+        self.app_data.update_run(
+            "run1", {"job_entries": {"job1": {"status": "RUNNING"}}}
+        )
+
+        self.app_data.update_run_status("run1", {"job1": "COMPLETED"})
+
+        run = self.app_data.get_run("run1")
+        self.assertEqual(run["job_entries"], {"job1": {"status": "COMPLETED"}})
+
+    def test_update_run_status_preserves_terminal(self):
+        self.app_data.update_run(
+            "run1", {"job_entries": {"job1": {"status": "COMPLETED"}}}
+        )
+
+        self.app_data.update_run_status("run1", {"job1": "UNKNOWN"})
+
+        run = self.app_data.get_run("run1")
+        self.assertEqual(run["job_entries"], {"job1": {"status": "COMPLETED"}})
+
 
 if __name__ == "__main__":
     unittest.main()

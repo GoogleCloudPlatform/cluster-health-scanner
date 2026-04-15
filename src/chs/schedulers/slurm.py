@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 
 from chs.schedulers.base import BaseScheduler
+from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
@@ -265,42 +266,43 @@ class SlurmScheduler(BaseScheduler):
             return False
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
-        """Gets the status of the given jobs using squeue."""
+        """Gets the status of the given jobs using sacct."""
         if not job_ids:
             return {}
 
         statuses = {}
-        # squeue format: JobID,StateCompact
         cmd = [
-            "squeue",
-            "--jobs",
+            "sacct",
+            "-j",
             ",".join(job_ids),
             "--noheader",
-            "--format=%i,%t",
+            "--format=JobID,State",
+            "-P",
         ]
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=False
             )
+            logger.debug(" sacct output: %r", result.stdout)
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
-                    if "," in line:
-                        jid, state = line.split(",", 1)
-                        # Map Slurm states to common statuses if needed,
-                        # but raw states are usually fine (R, PD, CG, etc.)
-                        statuses[jid.strip()] = state.strip()
+                    if "|" in line:
+                        jid, state = line.split("|", 1)
+                        jid = jid.strip()
+                        if jid.isdigit():
+                            statuses[jid] = JobStatus.from_string(
+                                state.strip().split()[0]
+                            )
 
-            # Jobs not in squeue are likely completed (or invalid).
-            # We can't strictly distinguish without accounting, but for CHS
-            # polling logic, absence implies completion.
+            # Fallback for any jobs not found in sacct output
             for jid in job_ids:
                 if jid not in statuses:
-                    statuses[jid] = "COMPLETED"
+                    statuses[jid] = JobStatus.UNKNOWN.value
 
         except FileNotFoundError:
-            logger.warning("squeue command not found. Assuming UNKNOWN.")
+            logger.warning("sacct command not found. Assuming UNKNOWN.")
             for jid in job_ids:
-                statuses[jid] = "UNKNOWN"
+                statuses[jid] = JobStatus.UNKNOWN.value
 
         return statuses
 

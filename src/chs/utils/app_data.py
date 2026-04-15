@@ -13,6 +13,7 @@ from typing import Any
 
 import chs.exceptions as ex
 import platformdirs
+from chs.utils.lifecycle import JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,23 @@ class ChsAppData:
 
         self._save_json(self._runs_file, runs)
         logger.debug("AppData: Updated run %s", run_id)
+
+    def update_run_status(
+        self, run_id: str, new_job_statuses: dict[str, str]
+    ) -> None:
+        """Updates the job statuses for a run.
+
+        Terminal statuses are preserved.
+        """
+        runs = self._load_json(self._runs_file)
+        job_entries = runs.get(run_id, {}).setdefault("job_entries", {})
+        for job_id, new_status in new_job_statuses.items():
+            entry = job_entries.setdefault(job_id, {})
+            # Update the status only if the job is in a non-terminal state.
+            if not JobStatus.is_terminal(entry.get("status")):
+                entry["status"] = new_status
+        self._save_json(self._runs_file, runs)
+        logger.debug("AppData: Updated status for run %s", run_id)
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         """Retrieves a run entry from the app data."""

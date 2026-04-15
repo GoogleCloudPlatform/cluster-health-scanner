@@ -92,7 +92,7 @@ class TestJobMonitoring(unittest.TestCase):
         ]
 
         # Execute
-        self.manager._monitor_jobs(poll_interval=1)
+        self.manager._monitor_jobs(MagicMock(), poll_interval=1)
 
         # Verify calls
         mock_scheduler.fetch_job_log.assert_any_call(
@@ -120,7 +120,7 @@ class TestJobMonitoring(unittest.TestCase):
         mock_scheduler.fetch_job_log.side_effect = Exception("Fetch failed")
 
         # Execute (should not raise)
-        self.manager._monitor_jobs(poll_interval=1)
+        self.manager._monitor_jobs(MagicMock(), poll_interval=1)
 
         # Verify
         mock_scheduler.fetch_job_log.assert_called_once_with(
@@ -171,7 +171,7 @@ class TestJobMonitoring(unittest.TestCase):
         ]
 
         # Execute
-        self.manager._monitor_jobs(poll_interval=1)
+        self.manager._monitor_jobs(MagicMock(), poll_interval=1)
 
         # Verify
         # Should have called get_job_statuses twice

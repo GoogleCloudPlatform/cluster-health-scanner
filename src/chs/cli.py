@@ -345,7 +345,7 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
 
             # 3. If neither exists, wait for jobs and then analyze
             logger.debug(f"Waiting for jobs for {run_id}...")
-            ramble_manager.wait_for_jobs()
+            ramble_manager.wait_for_jobs(app_data=app_data)
 
             ramble_manager.analyze_results()
             logger.debug("Analysis complete for run_id=%r", run_id)
