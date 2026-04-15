@@ -15,6 +15,14 @@ SUPPORTED_TESTS = [
 ]
 SUPPORTED_SCHEDULERS = ["slurm", "gke"]
 
+MACHINE_TYPE_RESOURCE_MAP = {
+    "a3-ultra": {"instance_type": "a3-ultragpu-8g", "gpus": 8},
+    "a3-mega": {"instance_type": "a3-megagpu-8g", "gpus": 8},
+    "a4": {"instance_type": "a4-highgpu-8g", "gpus": 8},
+    "a4x": {"instance_type": "a4x-highgpu-4g", "gpus": 4},
+}
+
+
 TESTS_FOR_MACHINE_TYPE = {
     "a3-mega": [
         "dcgm",

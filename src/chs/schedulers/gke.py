@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 import click
 from typing import Any, TYPE_CHECKING
 from collections import defaultdict
@@ -15,7 +16,8 @@ if TYPE_CHECKING:
 
 
 from chs.schedulers.base import BaseScheduler
-from chs.exceptions import NetworkDiscoveryException
+from chs.exceptions import NetworkDiscoveryException, KueueException
+from chs.resources import MACHINE_TYPE_RESOURCE_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ class GKEScheduler(BaseScheduler):
         self.nodes_arg = nodes
         self.nodepool_arg = nodepool
         self._resolved_nodes: list[str] | None = None
+        self.workspace_config_dir: str | None = None
 
         if nodelist:
             logger.warning(
@@ -152,6 +155,88 @@ class GKEScheduler(BaseScheduler):
 
         return self._resolved_nodes
 
+    def _apply_and_verify_kueue(self, kueue_config_path: str) -> None:
+        """Applies Kueue configuration and verifies it becomes active."""
+        logger.debug("Applying Kueue configuration: %s", kueue_config_path)
+        self._run_kubectl(["apply", "-f", kueue_config_path])
+
+        logger.debug("Verifying Kueue ClusterQueue is active...")
+        start_time = time.time()
+        timeout = 300
+        verified = False
+        while time.time() - start_time < timeout:
+            try:
+                result = self._run_kubectl(
+                    [
+                        "get",
+                        "clusterqueue",
+                        "chs-cluster-queue",
+                        "-o",
+                        'jsonpath={.status.conditions[?(@.type=="Active")].status}',
+                    ]
+                )
+                if result.strip() == "True":
+                    verified = True
+                    break
+            except Exception as e:
+                logger.debug("ClusterQueue not ready yet: %s", e)
+
+            time.sleep(10)
+
+        if not verified:
+            raise KueueException(
+                "Timeout waiting for Kueue ClusterQueue to become active"
+            )
+
+        logger.debug("Kueue ClusterQueue is active.")
+
+    def _setup_kueue(
+        self, workspace_config_dir: str, machine_type: str, nodes: list[str]
+    ) -> str:
+        """Resolves resources, renders Kueue config, applies and verifies it."""
+        resource_map = MACHINE_TYPE_RESOURCE_MAP.get(machine_type, {})
+        instance_type = resource_map.get("instance_type", "unknown")
+        gpus_per_node = resource_map.get("gpus", 0)
+        nominal_quota = len(nodes) * gpus_per_node
+
+        try:
+            result = self._run_kubectl(
+                [
+                    "get",
+                    "clusterqueue",
+                    "chs-cluster-queue",
+                    "-o",
+                    'jsonpath={.status.conditions[?(@.type=="Active")].status}',
+                ]
+            )
+            if result.strip() == "True":
+                logger.info("ClusterQueue chs-cluster-queue is already active")
+                return "kueue.x-k8s.io/queue-name: chs-local-queue"
+        except subprocess.CalledProcessError:
+            pass
+
+        kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
+            "kueue-configs.yaml.tpl"
+        )
+        with pkg_resources.as_file(kueue_tpl_path) as p:
+            with open(p, "r") as f:
+                kueue_tpl = f.read()
+
+        rendered_kueue = kueue_tpl.format(
+            instance_type=instance_type, nominal_quota=str(nominal_quota)
+        )
+
+        kueue_config_path = os.path.join(
+            workspace_config_dir, "kueue-configs.yaml"
+        )
+        with open(kueue_config_path, "w") as f:
+            f.write(rendered_kueue)
+
+        # Call apply and verify method
+        self._apply_and_verify_kueue(kueue_config_path)
+
+        return "kueue.x-k8s.io/queue-name: chs-local-queue"
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
@@ -160,6 +245,7 @@ class GKEScheduler(BaseScheduler):
         timeout: int | None = None,
         deadline: int | None = None,
     ) -> None:
+        self.workspace_config_dir = workspace_config_dir
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with gke_template.yaml")
         template_path = pkg_resources.files("chs.schedulers").joinpath(
@@ -191,6 +277,10 @@ class GKEScheduler(BaseScheduler):
         default_interface_name = "eth0"
         all_interfaces_json = json.dumps(all_interfaces)
 
+        jobset_labels_yaml = self._setup_kueue(
+            workspace_config_dir, machine_type, nodes
+        )
+
         rendered_content = template_content.format(
             nodes=nodes_str,
             machine_type=machine_type,
@@ -199,6 +289,7 @@ class GKEScheduler(BaseScheduler):
             all_interfaces_json=all_interfaces_json,
             timeout=timeout,
             deadline=deadline,
+            jobset_labels_yaml=jobset_labels_yaml,
         )
         logger.debug("Configuration: %r", rendered_content)
 
@@ -373,3 +464,22 @@ class GKEScheduler(BaseScheduler):
                     "Failed to delete JobSet %s. Error: %s", job_id, e.stderr
                 )
                 click.echo(f"Failed to delete JobSet {job_id}: {e.stderr}")
+
+        if self.workspace_config_dir:
+            kueue_config_path = os.path.join(
+                self.workspace_config_dir, "kueue-configs.yaml"
+            )
+            if os.path.exists(kueue_config_path):
+                try:
+                    logger.debug("Cleaning up Kueue resources...")
+                    self._run_kubectl(["delete", "-f", kueue_config_path])
+                    logger.debug("Successfully deleted Kueue resources.")
+                except subprocess.CalledProcessError as e:
+                    raise KueueException(
+                        f"Failed to delete Kueue resources: {e.stderr}"
+                    )
+        else:
+            logger.warning(
+                "Cannot delete Kueue resources because workspace directory is "
+                "unknown."
+            )
