@@ -451,6 +451,73 @@ ramble:
             with self.assertRaises(NetworkDiscoveryException):
                 scheduler.write_ramble_config("/tmp", ["test1"], "a3-high")
 
+    @mock.patch("subprocess.run")
+    def test_get_topology(self, mock_run, mock_logger):
+        """Test get_topology returns mapped nodes."""
+        scheduler = GKEScheduler(
+            nodes="node1,node2", app_data=self.mock_app_data
+        )
+
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {
+                    "metadata": {
+                        "name": "node1",
+                        "labels": {
+                            "cloud.google.com/gce-topology-block": "block1"
+                        },
+                    }
+                },
+                {
+                    "metadata": {
+                        "name": "node2",
+                        "labels": {
+                            "cloud.google.com/gce-topology-block": "block2"
+                        },
+                    }
+                },
+            ],
+        }
+        mock_run.return_value.stdout = json.dumps(mock_nodes_json)
+
+        topology = scheduler.get_topology()
+
+        self.assertEqual(len(topology), 2)
+        self.assertEqual(topology["block1"]["default-subblock"], ["node1"])
+        self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
+
+    @mock.patch("subprocess.run")
+    def test_get_topology_missing_label(self, mock_run, mock_logger):
+        """Test get_topology falls back to default-block."""
+        scheduler = GKEScheduler(
+            nodes="node1,node2", app_data=self.mock_app_data
+        )
+
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {"metadata": {"name": "node1", "labels": {}}},
+                {
+                    "metadata": {
+                        "name": "node2",
+                        "labels": {
+                            "cloud.google.com/gce-topology-block": "block2"
+                        },
+                    }
+                },
+            ],
+        }
+        mock_run.return_value.stdout = json.dumps(mock_nodes_json)
+
+        topology = scheduler.get_topology()
+
+        self.assertEqual(len(topology), 2)
+        self.assertEqual(
+            topology["default-block"]["default-subblock"], ["node1"]
+        )
+        self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
+
 
 if __name__ == "__main__":
     unittest.main()

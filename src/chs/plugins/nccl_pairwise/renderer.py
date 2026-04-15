@@ -5,6 +5,13 @@ from chs.plugins.nccl_utils import render_nccl_detail
 
 
 class NcclPairwiseRenderer(DefaultRenderer):
+    def __init__(self):
+        super().__init__()
+        self.topology = None
+
+    def set_topology(self, topology):
+        self.topology = topology
+
     def render_detail(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
@@ -15,4 +22,5 @@ class NcclPairwiseRenderer(DefaultRenderer):
             lambda res: " <-> ".join(res.target_resource_ids)
             if res.target_resource_ids
             else "Unknown Pair",
+            self.topology,
         )

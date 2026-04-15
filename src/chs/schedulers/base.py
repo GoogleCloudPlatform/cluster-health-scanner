@@ -1,6 +1,8 @@
 """Base scheduler module."""
 
 import abc
+import json
+import os
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,6 +33,18 @@ class BaseScheduler(abc.ABC):
             A dictionary of extra environment variables.
         """
         return {}
+
+    @abc.abstractmethod
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Determine the network topology of the cluster."""
+        pass
+
+    def _write_topology_json(self, workspace_config_dir: str) -> None:
+        """Writes the topology to topology.json in the workspace directory."""
+        workspace_dir = os.path.dirname(workspace_config_dir)
+        topo_path = os.path.join(workspace_dir, "topology.json")
+        with open(topo_path, "w") as f:
+            json.dump(self.get_topology(), f)
 
     @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:

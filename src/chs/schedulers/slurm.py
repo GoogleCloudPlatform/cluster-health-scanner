@@ -172,6 +172,65 @@ class SlurmScheduler(BaseScheduler):
         self._resolved_nodes = all_nodes
         return self._resolved_nodes
 
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Discovers network topology using the GCE API via gcloud.
+
+        Returns a dictionary mapping block names to dicts of subblocks to lists
+        of nodes.
+        """
+        nodes = self.get_nodes_under_test()
+        if not nodes:
+            return {}
+
+        try:
+            # Batch filter: name=(node1 OR node2 ...)
+            nodes_filter_str = f"name=({' '.join(nodes)})"
+            args = [
+                "gcloud",
+                "compute",
+                "instances",
+                "list",
+                f"--filter={nodes_filter_str}",
+                "--format=json(name,resourceStatus.physicalHostTopology)",
+            ]
+
+            output = subprocess.run(
+                args,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+
+            if not output:
+                return {}
+
+            data = json.loads(output)
+
+            topology: dict[str, dict[str, list[str]]] = {}
+            for item in data:
+                name = item.get("name")
+                if not name:
+                    continue
+
+                topo_info = item.get("resourceStatus", {}).get(
+                    "physicalHostTopology", {}
+                )
+                block = topo_info.get("block", "default-block")
+                subblock = topo_info.get("subblock", "default-subblock")
+
+                topology.setdefault(block, {}).setdefault(subblock, []).append(
+                    name
+                )
+
+            return topology
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning("Failed to get node topology via gcloud: %s", e)
+            return {}
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse gcloud output: %s", e)
+            return {}
+
     def _ensure_enroot_directories(self) -> None:
         """Ensures that Enroot runtime and cache directories exist."""
         for d in self._enroot_paths.values():
@@ -236,6 +295,8 @@ class SlurmScheduler(BaseScheduler):
             deadline=deadline,
         )
         logger.debug("Configuration: %r", rendered_content)
+
+        self._write_topology_json(workspace_config_dir)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             f.write(rendered_content)

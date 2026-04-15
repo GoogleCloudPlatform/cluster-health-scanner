@@ -121,6 +121,7 @@ class TestRambleManager(unittest.TestCase):
         manager = RambleManager("/tmp", "ws1", self.mock_run)
         cmd = ["ramble", "test"]
         expected_script_path = self._get_expected_setup_script_path()
+
         expected_cmd = [
             "bash",
             "-c",

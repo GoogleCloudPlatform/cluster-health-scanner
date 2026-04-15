@@ -1,6 +1,8 @@
 """Module for displaying Bill of Health results in the terminal."""
 
 import logging
+import os
+import json
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
@@ -23,6 +25,26 @@ class ResultsViewer:
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
+        self.topology = {}
+
+        workspace_dir = os.path.dirname(self.boh_path)
+        topo_path = os.path.join(workspace_dir, "topology.json")
+        if os.path.exists(topo_path):
+            try:
+                with open(topo_path, "r") as f:
+                    self.topology = json.load(f)
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "Failed to parse topology JSON from %s: %s",
+                    topo_path,
+                    e,
+                )
+            except IOError as e:
+                logger.warning(
+                    "Failed to read topology file %s: %s",
+                    topo_path,
+                    e,
+                )
 
         try:
             with open(self.boh_path, "r") as f:
@@ -129,6 +151,8 @@ class ResultsViewer:
 
         for (canonical_name, test_level), results in grouped_results.items():
             plugin = self.plugin_manager.get_plugin(canonical_name)
+            if hasattr(plugin, "set_topology"):
+                plugin.set_topology(self.topology)
             detail = plugin.render_detail(results)
             has_errors = any(
                 (

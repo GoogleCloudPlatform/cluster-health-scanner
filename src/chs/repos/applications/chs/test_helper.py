@@ -179,8 +179,60 @@ podAntiAffinity:
         return create_context_from_dict(experiment_name, context_dict)
 
     @staticmethod
-    def nccl_test(variables, experiment_name, configs, test_type):
+    def generate_topological_pairs(
+        topology: dict[str, dict[str, list[str]]],
+    ) -> list[list[str]]:
+        """Generates pairs ordered by topology hierarchy.
+
+        Note: This method generates disjoint pairs (e.g., [n1, n2], [n3, n4]) rather
+        than a fully connected ring or all-to-all coverage, as we moved away from
+        n-ring pairs.
+
+        topology: dict mapping block names to dicts of subblocks to lists of nodes.
+        """
+        all_pairs = []
+        inter_block_nodes = []
+
+        # 1. Intra-subblock pairs
+        for block in sorted(topology.keys()):
+            subblocks = topology[block]
+            block_nodes = []
+            for subblock in sorted(subblocks.keys()):
+                nodes = sorted(subblocks[subblock])
+                for i in range(0, len(nodes) - 1, 2):
+                    all_pairs.append([nodes[i], nodes[i + 1]])
+
+                if len(nodes) % 2 != 0 and len(nodes) > 1:
+                    all_pairs.append([nodes[-2], nodes[-1]])
+
+                if nodes:
+                    block_nodes.append(nodes[0])
+
+            # 2. Inter-subblock pairs (within the same block)
+            for i in range(0, len(block_nodes) - 1, 2):
+                all_pairs.append([block_nodes[i], block_nodes[i + 1]])
+
+            if len(block_nodes) % 2 != 0 and len(block_nodes) > 1:
+                all_pairs.append([block_nodes[-2], block_nodes[-1]])
+
+            if block_nodes:
+                inter_block_nodes.append(block_nodes[0])
+
+        # 3. Inter-block pairs
+        for i in range(0, len(inter_block_nodes) - 1, 2):
+            all_pairs.append([inter_block_nodes[i], inter_block_nodes[i + 1]])
+
+        if len(inter_block_nodes) % 2 != 0 and len(inter_block_nodes) > 1:
+            all_pairs.append([inter_block_nodes[-2], inter_block_nodes[-1]])
+
+        return all_pairs
+
+    @staticmethod
+    def nccl_test(
+        variables, experiment_name, configs, test_type, topology=None
+    ):
         all_nodes = variables.get("nodes", [])
+
         if test_type == "nccl-pairwise":
             if not all_nodes or len(all_nodes) < 3:
                 logger.warning(
@@ -188,14 +240,14 @@ podAntiAffinity:
                 )
                 return []
 
-            node_groups = []
-            i = 0
-            while i < len(all_nodes) - 1:
-                node_groups.append([all_nodes[i], all_nodes[i + 1]])
-                i += 2
-
-            if i == len(all_nodes) - 1:
-                node_groups.append([all_nodes[-2], all_nodes[-1]])
+            if topology:
+                node_groups = TestHelper.generate_topological_pairs(topology)
+            else:
+                # Fallback: create a dummy topology with all nodes in a single block
+                dummy_topology = {"default": {"default-subblock": all_nodes}}
+                node_groups = TestHelper.generate_topological_pairs(
+                    dummy_topology
+                )
         elif test_type == "nccl-single-node":
             node_groups = [[n] for n in all_nodes]
         else:

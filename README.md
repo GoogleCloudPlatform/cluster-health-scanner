@@ -292,7 +292,6 @@ CHS expects a standard Ramble installation. It looks for the Ramble setup script
 ## Known Limitations
 
 -   **A4X on GKE**: NCCL tests are currently not working on A4X machine types within GKE.
--   **Topological Pairwise Testing**: Topology-aware pairwise testing is not yet implemented.
 -   **GCS Bucket Configuration**: For the `chs configure bucket` command, the specified GCS bucket must already exist; CHS does not create it automatically.
 
 ## Development & TODOs

@@ -1,6 +1,8 @@
 from copy import deepcopy
+import logging
 import sys
 import os
+import json
 import spack.util.spack_yaml as yaml
 from ramble.repository import ObjectTypes, paths
 
@@ -13,7 +15,8 @@ sys.path.append(config_dir)
 
 from test_helper import TestHelper
 from ramble.appkit import *
-from ramble.appkit import *
+
+logger = logging.getLogger(__name__)
 
 
 class TestModel:
@@ -170,6 +173,30 @@ class Chs(ExecutableApplication):
                 "nccl-pairwise",
                 "nccl-single-node",
             ]:
+                topology = None
+                if test.name == "nccl-pairwise":
+                    workspace_dir = self.expander.expand_var_name(
+                        "workspace_dir"
+                    )
+                    topo_path = os.path.join(workspace_dir, "topology.json")
+
+                    if os.path.exists(topo_path):
+                        try:
+                            with open(topo_path, "r") as f:
+                                topology = json.load(f)
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                "Failed to parse topology JSON from %s: %s",
+                                topo_path,
+                                e,
+                            )
+                        except IOError as e:
+                            logger.warning(
+                                "Failed to read topology file %s: %s",
+                                topo_path,
+                                e,
+                            )
+
                 workloads = (
                     test.workloads
                     if test.workloads
@@ -180,7 +207,7 @@ class Chs(ExecutableApplication):
                 for workload in workloads:
                     experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
                     contexts = TestHelper.nccl_test(
-                        test_vars, experiment_name, configs, test.name
+                        test_vars, experiment_name, configs, test.name, topology
                     )
                     for context in contexts:
                         self.experiment_set.render_chained_experiments(

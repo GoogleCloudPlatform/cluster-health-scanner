@@ -153,6 +153,55 @@ class GKEScheduler(BaseScheduler):
 
         return self._resolved_nodes
 
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Discovers network topology using kubectl to get node labels.
+
+        Returns a dictionary mapping block names to dicts of subblocks to lists
+        of nodes.
+        """
+        nodes = self.get_nodes_under_test()
+        if not nodes:
+            return {}
+
+        try:
+            args = ["get", "nodes"] + nodes + ["-o", "json"]
+            output = self._run_kubectl(args)
+            if not output:
+                return {}
+
+            data = json.loads(output)
+            items = (
+                data.get("items", [data])
+                if data.get("kind") == "List"
+                else [data]
+            )
+
+            topology = defaultdict(lambda: defaultdict(list))
+            for item in items:
+                metadata = item.get("metadata", {})
+                name = metadata.get("name")
+                labels = metadata.get("labels", {})
+
+                block = labels.get(
+                    "cloud.google.com/gce-topology-block", "default-block"
+                )
+                subblock = labels.get(
+                    "cloud.google.com/gce-topology-subblock", "default-subblock"
+                )
+
+                if name:
+                    topology[block][subblock].append(name)
+
+            # Convert defaultdict to regular dict
+            return {b: dict(s) for b, s in topology.items()}
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning("Failed to get node topology via kubectl: %s", e)
+            return {}
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse kubectl output as JSON: %s", e)
+            return {}
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
@@ -202,6 +251,8 @@ class GKEScheduler(BaseScheduler):
             deadline=deadline,
         )
         logger.debug("Configuration: %r", rendered_content)
+
+        self._write_topology_json(workspace_config_dir)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             f.write(rendered_content)

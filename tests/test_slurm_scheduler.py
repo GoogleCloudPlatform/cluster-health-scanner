@@ -69,6 +69,68 @@ class TestSlurmScheduler(unittest.TestCase):
             env["ENROOT_CACHE_PATH"], os.path.join(home, ".enroot", "cache")
         )
 
+    @patch("subprocess.run")
+    def test_get_topology(self, mock_run):
+        import json
+
+        # Mock gcloud compute instances list output
+        gcloud_output = [
+            {
+                "name": "n1",
+                "resourceStatus": {
+                    "physicalHostTopology": {
+                        "block": "s0_0",
+                        "subblock": "s0_0_0",
+                    }
+                },
+            },
+            {
+                "name": "n2",
+                "resourceStatus": {
+                    "physicalHostTopology": {
+                        "block": "s0_0",
+                        "subblock": "s0_0_0",
+                    }
+                },
+            },
+            {
+                "name": "n3",
+                "resourceStatus": {
+                    "physicalHostTopology": {
+                        "block": "s0_0",
+                        "subblock": "s0_1",
+                    }
+                },
+            },
+            {
+                "name": "n4",
+                "resourceStatus": {
+                    "physicalHostTopology": {
+                        "block": "s0_0",
+                        "subblock": "s0_1",
+                    }
+                },
+            },
+        ]
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(gcloud_output)
+        )
+
+        with patch.object(
+            self.scheduler,
+            "get_nodes_under_test",
+            return_value=["n1", "n2", "n3", "n4"],
+        ):
+            topology = self.scheduler.get_topology()
+
+        self.assertEqual(len(topology), 1)
+        self.assertIn("s0_0", topology)
+        self.assertIn("s0_0_0", topology["s0_0"])
+        self.assertIn("s0_1", topology["s0_0"])
+        self.assertEqual(topology["s0_0"]["s0_0_0"], ["n1", "n2"])
+        self.assertEqual(topology["s0_0"]["s0_1"], ["n3", "n4"])
+
 
 if __name__ == "__main__":
     unittest.main()

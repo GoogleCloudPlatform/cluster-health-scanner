@@ -34,6 +34,10 @@ class DefaultScheduler(BaseScheduler):
     def get_nodes_under_test(self) -> list[str]:
         return []
 
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Determine the network topology of the cluster."""
+        return {}
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,

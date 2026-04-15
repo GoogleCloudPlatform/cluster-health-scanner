@@ -33,7 +33,29 @@ def get_peak_metrics(metrics: list[pb.Metric]) -> PeakMetrics:
     return PeakMetrics(max_bw, max_size)
 
 
-def create_nccl_table(resource_column_name: str) -> Table:
+def get_topological_context(
+    node1: str, node2: str, node_to_location: dict[str, dict[str, str]]
+) -> str:
+    if not node_to_location:
+        return "Unknown"
+
+    loc1 = node_to_location.get(node1)
+    loc2 = node_to_location.get(node2)
+
+    if loc1 and loc2:
+        if loc1["block"] != loc2["block"]:
+            return "Inter-Block"
+        elif loc1["subblock"] != loc2["subblock"]:
+            return "Inter-Subblock"
+        else:
+            return "Intra-Subblock"
+
+    return "Unknown"
+
+
+def create_nccl_table(
+    resource_column_name: str, include_topology: bool = False
+) -> Table:
     """Creates a standardized Table for NCCL metrics."""
     table = theme.create_styled_table(
         header_style=theme.CHS_HEADER_STYLE,
@@ -41,6 +63,8 @@ def create_nccl_table(resource_column_name: str) -> Table:
     )
     table.add_column("Workload")
     table.add_column(resource_column_name)
+    if include_topology:
+        table.add_column("Topological Context")
     table.add_column("Peak Bandwidth (GB/s)", justify="right")
     table.add_column("Msg Size (GB)", justify="right")
     return table
@@ -51,13 +75,33 @@ def render_nccl_detail(
     resource_column_name: str,
     test_results: list[pb.TestResult],
     get_resource_id_func,
+    topology: dict[str, dict[str, list[str]]] | None = None,
 ) -> RenderableType:
     if not test_results:
         return Text(
             "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
         )
 
-    table = create_nccl_table(resource_column_name)
+    node_to_location = {}
+    if topology:
+        for block, subblocks in topology.items():
+            for subblock, nodes in subblocks.items():
+                for node in nodes:
+                    node_to_location[node] = {
+                        "block": block,
+                        "subblock": subblock,
+                    }
+
+    include_topology = False
+    if node_to_location:
+        for res in test_results:
+            if res.target_resource_ids and len(res.target_resource_ids) >= 2:
+                include_topology = True
+                break
+
+    table = create_nccl_table(
+        resource_column_name, include_topology=include_topology
+    )
 
     for res in test_results:
         peak = get_peak_metrics(res.metrics)
@@ -65,8 +109,27 @@ def render_nccl_detail(
         max_size = peak.max_size
 
         resource_id = get_resource_id_func(res)
+
+        topo_context = "Unknown"
+        if (
+            node_to_location
+            and res.target_resource_ids
+            and len(res.target_resource_ids) >= 2
+        ):
+            topo_context = get_topological_context(
+                res.target_resource_ids[0],
+                res.target_resource_ids[1],
+                node_to_location,
+            )
+
         test_level = res.test_level if res.test_level else "Unknown"
-        table.add_row(test_level, resource_id, f"{max_bw:.2f}", max_size)
+
+        row = [test_level, resource_id]
+        if include_topology:
+            row.append(topo_context)
+        row.extend([f"{max_bw:.2f}", max_size])
+
+        table.add_row(*row)
 
     renderables = [Text(f"\n{title}", style=theme.CHS_TITLE_STYLE), table]
 

@@ -26,10 +26,10 @@ cd "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostic
 
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
 if [ -d "/usr/local/gib/scripts" ]; then
     NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
 fi
-scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/.slurm_config
 export NCCL_DEBUG=INFO;
 export NCCL_NET=gIB;
 export NCCL_TESTS_SPLIT_MASK="";
