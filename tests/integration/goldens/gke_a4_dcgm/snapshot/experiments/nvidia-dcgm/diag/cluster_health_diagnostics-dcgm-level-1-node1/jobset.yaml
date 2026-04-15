@@ -26,7 +26,7 @@ spec:
             spec:
               restartPolicy: Never
               nodeSelector:
-                cloud.google.com/gke-nodepool: <GKE_NODEPOOL>
+                node.kubernetes.io/instance-type: a4-highgpu-8g
               affinity:
                 nodeAffinity:
                   requiredDuringSchedulingIgnoredDuringExecution:

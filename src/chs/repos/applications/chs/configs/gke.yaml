@@ -4,7 +4,7 @@ a3-ultra:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a3-ultragpu-8g"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
         operator: "Exists"
@@ -44,12 +44,12 @@ a3-ultra:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
+
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
@@ -109,7 +109,7 @@ a4:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-nodepool: a4-highgpu-8g-a4-pool"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a4-highgpu-8g"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
         operator: "Equal"
@@ -150,12 +150,12 @@ a4:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
+
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
@@ -216,7 +216,7 @@ a3-mega:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-nodepool: a3-megagpu-8g-a3megagpupool"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a3-megagpu-8g"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
         operator: "Exists"
@@ -292,7 +292,7 @@ a4x:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-accelerator: nvidia-gb200"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a4x-highgpu-4g"
     tolerations_yaml: |
       - key: nvidia.com/gpu
         operator: Equal
