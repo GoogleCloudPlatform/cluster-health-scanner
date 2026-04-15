@@ -724,28 +724,10 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
-        try:
-            with open(results_json_path, "r") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.error("Error reading JSON results: %s", e)
-            data = {}
-
-        app_names = self._get_application_names(data)
-
-        app_mapping = self._get_success_criteria_mapping(
-            app_names, "applications"
-        )
-
-        success_criteria_mapping = {
-            "applications": app_mapping,
-        }
-
         boh_generator = BOHGenerator(
             results_json_path,
             base_log_dir=str(workspace_dir),
             cluster_type=self.get_scheduler_type(),
-            success_criteria_mapping=success_criteria_mapping,
         )
         logger.debug("Generating Bill of Health from %s", results_json_path)
         boh = boh_generator.generate()

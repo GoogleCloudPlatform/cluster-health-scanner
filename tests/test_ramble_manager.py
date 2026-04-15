@@ -452,7 +452,6 @@ class TestRambleManager(unittest.TestCase):
                                 results_json_path,
                                 base_log_dir=f"{self.tmp_dir}/ws1",
                                 cluster_type="slurm",
-                                success_criteria_mapping={"applications": {}},
                             )
                         mock_boh_gen.return_value.generate.assert_called_once()
                         mock_cancel.assert_called_once()
