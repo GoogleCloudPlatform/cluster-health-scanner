@@ -1,0 +1,184 @@
+import logging
+import unittest
+from unittest import mock
+import os
+import tempfile
+import yaml
+from chs.utils.config import load_yaml_config
+from chs.utils.tests import (
+    _load_tests,
+    get_all_supported_tests,
+    get_all_supported_machine_types,
+    get_all_supported_schedulers,
+    get_tests_map,
+    TestsMap,
+)
+
+
+class TestTests(unittest.TestCase):
+    def setUp(self):
+        load_yaml_config.cache_clear()
+        logging.disable(logging.CRITICAL)
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.tests_path = os.path.join(self.test_dir.name, "tests.yaml")
+
+    def tearDown(self):
+        load_yaml_config.cache_clear()
+        self.test_dir.cleanup()
+
+    def test__load_tests_success(self):
+        """Test loading tests.yaml."""
+        data = {
+            "tests": [
+                {
+                    "name": "t1",
+                    "platforms": [{"scheduler": "s1", "machine_type": "m1"}],
+                }
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            tests_data = _load_tests()
+        self.assertEqual(tests_data, data)
+
+    def test__load_tests_missing_file(self):
+        """Test load_tests with missing file."""
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            with self.assertRaisesRegex(
+                FileNotFoundError, "tests.yaml not found"
+            ):
+                _load_tests()
+
+    def test_get_all_supported_tests(self):
+        """Test deriving all supported tests."""
+        data = {
+            "tests": [
+                {"name": "t1"},
+                {"name": "t2"},
+                {"name": "t3"},
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            tests = get_all_supported_tests()
+        self.assertEqual(tests, ["t1", "t2", "t3"])
+
+    def test_get_all_supported_machine_types(self):
+        """Test deriving all supported machine types."""
+        data = {
+            "tests": [
+                {
+                    "name": "t1",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m1"},
+                        {"scheduler": "s2", "machine_type": "m2"},
+                    ],
+                },
+                {
+                    "name": "t2",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m2"},
+                        {"scheduler": "s2", "machine_type": "m3"},
+                    ],
+                },
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            mts = get_all_supported_machine_types()
+        self.assertEqual(mts, ["m1", "m2", "m3"])
+
+    def test_get_all_supported_schedulers(self):
+        """Test deriving all supported schedulers."""
+        data = {
+            "tests": [
+                {
+                    "name": "t1",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m1"},
+                        {"scheduler": "s2", "machine_type": "m2"},
+                    ],
+                },
+                {
+                    "name": "t2",
+                    "platforms": [
+                        {"scheduler": "s2", "machine_type": "m2"},
+                        {"scheduler": "s3", "machine_type": "m3"},
+                    ],
+                },
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            schedulers = get_all_supported_schedulers()
+        self.assertEqual(schedulers, ["s1", "s2", "s3"])
+
+    def test_get_tests_map(self):
+        """Test deriving tests map."""
+        data = {
+            "tests": [
+                {
+                    "name": "t1",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m1"},
+                        {"scheduler": "s2", "machine_type": "m1"},
+                        {"scheduler": "s1", "machine_type": "m2"},
+                        {"scheduler": "s2", "machine_type": "m2"},
+                    ],
+                },
+                {
+                    "name": "t2",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m2"},
+                    ],
+                },
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            tests_map = get_tests_map()
+        expected = {
+            "s1": {"m1": ["t1"], "m2": ["t1", "t2"]},
+            "s2": {"m1": ["t1"], "m2": ["t1"]},
+        }
+        self.assertEqual(tests_map, TestsMap(data=expected))
+        self.assertEqual(tests_map.get("s1"), expected["s1"])
+        self.assertEqual(tests_map.get("s2"), expected["s2"])
+        self.assertIsNone(tests_map.get("unknown_scheduler"))
+
+    def test_load_tests_malformed_yaml(self):
+        """Test malformed yaml."""
+        with open(self.tests_path, "w") as f:
+            f.write("tests: [ unclosed_list")
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            with self.assertRaises(Exception):  # Yaml parser generic exception
+                _load_tests()
+
+
+if __name__ == "__main__":
+    unittest.main()

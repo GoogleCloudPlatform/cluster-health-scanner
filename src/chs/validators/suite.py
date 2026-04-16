@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from chs import resources
+from chs.utils import suites
 from chs.validators.base import Validator
 
 
@@ -24,10 +24,11 @@ class SuiteValidator(Validator):
         """
         suite = config.get("suite")
 
-        if suite is None or suite in resources.SUPPORTED_SUITES:
+        supported_suites = suites.get_all_suites()
+        if suite is None or suite in supported_suites:
             return []
         return [
             f"Suite '{suite}' is not supported. "
             "Supported suites: "
-            f"{', '.join(list(resources.SUPPORTED_SUITES.keys()))}"
+            f"{', '.join(supported_suites)}"
         ]

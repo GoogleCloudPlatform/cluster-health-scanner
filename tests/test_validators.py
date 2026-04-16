@@ -10,6 +10,41 @@ from chs import validators
 class TestValidators(unittest.TestCase):
     """Tests the validators package."""
 
+    def setUp(self):
+        # Mock _load_suites and _load_tests to return test data
+        self.mock_suites_patcher = mock.patch("chs.utils.suites._load_suites")
+        self.mock_tests_patcher = mock.patch("chs.utils.tests._load_tests")
+
+        self.mock_suites = self.mock_suites_patcher.start()
+        self.mock_tests = self.mock_tests_patcher.start()
+
+        self.mock_suites.return_value = {
+            "suites": [
+                {
+                    "name": "lite",
+                    "tests": [{"name": "nvidia-smi"}],
+                }
+            ]
+        }
+
+        self.mock_tests.return_value = {
+            "tests": [
+                {
+                    "name": "nvidia-smi",
+                    "platforms": [
+                        {"scheduler": "slurm", "machine_type": "a3-mega"},
+                        {"scheduler": "slurm", "machine_type": "a3-ultra"},
+                        {"scheduler": "gke", "machine_type": "a3-mega"},
+                        {"scheduler": "gke", "machine_type": "a3-ultra"},
+                    ],
+                }
+            ]
+        }
+
+    def tearDown(self):
+        self.mock_suites_patcher.stop()
+        self.mock_tests_patcher.stop()
+
     def test_machine_type_validator_valid(self):
         v = validators.MachineTypeValidator()
         errors = v.validate({"machine_type": "a3-mega"})
@@ -95,6 +130,68 @@ class TestValidators(unittest.TestCase):
         v = validators.TestsValidator()
         errors = v.validate({"machine_type": "unknown", "tests": ["unknown"]})
         self.assertEqual(errors, [])
+
+    def test_project_config_validator_invalid_scheduler_and_machine_type(self):
+        v = validators.ProjectConfigValidator()
+        errors = v.validate(
+            {
+                "scheduler": "unknown_scheduler",
+                "machine_type": "unknown_mt",
+            }
+        )
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(any("Scheduler" in e for e in errors))
+        self.assertTrue(any("Machine type" in e for e in errors))
+
+    def test_tests_validator_skips_when_scheduler_invalid(self):
+        v = validators.TestsValidator()
+        errors = v.validate(
+            {
+                "scheduler": "unknown_scheduler",
+                "tests": ["unknown_test"],
+            }
+        )
+        self.assertEqual(errors, [])
+
+    def test_tests_validator_skips_when_machine_type_invalid(self):
+        v = validators.TestsValidator()
+        errors = v.validate(
+            {
+                "machine_type": "unknown_mt",
+                "tests": ["unknown_test"],
+            }
+        )
+        self.assertEqual(errors, [])
+
+    def test_project_config_validator_invalid_suite_and_test(self):
+        v = validators.ProjectConfigValidator()
+        errors = v.validate(
+            {
+                "suite": "unknown_suite",
+                "tests": ["unknown_test"],
+                "scheduler": "gke",
+                "machine_type": "a3-mega",
+            }
+        )
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(any("Suite" in e for e in errors))
+        self.assertTrue(any("Tests" in e for e in errors))
+
+    def test_project_config_validator_invalid_suite_scheduler_and_machine_type(
+        self,
+    ):
+        v = validators.ProjectConfigValidator()
+        errors = v.validate(
+            {
+                "suite": "unknown_suite",
+                "scheduler": "unknown_scheduler",
+                "machine_type": "unknown_mt",
+            }
+        )
+        self.assertEqual(len(errors), 3)
+        self.assertTrue(any("Suite" in e for e in errors))
+        self.assertTrue(any("Scheduler" in e for e in errors))
+        self.assertTrue(any("Machine type" in e for e in errors))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Validator for tests."""
 
 from typing import Any
-from chs import resources
+from chs.utils import tests as utils_tests
 from chs.validators.base import Validator
 from chs.validators.machine_type import MachineTypeValidator
 from chs.validators.scheduler import SchedulerValidator
@@ -31,11 +31,9 @@ class TestsValidator(Validator):
             or (not tests)
         ):
             return []
-        supported_tests = resources.SUPPORTED_TESTS
+        supported_tests = utils_tests.get_all_supported_tests()
         if scheduler and machine_type:
-            tests_map = resources.MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE.get(
-                scheduler
-            )
+            tests_map = utils_tests.get_tests_map().get(scheduler)
             if tests_map:
                 supported_tests = tests_map.get(machine_type, [])
         invalid_tests = [t for t in tests if t not in supported_tests]

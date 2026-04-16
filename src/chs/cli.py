@@ -32,6 +32,7 @@ from chs import (
     get_scheduler,
     load_suite,
     resources,
+    utils,
     validators,
 )
 
@@ -99,10 +100,10 @@ def cancel_jobs_on_failure(
 
 def _get_suites_list() -> list[str]:
     """Returns lines for available suites."""
-    suites = list(resources.SUPPORTED_SUITES.keys())
-    if suites:
+    suites_list = utils.suites.get_all_suites()
+    if suites_list:
         lines = ["Available Suites:"]
-        lines.extend(f"  - {s}" for s in suites)
+        lines.extend(f"  - {s}" for s in suites_list)
         return lines
     return ["No suites found."]
 
@@ -110,9 +111,13 @@ def _get_suites_list() -> list[str]:
 def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
     """Returns lines for available tests."""
     if from_suite:
-        tests = resources.SUPPORTED_SUITES.get(from_suite, [])
+        suite_cfg = load_suite(from_suite)
+        tests = [
+            t.get("name") if isinstance(t, dict) else t
+            for t in suite_cfg.get("tests", [])
+        ]
     else:
-        tests = resources.SUPPORTED_TESTS
+        tests = utils.tests.get_all_supported_tests()
 
     if tests:
         lines = []
@@ -131,10 +136,10 @@ def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
 
 def _get_schedulers_list() -> list[str]:
     """Returns lines for available schedulers."""
-    schedulers = resources.SUPPORTED_SCHEDULERS
-    if schedulers:
+    schedulers_list = utils.tests.get_all_supported_schedulers()
+    if schedulers_list:
         lines = ["Supported Schedulers:"]
-        lines.extend(f"  - {s}" for s in schedulers)
+        lines.extend(f"  - {s}" for s in schedulers_list)
         return lines
     return ["No schedulers found."]
 
@@ -721,9 +726,7 @@ def run(
         if not suite:
             suite = "lite"
 
-        configs_dir = pathlib.Path(__file__).parent
-
-        suite_cfg = load_suite(suite, str(configs_dir))
+        suite_cfg = load_suite(suite)
         resolved_tests = suite_cfg.get("tests", [])
         try:
             timeout = int(suite_cfg.get("timeout"))

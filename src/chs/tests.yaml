@@ -1,0 +1,158 @@
+tests:
+  - name: nvidia-smi
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+
+  - name: dcgm
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+
+  - name: gemm
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: tpu7x
+      - scheduler: gke
+        machine_type: tpuv6e
+
+  - name: nccl-single-node
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+
+  - name: nccl-cluster
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+
+  - name: nccl-pairwise
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+
+  - name: stream
+    platforms:
+      - scheduler: slurm
+        machine_type: a3-ultra
+      - scheduler: slurm
+        machine_type: a4
+      - scheduler: slurm
+        machine_type: a3-mega
+      - scheduler: slurm
+        machine_type: a4x
+      - scheduler: gke
+        machine_type: a3-ultra
+      - scheduler: gke
+        machine_type: a4
+      - scheduler: gke
+        machine_type: a3-mega
+      - scheduler: gke
+        machine_type: a4x
+
+  - name: tpu-info
+    platforms:
+      - scheduler: gke
+        machine_type: tpu7x
+      - scheduler: gke
+        machine_type: tpuv6e
+
+  - name: hbm
+    platforms:
+      - scheduler: gke
+        machine_type: tpu7x
+      - scheduler: gke
+        machine_type: tpuv6e
+
+  - name: host-device
+    platforms:
+      - scheduler: gke
+        machine_type: tpu7x
+      - scheduler: gke
+        machine_type: tpuv6e

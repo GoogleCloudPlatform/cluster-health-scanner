@@ -12,6 +12,7 @@ from typing import Any
 
 from chs import cli
 from chs import exceptions
+from chs.utils.tests import TestsMap
 from click import testing
 import shutil
 import tempfile
@@ -117,36 +118,51 @@ class TestCli(unittest.TestCase):
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
-        # Mock resources to allow test dummy values
+        # Mock suites utilities to return test dummy values
         self.enterContext(
             mock.patch(
-                "chs.resources.SUPPORTED_MACHINE_TYPES",
-                new=["a3-ultra", "a4", "a3-mega", "a3-high"],
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["a3-ultra", "a4", "a3-mega", "a3-high"],
             )
         )
         self.enterContext(
             mock.patch(
-                "chs.resources.SUPPORTED_SUITES",
-                new={
-                    "lite": [],
-                    "standard": [],
-                    "burn-in": [],
-                    "suite1": [],
-                    "s1": [],
-                },
+                "chs.utils.suites.get_all_suites",
+                return_value=["lite", "standard", "burn-in", "suite1", "s1"],
             )
         )
         self.enterContext(
             mock.patch(
-                "chs.resources.MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE",
-                new={
-                    "slurm": {
-                        "a3-high": ["t1", "t2", "t3"],
-                    },
-                    "gke": {
-                        "a3-high": ["t1", "t2", "t3"],
-                    },
-                },
+                "chs.utils.tests.get_all_supported_schedulers",
+                return_value=["slurm", "gke"],
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=[
+                    "t1",
+                    "t2",
+                    "t3",
+                    "nccl-cluster",
+                    "nccl-pairwise",
+                    "dcgm",
+                ],
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=TestsMap(
+                    data={
+                        "slurm": {
+                            "a3-high": ["t1", "t2", "t3"],
+                        },
+                        "gke": {
+                            "a3-high": ["t1", "t2", "t3"],
+                        },
+                    }
+                ),
             )
         )
 

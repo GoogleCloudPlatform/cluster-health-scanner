@@ -1,7 +1,7 @@
 """Validator for schedulers."""
 
 from typing import Any
-from chs import resources
+from chs.utils import tests as utils_tests
 from chs.validators.base import Validator
 
 
@@ -24,10 +24,11 @@ class SchedulerValidator(Validator):
         scheduler = config.get("scheduler")
         if scheduler is None:
             return ["'scheduler' is missing in the configuration."]
-        if scheduler not in resources.SUPPORTED_SCHEDULERS:
+        supported_schedulers = utils_tests.get_all_supported_schedulers()
+        if scheduler not in supported_schedulers:
             return [
                 f"Scheduler '{scheduler}' is not supported. "
                 "Supported schedulers: "
-                f"{', '.join(resources.SUPPORTED_SCHEDULERS)}"
+                f"{', '.join(supported_schedulers)}"
             ]
         return []
