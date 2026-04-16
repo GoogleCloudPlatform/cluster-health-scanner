@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 from chs.schedulers.base import BaseScheduler
 from chs.exceptions import NetworkDiscoveryException, KueueException
 from chs.resources import MACHINE_TYPE_RESOURCE_MAP
+from chs.utils.lifecycle import JobStatus
+
 
 logger = logging.getLogger(__name__)
 
@@ -360,44 +362,92 @@ class GKEScheduler(BaseScheduler):
 
         return still_running
 
+    def _any_job_exceeded_deadline(self, jobset_id: str) -> bool:
+        """Checks individual jobs under a failed JobSet for deadline."""
+        try:
+            args = [
+                "get",
+                "jobs",
+                "-l",
+                f"jobset.sigs.k8s.io/jobset-name={jobset_id}",
+                "-o",
+                "json",
+            ]
+            jobs_output = self._run_kubectl(args)
+            if not jobs_output:
+                return False
+
+            jobs_data = json.loads(jobs_output).get("items", [])
+            for job in jobs_data:
+                for condition in job.get("status", {}).get("conditions", []):
+                    if (
+                        condition.get("type") == "Failed"
+                        and condition.get("status") == "True"
+                        and condition.get("reason") == "DeadlineExceeded"
+                    ):
+                        return True
+        except Exception as e:
+            logger.debug(
+                "Failed to check exceeded deadline for %s: %s", jobset_id, e
+            )
+        return False
+
+    def _evaluate_jobset_status(self, jobset_id: str, jobset_data: dict) -> str:
+        """Evaluates JobSet conditions and fallbacks to active count."""
+        status = jobset_data.get("status", {})
+
+        conditions = status.get("conditions", [])
+        for condition in conditions:
+            condition_type = condition.get("type", "")
+            is_true = condition.get("status") == "True"
+
+            if condition_type == "Completed" and is_true:
+                return "Completed"
+            elif condition_type == "Failed" and is_true:
+                if self._any_job_exceeded_deadline(jobset_id):
+                    return "Deadline"
+                return "Failed"
+
+        replicated_jobs = status.get("replicatedJobsStatus", [])
+        is_pending = all(
+            job.get("active", 0) == 0 and job.get("failed", 0) == 0
+            for job in replicated_jobs
+        )
+        return "PENDING" if is_pending else "RUNNING"
+
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs using kubectl."""
-        statuses = {}
-        for job_id in job_ids:
-            try:
-                args = ["get", "jobset", job_id, "-o", "json"]
-                output = self._run_kubectl(args)
-                if not output:
-                    statuses[job_id] = "UNKNOWN"
-                    continue
+        if not job_ids:
+            return {}
 
-                job_data = json.loads(output)
-                conditions = job_data.get("status", {}).get("conditions", [])
+        statuses = {j: JobStatus.UNKNOWN.value for j in job_ids}
 
-                status = "RUNNING"  # Default if exists but not complete/failed
-                for cond in conditions:
-                    if (
-                        cond.get("type") == "Completed"
-                        and cond.get("status") == "True"
-                    ):
-                        status = "COMPLETED"
-                        break
-                    if (
-                        cond.get("type") == "Failed"
-                        and cond.get("status") == "True"
-                    ):
-                        status = "FAILED"
-                        break
-                statuses[job_id] = status
+        try:
+            args = (
+                ["get", "jobset"]
+                + job_ids
+                + ["-o", "json", "--ignore-not-found"]
+            )
+            output = self._run_kubectl(args)
+            if not output:
+                return statuses
+            data = json.loads(output)
+            items = (
+                data.get("items", []) if data.get("kind") == "List" else [data]
+            )
 
-            except subprocess.CalledProcessError:
-                # JobSet not found, likely deleted or never existed.
-                statuses[job_id] = "UNKNOWN"
-            except (json.JSONDecodeError, AttributeError, TypeError) as e:
-                logger.warning(
-                    "Failed to check status for JobSet %s: %s", job_id, e
-                )
-                statuses[job_id] = "UNKNOWN"
+            for item in items:
+                job_id = item.get("metadata", {}).get("name")
+                if job_id in statuses:
+                    raw_status = self._evaluate_jobset_status(job_id, item)
+                    statuses[job_id] = JobStatus.from_string(raw_status)
+        except (
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+            AttributeError,
+            TypeError,
+        ) as e:
+            logger.warning("Failed to get statuses for JobSets: %s", e)
 
         return statuses
 
