@@ -28,7 +28,7 @@ spec:
         spec:
           parallelism: 2
           completions: 2
-          activeDeadlineSeconds: 600
+          activeDeadlineSeconds: 2400
           template:
             metadata:
 
@@ -129,15 +129,15 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce/cluster_health_diagnostics-nccl-cluster-all-reduce.out"
-                    if [ -d "/usr/local/gib/scripts" ]; then
-                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
-                    fi
-                    nvidia-smi -pm 1 || true
                     export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
                     export NCCL_DEBUG=INFO;
                     export NCCL_NET=gIB;
                     export NCCL_TESTS_SPLIT_MASK="";
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
+                    nvidia-smi -pm 1 || true
+                    if [ -d "/usr/local/gib/scripts" ]; then
+                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
+                    fi
                     mpirun -n 16 -N 8 \
                       --hostfile /tmp/hostfile --bind-to none \
                       --mca btl self,tcp --mca btl_tcp_if_include eth0 \
