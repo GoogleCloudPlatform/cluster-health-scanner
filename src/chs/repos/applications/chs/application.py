@@ -94,6 +94,11 @@ class Chs(ExecutableApplication):
     workload("cluster_health", executables=["cluster_health"])
 
     def _deep_merge(self, dest, src):
+        if not isinstance(src, dict) or not isinstance(dest, dict):
+            raise ValueError(
+                f"Expected both source and destination to be dictionaries, "
+                f"got src={type(src).__name__} and dest={type(dest).__name__}"
+            )
         for key, value in src.items():
             if (
                 isinstance(value, dict)
