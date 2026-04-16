@@ -448,6 +448,7 @@ def list_command(
 ) -> bool:
     """Lists available resources.
 
+    \b
     Args:
       suites: Whether to list available test suites.
       tests: Whether to list available tests.
@@ -531,6 +532,7 @@ def run(
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
+    \b
     Args:
       suite: Name of the test suite to run.
       scheduler: Scheduler to use (e.g., slurm, gke).
@@ -676,6 +678,7 @@ def analyze(obj, run_id: str | None) -> str:
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
 
+    \b
     Args:
       obj: Click object containing app_data.
       run_id: The ID of the test run to analyze.
@@ -704,6 +707,7 @@ def cancel(obj, run_id: str | None) -> str:
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
 
+    \b
     Args:
       obj: Click object containing app_data.
       run_id: The ID of the test run to cancel.
