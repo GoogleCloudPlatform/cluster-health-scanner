@@ -47,8 +47,6 @@ def mock_cluster_env(tmp_path, monkeypatch):
         '      echo \'{"items": [{"metadata": {"name": "default"}, '
         '"spec": {"type": "L3"}}, {"metadata": {"name": "gpu-net-1"}, '
         '"spec": {"type": "Device"}}]}\'\n'
-        '    elif [[ "$*" == *"get clusterqueue"* ]]; then\n'
-        '      echo "True"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"

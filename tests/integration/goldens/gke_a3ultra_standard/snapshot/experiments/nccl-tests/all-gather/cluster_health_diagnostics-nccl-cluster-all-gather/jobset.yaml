@@ -15,11 +15,9 @@ kind: JobSet
 metadata:
   name: nccl-tests-all-gather-cluster-health-diagno-<HASH>
   namespace: default
-  labels:
-    kueue.x-k8s.io/queue-name: chs-local-queue
+
 
 spec:
-  suspend: true
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true
@@ -131,12 +129,12 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
-                    nvidia-smi -pm 1 || true
                     export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
                     export NCCL_DEBUG=INFO;
                     export NCCL_NET=gIB;
                     export NCCL_TESTS_SPLIT_MASK="";
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
+                    nvidia-smi -pm 1 || true
                     if [ -d "/usr/local/gib/scripts" ]; then
                         NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
                     fi

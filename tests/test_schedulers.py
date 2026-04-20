@@ -232,103 +232,7 @@ class TestGKEScheduler(unittest.TestCase):
         self.assertEqual(nodes, ["node-1"])
         mock_run.assert_not_called()
 
-    @mock.patch("subprocess.run")
-    def test__apply_and_verify_kueue_success(self, mock_run, mock_logger):
-        """Test _apply_and_verify_kueue successful path."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
-
-        # Mock kubectl get clusterqueue returning 'True'
-        mock_run.return_value.stdout = "True"
-
-        try:
-            scheduler._apply_and_verify_kueue("/path/to/kueue-configs.yaml")
-        except Exception as e:
-            self.fail(
-                f"_apply_and_verify_kueue raised unexpected exception: {e}"
-            )
-
-        # Verify apply was called
-        mock_run.assert_any_call(
-            ["kubectl", "apply", "-f", "/path/to/kueue-configs.yaml"],
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-
-    @mock.patch("time.time")
-    @mock.patch("subprocess.run")
-    @mock.patch("time.sleep")  # Mock sleep to speed up test
-    def test__apply_and_verify_kueue_timeout(
-        self, mock_sleep, mock_run, mock_time, mock_logger
-    ):
-        """Test _apply_and_verify_kueue timeout path."""
-        from chs.exceptions import KueueException
-
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
-
-        # Mock kubectl get clusterqueue returning 'False'
-        mock_run.return_value.stdout = "False"
-
-        # Mock time.time to simulate timeout
-        mock_time.side_effect = [0, 301]
-
-        with self.assertRaises(KueueException):
-            scheduler._apply_and_verify_kueue("/path/to/kueue-configs.yaml")
-
-    @mock.patch.object(GKEScheduler, "_apply_and_verify_kueue")
-    def test__setup_kueue_success(self, mock_apply, mock_logger):
-        """Test _setup_kueue renders template and calls apply."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
-
-        # Mock kubectl returning that it doesn't exist
-        with mock.patch.object(GKEScheduler, "_run_kubectl") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(
-                1, "kubectl get"
-            )
-
-            label = scheduler._setup_kueue(self.tmp_dir, "a3-high", ["node1"])
-
-            self.assertEqual(
-                label, "kueue.x-k8s.io/queue-name: chs-local-queue"
-            )
-            mock_apply.assert_called_once()
-
-            # Verify file was written
-            kueue_config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
-            self.assertTrue(os.path.exists(kueue_config_path))
-
-    @mock.patch.object(GKEScheduler, "_apply_and_verify_kueue")
-    def test__setup_kueue_already_exists(self, mock_apply, mock_logger):
-        """Test _setup_kueue skips application if ClusterQueue exists."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
-
-        # Mock kubectl returning that it exists
-        with mock.patch.object(GKEScheduler, "_run_kubectl") as mock_run:
-            mock_run.return_value = "True"
-
-            label = scheduler._setup_kueue(self.tmp_dir, "a3-high", ["node1"])
-
-            self.assertEqual(
-                label, "kueue.x-k8s.io/queue-name: chs-local-queue"
-            )
-            mock_apply.assert_not_called()
-
-    def test_cancel_jobs_missing_workspace_dir(self, mock_logger):
-        """Test cancel_jobs logs warning if workspace_dir is missing."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
-
-        scheduler.cancel_jobs(["job1"])
-
-        mock_logger.warning.assert_any_call(
-            "Cannot delete Kueue resources because workspace directory is "
-            "unknown."
-        )
-
-    @mock.patch.object(GKEScheduler, "_setup_kueue")
-    def test_write_ramble_config(self, mock_setup_kueue, mock_logger):
-        mock_setup_kueue.return_value = (
-            "kueue.x-k8s.io/queue-name: chs-local-queue"
-        )
+    def test_write_ramble_config(self, mock_logger):
         """Test write_ramble_config generates correct YAML."""
         scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
@@ -359,13 +263,7 @@ ramble:
                         workspace_config_dir, ["test1"], "a3-high"
                     )
 
-    @mock.patch.object(GKEScheduler, "_setup_kueue")
-    def test_write_ramble_config_integration(
-        self, mock_setup_kueue, mock_logger
-    ):
-        mock_setup_kueue.return_value = (
-            "kueue.x-k8s.io/queue-name: chs-local-queue"
-        )
+    def test_write_ramble_config_integration(self, mock_logger):
         """Integration-like test for write_ramble_config using real template."""
         scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
@@ -419,13 +317,7 @@ ramble:
         self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
         self.assertEqual(all_interfaces[0]["network"], "default")
 
-    @mock.patch.object(GKEScheduler, "_setup_kueue")
-    def test_write_ramble_config_with_timeout(
-        self, mock_setup_kueue, mock_logger
-    ):
-        mock_setup_kueue.return_value = (
-            "kueue.x-k8s.io/queue-name: chs-local-queue"
-        )
+    def test_write_ramble_config_with_timeout(self, mock_logger):
         """Test write_ramble_config injects timeout and deadline."""
         scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")

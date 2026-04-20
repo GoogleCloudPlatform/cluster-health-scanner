@@ -16,8 +16,6 @@ ramble:
       {all_interfaces_json}
     timeout: {timeout}
     deadline: {deadline}
-    jobset_labels_yaml: |
-      {jobset_labels_yaml}
 
   applications:
     chs:

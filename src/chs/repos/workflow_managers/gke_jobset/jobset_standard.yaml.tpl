@@ -6,7 +6,6 @@ metadata:
 {jobset_labels_section}
 {jobset_annotations_section}
 spec:
-  suspend: true
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true
