@@ -331,12 +331,19 @@ class SlurmScheduler(BaseScheduler):
 
         cmd = ["scancel", ",".join(job_ids)]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-            logger.debug("Successfully canceled jobs: %s", job_ids)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0:
+                logger.debug("Successfully canceled jobs: %s", job_ids)
+            else:
+                logger.warning(
+                    "scancel returned non-zero exit code: %s", result.stderr
+                )
         except FileNotFoundError:
             logger.warning("scancel command not found. Cannot cancel jobs.")
-        except subprocess.CalledProcessError as e:
-            logger.error("Failed to cancel jobs. Error: %s", e.stderr)
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.error("Failed to cancel jobs. Error: %s", e)
             raise ex.ChsCancellationException(
-                f"Failed to cancel jobs: {e.stderr}"
+                f"Failed to cancel jobs: {e}"
             ) from e

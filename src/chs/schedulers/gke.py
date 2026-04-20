@@ -270,37 +270,50 @@ class GKEScheduler(BaseScheduler):
 
         return still_running
 
-    def _any_job_exceeded_deadline(self, jobset_id: str) -> bool:
-        """Checks individual jobs under a failed JobSet for deadline."""
+    def _check_and_update_deadlines(
+        self, failed_jobset_ids: list[str], statuses: dict[str, str]
+    ) -> None:
+        """Batch checks jobs for deadline exceeded and updates statuses."""
         try:
-            args = [
-                "get",
-                "jobs",
-                "-l",
-                f"jobset.sigs.k8s.io/jobset-name={jobset_id}",
-                "-o",
-                "json",
-            ]
+            label_selector = (
+                "jobset.sigs.k8s.io/jobset-name in "
+                f"({','.join(failed_jobset_ids)})"
+            )
+            args = ["get", "jobs", "-l", label_selector, "-o", "json"]
             jobs_output = self._run_kubectl(args)
             if not jobs_output:
-                return False
+                return
 
             jobs_data = json.loads(jobs_output).get("items", [])
+            deadlined_jobsets = set()
+
             for job in jobs_data:
+                jobset_name = (
+                    job.get("metadata", {})
+                    .get("labels", {})
+                    .get("jobset.sigs.k8s.io/jobset-name")
+                )
+                if not jobset_name or jobset_name in deadlined_jobsets:
+                    continue
+
                 for condition in job.get("status", {}).get("conditions", []):
                     if (
                         condition.get("type") == "Failed"
                         and condition.get("status") == "True"
                         and condition.get("reason") == "DeadlineExceeded"
                     ):
-                        return True
-        except Exception as e:
-            logger.debug(
-                "Failed to check exceeded deadline for %s: %s", jobset_id, e
-            )
-        return False
+                        deadlined_jobsets.add(jobset_name)
+                        statuses[jobset_name] = JobStatus.DEADLINE.value
+                        break
+        except (
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+            AttributeError,
+            TypeError,
+        ) as e:
+            logger.debug("Failed to batch check deadlines: %s", e)
 
-    def _evaluate_jobset_status(self, jobset_id: str, jobset_data: dict) -> str:
+    def _evaluate_jobset_status(self, jobset_data: dict) -> str:
         """Evaluates JobSet conditions and fallbacks to active count."""
         status = jobset_data.get("status", {})
 
@@ -312,8 +325,6 @@ class GKEScheduler(BaseScheduler):
             if condition_type == "Completed" and is_true:
                 return "Completed"
             elif condition_type == "Failed" and is_true:
-                if self._any_job_exceeded_deadline(jobset_id):
-                    return "Deadline"
                 return "Failed"
 
         replicated_jobs = status.get("replicatedJobsStatus", [])
@@ -344,11 +355,17 @@ class GKEScheduler(BaseScheduler):
                 data.get("items", []) if data.get("kind") == "List" else [data]
             )
 
+            failed_jobset_ids = []
             for item in items:
                 job_id = item.get("metadata", {}).get("name")
                 if job_id in statuses:
-                    raw_status = self._evaluate_jobset_status(job_id, item)
+                    raw_status = self._evaluate_jobset_status(item)
+                    if raw_status == "Failed":
+                        failed_jobset_ids.append(job_id)
                     statuses[job_id] = JobStatus.from_string(raw_status)
+
+            if failed_jobset_ids:
+                self._check_and_update_deadlines(failed_jobset_ids, statuses)
         except (
             subprocess.CalledProcessError,
             json.JSONDecodeError,
@@ -410,15 +427,12 @@ class GKEScheduler(BaseScheduler):
             logger.warning("No job IDs to cancel.")
             return
 
-        for job_id in job_ids:
-            try:
-                args = ["delete", "jobset", job_id]
-                self._run_kubectl(args)
-                logger.debug("Successfully deleted JobSet: %s", job_id)
-            except FileNotFoundError:
-                logger.warning("kubectl command not found. Cannot cancel jobs.")
-            except subprocess.CalledProcessError as e:
-                logger.error(
-                    "Failed to delete JobSet %s. Error: %s", job_id, e.stderr
-                )
-                click.echo(f"Failed to delete JobSet {job_id}: {e.stderr}")
+        try:
+            args = ["delete", "jobset"] + job_ids + ["--ignore-not-found"]
+            self._run_kubectl(args)
+            logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
+        except FileNotFoundError:
+            logger.warning("kubectl command not found. Cannot cancel jobs.")
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to delete JobSets. Error: %s", e.stderr)
+            click.echo(f"Failed to delete JobSets: {e.stderr}")

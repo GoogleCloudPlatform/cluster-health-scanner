@@ -406,10 +406,6 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
 
     with archive_workspace(ramble_manager, on_success=True):
         try:
-            if not ramble_manager.check_jobs_running():
-                logger.info("No jobs for run %s are currently running.", run_id)
-                return run_id
-
             ramble_manager.cancel_experiments()
             logger.debug("Cancellation complete for run_id=%r", run_id)
             logger.info("Jobs for run %s have been canceled.", run_id)
