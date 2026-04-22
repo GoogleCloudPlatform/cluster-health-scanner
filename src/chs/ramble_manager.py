@@ -26,6 +26,7 @@ from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 from chs.utils.app_data import ChsAppData
+from chs.utils.lifecycle import JobStatus
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -265,6 +266,8 @@ class RambleManager:
         scheduler: BaseScheduler,
         tests: list[str] | None,
         machine_type: str,
+        timeout: int | None = None,
+        deadline: int | None = None,
     ) -> None:
         """Configures the Ramble workspace for the CHS run.
 
@@ -272,6 +275,8 @@ class RambleManager:
           scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
           tests: An optional list of names of specific tests to run.
           machine_type: The machine type.
+          timeout: Suite-level timeout in seconds.
+          deadline: Suite-level deadline in seconds.
         """
         self._scheduler = scheduler
 
@@ -287,6 +292,8 @@ class RambleManager:
             workspace_config_dir=workspace_config_dir,
             tests=tests,
             machine_type=machine_type,
+            timeout=timeout,
+            deadline=deadline,
         )
 
     def setup_workspace(self) -> None:
@@ -349,7 +356,7 @@ class RambleManager:
             )
             return
 
-        job_ids = registry_entry.get("job_ids", [])
+        job_ids = self.get_job_ids()
         if not job_ids:
             logger.warning("No job IDs found in registry. Cannot cancel jobs.")
             click.echo(f"No job IDs found for run {self._workspace_name}.")
@@ -372,7 +379,10 @@ class RambleManager:
         run_entry = {
             "run_id": self._workspace_name,
             "workspace_path": self.path,
-            "job_ids": job_ids,
+            "job_entries": {
+                job_id: {"status": JobStatus.PENDING.value}
+                for job_id in job_ids
+            },
             "submission_time": (
                 datetime.datetime.now(datetime.timezone.utc).isoformat()
             ),
@@ -384,7 +394,7 @@ class RambleManager:
         """Retrieves job IDs for this workspace from the registry."""
         entry = self._app_data.get_run(self._workspace_name)
         if entry:
-            return entry.get("job_ids", [])
+            return list(entry.get("job_entries", {}).keys())
         return []
 
     def check_jobs_running(self) -> bool:
@@ -394,7 +404,7 @@ class RambleManager:
             logger.debug("No registry entry found for checking.")
             return False
 
-        job_ids = registry_entry.get("job_ids", [])
+        job_ids = self.get_job_ids()
         if not job_ids:
             logger.debug("No job IDs found for checking.")
             return False
@@ -474,18 +484,21 @@ class RambleManager:
 
         return mapping
 
-    def wait_for_jobs(self, poll_interval: int = 30) -> None:
+    def wait_for_jobs(
+        self, app_data: ChsAppData, poll_interval: int = 30
+    ) -> None:
         """Waits for all jobs in the workspace to complete and fetches logs.
 
         Args:
+            app_data: ChsAppData to update run status.
             poll_interval: Seconds to wait between checks.
         """
         logger.info(
             "Waiting for jobs to complete for run %s...", self._workspace_name
         )
-        self._monitor_jobs(poll_interval)
+        self._monitor_jobs(app_data, poll_interval)
 
-    def _monitor_jobs(self, poll_interval: int) -> None:
+    def _monitor_jobs(self, app_data: ChsAppData, poll_interval: int) -> None:
         """Generic wait logic to monitor job progress and fetch logs.
 
         Polls job statuses for all jobs in the registry. When a job completes,
@@ -508,7 +521,7 @@ class RambleManager:
 
             still_running = False
             for job_id, status in statuses.items():
-                if status in ["COMPLETED", "FAILED", "UNKNOWN"]:
+                if JobStatus.is_terminal(status):
                     # Job finished
                     if job_id in pending_log_fetches:
                         log_path = job_log_map.get(job_id)
@@ -524,6 +537,11 @@ class RambleManager:
                     active_jobs.remove(job_id)
                 else:
                     still_running = True
+
+            try:
+                app_data.update_run_status(self._workspace_name, statuses)
+            except Exception as e:
+                logger.warning("Failed to update run status in registry: %s", e)
 
             if still_running:
                 logger.info(
@@ -724,28 +742,10 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
-        try:
-            with open(results_json_path, "r") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.error("Error reading JSON results: %s", e)
-            data = {}
-
-        app_names = self._get_application_names(data)
-
-        app_mapping = self._get_success_criteria_mapping(
-            app_names, "applications"
-        )
-
-        success_criteria_mapping = {
-            "applications": app_mapping,
-        }
-
         boh_generator = BOHGenerator(
             results_json_path,
             base_log_dir=str(workspace_dir),
             cluster_type=self.get_scheduler_type(),
-            success_criteria_mapping=success_criteria_mapping,
         )
         logger.debug("Generating Bill of Health from %s", results_json_path)
         boh = boh_generator.generate()

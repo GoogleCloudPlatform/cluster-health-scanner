@@ -28,6 +28,7 @@ spec:
         spec:
           parallelism: {n_nodes}
           completions: {n_nodes}
+          activeDeadlineSeconds: {deadline}
           template:
             metadata:
 {pod_labels_section}

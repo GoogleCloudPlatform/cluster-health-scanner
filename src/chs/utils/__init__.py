@@ -1,7 +1,7 @@
 """Utility functions for CHS."""
 
 from chs.utils.app_data import ChsAppData
-from chs.utils.suites import load_suite_tests
+from chs.utils.suites import load_suite
 from chs.utils.theme import (
     create_styled_table,
     CHS_HEADER_STYLE,
@@ -14,7 +14,7 @@ from chs.utils.theme import (
 
 __all__ = [
     "ChsAppData",
-    "load_suite_tests",
+    "load_suite",
     "create_styled_table",
     "CHS_HEADER_STYLE",
     "CHS_WARNING_STYLE",

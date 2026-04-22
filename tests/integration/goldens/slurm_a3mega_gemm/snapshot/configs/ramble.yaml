@@ -12,8 +12,9 @@ ramble:
     tests: [{"name": "gemm"}]
     scheduler: slurm
     container_dir: <HOME_DIR>/.local/share/chs/images
-    tcp_interfaces: |
-      enp0s1,enp0s2
+    tcp_interfaces: "enp0s1,enp0s2"
+    timeout: 600
+    deadline: 2400
 
   applications:
     chs:

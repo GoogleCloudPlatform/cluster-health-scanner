@@ -243,12 +243,14 @@ class TestRambleManager(unittest.TestCase):
             workspace_config_dir=mock.ANY,
             tests=None,
             machine_type="a3-high",
+            timeout=None,
+            deadline=None,
         )
 
     def test_check_jobs_running_true(self):
         """Test check_jobs_running returns True when jobs are running."""
         self.mock_app_data.get_run.return_value = {
-            "job_ids": ["123"],
+            "job_entries": {"123": {"status": "PENDING"}},
             "scheduler": "mock_scheduler",
         }
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
@@ -263,14 +265,14 @@ class TestRambleManager(unittest.TestCase):
             result = manager.check_jobs_running()
 
             self.assertTrue(result)
-            self.mock_app_data.get_run.assert_called_once_with("ws1")
+            self.assertEqual(self.mock_app_data.get_run.call_count, 2)
             mock_get_scheduler.assert_called_once_with("mock_scheduler")
             mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
 
     def test_check_jobs_running_false(self):
         """Test check_jobs_running returns False when jobs are not running."""
         self.mock_app_data.get_run.return_value = {
-            "job_ids": ["123"],
+            "job_entries": {"123": {"status": "PENDING"}},
             "scheduler": "mock_scheduler",
         }
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
@@ -285,7 +287,7 @@ class TestRambleManager(unittest.TestCase):
             result = manager.check_jobs_running()
 
             self.assertFalse(result)
-            self.mock_app_data.get_run.assert_called_once_with("ws1")
+            self.assertEqual(self.mock_app_data.get_run.call_count, 2)
             mock_get_scheduler.assert_called_once_with("mock_scheduler")
             mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
 
@@ -452,7 +454,6 @@ class TestRambleManager(unittest.TestCase):
                                 results_json_path,
                                 base_log_dir=f"{self.tmp_dir}/ws1",
                                 cluster_type="slurm",
-                                success_criteria_mapping={"applications": {}},
                             )
                         mock_boh_gen.return_value.generate.assert_called_once()
                         mock_cancel.assert_called_once()
@@ -463,8 +464,8 @@ class TestRambleManager(unittest.TestCase):
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
 
         with mock.patch.object(manager, "_monitor_jobs") as mock_monitor:
-            manager.wait_for_jobs(poll_interval=1)
-            mock_monitor.assert_called_once_with(1)
+            manager.wait_for_jobs(self.mock_app_data, poll_interval=1)
+            mock_monitor.assert_called_once_with(self.mock_app_data, 1)
 
     def test_get_application_names(self):
         """Test extraction of unique application names from results."""

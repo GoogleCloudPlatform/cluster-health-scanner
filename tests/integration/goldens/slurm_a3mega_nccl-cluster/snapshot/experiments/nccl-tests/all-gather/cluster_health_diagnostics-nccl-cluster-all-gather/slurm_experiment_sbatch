@@ -1,7 +1,9 @@
 #!/bin/bash
+#SBATCH --deadline=<DEADLINE>
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
+#SBATCH --time=10
 #SBATCH -J nccl-tests_all-gather_cluster_health_diagnostics-nccl-cluster-all-gather
 #SBATCH -N 2
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/slurm-%j.err
@@ -22,6 +24,7 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/clu
 
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
+export NCCL_DEBUG=INFO;
 export NCCL_FASTRAK_CTRL_DEV=enp0s12;
 export NCCL_FASTRAK_IFNAME=enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0;
 export NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY=/dev/aperture_devices;

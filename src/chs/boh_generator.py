@@ -152,16 +152,6 @@ class BOHGenerator:
                 fom_regex = fom_regex_or_def
 
             if fom_regex:
-                logger.debug(
-                    "Criteria '%s' mapped to pattern '%s'",
-                    simple_name,
-                    fom_regex,
-                )
-            else:
-                logger.debug("Criteria '%s' has no mapping found", simple_name)
-
-            matched_any_metric = False
-            if fom_regex:
                 try:
                     pattern = re.compile(fom_regex)
                 except re.error:
@@ -176,14 +166,6 @@ class BOHGenerator:
 
                     if is_match:
                         metric.validation_criteria.CopyFrom(validation)
-                        matched_any_metric = True
-
-            if not matched_any_metric:
-                logger.debug(
-                    "No metrics matched for criteria '%s' " "(pattern: '%s').",
-                    simple_name,
-                    fom_regex,
-                )
 
     def _extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         """Extracts test name and level, delegating to plugins if available."""

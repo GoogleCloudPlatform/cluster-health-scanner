@@ -91,13 +91,16 @@ class TestSlurmScheduler(unittest.TestCase):
         """Test _ensure_enroot_directories creates missing paths."""
         scheduler = SlurmScheduler()
         mock_expanduser.return_value = "/home/user"
-        mock_exists.side_effect = [False, False]  # Both don't exist
+        mock_exists.side_effect = [False, False, False]  # All 3 don't exist
 
         scheduler._ensure_enroot_directories()
 
-        self.assertEqual(mock_makedirs.call_count, 2)
+        self.assertEqual(mock_makedirs.call_count, 3)
         mock_makedirs.assert_any_call("/home/user/.enroot/run", exist_ok=True)
         mock_makedirs.assert_any_call("/home/user/.enroot/cache", exist_ok=True)
+        mock_makedirs.assert_any_call(
+            "/home/user/.enroot/.credentials", exist_ok=True
+        )
 
     @mock.patch("os.path.expanduser")
     def test_get_extra_env(self, mock_expanduser, mock_logger):
@@ -107,6 +110,9 @@ class TestSlurmScheduler(unittest.TestCase):
         env = scheduler.get_extra_env()
         self.assertEqual(env["ENROOT_RUNTIME_PATH"], "/home/user/.enroot/run")
         self.assertEqual(env["ENROOT_CACHE_PATH"], "/home/user/.enroot/cache")
+        self.assertEqual(
+            env["ENROOT_CONFIG_CREDENTIALS"], "/home/user/.enroot/.credentials"
+        )
 
     def test_discover_network_interfaces_with_anchor(self, mock_logger):
         """Test _discover_network_interfaces uses default route as anchor."""
@@ -265,12 +271,14 @@ ramble:
         template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
         with open(template_path, "w") as f:
             f.write("""
-variables:
-  nodes: {nodes}
-  machine_type: {machine_type}
-  tests: {tests}
-  default_interface_name: {default_interface_name}
-  all_interfaces_json: {all_interfaces_json}
+ramble:
+  variables:
+    nodes: {nodes}
+    machine_type: {machine_type}
+    tests: {tests}
+    default_interface_name: {default_interface_name}
+    all_interfaces_json: |
+      {all_interfaces_json}
 """)
 
         @contextlib.contextmanager
@@ -291,19 +299,74 @@ variables:
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
-        with open(output_path, "r") as f:
-            content = f.read()
+        import yaml
 
-        self.assertIn('nodes: ["node1"]', content)
-        self.assertIn("machine_type: a3-high", content)
-        self.assertIn('tests: ["test1"]', content)
-        self.assertIn("default_interface_name: eth0", content)
-        self.assertIn(
-            'all_interfaces_json: [{"interfaceName": "eth0", '
-            '"network": "default"}, {"interfaceName": "eth1", '
-            '"network": "rdma-0"}]',
-            content,
-        )
+        with open(output_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        variables = data["ramble"]["variables"]
+        self.assertEqual(variables["nodes"], ["node1"])
+        self.assertEqual(variables["machine_type"], "a3-high")
+        self.assertEqual(variables["tests"], ["test1"])
+        self.assertEqual(variables["default_interface_name"], "eth0")
+
+        import json
+
+        all_interfaces = json.loads(variables["all_interfaces_json"].strip())
+        self.assertEqual(len(all_interfaces), 2)
+        self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
+        self.assertEqual(all_interfaces[0]["network"], "default")
+
+    def test_write_ramble_config_with_timeout(self, mock_logger):
+        """Test write_ramble_config injects timeout and deadline."""
+        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        with open(template_path, "w") as f:
+            f.write("""
+ramble:
+  variables:
+    nodes: {nodes}
+    machine_type: {machine_type}
+    tests: {tests}
+    default_interface_name: {default_interface_name}
+    all_interfaces_json: |
+      {all_interfaces_json}
+    timeout: {timeout}
+    deadline: {deadline}
+""")
+
+        @contextlib.contextmanager
+        def mock_as_file_func(path):
+            yield template_path
+
+        with mock.patch.object(
+            GKEScheduler,
+            "_discover_networks",
+            return_value=(["default"], ["rdma-0"]),
+        ):
+            with mock.patch(
+                "chs.schedulers.gke.pkg_resources.as_file",
+                side_effect=mock_as_file_func,
+            ):
+                scheduler.write_ramble_config(
+                    workspace_config_dir,
+                    ["test1"],
+                    "a3-high",
+                    timeout=600,
+                    deadline=1800,
+                )
+
+        output_path = os.path.join(workspace_config_dir, "ramble.yaml")
+        import yaml
+
+        with open(output_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        variables = data["ramble"]["variables"]
+        self.assertEqual(variables["timeout"], 600)
+        self.assertEqual(variables["deadline"], 1800)
 
     @mock.patch("subprocess.run")
     def test_discover_networks_success(self, mock_run, mock_logger):

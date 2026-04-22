@@ -14,6 +14,8 @@ ramble:
     default_interface_name: eth0
     all_interfaces_json: |
       [{"interfaceName": "eth0", "network": "default"}, {"interfaceName": "eth1", "network": "gpu-net-1"}]
+    timeout: 600
+    deadline: 2400
 
   applications:
     chs:

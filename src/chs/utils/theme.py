@@ -30,3 +30,16 @@ def create_styled_table(
     for col in columns:
         table.add_column(col)
     return table
+
+
+def create_error_table(errors: list[tuple[str, str]]) -> Table:
+    """Creates a table for displaying errors and warnings."""
+    table = create_styled_table(
+        "Type",
+        "Detail",
+        header_style="bold red",
+        expand=True,
+    )
+    for error_type, detail in errors:
+        table.add_row(error_type, detail)
+    return table

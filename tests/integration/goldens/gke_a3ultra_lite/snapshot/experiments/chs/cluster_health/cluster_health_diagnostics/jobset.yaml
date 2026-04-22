@@ -1,0 +1,55 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: chs-cluster-health-cluster-health-diagnostics
+  namespace: default
+
+
+spec:
+  ttlSecondsAfterFinished: 86400
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+  replicatedJobs:
+    - name: w
+      template:
+        spec:
+          parallelism: 1
+          completions: 1
+          activeDeadlineSeconds: 2400
+          template:
+            metadata:
+
+
+            spec:
+              restartPolicy: Never
+
+
+
+
+              containers:
+              - name: standard-container
+                stdin: true
+                tty: true
+                image: ""
+
+
+                env:
+                - name: MY_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                command:
+                - bash
+                - -c
+                - |
+                  export NODE_RANK=$JOB_COMPLETION_INDEX
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics"
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics"
+                  cd "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics"
+                  rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
+                  touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/cluster_health_diagnostics/cluster_health_diagnostics.out"
+                  echo 'Initiating cluster health diagnostics for a3-ultra' 
+
+              restartPolicy: Never
+

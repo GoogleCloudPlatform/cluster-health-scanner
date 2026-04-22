@@ -1,7 +1,9 @@
 #!/bin/bash
+#SBATCH --deadline=<DEADLINE>
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
+#SBATCH --time=10
 #SBATCH -J nvidia-smi_local_cluster_health_diagnostics-nvidia-smi-node2
 #SBATCH -N 1
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/slurm-%j.err
@@ -23,6 +25,8 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/cluster_health_diagnostics-nvidia-smi-node2.out"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/cluster_health_diagnostics-nvidia-smi-node2.out"
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/.slurm_config
-nvidia-smi -q >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/cluster_health_diagnostics-nvidia-smi-node2.out" 2>&1
+nvidia-smi --query-gpu=index,name,driver_version,pstate,pci.bus_id,serial,uuid,power.draw,power.limit,clocks.gr,clocks.mem --format=csv,noheader,nounits >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/cluster_health_diagnostics-nvidia-smi-node2.out" 2>&1
+echo "GPU Count: $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)" >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/cluster_health_diagnostics-nvidia-smi-node2.out" 2>&1
+nvidia-smi | grep -o "CUDA Version: [0-9.]*" || true >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/cluster_health_diagnostics-nvidia-smi-node2.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/cluster_health_diagnostics-nvidia-smi-node2/.slurm_script_end_time
 

@@ -4,7 +4,7 @@ a3-ultra:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a3-ultragpu-8g"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
         operator: "Exists"
@@ -22,12 +22,13 @@ a3-ultra:
     container_security_context_yaml: |
       privileged: true
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
         CUDA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
         NCCL_NET: gIB
+        NCCL_DEBUG: INFO
     variables:
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
@@ -43,14 +44,14 @@ a3-ultra:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
+
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -61,7 +62,7 @@ a3-ultra:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
@@ -71,7 +72,7 @@ a3-ultra:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -85,7 +86,7 @@ a3-ultra:
       mem_affinity: "0:0:0:0:1:1:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -108,7 +109,7 @@ a4:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-nodepool: a4-highgpu-8g-a4-pool"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a4-highgpu-8g"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
         operator: "Equal"
@@ -127,12 +128,13 @@ a4:
     container_security_context_yaml: |
       privileged: true
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
         CUDA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
         NCCL_NET: gIB
+        NCCL_DEBUG: INFO
     variables:
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
@@ -148,14 +150,14 @@ a4:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-
     success_criteria:
       avg_bus_bw:
         mode: fom_comparison
         fom_name: "Avg. Bus Bandwidth"
         formula: "{value} > 80"
+
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -166,7 +168,7 @@ a4:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
@@ -176,7 +178,7 @@ a4:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -190,7 +192,7 @@ a4:
       mem_affinity: "0:0:0:0:1:1:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -214,7 +216,7 @@ a3-mega:
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
-    node_selector_yaml: "cloud.google.com/gke-nodepool: a3-megagpu-8g-a3megagpupool"
+    node_selector_yaml: "node.kubernetes.io/instance-type: a3-megagpu-8g"
     tolerations_yaml: |
       - key: "nvidia.com/gpu"
         operator: "Exists"
@@ -232,7 +234,7 @@ a3-mega:
     container_security_context_yaml: |
       privileged: true
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -243,7 +245,7 @@ a3-mega:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
@@ -253,7 +255,7 @@ a3-mega:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -267,7 +269,7 @@ a3-mega:
       mem_affinity: "0:0:0:0:1:1:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -284,3 +286,84 @@ a3-mega:
       m: 16384
       n: 16384
       k: 16384
+a4x:
+  variables:
+    pod_annotations_yaml: |
+      networking.gke.io/default-interface: {default_interface_name}
+      networking.gke.io/interfaces: |
+        {all_interfaces_json}
+    node_selector_yaml: "node.kubernetes.io/instance-type: a4x-highgpu-4g"
+    tolerations_yaml: |
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: present
+        effect: NoSchedule
+      - key: kubernetes.io/arch
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+    extra_volumes_yaml: |
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+    extra_volume_mounts_yaml: |
+      - name: shared-memory
+        mountPath: /dev/shm
+    container_resources_yaml: |
+      limits:
+        nvidia.com/gpu: {gpus_per_node}
+    container_security_context_yaml: |
+      privileged: true
+      runAsUser: 0
+  nvidia-dcgm:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "2800000000"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      processes_per_node: "{gpus_per_node}"
+      n_ranks: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-69:0-69:70-139:70-139"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 51200
+      n: 51200
+      k: 51200

@@ -17,6 +17,7 @@ EXPERIMENT_ARTIFACT_SUFFIXES = (
 
 
 SCRUBBING_RULES = [
+    (re.compile(r"#SBATCH --deadline=.*"), "#SBATCH --deadline=<DEADLINE>"),
     (re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}\.\d{2}\.\d{2}\.\d+"), "<TIMESTAMP>"),
     (
         re.compile(r"ssh-rsa [A-Za-z0-9+/=]+(?:\s+\S+)?"),

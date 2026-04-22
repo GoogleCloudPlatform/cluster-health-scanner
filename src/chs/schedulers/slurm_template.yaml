@@ -12,8 +12,9 @@ ramble:
     tests: {tests}
     scheduler: slurm
     container_dir: {images_dir}
-    tcp_interfaces: |
-      {tcp_interfaces}
+    tcp_interfaces: "{tcp_interfaces}"
+    timeout: {timeout}
+    deadline: {deadline}
 
   applications:
     chs:

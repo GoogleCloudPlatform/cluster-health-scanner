@@ -1,8 +1,10 @@
 #!/bin/bash
+#SBATCH --deadline=<DEADLINE>
 #SBATCH --exclusive
 #SBATCH --gpu-bind=single:1
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
+#SBATCH --time=10
 #SBATCH -J nvidia-stream_standard_cluster_health_diagnostics-stream-node2
 #SBATCH -N 1
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/cluster_health_diagnostics-stream-node2/slurm-%j.err

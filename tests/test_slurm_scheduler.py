@@ -13,18 +13,18 @@ class TestSlurmScheduler(unittest.TestCase):
 
     @patch("subprocess.run")
     def test_get_job_statuses_success(self, mock_run):
-        # Mock squeue output (JobID,State)
-        mock_output = "123,R\n124,CD\n"
+        # Mock sacct output (JobID|State)
+        mock_output = "123|RUNNING\n124|COMPLETED\n"
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=mock_output
         )
 
         statuses = self.scheduler.get_job_statuses(["123", "124", "125"])
 
-        self.assertEqual(statuses["123"], "R")
-        self.assertEqual(statuses["124"], "CD")
-        # 125 not in output -> COMPLETED
-        self.assertEqual(statuses["125"], "COMPLETED")
+        self.assertEqual(statuses["123"], "RUNNING")
+        self.assertEqual(statuses["124"], "COMPLETED")
+        # 125 not in output -> UNKNOWN
+        self.assertEqual(statuses["125"], "UNKNOWN")
 
     @patch("subprocess.run")
     def test_get_job_statuses_command_not_found(self, mock_run):
