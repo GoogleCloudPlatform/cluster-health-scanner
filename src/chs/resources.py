@@ -110,6 +110,9 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
     "gke": {
         "a3-mega": [
             "dcgm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
             "stream",
             "nvidia-smi",
             "gemm",

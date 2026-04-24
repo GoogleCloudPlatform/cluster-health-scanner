@@ -61,6 +61,7 @@ spec:
                 - key: "nvidia.com/gpu"
                   operator: "Exists"
                   effect: "NoSchedule"
+
               volumes:
               - name: mpi-id
                 secret:
@@ -129,12 +130,12 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-cluster-all-gather/cluster_health_diagnostics-nccl-cluster-all-gather.out"
+                    nvidia-smi -pm 1 || true
                     export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
                     export NCCL_DEBUG=INFO;
                     export NCCL_NET=gIB;
                     export NCCL_TESTS_SPLIT_MASK="";
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
-                    nvidia-smi -pm 1 || true
                     if [ -d "/usr/local/gib/scripts" ]; then
                         NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
                     fi
@@ -156,13 +157,13 @@ spec:
 
                     # Wait for head node to become reachable
                     echo "Waiting for head node ${HEAD_NODE} to become reachable..."
-                    until ping -c 1 $HEAD_NODE > /dev/null 2>&1; do
+                    while ! (echo > /dev/tcp/$HEAD_NODE/222) 2>/dev/null; do
                       sleep 5
                     done
 
                     echo "Head node is up. Idling until it finishes..."
                     # Once reachable, stay alive as long as it replies
-                    while ping -c 1 $HEAD_NODE > /dev/null 2>&1; do
+                    while (echo > /dev/tcp/$HEAD_NODE/222) 2>/dev/null; do
                       sleep 5
                     done
 

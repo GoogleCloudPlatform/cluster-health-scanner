@@ -113,6 +113,12 @@ class GkeJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="init_containers_yaml",
+        default="",
+        description="Raw YAML string for extra initContainers",
+    )
+
+    workflow_manager_variable(
         name="container_image",
         default="",
         description="url to the container image",
@@ -267,7 +273,7 @@ class GkeJobset(WorkflowManagerBase):
         # Standard templating (where 'volumes' keys are entirely optional)
         svol = self._yaml_block("extra_volumes_yaml", "volumes", 14)
         smnt = self._yaml_block("extra_volume_mounts_yaml", "volumeMounts", 16)
-
+        init_c = self._yaml_block("init_containers_yaml", "initContainers", 14)
         mvol_add = self._yaml_append("extra_volumes_yaml", 14)
         mmnt_add = self._yaml_append("extra_volume_mounts_yaml", 16)
 
@@ -282,6 +288,7 @@ class GkeJobset(WorkflowManagerBase):
             "tolerations_section": tol,
             "standard_volumes_section": svol,
             "standard_volume_mounts_section": smnt,
+            "init_containers_section": init_c,
             "mpi_volumes_append": mvol_add,
             "mpi_volume_mounts_append": mmnt_add,
             "sanitized_job_name": sanitized_job_name,

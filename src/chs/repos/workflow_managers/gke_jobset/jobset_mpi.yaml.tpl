@@ -38,6 +38,7 @@ spec:
 {node_selector_section}
 {affinity_section}
 {tolerations_section}
+{init_containers_section}
               volumes:
               - name: mpi-id
                 secret:
@@ -110,13 +111,13 @@ spec:
 
                     # Wait for head node to become reachable
                     echo "Waiting for head node ${HEAD_NODE} to become reachable..."
-                    until ping -c 1 $HEAD_NODE > /dev/null 2>&1; do
+                    while ! (echo > /dev/tcp/$HEAD_NODE/{ssh_port}) 2>/dev/null; do
                       sleep 5
                     done
 
                     echo "Head node is up. Idling until it finishes..."
                     # Once reachable, stay alive as long as it replies
-                    while ping -c 1 $HEAD_NODE > /dev/null 2>&1; do
+                    while (echo > /dev/tcp/$HEAD_NODE/{ssh_port}) 2>/dev/null; do
                       sleep 5
                     done
 

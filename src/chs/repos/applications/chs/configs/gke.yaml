@@ -225,14 +225,81 @@ a3-mega:
       - name: shared-memory
         emptyDir:
           medium: "Memory"
+      - name: nvidia
+        hostPath:
+          path: /home/kubernetes/bin/nvidia/lib64
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: proc-sys
+        hostPath:
+          path: /proc/sys
+      - name: aperture-devices
+        hostPath:
+          path: /dev/aperture_devices
     extra_volume_mounts_yaml: |
       - name: shared-memory
         mountPath: /dev/shm
+      - name: nvidia
+        mountPath: /usr/local/nvidia/lib64
+      - name: aperture-devices
+        mountPath: /dev/aperture_devices
     container_resources_yaml: |
       limits:
-        nvidia.com/gpu: 8
+        nvidia.com/gpu: {gpus_per_node}
     container_security_context_yaml: |
       privileged: true
+  nccl-tests:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        OMPI_ALLOW_RUN_AS_ROOT: 1
+        NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: "/dev/aperture_devices"
+        NCCL_LIB_DIR: "/usr/local/nvidia/lib64"
+        NCCL_DEBUG: INFO
+    variables:
+      jobset_template: jobset_mpi.yaml.tpl
+      init_containers_yaml: |
+        - name: tcpxo-daemon
+          image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.21
+          imagePullPolicy: Always
+          restartPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -ex
+              chmod 755 /fts/entrypoint_rxdm_container.sh
+              /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_BIND_SERVICE
+          volumeMounts:
+            - name: nvidia
+              mountPath: /usr/local/nvidia/lib64
+            - name: sys
+              mountPath: /hostsysfs
+            - name: proc-sys
+              mountPath: /hostprocsysfs
+            - name: aperture-devices
+              mountPath: /dev/aperture_devices
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.15
+      ssh_port: 222
+      nccl-tests_path: /scripts
+      processes_per_node: {gpus_per_node}
+      mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
+      mpi_command: |
+        WORKLOAD_NAME=$(basename $(dirname $(pwd)))
+        BINARY=$(echo $WORKLOAD_NAME | tr '-' '_')_perf
+        mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 \
+          --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_args "-p {ssh_port}" \
+          -np $(( {n_nodes} * {processes_per_node} )) \
+          --hostfile /tmp/hostfile \
+          -x {mpi_env_vars} \
+          taskset -c 32-63 /scripts/demo_mpi_entry_with_config_profile.sh $BINARY -b 8 -e 8G -f 2 -g 1 -w 5 --iters 20
+
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
