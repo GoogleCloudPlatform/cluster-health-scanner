@@ -253,7 +253,8 @@ class RambleManager:
         import chs
 
         logger.debug("Adding custom CHS repository to workspace...")
-        with pkg_resources.path(chs, "repos") as p:
+        repo_path = pkg_resources.files(chs).joinpath("repos")
+        with pkg_resources.as_file(repo_path) as p:
             self._execute_ramble_command(
                 subcommand="repo",
                 args=["add", str(p)],

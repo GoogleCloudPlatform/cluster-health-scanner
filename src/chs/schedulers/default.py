@@ -42,8 +42,11 @@ class DefaultScheduler(BaseScheduler):
         timeout: int | None = None,
         deadline: int | None = None,
     ) -> None:
-        with pkg_resources.path(chs, "ramble.yaml") as p:
-            shutil.copy(p, os.path.join(workspace_config_dir, "ramble.yaml"))
+        p = pkg_resources.files(chs).joinpath("ramble.yaml")
+        with pkg_resources.as_file(p) as file_path:
+            shutil.copy(
+                file_path, os.path.join(workspace_config_dir, "ramble.yaml")
+            )
             logger.debug(
                 "Copied default ramble.yaml to %s", workspace_config_dir
             )
