@@ -650,7 +650,8 @@ def run(
 
     if not job_ids:
         raise ex.JobSubmissionFailureException(
-            f"Job submission failed for workspace: {workspace_name}"
+            f"Job submission failed for workspace: {workspace_name}. "
+            f"Please check internal.log in the workspace directory for details."
         )
 
     logger.info("Run submitted successfully.")

@@ -557,7 +557,7 @@ mycriteria:
                     "archive",
                     "-t",
                     "--upload-url",
-                    "gs://my-bucket/workspaces/ws1.tar.gz",
+                    "gs://my-bucket/workspaces/",
                     "--archive-pattern",
                     "bill_of_health.json",
                     "--archive-pattern",

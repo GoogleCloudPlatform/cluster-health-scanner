@@ -812,9 +812,7 @@ class RambleManager:
             )
             return
 
-        upload_url = (
-            f"gs://{bucket_name}/workspaces/{self._workspace_name}.tar.gz"
-        )
+        upload_url = f"gs://{bucket_name}/workspaces/"
         logger.info("Archiving workspace to %s", upload_url)
 
         try:

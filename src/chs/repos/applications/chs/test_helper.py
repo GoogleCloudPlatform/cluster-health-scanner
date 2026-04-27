@@ -1,7 +1,10 @@
 import copy
 import datetime
+import logging
 import textwrap
 from ramble.context import create_context_from_dict
+
+logger = logging.getLogger(__name__)
 
 
 class TestHelper:
@@ -180,6 +183,9 @@ podAntiAffinity:
         all_nodes = variables.get("nodes", [])
         if test_type == "nccl-pairwise":
             if not all_nodes or len(all_nodes) < 3:
+                logger.warning(
+                    f"nccl-pairwise test requires at least 3 nodes, but only {len(all_nodes)} were provided. Skipping test generation."
+                )
                 return []
 
             node_groups = []

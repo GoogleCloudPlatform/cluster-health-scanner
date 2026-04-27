@@ -80,6 +80,8 @@ class ChsAppData:
     def set_bucket(self, bucket_name: str) -> None:
         """Sets the GCS bucket name in the app data."""
         metadata = self._load_json(self._metadata_file)
+        if bucket_name.lower().startswith("gs://"):
+            bucket_name = bucket_name[5:]
         metadata["bucket_name"] = bucket_name
         self._save_json(self._metadata_file, metadata)
         logger.debug("AppData: Set bucket_name to %s", bucket_name)
