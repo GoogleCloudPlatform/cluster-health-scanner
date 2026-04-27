@@ -26,6 +26,7 @@ class BOHGenerator:
         success_criteria_mapping: (
             dict[str, dict[str, dict[str, str]]] | None
         ) = None,
+        gcs_base_path: str | None = None,
     ):
         self.file_path = file_path
         self.base_log_dir = base_log_dir
@@ -33,6 +34,7 @@ class BOHGenerator:
         self.report = pb.BillOfHealth()
         self.success_criteria_mapping = success_criteria_mapping or {}
         self.pm = chs.core.plugin_manager.PluginManager()
+        self.gcs_base_path = gcs_base_path
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()
@@ -252,6 +254,11 @@ class BOHGenerator:
                 test_result.metadata.fields["log_file"].string_value = log_file
             else:
                 test_result.metadata.fields["log_file"].string_value = ""
+            if self.gcs_base_path:
+                gcs_path = f"{self.gcs_base_path}/{log_file}"
+                test_result.metadata.fields[
+                    "gcs_log_file"
+                ].string_value = gcs_path
 
             node = ramble_vars.get("node")
             if node:

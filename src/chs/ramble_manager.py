@@ -743,10 +743,18 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
+        bucket_name = self._app_data.get_bucket()
+        gcs_base_path = None
+        if bucket_name:
+            gcs_base_path = (
+                f"gs://{bucket_name}/workspaces/{self._workspace_name}"
+            )
+
         boh_generator = BOHGenerator(
             results_json_path,
             base_log_dir=str(workspace_dir),
             cluster_type=self.get_scheduler_type(),
+            gcs_base_path=gcs_base_path,
         )
         logger.debug("Generating Bill of Health from %s", results_json_path)
         boh = boh_generator.generate()

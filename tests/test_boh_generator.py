@@ -516,6 +516,37 @@ class TestBOHGenerator(unittest.TestCase):
             metadata.fields["log_file"].string_value, "experiments/log1.out"
         )
 
+    def test_generate_metadata_gcs_log(self):
+        """Test extraction of tags and log files with GCS path."""
+        log_path = os.path.join(self.test_dir.name, "experiments/log1.out")
+        data = {
+            "workspace_name": "my_workspace",
+            "experiments": [
+                {
+                    "name": "exp1",
+                    "TAGS": ["tag1", "tag2"],
+                    "RAMBLE_VARIABLES": {"log_file": log_path},
+                }
+            ],
+        }
+        self._write_json(data)
+
+        generator = BOHGenerator(
+            self.test_json_path,
+            base_log_dir=self.test_dir.name,
+            gcs_base_path="gs://my_bucket/workspaces/my_workspace",
+        )
+        report = generator.generate()
+
+        metadata = report.test_results[0].metadata
+        self.assertEqual(
+            metadata.fields["log_file"].string_value, "experiments/log1.out"
+        )
+        self.assertEqual(
+            metadata.fields["gcs_log_file"].string_value,
+            "gs://my_bucket/workspaces/my_workspace/experiments/log1.out",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

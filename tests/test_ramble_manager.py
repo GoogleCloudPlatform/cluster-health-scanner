@@ -431,6 +431,7 @@ class TestRambleManager(unittest.TestCase):
         manager._scheduler = mock.Mock()
         manager._scheduler.name = "slurm"
         results_json_path = f"{self.tmp_dir}/ws1/results.latest.json"
+        self.mock_app_data.get_bucket.return_value = "my-bucket"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
             with mock.patch.object(
@@ -455,6 +456,7 @@ class TestRambleManager(unittest.TestCase):
                                 results_json_path,
                                 base_log_dir=f"{self.tmp_dir}/ws1",
                                 cluster_type="slurm",
+                                gcs_base_path="gs://my-bucket/workspaces/ws1",
                             )
                         mock_boh_gen.return_value.generate.assert_called_once()
                         mock_cancel.assert_called_once()
