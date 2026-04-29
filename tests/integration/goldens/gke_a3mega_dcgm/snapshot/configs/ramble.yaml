@@ -5,18 +5,20 @@ ramble:
     overwrite_inventories: True
   variables:
     scheduler: gke
-    nodes: ["node1", "node2"]
+    nodes:
+    - node1
+    - node2
     n_nodes: 1
     processes_per_node: 1
     n_ranks: 1
     machine_type: a3-mega
-    tests: [{"name": "dcgm"}]
+    tests:
+    - name: dcgm
     default_interface_name: eth0
-    all_interfaces_json: |
-      [{"interfaceName": "eth0", "network": "default"}, {"interfaceName": "eth1", "network": "gpu-net-1"}]
+    all_interfaces_json: '[{"interfaceName": "eth0", "network": "default"}, {"interfaceName":
+      "eth1", "network": "gpu-net-1"}]'
     timeout: 600
     deadline: 2400
-
   applications:
     chs:
       workloads:
@@ -24,4 +26,4 @@ ramble:
           experiments:
             chs:
               variables:
-                placeholder: "true"
+                placeholder: 'true'

@@ -4,6 +4,9 @@ import importlib.resources as pkg_resources
 import json
 import logging
 import os
+import yaml
+
+
 import re
 import subprocess
 import click
@@ -17,6 +20,13 @@ if TYPE_CHECKING:
 from chs.schedulers.base import BaseScheduler
 from chs.exceptions import NetworkDiscoveryException
 from chs.utils.lifecycle import JobStatus
+
+
+def boolean_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:bool", str(data))
+
+
+yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
 
@@ -217,14 +227,7 @@ class GKEScheduler(BaseScheduler):
         )
         with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
-                template_content = f.read()
-
-        if nodes:
-            nodes_str = json.dumps(nodes)
-        else:
-            nodes_str = "[]"
-
-        tests_str = json.dumps(tests) if tests else "[]"
+                config = yaml.safe_load(f)
 
         l3_networks, device_networks = self._discover_networks()
         if not l3_networks or not device_networks:
@@ -239,23 +242,22 @@ class GKEScheduler(BaseScheduler):
         ]
 
         default_interface_name = "eth0"
-        all_interfaces_json = json.dumps(all_interfaces)
 
-        rendered_content = template_content.format(
-            nodes=nodes_str,
-            machine_type=machine_type,
-            tests=tests_str,
-            default_interface_name=default_interface_name,
-            all_interfaces_json=all_interfaces_json,
-            timeout=timeout,
-            deadline=deadline,
-        )
-        logger.debug("Configuration: %r", rendered_content)
+        variables = config["ramble"]["variables"]
+        variables["nodes"] = nodes or []
+        variables["machine_type"] = machine_type
+        variables["tests"] = tests or []
+        variables["default_interface_name"] = default_interface_name
+        variables["all_interfaces_json"] = json.dumps(all_interfaces)
+        variables["timeout"] = timeout
+        variables["deadline"] = deadline
+
+        logger.debug("Configuration: %r", config)
 
         self._write_topology_json(workspace_config_dir)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
-            f.write(rendered_content)
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     def check_jobs_running(self, job_ids: list[str]) -> bool:
         """Checks if the given jobs are still running."""

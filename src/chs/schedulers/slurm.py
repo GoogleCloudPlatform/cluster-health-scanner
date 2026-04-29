@@ -6,6 +6,9 @@ import os
 import re
 import subprocess
 import json
+import yaml
+
+
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,6 +20,13 @@ from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
+
+
+def boolean_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:bool", str(data))
+
+
+yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
 
@@ -263,14 +273,7 @@ class SlurmScheduler(BaseScheduler):
         )
         with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
-                template_content = f.read()
-
-        if nodes:
-            nodes_str = json.dumps(nodes)
-        else:
-            nodes_str = "[]"
-
-        tests_str = json.dumps(tests) if tests else "[]"
+                config = yaml.safe_load(f)
 
         tcp_interfaces = self._discover_network_interfaces()
         if not tcp_interfaces:
@@ -285,21 +288,21 @@ class SlurmScheduler(BaseScheduler):
             self._app_data and self._app_data.get_images_dir()
         ) or "{workload_input_dir}"
 
-        rendered_content = template_content.format(
-            nodes=nodes_str,
-            machine_type=machine_type,
-            tests=tests_str,
-            images_dir=images_dir_value,
-            tcp_interfaces=tcp_interfaces_str,
-            timeout=timeout,
-            deadline=deadline,
-        )
-        logger.debug("Configuration: %r", rendered_content)
+        variables = config["ramble"]["variables"]
+        variables["nodes"] = nodes or []
+        variables["machine_type"] = machine_type
+        variables["tests"] = tests or []
+        variables["container_dir"] = images_dir_value
+        variables["tcp_interfaces"] = tcp_interfaces_str
+        variables["timeout"] = timeout
+        variables["deadline"] = deadline
+
+        logger.debug("Configuration: %r", config)
 
         self._write_topology_json(workspace_config_dir)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
-            f.write(rendered_content)
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     def check_jobs_running(self, job_ids: list[str]) -> bool:
         """Checks if the given jobs are still running."""

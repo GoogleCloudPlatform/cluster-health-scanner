@@ -4,18 +4,20 @@ ramble:
   config:
     overwrite_inventories: True
   variables:
-    nodes: ["node1", "node2"]
+    nodes:
+    - node1
+    - node2
     n_nodes: 1
     processes_per_node: 1
     n_ranks: 1
     machine_type: a4
-    tests: [{"name": "gemm"}]
+    tests:
+    - name: gemm
     scheduler: slurm
     container_dir: <HOME_DIR>/.local/share/chs/images
-    tcp_interfaces: "enp0s1,enp0s2"
+    tcp_interfaces: enp0s1,enp0s2
     timeout: 600
     deadline: 2400
-
   applications:
     chs:
       workloads:
@@ -23,4 +25,4 @@ ramble:
           experiments:
             chs:
               variables:
-                placeholder: "true"
+                placeholder: 'true'
