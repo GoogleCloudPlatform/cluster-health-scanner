@@ -14,17 +14,22 @@ class TestHelper:
         return textwrap.indent(value.strip(), prefix)
 
     @staticmethod
-    def _k8s_gpu_settings(variables, nodes_str=None):
+    def _k8s_gpu_settings(variables, nodes_str=None, nodes_list=None):
         affinity_yaml = ""
+        node_affinity_only_yaml = ""
         if nodes_str:
-            affinity_yaml = f'''nodeAffinity:
+            node_affinity_only_yaml = f"""nodeAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
     nodeSelectorTerms:
     - matchExpressions:
       - key: kubernetes.io/hostname
         operator: In
         values:
-{nodes_str}
+{nodes_str}"""
+
+            affinity_yaml = (
+                node_affinity_only_yaml
+                + '''
 podAntiAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
   - labelSelector:
@@ -32,8 +37,22 @@ podAntiAffinity:
       - key: jobset.sigs.k8s.io/jobset-name
         operator: Exists
     topologyKey: "kubernetes.io/hostname"'''
+            )
 
         variables["affinity_yaml"] = affinity_yaml
+        variables["node_affinity_only_yaml"] = node_affinity_only_yaml
+        lines = node_affinity_only_yaml.split("\n")
+        variables["cd_affinity_yaml"] = (
+            lines[0] + "\n" + textwrap.indent("\n".join(lines[1:]), "        ")
+        )
+
+        if nodes_list:
+            expr = " || ".join(
+                [f"device.pool == '{name}'" for name in nodes_list]
+            )
+            variables["cel_filter_expression"] = expr if expr else "true"
+        else:
+            variables["cel_filter_expression"] = "device.pool == '{node}'"
 
     @staticmethod
     def _get_nccl_nodes_str(scheduler, nodes):
@@ -149,6 +168,7 @@ podAntiAffinity:
         ctx_vars["nodes"] = nodes_list
         ctx_vars["n_nodes"] = len(nodes_list)
         sched_nodes_str = TestHelper._get_nccl_nodes_str(scheduler, nodes_list)
+
         context_dict = {
             "variables": ctx_vars,
         }
@@ -165,7 +185,9 @@ podAntiAffinity:
             )
 
         elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(ctx_vars, sched_nodes_str)
+            TestHelper._k8s_gpu_settings(
+                ctx_vars, sched_nodes_str, nodes_list=nodes_list
+            )
 
         if test_type == "nccl-pairwise":
             experiment_name = (

@@ -160,6 +160,18 @@ class GkeJobset(WorkflowManagerBase):
         description="Raw YAML for container securityContext (e.g. privileged)",
     )
 
+    workflow_manager_variable(
+        name="custom_resources_yaml",
+        default="",
+        description="Raw YAML for extra top-level Kubernetes resources",
+    )
+
+    workflow_manager_variable(
+        name="pod_resource_claims_yaml",
+        default="",
+        description="Raw YAML for Pod spec.template.spec.resourceClaims",
+    )
+
     def _yaml_block(self, var_name, key_name, indent_spaces):
         """Constructs a full YAML key-value block with proper indentation."""
         val = self.app_inst.expander.expand_var_name(var_name)
@@ -281,8 +293,17 @@ class GkeJobset(WorkflowManagerBase):
         mvol_add = self._yaml_append("extra_volumes_yaml", 14)
         mmnt_add = self._yaml_append("extra_volume_mounts_yaml", 16)
 
+        custom_res = self.app_inst.expander.expand_var_name(
+            "custom_resources_yaml"
+        ).replace(raw_job_name, sanitized_job_name)
+        pod_claims = self._yaml_block(
+            "pod_resource_claims_yaml", "resourceClaims", 14
+        ).replace(raw_job_name, sanitized_job_name)
+
         priv_key, pub_key = self._generate_ssh_keys()
         return {
+            "custom_resources_section": custom_res,
+            "pod_resource_claims_section": pod_claims,
             "jobset_labels_section": jl,
             "jobset_annotations_section": ja,
             "pod_labels_section": pl,

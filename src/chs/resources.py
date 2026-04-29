@@ -140,6 +140,9 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
             "nvidia-smi",
             "stream",
             "gemm",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-single-node",
         ],
     },
 }

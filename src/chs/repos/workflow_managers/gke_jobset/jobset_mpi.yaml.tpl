@@ -1,3 +1,4 @@
+{custom_resources_section}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -39,6 +40,7 @@ spec:
 {affinity_section}
 {tolerations_section}
 {init_containers_section}
+{pod_resource_claims_section}
               volumes:
               - name: mpi-id
                 secret:
