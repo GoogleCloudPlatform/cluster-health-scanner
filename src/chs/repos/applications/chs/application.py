@@ -206,8 +206,14 @@ class Chs(ExecutableApplication):
 
                 for workload in workloads:
                     experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
                     contexts = TestHelper.nccl_test(
-                        test_vars, experiment_name, configs, test.name, topology
+                        local_vars,
+                        experiment_name,
+                        configs,
+                        test.name,
+                        topology,
                     )
                     for context in contexts:
                         self.experiment_set.render_chained_experiments(
@@ -215,30 +221,39 @@ class Chs(ExecutableApplication):
                         )
             elif test.name == "dcgm":
                 application_name = "nvidia-dcgm"
-                experiment_name = self.expander.experiment_name
+                experiment_name = f"{self.expander.experiment_name}-{test.name}-level-{{diag_level}}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
 
                 context = TestHelper.dcgm_test(
-                    test_vars, experiment_name, deepcopy(configs)
+                    local_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "diag", context
                 )
             elif test.name == "stream":
                 application_name = "nvidia-stream"
-                experiment_name = self.expander.experiment_name
+                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
 
                 context = TestHelper.stream_test(
-                    test_vars, experiment_name, deepcopy(configs)
+                    local_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "standard", context
                 )
             elif test.name == "nvidia-smi":
                 application_name = "nvidia-smi"
-                experiment_name = self.expander.experiment_name
+                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
 
                 context = TestHelper.nvidia_smi_test(
-                    test_vars, experiment_name, deepcopy(configs)
+                    local_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "local", context
@@ -248,9 +263,11 @@ class Chs(ExecutableApplication):
                 workloads = test.workloads if test.workloads else ["check"]
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    experiment_name = f"{self.expander.experiment_name}-{workload}-{test.name}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
                     context = TestHelper.gemm_test(
-                        test_vars, experiment_name, deepcopy(configs)
+                        local_vars, experiment_name, deepcopy(configs)
                     )
                     self.experiment_set.render_chained_experiments(
                         application_name, workload, context

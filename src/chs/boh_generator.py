@@ -217,9 +217,9 @@ class BOHGenerator:
 
         for exp in data.get("experiments", []):
             exp_name = exp.get("experiment_name", "")
-            # Experiment cluster_health_diagnostics is used to inject other
-            # experiments, not required for BoH; hardcoding the skip for now.
-            if exp_name == "cluster_health_diagnostics":
+            # Experiment chs is used to inject other experiments;
+            # hardcoding the skip for now.
+            if exp_name == "chs":
                 continue
 
             test_result = pb.TestResult()

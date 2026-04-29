@@ -259,12 +259,12 @@ class TestBOHGenerator(unittest.TestCase):
             self.assertEqual(len(report.test_results), 0)
             mock_logger.error.assert_called_once()
 
-    def test_ignore_cluster_health_diagnostics(self):
-        """Test that cluster_health_diagnostics experiment is ignored."""
+    def test_ignore_chs(self):
+        """Test that chs experiment is ignored."""
         data = {
             "experiments": [
                 {
-                    "experiment_name": "cluster_health_diagnostics",
+                    "experiment_name": "chs",
                     "SUCCESS_CRITERIA": {"criteria1": "PASSED"},
                 },
                 {

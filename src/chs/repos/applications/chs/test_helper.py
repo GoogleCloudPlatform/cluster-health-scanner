@@ -272,7 +272,7 @@ podAntiAffinity:
 
         ctx_vars["node"] = ctx_vars.get("nodes")
 
-        experiment_template_name = f"{experiment_name}-nvidia-smi-{{node}}"
+        experiment_template_name = f"{experiment_name}-{{node}}"
 
         context_dict = {
             "variables": ctx_vars,
@@ -303,9 +303,7 @@ podAntiAffinity:
         ctx_vars["node"] = ctx_vars.get("nodes")
 
         modifiers = []
-        experiment_template_name = (
-            f"{experiment_name}-dcgm-level-{{diag_level}}-{{node}}"
-        )
+        experiment_template_name = f"{experiment_name}-{{node}}"
 
         context_dict = {
             "variables": ctx_vars,
@@ -338,7 +336,7 @@ podAntiAffinity:
         ctx_vars["node"] = ctx_vars.get("nodes")
 
         modifiers = []
-        experiment_template_name = f"{experiment_name}-stream-{{node}}"
+        experiment_template_name = f"{experiment_name}-{{node}}"
 
         context_dict = {
             "variables": ctx_vars,
@@ -371,7 +369,7 @@ podAntiAffinity:
         ctx_vars["node"] = ctx_vars.get("nodes")
 
         modifiers = []
-        experiment_template_name = f"{experiment_name}-gemm-{{node}}"
+        experiment_template_name = f"{experiment_name}-{{node}}"
 
         context_dict = {
             "variables": ctx_vars,

@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "nccl-tests" = "chs" ]; then
+    echo "Skipping JobSet submission for nccl-tests scaffolding experiment."
+    echo "Submitted chs-nccl-cluster-all-to-all at $(date)" > <WORKSPACE_ROOT>/experiments/nccl-tests/all-to-all/chs-nccl-cluster-all-to-all/chs-nccl-cluster-all-to-all.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-to-all/chs-nccl-cluster-all-to-all/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-to-all/chs-nccl-cluster-all-to-all/jobset.yaml"
+echo "Submitted chs-nccl-cluster-all-to-all at $(date)" > <WORKSPACE_ROOT>/experiments/nccl-tests/all-to-all/chs-nccl-cluster-all-to-all/chs-nccl-cluster-all-to-all.out
+

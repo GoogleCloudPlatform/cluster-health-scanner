@@ -330,7 +330,14 @@ class GKEScheduler(BaseScheduler):
                 "jobset.sigs.k8s.io/jobset-name in "
                 f"({','.join(failed_jobset_ids)})"
             )
-            args = ["get", "jobs", "-l", label_selector, "-o", "json"]
+            args = [
+                "get",
+                "jobs",
+                "-l",
+                label_selector,
+                "-o",
+                "json",
+            ]
             jobs_output = self._run_kubectl(args)
             if not jobs_output:
                 return

@@ -22,6 +22,6 @@ ramble:
       workloads:
         cluster_health:
           experiments:
-            cluster_health_diagnostics:
+            chs:
               variables:
                 placeholder: "true"

@@ -1,0 +1,31 @@
+#!/bin/bash
+#SBATCH --deadline=<DEADLINE>
+#SBATCH --exclusive
+#SBATCH --gpu-bind=single:1
+#SBATCH --gpus-per-node 8
+#SBATCH --ntasks-per-node 8
+#SBATCH --time=10
+#SBATCH -J chs-stream
+#SBATCH -N 1
+#SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/slurm-%j.err
+#SBATCH -o <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/slurm-%j.out
+#SBATCH -w node2
+
+# ****************************************************
+# * Workflow manager: slurm
+# * Execution script is: <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/slurm_experiment_sbatch
+# * If this file is not the same as the above path, it is unlikely that this script
+# * is used when `ramble on` executes experiments.
+# ****************************************************
+
+
+cd <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2
+
+scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/hostfile
+
+rm -f "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/chs-stream-node2.out"
+touch "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/chs-stream-node2.out"
+scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_config
+srun -l --container-workdir /workspace --container-image <HOME_DIR>/.local/share/chs/images/hpc-benchmarks:25.09.sqsh --container-writable --wait=60 ./stream-gpu-test.sh --n 1500000000 --gpu-affinity  --cpu-affinity 0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111 --mem-affinity 0:0:0:0:1:1:1:1 >> "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/chs-stream-node2.out" 2>&1
+date +%s > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_script_end_time
+

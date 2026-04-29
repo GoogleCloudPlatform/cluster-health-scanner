@@ -211,12 +211,16 @@ class GkeJobset(WorkflowManagerBase):
         raw_job_name = expander.expand_var_name("job_name")
         # K8S resource names can be max 63 chars and no `_` is supported
         sanitized_job_name = raw_job_name.replace("_", "-").lower()
-        if len(sanitized_job_name) > 50:
-            name_hash = uuid.uuid4().hex[:6]
 
+        u = uuid.uuid4().hex[:6]
+        max_base_len = 40
+
+        if len(sanitized_job_name) > max_base_len:
             sanitized_job_name = (
-                sanitized_job_name[:43].strip("-") + "-" + name_hash
+                sanitized_job_name[:max_base_len].strip("-") + "-" + u
             )
+        else:
+            sanitized_job_name = sanitized_job_name.strip("-") + "-" + u
 
         raw_cmd = expander.expand_var_name("command")
         raw_cmd = re.sub(r'>>\s*"[^"]+"\s*2>&1', "", raw_cmd)

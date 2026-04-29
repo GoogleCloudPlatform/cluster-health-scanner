@@ -310,7 +310,12 @@ class SlurmScheduler(BaseScheduler):
             )
             return False
 
-        cmd = ["squeue", "--jobs", ",".join(job_ids), "--noheader"]
+        cmd = [
+            "squeue",
+            "--jobs",
+            ",".join(job_ids),
+            "--noheader",
+        ]
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=False
