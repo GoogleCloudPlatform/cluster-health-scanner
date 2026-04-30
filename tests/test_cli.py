@@ -85,6 +85,9 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        self.mock_scheduler.run_preflight_checks.side_effect = (
+            lambda tests, *args, **kwargs: tests
+        )
 
         self.mock_load_suite = self.enterContext(
             mock.patch("chs.cli.load_suite", autospec=True)
@@ -311,6 +314,9 @@ class TestCli(unittest.TestCase):
             s = mock.Mock()
             s.name = name
             s.get_nodes_under_test.return_value = ["node1"]
+            s.run_preflight_checks.side_effect = (
+                lambda tests=None, *args, **kwargs: tests
+            )
             return s
 
         mock_get_scheduler.side_effect = get_scheduler_side_effect
@@ -628,7 +634,7 @@ class TestCli(unittest.TestCase):
     def test_run_action_chs_exception(self):
         """Test that run_action handles ChsException and archives."""
         self.mock_scheduler.name = "slurm"
-        self.mock_rm_instance.create_workspace.side_effect = (
+        self.mock_rm_instance.setup_workspace.side_effect = (
             exceptions.ChsException("Mock failure")
         )
         result = self.runner.invoke(
@@ -647,7 +653,7 @@ class TestCli(unittest.TestCase):
 
         self.mock_scheduler.name = "slurm"
 
-        self.mock_rm_instance.create_workspace.side_effect = OSError(
+        self.mock_rm_instance.setup_workspace.side_effect = OSError(
             "Permission denied"
         )
         result = self.runner.invoke(

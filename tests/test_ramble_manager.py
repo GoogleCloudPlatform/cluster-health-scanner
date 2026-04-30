@@ -549,6 +549,9 @@ mycriteria:
     def test_archive_and_upload_workspace_success(self):
         """Test archive_and_upload_workspace with bucket configured."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        os.makedirs(
+            os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
+        )
         self.mock_app_data.get_bucket.return_value = "my-bucket"
 
         with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
@@ -642,6 +645,9 @@ mycriteria:
     def test_archive_success(self):
         """Test archive calls both archival methods."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        os.makedirs(
+            os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
+        )
         with (
             mock.patch.object(manager, "archive_and_upload_boh") as mock_boh,
             mock.patch.object(
@@ -655,6 +661,9 @@ mycriteria:
     def test_archive_boh_failure(self):
         """Test archive calls workspace archival even if BOH archival fails."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        os.makedirs(
+            os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
+        )
         with (
             mock.patch.object(manager, "archive_and_upload_boh") as mock_boh,
             mock.patch.object(

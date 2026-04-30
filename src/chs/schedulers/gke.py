@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from chs.schedulers.base import BaseScheduler
 from chs.exceptions import NetworkDiscoveryException
 from chs.utils.lifecycle import JobStatus
+from chs.preflights.gke_preflight import GkePreflightChecker
 
 
 def boolean_representer(dumper, data):
@@ -46,7 +47,6 @@ class GKEScheduler(BaseScheduler):
         self.nodes_arg = nodes
         self.nodepool_arg = nodepool
         self._resolved_nodes: list[str] | None = None
-
         if nodelist:
             logger.warning(
                 "nodelist argument is ignored for GKE scheduler. Did you want"
@@ -57,6 +57,14 @@ class GKEScheduler(BaseScheduler):
                 "partition argument is ignored for GKE scheduler. Did you want"
                 " to use nodes or nodepool?"
             )
+
+    def run_preflight_checks(
+        self,
+        tests: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Checks for JobSet and Kueue dependencies on GKE."""
+        preflight_checker = GkePreflightChecker(self)
+        return preflight_checker.check(tests)
 
     @property
     def name(self) -> str:
@@ -267,6 +275,7 @@ class GKEScheduler(BaseScheduler):
             )
             return False
 
+        still_running = False
         try:
             # Pass all job IDs at once and ignore ones that were already deleted
             args = (
@@ -288,8 +297,6 @@ class GKEScheduler(BaseScheduler):
                 if data.get("kind") == "List"
                 else [data]
             )
-
-            still_running = False
 
             for job_data in items:
                 conditions = job_data.get("status", {}).get("conditions", [])

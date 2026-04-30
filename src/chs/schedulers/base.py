@@ -20,6 +20,17 @@ class BaseScheduler(abc.ABC):
         """
         self._app_data = app_data
 
+    def run_preflight_checks(
+        self,
+        tests: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Runs preflight checks for the scheduler. Optional to implement."""
+        return tests
+
+    def cleanup(self) -> None:
+        """Cleans up resources created by the scheduler. Optional."""
+        pass
+
     @property
     @abc.abstractmethod
     def name(self) -> str:

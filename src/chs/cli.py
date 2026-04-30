@@ -280,6 +280,10 @@ def run_action(
 
     with archive_workspace(ramble_manager, on_success=False):
         try:
+            logger.info("Running preflight checks")
+            if scheduler_obj:
+                tests = scheduler_obj.run_preflight_checks(tests)
+
             ramble_manager.create_workspace()
             ramble_manager.add_custom_repository()
             ramble_manager.configure_workspace(
@@ -294,7 +298,14 @@ def run_action(
                 logger.info("Setup complete. Skipping experiment execution.")
                 return None
 
-            return ramble_manager.execute_experiments()
+            job_ids = ramble_manager.execute_experiments()
+            if not job_ids:
+                raise ex.JobSubmissionFailureException(
+                    f"Job submission failed for workspace: {workspace_name}. "
+                    "Please check internal.log in the workspace directory "
+                    "for details."
+                )
+            return job_ids
         except (OSError, subprocess.CalledProcessError) as e:
             raise ex.ChsExecutionException(
                 f"CHS execution failed: {e!r}"
@@ -647,12 +658,6 @@ def run(
     if dry_run:
         logger.info("Dry run completed. Workspace setup is ready.")
         return result
-
-    if not job_ids:
-        raise ex.JobSubmissionFailureException(
-            f"Job submission failed for workspace: {workspace_name}. "
-            f"Please check internal.log in the workspace directory for details."
-        )
 
     logger.info("Run submitted successfully.")
     logger.info("Job IDs: %s", ", ".join(job_ids))

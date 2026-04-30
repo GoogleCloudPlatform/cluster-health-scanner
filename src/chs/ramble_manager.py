@@ -851,6 +851,16 @@ class RambleManager:
 
     def archive(self) -> None:
         """Orchestrates archival and upload of BoH and workspace."""
+        if not os.path.exists(self.path) or not os.path.exists(
+            os.path.join(self.path, ".ramble-workspace")
+        ):
+            logger.debug(
+                "Workspace %s is not a valid Ramble workspace. "
+                "Skipping archival.",
+                self.path,
+            )
+            return
+
         try:
             self.archive_and_upload_boh()
         finally:

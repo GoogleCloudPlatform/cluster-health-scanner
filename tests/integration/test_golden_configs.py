@@ -47,6 +47,11 @@ def mock_cluster_env(tmp_path, monkeypatch):
         '      echo \'{"items": [{"metadata": {"name": "default"}, '
         '"spec": {"type": "L3"}}, {"metadata": {"name": "gpu-net-1"}, '
         '"spec": {"type": "Device"}}]}\'\n'
+        '    elif [[ "$*" == *"get crd"* ]]; then\n'
+        '      echo -e "jobsets.jobset.sigs.k8s.io'
+        '\\nkueues.kueue.sigs.k8s.io"\n'
+        '    elif [[ "$*" == *"get deployment -n kueue-system"* ]]; then\n'
+        '      echo "registry.k8s.io/kueue/kueue:v0.14.5"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"
