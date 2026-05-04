@@ -49,13 +49,12 @@ class ResultsViewer:
         try:
             with open(self.boh_path, "r") as f:
                 content = f.read()
-                try:
-                    json_format.Parse(
-                        content, self.boh, ignore_unknown_fields=True
-                    )
-                except json_format.ParseError:
-                    # Fallback to TextProto (in case it was written as such)
-                    text_format.Parse(content, self.boh)
+            try:
+                json_format.Parse(content, self.boh, ignore_unknown_fields=True)
+            except json_format.ParseError:
+                # Fallback to TextProto (in case it was written as such)
+                text_format.Parse(content, self.boh)
+
         except FileNotFoundError as e:
             logger.error(
                 "Bill of Health file not found at %s: %s", self.boh_path, e
@@ -154,6 +153,7 @@ class ResultsViewer:
             if hasattr(plugin, "set_topology"):
                 plugin.set_topology(self.topology)
             detail = plugin.render_detail(results)
+
             has_errors = any(
                 (
                     m.key.endswith("Error Detected")

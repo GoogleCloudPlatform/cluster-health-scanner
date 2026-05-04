@@ -26,13 +26,13 @@ class TestResultsViewer(unittest.TestCase):
             "chs_version": "1.0.0",
             "test_results": [
                 {
-                    "name": "test1",
+                    "test_name": "test1",
                     "result_status": "RESULT_STATUS_SUCCESS",
                     "target_resource_ids": ["node1"],
                     "metrics": [{"key": "m1", "value": 1.0, "unit": "GB/s"}],
                 },
                 {
-                    "name": "test2",
+                    "test_name": "test2",
                     "result_status": "RESULT_STATUS_FAILED",
                     "target_resource_ids": ["node2"],
                     "metrics": [{"key": "m2", "value": "some_error"}],
@@ -87,7 +87,9 @@ class TestResultsViewer(unittest.TestCase):
         viewer.show_details(tests=["test1"])
         self.assertTrue(mock_print.called)
         # Should only print test1
-        self.assertEqual(mock_print.call_count, 1)  # One panel for test1
+        self.assertEqual(
+            mock_print.call_count, 2
+        )  # One panel for test1 and one for separator newline
 
     @mock.patch.object(Console, "print")
     def test_show_details_filtered_by_resource(self, mock_print):

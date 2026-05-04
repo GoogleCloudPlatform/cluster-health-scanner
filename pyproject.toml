@@ -15,6 +15,7 @@ dependencies = [
     "protobuf",
     "rich",
     "pre_commit",
+    "google-cloud-storage",
 ]
 
 [project.optional-dependencies]

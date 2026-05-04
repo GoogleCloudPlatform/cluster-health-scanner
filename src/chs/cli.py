@@ -11,9 +11,14 @@ import json
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
+import tarfile
+import tempfile
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import urlparse
+from google.cloud import storage
 
 import click
 
@@ -369,27 +374,120 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
             return run_id
 
 
+def _get_gcs_blob(gcs_path: str) -> storage.Blob:
+    """Helper to get GCS blob from URI."""
+    parsed_uri = urlparse(gcs_path)
+    bucket_name = parsed_uri.netloc
+    blob_name = parsed_uri.path.lstrip("/")
+
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    return bucket.blob(blob_name)
+
+
+def _download_file(gcs_path: str, dest_path: str) -> None:
+    """Downloads a file from GCS."""
+    logger.info("Downloading file from GCS: %s", gcs_path)
+    try:
+        blob = _get_gcs_blob(gcs_path)
+        blob.download_to_filename(dest_path)
+    except Exception as e:
+        raise ex.ChsException(f"Failed to download file from GCS: {e}") from e
+
+
+def _write_file_content(f, dest_path: str) -> None:
+    """Writes content of extracted file to dest_path."""
+    with open(dest_path, "wb") as out:
+        shutil.copyfileobj(f, out)
+
+
+def _extract_from_archive(gcs_path: str, dest_path: str) -> None:
+    """Extracts bill_of_health.json from GCS archive."""
+    logger.info("Reading results from GCS archive: %s", gcs_path)
+    try:
+        blob = _get_gcs_blob(gcs_path)
+        with blob.open("rb") as gcs_file:
+            with tarfile.open(fileobj=gcs_file, mode="r:gz") as tar:
+                f = None
+                try:
+                    f = tar.extractfile("bill_of_health.json")
+                    if f is None:
+                        logger.debug(
+                            "bill_of_health.json found but is not a regular"
+                            " file"
+                        )
+                except KeyError:
+                    logger.debug(
+                        "bill_of_health.json not found at root, searching"
+                        " archive"
+                    )
+
+                if f is None:
+                    boh_member = None
+                    for member in tar.getmembers():
+                        if member.name.endswith("bill_of_health.json"):
+                            boh_member = member
+                            break
+                    if not boh_member:
+                        raise ex.ChsException("BoH not found in archive")
+                    f = tar.extractfile(boh_member)
+                    if f is None:
+                        raise ex.ChsException(
+                            "BoH found in archive but is not a regular file"
+                        )
+
+                _write_file_content(f, dest_path)
+    except ex.ChsException:
+        raise
+    except Exception as e:
+        raise ex.ChsException(f"Failed to extract from GCS archive: {e}") from e
+
+
+def _download_boh_from_gcs(gcs_path: str, dest_path: str) -> None:
+    """Downloads Bill of Health from GCS to dest_path."""
+    if not gcs_path.startswith("gs://"):
+        gcs_path = "gs://" + gcs_path
+
+    if gcs_path.endswith(".json"):
+        _download_file(gcs_path, dest_path)
+    elif gcs_path.endswith(".tar.gz") or gcs_path.endswith(".tgz"):
+        _extract_from_archive(gcs_path, dest_path)
+    else:
+        # Directory
+        gcs_json_path = gcs_path.rstrip("/") + "/bill_of_health.json"
+        _download_file(gcs_json_path, dest_path)
+
+
 def _show_results(
     app_data: ChsAppData,
     run_id: str | None,
     tests: str | None = None,
     resources: str | None = None,
+    gcs: str | None = None,
 ) -> None:
     """Show Bill of Health results for a run."""
     workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
-    if not run_id:
-        run_id = app_data.get_latest_run_id()
-        logger.info("No run_id provided. Using latest run: %s", run_id)
-        logger.info("Showing results for latest run: %s", run_id)
 
-    boh_path = workspaces_dir / run_id / "bill_of_health.json"
-    if not boh_path.exists():
-        raise ex.BillOfHealthNotFoundException(
-            f"Could not find bill of health at {boh_path}. "
-            f"Have you run 'chs analyze {run_id}'?"
-        )
+    if gcs:
+        with tempfile.NamedTemporaryFile(
+            delete=True, suffix=".json"
+        ) as tmp_file:
+            _download_boh_from_gcs(gcs, tmp_file.name)
+            viewer = ResultsViewer(tmp_file.name)
+    else:
+        # Local run
+        if not run_id:
+            run_id = app_data.get_latest_run_id()
+            logger.info("No run_id provided. Using latest run: %s", run_id)
+            logger.info("Showing results for latest run: %s", run_id)
 
-    viewer = ResultsViewer(boh_path)
+        boh_path = workspaces_dir / run_id / "bill_of_health.json"
+        if not boh_path.exists():
+            raise ex.BillOfHealthNotFoundException(
+                f"Could not find bill of health at {boh_path}. "
+                f"Have you run 'chs analyze {run_id}'?"
+            )
+        viewer = ResultsViewer(boh_path)
 
     parsed_tests = _parse_str_to_list(tests)
     parsed_resources = _parse_str_to_list(resources)
@@ -743,19 +841,25 @@ def cancel(obj, run_id: str | None) -> str:
     help="Comma-separated list of resource names to show details for.",
     callback=validators.validate_non_empty_string,
 )
+@click.option(
+    "--gcs",
+    help="Path to Bill of Health in GCS (bucket/path/to/file)",
+    callback=validators.validate_non_empty_string,
+)
 @click.pass_obj
 def results(
     obj,
     run_id: str | None,
     tests: str | None,
     resources: str | None,
+    gcs: str | None,
 ) -> None:
     """Show Bill of Health results for a run.
 
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
     """
-    _show_results(obj["app_data"], run_id, tests, resources)
+    _show_results(obj["app_data"], run_id, tests, resources, gcs)
 
 
 @cli.group()
