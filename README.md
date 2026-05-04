@@ -298,7 +298,7 @@ CHS expects a standard Ramble installation. It looks for the Ramble setup script
 
 The following features are currently in development or planned:
 
--   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs, and Bare Metals is planned.
+-   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs and Bare Metals is planned.
 -   **Dynamic Listing**: The `list` command currently acts as a placeholder and needs to be connected to the Ramble registry to dynamically list available suites and tests.
 -   **Workspace Cleanup**: A `cleanup` command or logic to manage old workspaces is pending implementation.
 -   **Configurable Paths**: Support for user-defined workspace directories via configuration or flags.
