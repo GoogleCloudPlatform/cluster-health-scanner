@@ -154,9 +154,11 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
         ],
         "tpu7x": [
             "tpu-info",
+            "gemm",
         ],
         "tpuv6e": [
             "tpu-info",
+            "gemm",
         ],
     },
 }

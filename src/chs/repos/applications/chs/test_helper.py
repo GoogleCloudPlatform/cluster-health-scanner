@@ -1,6 +1,7 @@
 import copy
 import datetime
 import logging
+import os
 import textwrap
 from ramble.context import create_context_from_dict
 
@@ -55,7 +56,7 @@ podAntiAffinity:
             variables["cel_filter_expression"] = "device.pool == '{node}'"
 
     @staticmethod
-    def _get_nccl_nodes_str(scheduler, nodes):
+    def _get_nodes_str(scheduler, nodes):
         if not nodes:
             return ""
         if scheduler == "slurm":
@@ -167,7 +168,7 @@ podAntiAffinity:
         scheduler = ctx_vars.get("scheduler", "slurm")
         ctx_vars["nodes"] = nodes_list
         ctx_vars["n_nodes"] = len(nodes_list)
-        sched_nodes_str = TestHelper._get_nccl_nodes_str(scheduler, nodes_list)
+        sched_nodes_str = TestHelper._get_nodes_str(scheduler, nodes_list)
 
         context_dict = {
             "variables": ctx_vars,
@@ -438,3 +439,59 @@ podAntiAffinity:
                 ctx_vars, TestHelper._yaml_block(" - {node}", 12)
             )
         return create_context_from_dict(experiment_template_name, context_dict)
+
+    @staticmethod
+    def _load_benchmark_config(filename):
+        if not filename:
+            return ""
+        chs_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(chs_dir, "configs", "benchmarks", filename)
+        try:
+            with open(path, "r") as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Failed to read benchmark config {path}: {e}")
+            raise e
+
+    @staticmethod
+    def _load_and_escape_benchmark_config(ctx_vars, default_filename):
+        benchmarks_yaml_file = ctx_vars.get("benchmarks_yaml_file")
+        if not benchmarks_yaml_file:
+            benchmarks_yaml_file = default_filename
+            ctx_vars["benchmarks_yaml_file"] = benchmarks_yaml_file
+
+        content = TestHelper._load_benchmark_config(benchmarks_yaml_file)
+        escaped = (
+            content.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+        )
+        ctx_vars["benchmarks_yaml_escaped"] = escaped
+
+    @staticmethod
+    def tpu_gemm_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "gke")
+        machine_type = ctx_vars.get("machine_type", "tpu7x")
+        nodes_list = ctx_vars.get("nodes", [])
+
+        ctx_vars["n_nodes"] = len(nodes_list)
+        sched_nodes_str = TestHelper._get_nodes_str(scheduler, nodes_list)
+
+        context_dict = {
+            "variables": ctx_vars,
+            "modifiers": [],
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "tpu-gemm"
+        )
+
+        TestHelper._load_and_escape_benchmark_config(
+            ctx_vars, "gemm_16384_bf16.yaml"
+        )
+
+        if scheduler == "gke":
+            TestHelper._k8s_settings(
+                ctx_vars, sched_nodes_str, nodes_list=nodes_list
+            )
+        return create_context_from_dict(experiment_name, context_dict)

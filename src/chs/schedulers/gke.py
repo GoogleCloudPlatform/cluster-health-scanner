@@ -469,12 +469,16 @@ class GKEScheduler(BaseScheduler):
 
         return statuses
 
-    def fetch_job_log(self, job_id: str, log_path: str) -> None:
-        """Fetches the log for a completed GKE job."""
-        logger.debug("Fetching logs for JobSet %s to %s", job_id, log_path)
-        try:
-            # Find the head pod (rank 0)
-            # This logic mirrors batch_wait.tpl
+    @staticmethod
+    def _is_tpu_job(job_id: str) -> bool:
+        """Checks if the job is a TPU benchmark based on naming convention."""
+        return "tpu-" in job_id
+
+    def _get_pod_names(
+        self, job_id: str, head_pod_only: bool = False
+    ) -> list[str]:
+        """Queries GKE for pod names."""
+        if head_pod_only:
             args = [
                 "get",
                 "pods",
@@ -483,22 +487,47 @@ class GKEScheduler(BaseScheduler):
                 "-o",
                 "jsonpath={.items[0].metadata.name}",
             ]
-            head_pod = self._run_kubectl(args)
+        else:
+            args = [
+                "get",
+                "pods",
+                "-l",
+                f"jobset.sigs.k8s.io/jobset-name={job_id}",
+                "-o",
+                "jsonpath={.items[*].metadata.name}",
+            ]
+        try:
+            output = self._run_kubectl(args)
+            return [p for p in output.split() if p]
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to query pods for JobSet %s: %s", job_id, e)
+            return []
 
-            if not head_pod:
-                logger.warning("Head pod not found for JobSet %s.", job_id)
+    def fetch_job_log(self, job_id: str, log_path: str) -> None:
+        """Fetches the log for a completed GKE job."""
+        logger.debug("Fetching logs for JobSet %s to %s", job_id, log_path)
+        try:
+            is_tpu = self._is_tpu_job(job_id)
+            pod_names = self._get_pod_names(job_id, head_pod_only=not is_tpu)
+
+            if not pod_names:
+                logger.warning(
+                    "No pods found to fetch logs for JobSet %s.", job_id
+                )
                 return
 
-            logger.debug("Found head pod: %s", head_pod)
+            logger.debug(
+                "Fetching logs from %d pods: %s", len(pod_names), pod_names
+            )
 
-            # Streaming logs to file
             with open(log_path, "w") as f:
-                subprocess.run(
-                    ["kubectl", "logs", head_pod],
-                    stdout=f,
-                    check=True,
-                    text=True,
-                )
+                for pod_name in pod_names:
+                    subprocess.run(
+                        ["kubectl", "logs", pod_name],
+                        stdout=f,
+                        check=True,
+                        text=True,
+                    )
             logger.debug("Logs saved to %s", log_path)
 
         except subprocess.CalledProcessError as e:

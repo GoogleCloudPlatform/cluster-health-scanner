@@ -63,6 +63,11 @@ def parse_tests_config(raw_input) -> TestsModel:
     return TestsModel(tests=[])
 
 
+def is_tpu(machine_type: str) -> bool:
+    """Returns True if the machine type is a TPU."""
+    return machine_type.startswith("tpu") if machine_type else False
+
+
 class Chs(ExecutableApplication):
     """Cluster health scanner for running diagnostics"""
 
@@ -267,16 +272,27 @@ class Chs(ExecutableApplication):
                     application_name, "local", context
                 )
             elif test.name == "gemm":
-                application_name = "nvidia-gemm"
+                machine_type = self.expander.expand_var_name(
+                    "machine_type", typed=True
+                )
+                is_tpu_machine = is_tpu(machine_type)
+                application_name = (
+                    "tpu-gemm" if is_tpu_machine else "nvidia-gemm"
+                )
                 workloads = test.workloads if test.workloads else ["check"]
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{workload}-{test.name}"
+                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
-                    context = TestHelper.gemm_test(
-                        local_vars, experiment_name, deepcopy(configs)
-                    )
+                    if is_tpu_machine:
+                        context = TestHelper.tpu_gemm_test(
+                            local_vars, experiment_name, deepcopy(configs)
+                        )
+                    else:
+                        context = TestHelper.gemm_test(
+                            local_vars, experiment_name, deepcopy(configs)
+                        )
                     self.experiment_set.render_chained_experiments(
                         application_name, workload, context
                     )

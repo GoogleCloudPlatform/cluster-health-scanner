@@ -1,0 +1,8 @@
+benchmarks:
+- benchmark_name: gemm_multiple_run
+  trace_dir: "../microbenchmarks/gemm_multiple_run_bf16"
+  csv_path: "../microbenchmarks/gemm_multiple_run_bf16"
+  xlml_metrics_dir: "../microbenchmarks/gemm_multiple_run_bf16"
+  xla_dump_dir: "../microbenchmarks/gemm_multiple_run_bf16/hlo_graphs"
+  benchmark_sweep_params:
+  - {m: 32768, k: 32768, n: 32768, num_runs: 100, dtype: 'bfloat16'}
