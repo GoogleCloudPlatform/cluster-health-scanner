@@ -18,3 +18,13 @@ a4x:
     gpus_per_node: 4
     processes_per_node: "{gpus_per_node}"
     n_ranks: "{processes_per_node}*{n_nodes}"
+tpu7x:
+  variables:
+    tpu_chips_per_node: 4
+    processes_per_node: "{tpu_chips_per_node}"
+    n_ranks: "{tpu_chips_per_node}*{n_nodes}"
+tpuv6e:
+  variables:
+    tpu_chips_per_node: 4
+    processes_per_node: "{tpu_chips_per_node}"
+    n_ranks: "{tpu_chips_per_node}*{n_nodes}"

@@ -3,7 +3,14 @@
 # TODO: Add support for dynamincally fetching the list of
 # supported machine types, suites, tests and schedulers.
 
-SUPPORTED_MACHINE_TYPES = ["a3-ultra", "a4", "a3-mega", "a4x"]
+SUPPORTED_MACHINE_TYPES = [
+    "a3-ultra",
+    "a4",
+    "a3-mega",
+    "a4x",
+    "tpu7x",
+    "tpuv6e",
+]
 SUPPORTED_TESTS = [
     "dcgm",
     "nccl-cluster",
@@ -12,6 +19,7 @@ SUPPORTED_TESTS = [
     "stream",
     "nvidia-smi",
     "gemm",
+    "tpu-info",
 ]
 SUPPORTED_SCHEDULERS = ["slurm", "gke"]
 
@@ -143,6 +151,12 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
             "nccl-cluster",
             "nccl-pairwise",
             "nccl-single-node",
+        ],
+        "tpu7x": [
+            "tpu-info",
+        ],
+        "tpuv6e": [
+            "tpu-info",
         ],
     },
 }

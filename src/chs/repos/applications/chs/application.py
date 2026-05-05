@@ -84,7 +84,15 @@ class Chs(ExecutableApplication):
         "machine_type",
         default="",
         description="Machine type to test",
-        values=["a3-high", "a3-ultra", "a4", "a3-mega", "a4x"],
+        values=[
+            "a3-high",
+            "a3-ultra",
+            "a4",
+            "a3-mega",
+            "a4x",
+            "tpu7x",
+            "tpuv6e",
+        ],
     )
 
     executable(
@@ -272,5 +280,18 @@ class Chs(ExecutableApplication):
                     self.experiment_set.render_chained_experiments(
                         application_name, workload, context
                     )
+            elif test.name == "tpu-info":
+                application_name = "tpu-info"
+                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                context = TestHelper.tpu_info_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "local", context
+                )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

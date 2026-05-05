@@ -81,6 +81,23 @@ class GKEScheduler(BaseScheduler):
         )
         return result.stdout.strip()
 
+    def _discover_tpu_topology(self, node_name: str) -> str:
+        """Queries node labels to discover TPU topology."""
+        try:
+            args = ["get", "node", node_name, "-o", "json"]
+            output = self._run_kubectl(args)
+            if not output:
+                return ""
+
+            data = json.loads(output)
+            labels = data.get("metadata", {}).get("labels", {})
+            return labels.get("cloud.google.com/gke-tpu-topology", "")
+        except Exception as e:
+            logger.warning(
+                "Failed to discover TPU topology for node %s: %s", node_name, e
+            )
+            return ""
+
     def _discover_networks(self) -> tuple[list[str], list[str]]:
         """Discovers all network names using kubectl and groups them by type.
 
@@ -237,12 +254,16 @@ class GKEScheduler(BaseScheduler):
             with open(p, "r") as f:
                 config = yaml.safe_load(f)
 
-        l3_networks, device_networks = self._discover_networks()
-        if not l3_networks or not device_networks:
-            raise NetworkDiscoveryException(
-                "Network discovery failed on GKE. "
-                "Could not identify L3 or Device networks."
-            )
+        if machine_type.startswith("tpu"):
+            l3_networks = ["default"]
+            device_networks = []
+        else:
+            l3_networks, device_networks = self._discover_networks()
+            if not l3_networks or not device_networks:
+                raise NetworkDiscoveryException(
+                    "Network discovery failed on GKE. "
+                    "Could not identify L3 or Device networks."
+                )
         all_networks = l3_networks + device_networks
         all_interfaces = [
             {"interfaceName": f"eth{i}", "network": net_name}
@@ -259,6 +280,11 @@ class GKEScheduler(BaseScheduler):
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
         variables["timeout"] = timeout
         variables["deadline"] = deadline
+
+        if machine_type.startswith("tpu") and nodes:
+            topology = self._discover_tpu_topology(nodes[0])
+            if topology:
+                variables["tpu_topology"] = topology
 
         logger.debug("Configuration: %r", config)
 

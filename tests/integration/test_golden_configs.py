@@ -52,6 +52,9 @@ def mock_cluster_env(tmp_path, monkeypatch):
         '\\nkueues.kueue.sigs.k8s.io"\n'
         '    elif [[ "$*" == *"get deployment -n kueue-system"* ]]; then\n'
         '      echo "registry.k8s.io/kueue/kueue:v0.14.5"\n'
+        '    elif [[ "$*" == *"get node"* ]]; then\n'
+        '      echo \'{"metadata": {"labels": '
+        '{"cloud.google.com/gke-tpu-topology": "2x2x1"}}}\'\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"

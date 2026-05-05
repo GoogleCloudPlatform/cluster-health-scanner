@@ -14,7 +14,7 @@ class TestHelper:
         return textwrap.indent(value.strip(), prefix)
 
     @staticmethod
-    def _k8s_gpu_settings(variables, nodes_str=None, nodes_list=None):
+    def _k8s_settings(variables, nodes_str=None, nodes_list=None):
         affinity_yaml = ""
         node_affinity_only_yaml = ""
         if nodes_str:
@@ -185,7 +185,7 @@ podAntiAffinity:
             )
 
         elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
+            TestHelper._k8s_settings(
                 ctx_vars, sched_nodes_str, nodes_list=nodes_list
             )
 
@@ -311,7 +311,7 @@ podAntiAffinity:
                 headers_dict
             )
         elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
+            TestHelper._k8s_settings(
                 ctx_vars, TestHelper._yaml_block(" - {node}", 12)
             )
         return create_context_from_dict(experiment_template_name, context_dict)
@@ -344,7 +344,7 @@ podAntiAffinity:
                 headers_dict
             )
         elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
+            TestHelper._k8s_settings(
                 ctx_vars, TestHelper._yaml_block(" - {node}", 12)
             )
         return create_context_from_dict(experiment_template_name, context_dict)
@@ -377,7 +377,7 @@ podAntiAffinity:
                 headers_dict
             )
         elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
+            TestHelper._k8s_settings(
                 ctx_vars, TestHelper._yaml_block(" - {node}", 12)
             )
         return create_context_from_dict(experiment_template_name, context_dict)
@@ -409,7 +409,32 @@ podAntiAffinity:
                 headers_dict
             )
         elif scheduler == "gke":
-            TestHelper._k8s_gpu_settings(
+            TestHelper._k8s_settings(
+                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
+            )
+        return create_context_from_dict(experiment_template_name, context_dict)
+
+    @staticmethod
+    def tpu_info_test(variables, experiment_name, configs):
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "gke")
+        machine_type = ctx_vars.get("machine_type", "tpu7x")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+        ctx_vars["n_nodes"] = len(ctx_vars["nodes"])
+        modifiers = []
+        experiment_template_name = f"{experiment_name}-{{node}}"
+
+        context_dict = {
+            "variables": ctx_vars,
+            "modifiers": modifiers,
+        }
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, "tpu-info"
+        )
+
+        if scheduler == "gke":
+            TestHelper._k8s_settings(
                 ctx_vars, TestHelper._yaml_block(" - {node}", 12)
             )
         return create_context_from_dict(experiment_template_name, context_dict)
