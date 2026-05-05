@@ -771,6 +771,36 @@ class TestBOHGenerator(unittest.TestCase):
             report.test_results[0].metrics[0].HasField("validation_criteria")
         )
 
+    @mock.patch("chs.boh_generator.ChsAppData")
+    def test_generate_system_info(self, mock_app_data_cls):
+        """Test that system info is populated from app_data."""
+        mock_app_data = mock_app_data_cls.return_value
+        mock_app_data.get_run.return_value = {
+            "command_statement": (
+                "chs run --scheduler slurm --machine-type a3-high "
+                "--dry-run --tests t1,t2"
+            ),
+        }
+
+        data = {"workspace_name": "test_workspace", "experiments": []}
+        self._write_json(data)
+
+        generator = BOHGenerator(self.test_json_path)
+        report = generator.generate()
+
+        self.assertEqual(report.report_id, "test_workspace")
+        self.assertEqual(
+            report.system_info.metadata.fields[
+                "command_statement"
+            ].string_value,
+            (
+                "chs run --scheduler slurm --machine-type a3-high "
+                "--dry-run --tests t1,t2"
+            ),
+        )
+        # Verify that other fields are NOT there
+        self.assertNotIn("scheduler", report.system_info.metadata.fields)
+
 
 if __name__ == "__main__":
     unittest.main()

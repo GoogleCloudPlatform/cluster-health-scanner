@@ -284,6 +284,25 @@ chs results
 chs results --tests nccl-cluster
 ```
 
+#### 7. `history`
+Shows the history of the last 5 runs.
+
+**Example:**
+```bash
+chs history
+```
+
+**Output:**
+Displays a table with Workspace and Details.
+
+**Example Output:**
+```
+Workspace                     Details
+------------------------------------------------------------------------------------------
+2026-05-05_16.23.13.228716    chs run --scheduler gke --machine-type a3-ultra --dry-run
+2026-05-04_19.05.29.792632    chs run --scheduler gke
+```
+
 
 ## Configuration
 

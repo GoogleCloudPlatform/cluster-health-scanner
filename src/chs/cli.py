@@ -13,6 +13,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -808,6 +809,26 @@ def run(
             job_ids=job_ids,
         )
 
+        # TODO: Revisit command statement normalization when
+        # distributing as a Docker image.
+        # Normalize command statement to start with "chs"
+        command_statement = " ".join(["chs"] + sys.argv[1:])
+
+        app_data.update_run(
+            workspace_name,
+            {
+                "run_id": workspace_name,
+                "workspace_path": os.path.join(
+                    workspaces_base_dir, workspace_name
+                ),
+                "submission_time": datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat(),
+                "scheduler": scheduler,
+                "command_statement": command_statement,
+            },
+        )
+
         if dry_run:
             logger.info("Dry run completed. Workspace setup is ready.")
             return result
@@ -925,6 +946,31 @@ def results(
     will be used.
     """
     _show_results(obj["app_data"], run_id, tests, resources, gcs)
+
+
+@cli.command()
+@click.pass_obj
+def history(obj) -> None:
+    """Show the history of last 5 runs."""
+    app_data = obj["app_data"]
+    runs = app_data.get_latest_runs(5)
+
+    if not runs:
+        click.echo("No runs found.")
+        return
+
+    click.echo(f"{'Workspace':<30} {'Details'}")
+    click.echo("-" * 90)
+    for run in runs.values():
+        run_id = run.get("run_id", "N/A")
+
+        command_statement = run.get("command_statement", "")
+        if not command_statement:
+            # Reconstruct for old runs or runs without stored statement
+            scheduler = run.get("scheduler", "unknown")
+            command_statement = f"chs run --scheduler {scheduler}"
+
+        click.echo(f"{run_id:<30} {command_statement}")
 
 
 @cli.group()

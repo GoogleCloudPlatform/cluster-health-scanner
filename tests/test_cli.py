@@ -8,6 +8,7 @@ import dataclasses
 import datetime
 import unittest
 from unittest import mock
+from typing import Any
 
 from chs import cli
 from chs import exceptions
@@ -59,6 +60,14 @@ class _ListActionTestCase:
     expected_suites_calls: int
     expected_tests_call_args: tuple[str | None, bool] | None
     expected_schedulers_calls: int
+
+
+@dataclasses.dataclass
+class _HistoryTestCase:
+    name: str
+    mock_runs: dict[str, Any]
+    expected_strings: list[str]
+    unexpected_strings: list[str] = dataclasses.field(default_factory=list)
 
 
 class TestCli(unittest.TestCase):
@@ -1203,6 +1212,63 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["analyze", "missing_run"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Workspace 'missing_run' not found", result.output)
+
+
+class TestCliHistory(unittest.TestCase):
+    """Tests the 'chs history' command."""
+
+    def setUp(self):
+        super().setUp()
+        self.runner = testing.CliRunner()
+        self.mock_app_data_cls = self.enterContext(
+            mock.patch("chs.cli.ChsAppData", autospec=True)
+        )
+        self.mock_app_data = self.mock_app_data_cls.return_value
+
+    def test_history_command(self):
+        """Test history command with various scenarios."""
+        test_cases = [
+            _HistoryTestCase(
+                name="no_runs",
+                mock_runs={},
+                expected_strings=["No runs found."],
+            ),
+            _HistoryTestCase(
+                name="with_runs",
+                mock_runs={
+                    "run1": {
+                        "run_id": "run1",
+                        "submission_time": "2023-01-01T12:00:00Z",
+                        "scheduler": "slurm",
+                    },
+                    "run2": {
+                        "run_id": "run2",
+                        "submission_time": "2023-01-02T12:00:00Z",
+                        "command_statement": "chs run --scheduler gke",
+                    },
+                },
+                expected_strings=[
+                    "Workspace",
+                    "Details",
+                    "run1",
+                    "run2",
+                    "chs run --scheduler slurm",
+                    "chs run --scheduler gke",
+                ],
+                unexpected_strings=["Alias", "my_alias", "alias not set"],
+            ),
+        ]
+        for case in test_cases:
+            with self.subTest(case.name):
+                self.mock_app_data.get_latest_runs.return_value = case.mock_runs
+                result = self.runner.invoke(cli.cli, ["history"])
+                self.assertEqual(result.exit_code, 0)
+                self.mock_app_data.get_latest_runs.assert_called_once_with(5)
+                self.mock_app_data.get_latest_runs.reset_mock()
+                for expected in case.expected_strings:
+                    self.assertIn(expected, result.output)
+                for unexpected in case.unexpected_strings:
+                    self.assertNotIn(unexpected, result.output)
 
 
 if __name__ == "__main__":

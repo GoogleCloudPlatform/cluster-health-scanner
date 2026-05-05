@@ -10,6 +10,7 @@ import uuid
 import yaml
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
+from chs.utils.app_data import ChsAppData
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class BOHGenerator:
         self.thresholds_path = thresholds_path
         self.skip_validation = skip_validation
         self.raw_thresholds = {} if skip_validation else self._load_thresholds()
+        self.app_data = ChsAppData()
 
     def _load_thresholds(self) -> dict:
         """Loads thresholds from workspace or default path."""
@@ -306,6 +308,37 @@ class BOHGenerator:
 
         return plugin.extract_test_info(exp)
 
+    def _get_result_status(self, success_criteria: dict[str, str]) -> int:
+        """Maps experiment success criteria to ResultStatus."""
+        if not success_criteria:
+            return pb.RESULT_STATUS_UNKNOWN
+
+        statuses = {s.upper() for s in success_criteria.values()}
+
+        if "FAILED" in statuses:
+            return pb.RESULT_STATUS_FAILED
+        if "TIMEOUT" in statuses:
+            return pb.RESULT_STATUS_TIMEOUT
+        if "CANCELLED" in statuses:
+            return pb.RESULT_STATUS_CANCELLED
+        if statuses == {"PASSED"}:
+            return pb.RESULT_STATUS_SUCCESS
+
+        return pb.RESULT_STATUS_UNKNOWN
+
+    def _add_system_info_from_app_data(self) -> None:
+        """Adds system information to the report from ChsAppData."""
+        try:
+            run_data = self.app_data.get_run(self.report.report_id)
+            if run_data:
+                command_statement = run_data.get("command_statement", "")
+                if command_statement:
+                    self.report.system_info.metadata.fields[
+                        "command_statement"
+                    ].string_value = command_statement
+        except Exception as e:
+            logger.warning("Failed to add system info from app_data: %s", e)
+
     def generate(self) -> pb.BillOfHealth:
         """Generates the Bill of Health report."""
         try:
@@ -318,8 +351,10 @@ class BOHGenerator:
         self.report.report_id = data.get("workspace_name", str(uuid.uuid4()))
         self.report.chs_version = "1.0.0"
         self.report.created_at.CopyFrom(self._get_timestamp())
-        # TODO: Fetch and add system info
+
         self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"
+
+        self._add_system_info_from_app_data()
 
         for exp in data.get("experiments", []):
             exp_name = exp.get("experiment_name", "")

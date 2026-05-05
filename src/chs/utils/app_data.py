@@ -131,6 +131,27 @@ class ChsAppData:
         runs = self._load_json(self._runs_file)
         return runs.get(run_id)
 
+    def get_all_runs(self) -> dict[str, Any]:
+        """Retrieves all run entries from the app data."""
+        return self._load_json(self._runs_file)
+
+    def get_latest_runs(self, limit: int = 5) -> dict[str, Any]:
+        """Retrieves the latest N run entries from the app data.
+
+        Args:
+            limit: The maximum number of runs to return.
+
+        Returns:
+            A dictionary of run entries, sorted by submission_time descending.
+        """
+        runs = self._load_json(self._runs_file)
+        sorted_runs = sorted(
+            runs.items(),
+            key=lambda item: item[1].get("submission_time", ""),
+            reverse=True,
+        )
+        return dict(sorted_runs[:limit])
+
     def get_workspaces_dir(self) -> str:
         """Returns the default workspaces directory path, creating if necessary.
 
