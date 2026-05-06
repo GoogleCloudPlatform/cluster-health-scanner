@@ -515,7 +515,7 @@ tpu7x:
     container_security_context_yaml: |
       privileged: true
   tpu-info:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -524,7 +524,7 @@ tpu7x:
       n_nodes: 1
       mpi_command: ""
   tpu-gemm:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -534,7 +534,7 @@ tpu7x:
       mpi_command: ""
       benchmarks_yaml_file: "gemm_16384_bf16.yaml"
   tpu-hbm:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -544,7 +544,7 @@ tpu7x:
       mpi_command: ""
       benchmarks_yaml_file: "hbm_copy_bf16.yaml"
   tpu-host-device:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -569,7 +569,7 @@ tpuv6e:
     container_security_context_yaml: |
       privileged: true
   tpu-info:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -578,7 +578,7 @@ tpuv6e:
       n_nodes: 1
       mpi_command: ""
   tpu-gemm:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -588,7 +588,7 @@ tpuv6e:
       mpi_command: ""
       benchmarks_yaml_file: "gemm_16384_bf16.yaml"
   tpu-hbm:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
@@ -598,7 +598,7 @@ tpuv6e:
       mpi_command: ""
       benchmarks_yaml_file: "hbm_copy_bf16.yaml"
   tpu-host-device:
-    modifiers: [{name: "generic-error-detector"}]
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
