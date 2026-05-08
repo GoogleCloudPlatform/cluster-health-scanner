@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "tpu-host-device" = "chs" ]; then
+    echo "Skipping JobSet submission for tpu-host-device scaffolding experiment."
+    echo "Submitted chs-tpu-host-device at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-host-device/check/chs-tpu-host-device/chs-tpu-host-device.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/tpu-host-device/check/chs-tpu-host-device/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/tpu-host-device/check/chs-tpu-host-device/jobset.yaml"
+echo "Submitted chs-tpu-host-device at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-host-device/check/chs-tpu-host-device/chs-tpu-host-device.out
+

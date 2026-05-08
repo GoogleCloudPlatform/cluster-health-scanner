@@ -296,6 +296,36 @@ class Chs(ExecutableApplication):
                     self.experiment_set.render_chained_experiments(
                         application_name, workload, context
                     )
+            elif test.name == "hbm":
+                application_name = "tpu-hbm"
+                experiment_name = (
+                    f"{self.expander.experiment_name}-{application_name}"
+                )
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                context = TestHelper.tpu_hbm_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "check", context
+                )
+            elif test.name == "host-device":
+                application_name = "tpu-host-device"
+                experiment_name = (
+                    f"{self.expander.experiment_name}-{application_name}"
+                )
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                context = TestHelper.tpu_host_device_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "check", context
+                )
             elif test.name == "tpu-info":
                 application_name = "tpu-info"
                 experiment_name = f"{self.expander.experiment_name}-{test.name}"

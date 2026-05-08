@@ -533,6 +533,26 @@ tpu7x:
       n_nodes: 1
       mpi_command: ""
       benchmarks_yaml_file: "gemm_16384_bf16.yaml"
+  tpu-hbm:
+    modifiers: [{name: "generic-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "hbm_copy_bf16.yaml"
+  tpu-host-device:
+    modifiers: [{name: "generic-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "host_device.yaml"
 tpuv6e:
   variables:
     node_selector_yaml: |
@@ -567,3 +587,23 @@ tpuv6e:
       n_nodes: 1
       mpi_command: ""
       benchmarks_yaml_file: "gemm_16384_bf16.yaml"
+  tpu-hbm:
+    modifiers: [{name: "generic-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "hbm_copy_bf16.yaml"
+  tpu-host-device:
+    modifiers: [{name: "generic-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "host_device.yaml"

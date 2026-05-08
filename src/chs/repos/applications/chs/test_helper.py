@@ -3,7 +3,7 @@ import datetime
 import logging
 import os
 import textwrap
-from ramble.context import create_context_from_dict
+from ramble.context import Context, create_context_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -469,7 +469,13 @@ podAntiAffinity:
         ctx_vars["benchmarks_yaml_escaped"] = escaped
 
     @staticmethod
-    def tpu_gemm_test(variables, experiment_name, configs):
+    def tpu_benchmark_test(
+        variables: dict,
+        experiment_name: str,
+        configs: dict,
+        ramble_app_name: str,
+        default_config_file: str,
+    ) -> Context:
         ctx_vars = copy.deepcopy(variables)
         scheduler = ctx_vars.get("scheduler", "gke")
         machine_type = ctx_vars.get("machine_type", "tpu7x")
@@ -483,11 +489,11 @@ podAntiAffinity:
             "modifiers": [],
         }
         TestHelper._merge_configs(
-            context_dict, configs, machine_type, "tpu-gemm"
+            context_dict, configs, machine_type, ramble_app_name
         )
 
         TestHelper._load_and_escape_benchmark_config(
-            ctx_vars, "gemm_16384_bf16.yaml"
+            ctx_vars, default_config_file
         )
 
         if scheduler == "gke":
@@ -495,3 +501,39 @@ podAntiAffinity:
                 ctx_vars, sched_nodes_str, nodes_list=nodes_list
             )
         return create_context_from_dict(experiment_name, context_dict)
+
+    @staticmethod
+    def tpu_gemm_test(
+        variables: dict, experiment_name: str, configs: dict
+    ) -> Context:
+        return TestHelper.tpu_benchmark_test(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-gemm",
+            default_config_file="gemm_16384_bf16.yaml",
+        )
+
+    @staticmethod
+    def tpu_hbm_test(
+        variables: dict, experiment_name: str, configs: dict
+    ) -> Context:
+        return TestHelper.tpu_benchmark_test(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-hbm",
+            default_config_file="hbm_copy_bf16.yaml",
+        )
+
+    @staticmethod
+    def tpu_host_device_test(
+        variables: dict, experiment_name: str, configs: dict
+    ) -> Context:
+        return TestHelper.tpu_benchmark_test(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-host-device",
+            default_config_file="host_device.yaml",
+        )

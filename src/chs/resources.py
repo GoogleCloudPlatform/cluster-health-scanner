@@ -20,6 +20,8 @@ SUPPORTED_TESTS = [
     "nvidia-smi",
     "gemm",
     "tpu-info",
+    "hbm",
+    "host-device",
 ]
 SUPPORTED_SCHEDULERS = ["slurm", "gke"]
 
@@ -155,10 +157,14 @@ MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE = {
         "tpu7x": [
             "tpu-info",
             "gemm",
+            "hbm",
+            "host-device",
         ],
         "tpuv6e": [
             "tpu-info",
             "gemm",
+            "hbm",
+            "host-device",
         ],
     },
 }
