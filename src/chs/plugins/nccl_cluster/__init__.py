@@ -4,7 +4,8 @@ from .renderer import NcclClusterRenderer
 
 
 class NcclClusterPlugin(NcclClusterRenderer, NcclClusterExtractor, TestPlugin):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"bandwidth": "Avg. Bus Bandwidth"}
 
 
 __chs_plugin__ = {

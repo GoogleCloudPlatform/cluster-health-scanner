@@ -134,6 +134,8 @@ Executes a test suite on a specified cluster.
 -   `--nodepool`: GKE node pool to run on.
 -   `--partition`: Slurm partition to run on.
 -   `--dry-run`: Set up the workspace but do not execute experiments or analyze.
+-   `--validation`: Path to a user-defined thresholds YAML file (optional).
+-   `--skip-validation`: Skip threshold evaluation entirely.
 
 ### Supported Suites and Tests
 
@@ -203,6 +205,10 @@ Analyzes the results of a test run and generates a Bill of Health.
 **Arguments:**
 -   `RUN_ID` (Optional): The ID (Workspace Name) of the run to analyze.
     *   *Default:* The most recent run found in the workspaces directory.
+
+**Options:**
+-   `--validation`: Path to a user-defined thresholds YAML file to override the workspace copy (optional).
+-   `--skip-validation`: Skip threshold evaluation entirely.
 
 **Example:**
 ```bash
@@ -288,6 +294,30 @@ CHS stores all run data, configurations, and logs in a dedicated workspaces dire
 
 ### Ramble Integration
 CHS expects a standard Ramble installation. It looks for the Ramble setup script (`setup-env.sh`) relative to the installed `chs` package location (typically inside `site-packages/share/ramble`).
+
+### Validation Thresholds Configuration
+
+When using the `--validation` flag, you can provide a YAML file to define custom success criteria. The file follows a hierarchical structure where you can define `default` thresholds and machine-specific overrides.
+
+Example `validation.yaml`:
+```yaml
+default:
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 50
+  gemm:
+    type: min
+    thresholds:
+      performance: 100
+
+a3-ultra:
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+```
+For a complete reference of supported tests and default values, see `src/chs/configs/thresholds.yaml`.
 
 ## Known Limitations
 

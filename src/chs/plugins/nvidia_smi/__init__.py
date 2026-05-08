@@ -4,7 +4,8 @@ from .renderer import NvidiaSmiRenderer
 
 
 class NvidiaSmiPlugin(NvidiaSmiRenderer, NvidiaSmiExtractor, TestPlugin):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"gpus": "GPU Count"}
 
 
 __chs_plugin__ = {

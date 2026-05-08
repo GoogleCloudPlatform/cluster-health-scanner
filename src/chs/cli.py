@@ -253,6 +253,8 @@ def run_action(
     dry_run: bool = False,
     timeout: int | None = None,
     deadline: int | None = None,
+    validation: str | None = None,
+    skip_validation: bool = False,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -266,6 +268,7 @@ def run_action(
       dry_run: Set up the workspace but do not execute experiments.
       timeout: The timeout for the job in seconds.
       deadline: The deadline for the job in seconds.
+      thresholds: Path to user-defined thresholds YAML file.
 
     Returns:
       A list of submitted job IDs, or None if dry_run is True.
@@ -290,6 +293,9 @@ def run_action(
                 tests = scheduler_obj.run_preflight_checks(tests)
 
             ramble_manager.create_workspace()
+            if not skip_validation:
+                ramble_manager.copy_thresholds(validation)
+
             ramble_manager.add_custom_repository()
             ramble_manager.configure_workspace(
                 scheduler_obj,
@@ -317,12 +323,18 @@ def run_action(
             ) from e
 
 
-def analyze_action(app_data: ChsAppData, run_id: str) -> str:
+def analyze_action(
+    app_data: ChsAppData,
+    run_id: str,
+    validation: str | None = None,
+    skip_validation: bool = False,
+) -> str:
     """Analyzes results from a specific test run.
 
     Args:
       app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
+      validation: Path to user-defined thresholds YAML file.
 
     Returns:
       The run_id of the analyzed test run.
@@ -346,7 +358,7 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
             results_json_path = workspace_path / "results.latest.json"
 
             # 1. Check if Bill of Health already exists
-            if boh_path.exists():
+            if boh_path.exists() and not validation:
                 _show_results(app_data, run_id)
                 return run_id
 
@@ -355,7 +367,11 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
                 logger.info(
                     "Found results from this run. Generating Bill of Health..."
                 )
-                ramble_manager.generate_boh(str(results_json_path))
+                ramble_manager.generate_boh(
+                    str(results_json_path),
+                    thresholds_path=validation,
+                    skip_validation=skip_validation,
+                )
                 _show_results(app_data, run_id)
                 return run_id
 
@@ -363,7 +379,9 @@ def analyze_action(app_data: ChsAppData, run_id: str) -> str:
             logger.debug(f"Waiting for jobs for {run_id}...")
             ramble_manager.wait_for_jobs(app_data=app_data)
 
-            ramble_manager.analyze_results()
+            ramble_manager.analyze_results(
+                thresholds_path=validation, skip_validation=skip_validation
+            )
             logger.debug("Analysis complete for run_id=%r", run_id)
             _show_results(app_data, run_id)
         except (OSError, subprocess.CalledProcessError) as e:
@@ -621,6 +639,19 @@ def list_command(
     is_flag=True,
     help="Set up the workspace but do not execute experiments or analyze.",
 )
+@click.option(
+    "--validation",
+    help=(
+        "Path to user-defined thresholds YAML file (optional). "
+        "See src/chs/configs/thresholds.yaml for template."
+    ),
+    callback=validators.validate_non_empty_string,
+)
+@click.option(
+    "--skip-validation",
+    is_flag=True,
+    help="Skip threshold evaluation entirely.",
+)
 @click.pass_obj
 def run(
     obj,
@@ -634,6 +665,8 @@ def run(
     partition: str | None,
     machine_type: str,
     dry_run: bool,
+    validation: str | None = None,
+    skip_validation: bool = False,
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
@@ -741,6 +774,8 @@ def run(
         dry_run=dry_run,
         timeout=timeout,
         deadline=deadline,
+        validation=validation,
+        skip_validation=skip_validation,
     )
     logger.info("Request ID (Workspace Name): %s", workspace_name)
 
@@ -761,7 +796,12 @@ def run(
     logger.info("Job IDs: %s", ", ".join(job_ids))
 
     # Automatically trigger analysis
-    analyze_action(app_data, workspace_name)
+    analyze_action(
+        app_data,
+        workspace_name,
+        validation=validation,
+        skip_validation=skip_validation,
+    )
 
     return result
 
@@ -771,8 +811,23 @@ def run(
 @click.argument(
     "run_id", required=False, callback=validators.validate_non_empty_string
 )
+@click.option(
+    "--validation",
+    help="Path to user-defined thresholds YAML file (overrides workspace copy)",
+    callback=validators.validate_non_empty_string,
+)
+@click.option(
+    "--skip-validation",
+    is_flag=True,
+    help="Skip threshold evaluation entirely.",
+)
 @click.pass_obj
-def analyze(obj, run_id: str | None) -> str:
+def analyze(
+    obj,
+    run_id: str | None,
+    validation: str | None = None,
+    skip_validation: bool = False,
+) -> str:
     """Analyze results from a test run.
 
     If no run_id is provided, the most recent run from the workspaces directory
@@ -782,6 +837,7 @@ def analyze(obj, run_id: str | None) -> str:
     Args:
       obj: Click object containing app_data.
       run_id: The ID of the test run to analyze.
+      thresholds: Path to user-defined thresholds YAML file.
 
     Returns:
       The run_id of the analyzed test run.
@@ -792,7 +848,9 @@ def analyze(obj, run_id: str | None) -> str:
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Analyzing latest run: %s", run_id)
 
-    return analyze_action(app_data, run_id)
+    return analyze_action(
+        app_data, run_id, validation=validation, skip_validation=skip_validation
+    )
 
 
 @cli.command()

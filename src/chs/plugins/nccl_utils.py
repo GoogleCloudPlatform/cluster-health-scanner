@@ -67,6 +67,7 @@ def create_nccl_table(
         table.add_column("Topological Context")
     table.add_column("Peak Bandwidth (GB/s)", justify="right")
     table.add_column("Msg Size (GB)", justify="right")
+    table.add_column("Validation")
     return table
 
 
@@ -128,6 +129,14 @@ def render_nccl_detail(
         if include_topology:
             row.append(topo_context)
         row.extend([f"{max_bw:.2f}", max_size])
+
+        validation_status = "N/A"
+        if res.result_status == pb.RESULT_STATUS_SUCCESS:
+            validation_status = "[green]PASS[/]"
+        elif res.result_status == pb.RESULT_STATUS_FAILED:
+            validation_status = "[red]FAIL[/]"
+
+        row.append(validation_status)
 
         table.add_row(*row)
 

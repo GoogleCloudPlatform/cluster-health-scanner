@@ -107,53 +107,74 @@ class TestBOHGenerator(unittest.TestCase):
         report = generator.generate()
         self.assertEqual(report.system_info.type, "CUSTOM_CLUSTER")
 
-    def test_generate_statuses(self):
-        """Test mapping of all supported experiment statuses."""
-        experiments = [
-            (
-                {"criteria1": "PASSED", "criteria2": "PASSED"},
-                pb.RESULT_STATUS_SUCCESS,
-            ),
-            (
-                {"criteria1": "FAILED", "criteria2": "PASSED"},
-                pb.RESULT_STATUS_FAILED,
-            ),
-            (
-                {"criteria1": "TIMEOUT", "criteria2": "PASSED"},
-                pb.RESULT_STATUS_TIMEOUT,
-            ),
-            ({"criteria1": "CANCELLED"}, pb.RESULT_STATUS_CANCELLED),
-            (
-                {"criteria1": "UNKNOWN", "criteria2": "PASSED"},
-                pb.RESULT_STATUS_UNKNOWN,
-            ),
-            ({}, pb.RESULT_STATUS_UNKNOWN),  # Empty criteria
-        ]
+    def test_generate_with_thresholds_min(self):
+        """Test threshold evaluation with 'min' type."""
+        thresholds_data = {
+            "default": {
+                "my-test": {"type": "min", "thresholds": {"bandwidth": 80}}
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
 
-        data = {
+            yaml.dump(thresholds_data, f)
+
+        # Test case 1: Passing metric
+        data_pass = {
             "experiments": [
-                {"name": f"exp_{i}", "SUCCESS_CRITERIA": criteria}
-                for i, (criteria, _) in enumerate(experiments)
+                {
+                    "experiment_name": "my-test",
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "bandwidth", "value": 85}],
+                        }
+                    ],
+                }
             ]
         }
-        # Add an experiment with no SUCCESS_CRITERIA key
-        data["experiments"].append({"name": "exp_missing"})
-        expected_statuses = [status_code for _, status_code in experiments] + [
-            pb.RESULT_STATUS_UNKNOWN
-        ]
-
-        self._write_json(data)
-
-        generator = BOHGenerator(self.test_json_path)
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
         report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+        self.assertEqual(
+            report.test_results[0].metrics[0].validation_criteria.result_status,
+            pb.RESULT_STATUS_SUCCESS,
+        )
 
-        self.assertEqual(len(report.test_results), len(expected_statuses))
-        for i, expected_status in enumerate(expected_statuses):
-            self.assertEqual(
-                report.test_results[i].result_status,
-                expected_status,
-                f"Failed for experiment {data['experiments'][i]['name']}",
-            )
+        # Test case 2: Failing metric
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "my-test",
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "bandwidth", "value": 75}],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+        self.assertEqual(
+            report.test_results[0].metrics[0].validation_criteria.result_status,
+            pb.RESULT_STATUS_FAILED,
+        )
 
     def test_generate_contexts(self):
         """Test handling of default vs explicit contexts."""
@@ -352,144 +373,176 @@ class TestBOHGenerator(unittest.TestCase):
             self.assertEqual(name, "generic_test")
             self.assertEqual(level, "workload")
 
-    def test_parse_formula(self):
-        """Test parsing of Ramble formulas."""
+    def test_generate_with_thresholds_scalar(self):
+        """Test threshold evaluation with 'scalar' type."""
+        thresholds_data = {
+            "default": {
+                "my-test": {"type": "scalar", "thresholds": {"gpus": 8}}
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        # Pass case
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "my-test",
+                    "CONTEXTS": [
+                        {"name": "null", "foms": [{"name": "gpus", "value": 8}]}
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+
+        # Fail case
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "my-test",
+                    "CONTEXTS": [
+                        {"name": "null", "foms": [{"name": "gpus", "value": 7}]}
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+
+    def test_generate_with_thresholds_relative(self):
+        """Test threshold evaluation with 'relative' type."""
+        thresholds_data = {
+            "default": {
+                "stream": {
+                    "type": "relative",
+                    "thresholds": {"efficiency": 0.8},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        # Pass case: Rate=85, PEAK=100 -> 0.85 >= 0.8
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "PEAK Bandwidth", "value": 100}],
+                        },
+                        {
+                            "name": "Device 0",
+                            "foms": [{"name": "Rate", "value": 85}],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+
+        # Fail case: Rate=75, PEAK=100 -> 0.75 < 0.8
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "PEAK Bandwidth", "value": 100}],
+                        },
+                        {
+                            "name": "Device 0",
+                            "foms": [{"name": "Rate", "value": 75}],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+
+    def test_generate_fallback_string_match(self):
+        """Test fallback string matching when no thresholds are defined."""
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "unknown-test",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [
+                                {
+                                    "name": "log",
+                                    "value": "Gpu homework PASSED successfully",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
         generator = BOHGenerator(self.test_json_path)
-        test_cases = [
-            (">= 10", pb.Comparator.COMPARATOR_GTE, 10.0),
-            ("<= 5.5", pb.Comparator.COMPARATOR_LTE, 5.5),
-            ("== true", pb.Comparator.COMPARATOR_EQ, True),
-            ("!= false", pb.Comparator.COMPARATOR_NE, False),
-            ("> 100", pb.Comparator.COMPARATOR_GT, 100.0),
-            ("< 0", pb.Comparator.COMPARATOR_LT, 0.0),
-            ('== "passed"', pb.Comparator.COMPARATOR_EQ, "passed"),
-            ("!= 'failed'", pb.Comparator.COMPARATOR_NE, "failed"),
-            (
-                ">= {value} 10",
-                pb.Comparator.COMPARATOR_GTE,
-                10.0,
-            ),  # Test {value} strip
-        ]
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
 
-        for formula, expected_op, expected_val in test_cases:
-            validation = pb.ValidationCriteria()
-            generator._parse_formula(formula, validation)
-            self.assertEqual(
-                validation.comparator, expected_op, f"Failed for {formula}"
-            )
-            if isinstance(expected_val, bool):
-                self.assertEqual(
-                    validation.expected_value.bool_value, expected_val
-                )
-            elif isinstance(expected_val, (int, float)):
-                self.assertEqual(
-                    validation.expected_value.number_value, expected_val
-                )
-            else:
-                self.assertEqual(
-                    validation.expected_value.string_value, expected_val
-                )
-
-    def test_process_success_criteria_exact_match(self):
-        """Test success criteria mapping with exact name match."""
-        success_criteria_mapping = {
-            "applications": {
-                "myapp": {
-                    "mycriteria": {"fom_name": "metric1", "formula": ">= 10"}
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "unknown-test",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [
+                                {"name": "log", "value": "Gpu homework FAILED"}
+                            ],
+                        }
+                    ],
                 }
-            }
+            ]
         }
-        generator = BOHGenerator(
-            self.test_json_path,
-            success_criteria_mapping=success_criteria_mapping,
-        )
-
-        test_result = pb.TestResult()
-        experiment = {
-            "application_name": "myapp",
-            "SUCCESS_CRITERIA": {"criteria::mycriteria": "PASSED"},
-        }
-        metric1 = pb.Metric(key="metric1")
-        metrics_map = {"metric1": metric1}
-
-        generator._process_success_criteria(
-            test_result, experiment, metrics_map
-        )
-
+        self._write_json(data_fail)
+        generator = BOHGenerator(self.test_json_path)
+        report = generator.generate()
         self.assertEqual(
-            metric1.validation_criteria.comparator, pb.Comparator.COMPARATOR_GTE
-        )
-        self.assertEqual(
-            metric1.validation_criteria.expected_value.number_value, 10.0
-        )
-
-    def test_process_success_criteria_regex_match(self):
-        """Test success criteria mapping with regex match."""
-        success_criteria_mapping = {
-            "applications": {
-                "myapp": {
-                    "mycriteria": {"fom_name": "metric.*", "formula": "== true"}
-                }
-            }
-        }
-        generator = BOHGenerator(
-            self.test_json_path,
-            success_criteria_mapping=success_criteria_mapping,
-        )
-
-        test_result = pb.TestResult()
-        experiment = {
-            "application_name": "myapp",
-            "SUCCESS_CRITERIA": {"mycriteria": "PASSED"},
-        }
-        metric1 = pb.Metric(key="metric1")
-        metric2 = pb.Metric(key="other")
-        metrics_map = {"metric1": metric1, "other": metric2}
-
-        generator._process_success_criteria(
-            test_result, experiment, metrics_map
-        )
-
-        self.assertEqual(
-            metric1.validation_criteria.comparator, pb.Comparator.COMPARATOR_EQ
-        )
-        self.assertTrue(metric1.validation_criteria.expected_value.bool_value)
-        self.assertEqual(
-            metric2.validation_criteria.comparator,
-            pb.Comparator.COMPARATOR_UNSPECIFIED,
-        )
-
-    def test_process_success_criteria_strip_braces(self):
-        """Test success criteria mapping where braces are stripped."""
-        success_criteria_mapping = {
-            "applications": {
-                "myapp": {
-                    "mycriteria": {"fom_name": "metric1", "formula": "!= 0"}
-                }
-            }
-        }
-        generator = BOHGenerator(
-            self.test_json_path,
-            success_criteria_mapping=success_criteria_mapping,
-        )
-
-        test_result = pb.TestResult()
-        experiment = {
-            "application_name": "myapp",
-            "SUCCESS_CRITERIA": {"{mycriteria}": "PASSED"},
-        }
-        metric1 = pb.Metric(key="metric1")
-        metrics_map = {"metric1": metric1}
-
-        generator._process_success_criteria(
-            test_result, experiment, metrics_map
-        )
-
-        self.assertEqual(
-            metric1.validation_criteria.comparator, pb.Comparator.COMPARATOR_NE
-        )
-        self.assertEqual(
-            metric1.validation_criteria.expected_value.number_value, 0.0
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
         )
 
     def test_generate_metadata_relative_log(self):
@@ -545,6 +598,177 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(
             metadata.fields["gcs_log_file"].string_value,
             "gs://my_bucket/workspaces/my_workspace/experiments/log1.out",
+        )
+
+    def test_generate_relative_zero_peak(self):
+        """Test relative threshold evaluation when peak value is zero."""
+        thresholds_data = {
+            "default": {
+                "stream": {
+                    "type": "relative",
+                    "thresholds": {"efficiency": 0.8},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh_zero.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "PEAK Bandwidth", "value": 0}],
+                        },
+                        {
+                            "name": "Device 0",
+                            "foms": [{"name": "Rate", "value": 50}],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+        self.assertEqual(
+            report.test_results[0].metrics[1].validation_criteria.result_status,
+            pb.RESULT_STATUS_FAILED,
+        )
+
+    def test_generate_missing_fom_ignored(self):
+        """Test that missing FOM for a defined threshold is ignored safely."""
+        thresholds_data = {
+            "default": {
+                "my-test": {
+                    "type": "min",
+                    "thresholds": {"bandwidth": 80, "non_existent_fom": 50},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh_missing.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "my-test",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "bandwidth", "value": 85}],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+        self.assertEqual(
+            report.test_results[0].metrics[0].validation_criteria.result_status,
+            pb.RESULT_STATUS_SUCCESS,
+        )
+
+    def test_generate_machine_override_type(self):
+        """Test that machine-specific config can override the default
+        comparison type.
+        """
+        thresholds_data = {
+            "default": {
+                "my-test": {"type": "min", "thresholds": {"metric1": 80}}
+            },
+            "a3-ultra": {
+                "my-test": {"type": "scalar", "thresholds": {"metric1": 80}}
+            },
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh_override.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "my-test",
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "metric1", "value": 85}],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+
+    def test_generate_skip_validation(self):
+        """Test that setting skip_validation=True skips evaluation."""
+        thresholds_data = {
+            "default": {
+                "my-test": {"type": "min", "thresholds": {"bandwidth": 80}}
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "my-test",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "bandwidth", "value": 75}],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+
+        generator = BOHGenerator(
+            self.test_json_path,
+            thresholds_path=thresh_file,
+            skip_validation=True,
+        )
+        report = generator.generate()
+
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_UNKNOWN
+        )
+        self.assertFalse(
+            report.test_results[0].metrics[0].HasField("validation_criteria")
         )
 
 

@@ -244,6 +244,31 @@ class RambleManager:
             error_context="Failed to create workspace",
         )
 
+    def copy_thresholds(self, thresholds_path: str | None = None) -> None:
+        """Copies the thresholds configuration file into the workspace."""
+        import shutil
+
+        dest_thresholds = os.path.join(self.path, "thresholds.yaml")
+        if thresholds_path:
+            shutil.copyfile(thresholds_path, dest_thresholds)
+            logger.info(
+                "Copied user thresholds from %s to %s",
+                thresholds_path,
+                dest_thresholds,
+            )
+        else:
+            internal_thresholds = os.path.join(
+                os.path.dirname(__file__), "configs", "thresholds.yaml"
+            )
+            if os.path.exists(internal_thresholds):
+                shutil.copyfile(internal_thresholds, dest_thresholds)
+                logger.info("Copied default thresholds to %s", dest_thresholds)
+            else:
+                logger.warning(
+                    "Default thresholds file not found at %s",
+                    internal_thresholds,
+                )
+
     def add_custom_repository(self) -> None:
         """Adds the internal custom CHS repository to the Ramble workspace.
 
@@ -690,7 +715,9 @@ class RambleManager:
 
         return mapping_result
 
-    def analyze_results(self) -> str:
+    def analyze_results(
+        self, thresholds_path: str | None = None, skip_validation: bool = False
+    ) -> str:
         """Analyzes and stores the results of the Ramble experiments.
 
         Analyzes the results and stores BoH in GCS/ BigQuery for later
@@ -728,13 +755,23 @@ class RambleManager:
                 "rerunning the command."
             )
         self._cleanup_inputs_dir()
-        return self.generate_boh(results_json_path)
+        return self.generate_boh(
+            results_json_path,
+            thresholds_path=thresholds_path,
+            skip_validation=skip_validation,
+        )
 
-    def generate_boh(self, results_json_path: str) -> str:
+    def generate_boh(
+        self,
+        results_json_path: str,
+        thresholds_path: str | None = None,
+        skip_validation: bool = False,
+    ) -> str:
         """Generates Bill of Health from results.latest.json.
 
         Args:
           results_json_path: Path to the results.latest.json file.
+          thresholds_path: Path to thresholds YAML file.
 
         Returns:
           The path to the directory containing the analysis results and Bill of
@@ -755,6 +792,8 @@ class RambleManager:
             base_log_dir=str(workspace_dir),
             cluster_type=self.get_scheduler_type(),
             gcs_base_path=gcs_base_path,
+            thresholds_path=thresholds_path,
+            skip_validation=skip_validation,
         )
         logger.debug("Generating Bill of Health from %s", results_json_path)
         boh = boh_generator.generate()

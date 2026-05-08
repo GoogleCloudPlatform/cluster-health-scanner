@@ -1,14 +1,13 @@
 """Generates Bill of Health from Ramble JSON results."""
 
 from datetime import datetime, timezone
-import fnmatch
 import json
 import logging
 import os
-import re
 import chs.core.plugin_manager
 from typing import Any
 import uuid
+import yaml
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -27,6 +26,8 @@ class BOHGenerator:
             dict[str, dict[str, dict[str, str]]] | None
         ) = None,
         gcs_base_path: str | None = None,
+        thresholds_path: str | None = None,
+        skip_validation: bool = False,
     ):
         self.file_path = file_path
         self.base_log_dir = base_log_dir
@@ -35,6 +36,41 @@ class BOHGenerator:
         self.success_criteria_mapping = success_criteria_mapping or {}
         self.pm = chs.core.plugin_manager.PluginManager()
         self.gcs_base_path = gcs_base_path
+        self.thresholds_path = thresholds_path
+        self.skip_validation = skip_validation
+        self.raw_thresholds = {} if skip_validation else self._load_thresholds()
+
+    def _load_thresholds(self) -> dict:
+        """Loads thresholds from workspace or default path."""
+        path = self.thresholds_path
+        if not path and self.file_path:
+            workspace_dir = os.path.dirname(self.file_path)
+            path = os.path.join(workspace_dir, "thresholds.yaml")
+
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    logger.info("Loading thresholds from %s", path)
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning("Failed to load thresholds from %s: %s", path, e)
+        else:
+            logger.warning("Thresholds file not found at %s", path)
+
+        internal_path = os.path.join(
+            os.path.dirname(__file__), "configs", "thresholds.yaml"
+        )
+        if os.path.exists(internal_path):
+            try:
+                with open(internal_path, "r") as f:
+                    logger.info(
+                        "Loading default internal thresholds from %s",
+                        internal_path,
+                    )
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning("Failed to load internal thresholds: %s", e)
+        return {}
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()
@@ -73,101 +109,189 @@ class BOHGenerator:
             metrics.append(metric)
         return metrics
 
-    def _parse_formula(
-        self, formula: str, validation: pb.ValidationCriteria
+    def _evaluate_thresholds(
+        self, machine_type: str, test_result: pb.TestResult
     ) -> None:
-        """Parses Ramble formula to populate comparator and expected value."""
-        # Clean up formula structure
-        formula = formula.replace("{value}", "").strip()
-        ops = [
-            (">=", pb.Comparator.COMPARATOR_GTE),
-            ("<=", pb.Comparator.COMPARATOR_LTE),
-            ("==", pb.Comparator.COMPARATOR_EQ),
-            ("!=", pb.Comparator.COMPARATOR_NE),
-            (">", pb.Comparator.COMPARATOR_GT),
-            ("<", pb.Comparator.COMPARATOR_LT),
-        ]
+        """Evaluates metrics against thresholds defined in thresholds.yaml."""
+        test_name = test_result.test_name
 
-        found_op = None
-        found_val = None
+        default_cfg = self.raw_thresholds.get("default", {}).get(test_name, {})
+        machine_cfg = self.raw_thresholds.get(machine_type, {}).get(
+            test_name, {}
+        )
 
-        for op_str, op_enum in ops:
-            if formula.startswith(op_str):
-                found_op = op_enum
-                found_val = formula[len(op_str) :].strip()
-                break
+        if not default_cfg and not machine_cfg:
+            self._fallback_string_match(test_result)
+            return
 
-        if found_op:
-            validation.comparator = found_op
-            # Try to parse value as number, bool, or string
-            if found_val.lower() == "true":
-                validation.expected_value.bool_value = True
-            elif found_val.lower() == "false":
-                validation.expected_value.bool_value = False
-            else:
-                try:
-                    validation.expected_value.number_value = float(found_val)
-                except ValueError:
-                    # Strip quotes if present
-                    if (
-                        found_val.startswith('"') and found_val.endswith('"')
-                    ) or (
-                        found_val.startswith("'") and found_val.endswith("'")
-                    ):
-                        found_val = found_val[1:-1]
-                    validation.expected_value.string_value = found_val
+        merged_thresholds = {}
+        merged_thresholds.update(default_cfg.get("thresholds", {}))
+        merged_thresholds.update(machine_cfg.get("thresholds", {}))
 
-    def _process_success_criteria(
-        self,
-        test_result: pb.TestResult,
-        experiment: dict[str, Any],
-        metrics_map: dict[str, pb.Metric],
-    ) -> None:
-        """Processes success criteria and attaches them to metrics.
+        comp_type = machine_cfg.get("type") or default_cfg.get("type")
+        if not comp_type:
+            logger.warning("No comparison type defined for test %s", test_name)
+            test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            return
 
-        Args:
-            test_result: The TestResult proto to update.
-            experiment: The experiment dictionary from Ramble results.
-            metrics_map: A map of metric keys to Metric proto objects.
-        """
-        success_criteria = experiment.get("SUCCESS_CRITERIA", {})
-        application_name = experiment.get("application_name")
+        resolved_name = self.pm.resolve_test_name(test_name)
+        plugin = self.pm.get_plugin(resolved_name or test_name)
+        aliases = plugin.get_fom_aliases()
+        relative_pairs = plugin.get_relative_fom_keys()
 
-        app_mappings = self.success_criteria_mapping.get("applications", {})
+        overall_success = True
+        metrics_map = {m.key: m for m in test_result.metrics}
 
-        app_mapping = app_mappings.get(application_name, {})
+        if comp_type == "relative":
+            for th_key, th_val in merged_thresholds.items():
+                validation = pb.ValidationCriteria(
+                    comparator=pb.Comparator.COMPARATOR_GTE, name=th_key
+                )
+                validation.expected_value.number_value = float(th_val)
 
-        for criteria_key, status in success_criteria.items():
-            simple_name = criteria_key.split("::")[-1]
+                for pair in relative_pairs:
+                    ach_key, peak_key = pair
+                    peak_metric = metrics_map.get(peak_key)
+                    if not peak_metric:
+                        logger.warning(
+                            "Peak metric %s not found for relative check",
+                            peak_key,
+                        )
+                        continue
 
-            validation = pb.ValidationCriteria()
-            fom_regex_or_def = app_mapping.get(simple_name)
-            if not fom_regex_or_def:
-                fom_regex_or_def = app_mapping.get(simple_name.strip("{}"))
+                    for m in test_result.metrics:
+                        if m.key == ach_key:
+                            ach_val = (
+                                m.value.number_value
+                                if m.value.HasField("number_value")
+                                else 0
+                            )
+                            peak_val = (
+                                peak_metric.value.number_value
+                                if peak_metric.value.HasField("number_value")
+                                else 0
+                            )
 
-            if isinstance(fom_regex_or_def, dict):
-                fom_regex = fom_regex_or_def.get("fom_name")
-                formula = fom_regex_or_def.get("formula")
-                if formula:
-                    self._parse_formula(formula, validation)
-            else:
-                fom_regex = fom_regex_or_def
+                            if peak_val > 0:
+                                ratio = ach_val / peak_val
+                                is_pass = ratio >= float(th_val)
+                            else:
+                                ratio = 0
+                                is_pass = False
 
-            if fom_regex:
-                try:
-                    pattern = re.compile(fom_regex)
-                except re.error:
-                    pattern = None
+                            m_validation = pb.ValidationCriteria()
+                            m_validation.CopyFrom(validation)
+                            m_validation.result_status = (
+                                pb.RESULT_STATUS_SUCCESS
+                                if is_pass
+                                else pb.RESULT_STATUS_FAILED
+                            )
+                            m.validation_criteria.CopyFrom(m_validation)
 
-                for metric_key, metric in metrics_map.items():
-                    is_match = False
-                    if pattern and pattern.fullmatch(metric_key):
-                        is_match = True
-                    if not is_match and fnmatch.fnmatch(metric_key, fom_regex):
-                        is_match = True
+                            if not is_pass:
+                                overall_success = False
 
-                    if is_match:
+        else:
+            for th_key, th_val in merged_thresholds.items():
+                raw_fom_name = aliases.get(th_key, th_key)
+
+                found_metric = False
+                for metric in test_result.metrics:
+                    if metric.key == raw_fom_name:
+                        found_metric = True
+                        validation = pb.ValidationCriteria(name=th_key)
+                        if comp_type == "min":
+                            validation.comparator = pb.Comparator.COMPARATOR_GTE
+                        elif comp_type == "scalar":
+                            validation.comparator = pb.Comparator.COMPARATOR_EQ
+
+                        if isinstance(th_val, bool):
+                            validation.expected_value.bool_value = th_val
+                        elif isinstance(th_val, (int, float)):
+                            validation.expected_value.number_value = float(
+                                th_val
+                            )
+                        else:
+                            validation.expected_value.string_value = str(th_val)
+
+                        is_pass = False
+                        if metric.value.HasField("number_value") and isinstance(
+                            th_val, (int, float)
+                        ):
+                            obs_val = metric.value.number_value
+                            if comp_type == "min":
+                                is_pass = obs_val >= float(th_val)
+                            elif comp_type == "scalar":
+                                is_pass = obs_val == float(th_val)
+                        elif metric.value.HasField("bool_value") and isinstance(
+                            th_val, bool
+                        ):
+                            obs_val = metric.value.bool_value
+                            is_pass = obs_val == th_val
+                        elif metric.value.HasField("string_value"):
+                            obs_val = metric.value.string_value
+                            is_pass = obs_val.lower() == str(th_val).lower()
+
+                        validation.result_status = (
+                            pb.RESULT_STATUS_SUCCESS
+                            if is_pass
+                            else pb.RESULT_STATUS_FAILED
+                        )
                         metric.validation_criteria.CopyFrom(validation)
+
+                        if not is_pass:
+                            overall_success = False
+
+                if not found_metric:
+                    logger.warning(
+                        "Metric %s (alias for %s) not found in results",
+                        raw_fom_name,
+                        th_key,
+                    )
+
+        test_result.result_status = (
+            pb.RESULT_STATUS_SUCCESS
+            if overall_success
+            else pb.RESULT_STATUS_FAILED
+        )
+
+    def _fallback_string_match(self, test_result: pb.TestResult) -> None:
+        """Fallback: search string metrics for 'PASS' (case-insensitive)."""
+        overall_success = False
+        found_string_metric = False
+
+        for m in test_result.metrics:
+            if m.value.HasField("string_value"):
+                found_string_metric = True
+                val = m.value.string_value
+                if "pass" in val.lower():
+                    overall_success = True
+                    validation = pb.ValidationCriteria(
+                        comparator=pb.Comparator.COMPARATOR_CONTAINS,
+                        result_status=pb.RESULT_STATUS_SUCCESS,
+                        name="default_fallback",
+                    )
+                    validation.expected_value.string_value = "PASS"
+                    m.validation_criteria.CopyFrom(validation)
+                elif "fail" in val.lower():
+                    validation = pb.ValidationCriteria(
+                        comparator=pb.Comparator.COMPARATOR_CONTAINS,
+                        result_status=pb.RESULT_STATUS_FAILED,
+                        name="default_fallback",
+                    )
+                    validation.expected_value.string_value = "PASS"
+                    m.validation_criteria.CopyFrom(validation)
+                    overall_success = False
+                    break
+
+        if found_string_metric:
+            test_result.result_status = (
+                pb.RESULT_STATUS_SUCCESS
+                if overall_success
+                else pb.RESULT_STATUS_FAILED
+            )
+        else:
+            test_result.result_status = pb.RESULT_STATUS_SUCCESS
 
     def _extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         """Extracts test name and level, delegating to plugins if available."""
@@ -181,24 +305,6 @@ class BOHGenerator:
         plugin = self.pm.get_plugin(resolved_name or exp_name)
 
         return plugin.extract_test_info(exp)
-
-    def _get_result_status(self, success_criteria: dict[str, str]) -> int:
-        """Maps experiment success criteria to ResultStatus."""
-        if not success_criteria:
-            return pb.RESULT_STATUS_UNKNOWN
-
-        statuses = {s.upper() for s in success_criteria.values()}
-
-        if "FAILED" in statuses:
-            return pb.RESULT_STATUS_FAILED
-        if "TIMEOUT" in statuses:
-            return pb.RESULT_STATUS_TIMEOUT
-        if "CANCELLED" in statuses:
-            return pb.RESULT_STATUS_CANCELLED
-        if statuses == {"PASSED"}:
-            return pb.RESULT_STATUS_SUCCESS
-
-        return pb.RESULT_STATUS_UNKNOWN
 
     def generate(self) -> pb.BillOfHealth:
         """Generates the Bill of Health report."""
@@ -232,9 +338,6 @@ class BOHGenerator:
 
             if desc:
                 test_result.metadata.fields["description"].string_value = desc
-            test_result.result_status = self._get_result_status(
-                exp.get("SUCCESS_CRITERIA", {})
-            )
             metrics_map = {}
 
             tags = exp.get("TAGS", [])
@@ -289,7 +392,11 @@ class BOHGenerator:
             for metric in test_result.metrics:
                 metrics_map[metric.key] = metric
 
-            self._process_success_criteria(test_result, exp, metrics_map)
+            machine_type = ramble_vars.get("machine_type", "default")
+            if not self.skip_validation:
+                self._evaluate_thresholds(machine_type, test_result)
+            else:
+                test_result.result_status = pb.RESULT_STATUS_UNKNOWN
 
             self.report.test_results.append(test_result)
 

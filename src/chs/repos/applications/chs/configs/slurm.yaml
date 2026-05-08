@@ -52,15 +52,6 @@ a3-mega:
       nccl-tests_path: "{nccl_tests_build_dir}/build/"
       begin_message_size: "256M"
       end_message_size: "8G"
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
-      out_of_bounds_values:
-        mode: fom_comparison
-        fom_name: "Out of bounds values"
-        formula: "{value} == 0"
   nvidia-smi:
     variables:
       n_ranks: 1
@@ -82,15 +73,6 @@ a3-ultra:
       nccl-tests_path: "/third_party/nccl-tests/build/"
       begin_message_size: "256M"
       end_message_size: "8G"
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
-      out_of_bounds_values:
-        mode: fom_comparison
-        fom_name: "Out of bounds values"
-        formula: "{value} == 0"
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
@@ -148,15 +130,6 @@ a4:
       nccl-tests_path: "/third_party/nccl-tests/build/"
       begin_message_size: "256M"
       end_message_size: "8G"
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
-      out_of_bounds_values:
-        mode: fom_comparison
-        fom_name: "Out of bounds values"
-        formula: "{value} == 0"
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
@@ -263,12 +236,3 @@ a4x:
       nccl-tests_path: "{nccl_tests_build_dir}/build/"
       begin_message_size: "256M"
       end_message_size: "8G"
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
-      out_of_bounds_values:
-        mode: fom_comparison
-        fom_name: "Out of bounds values"
-        formula: "{value} == 0"

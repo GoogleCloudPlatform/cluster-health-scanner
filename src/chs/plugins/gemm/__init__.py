@@ -4,7 +4,8 @@ from .renderer import GemmRenderer
 
 
 class GemmPlugin(GemmRenderer, GemmExtractor, TestPlugin):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"performance": "Value"}
 
 
 __chs_plugin__ = {

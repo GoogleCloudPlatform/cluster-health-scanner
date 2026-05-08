@@ -148,6 +148,9 @@ class ResultsViewer:
                 grouped_results[key] = []
             grouped_results[key].append(result)
 
+        from chs.core.default_plugin import DefaultPlugin
+        from chs.core.default_plugin.renderer import DefaultRenderer
+
         for (canonical_name, test_level), results in grouped_results.items():
             plugin = self.plugin_manager.get_plugin(canonical_name)
             if hasattr(plugin, "set_topology"):
@@ -163,9 +166,23 @@ class ResultsViewer:
                 for m in res.metrics
             )
 
+            has_thresholds = any(
+                m.HasField("validation_criteria") and m.validation_criteria.name
+                for res in results
+                for m in res.metrics
+            )
+
             if detail is not None or has_errors:
                 if detail is not None:
                     self.console.print(detail)
+
+                if (
+                    detail is not None
+                    and not isinstance(plugin, DefaultPlugin)
+                    and has_thresholds
+                ):
+                    raw_detail = DefaultRenderer().render_detail(results)
+                    self.console.print(raw_detail)
 
                 self._append_errors(results)
                 self.console.print()

@@ -6,7 +6,8 @@ from .renderer import NcclPairwiseRenderer
 class NcclPairwisePlugin(
     NcclPairwiseRenderer, NcclPairwiseExtractor, TestPlugin
 ):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"bandwidth": "Avg. Bus Bandwidth"}
 
 
 __chs_plugin__ = {

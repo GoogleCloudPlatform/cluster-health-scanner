@@ -573,7 +573,10 @@ class TestCli(unittest.TestCase):
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
                 mock_analyze_action.assert_called_once_with(
-                    self.mock_app_data, MOCK_WORKSPACE_NAME
+                    self.mock_app_data,
+                    MOCK_WORKSPACE_NAME,
+                    validation=None,
+                    skip_validation=False,
                 )
 
     def test_analyze_action_exception_handling(self):
@@ -910,7 +913,7 @@ class TestCli(unittest.TestCase):
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = workspace_dir
 
-        def mock_generate_boh(results_path):
+        def mock_generate_boh(results_path, **kwargs):
             boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")
@@ -925,7 +928,9 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         self.mock_rm_instance.wait_for_jobs.assert_not_called()
-        self.mock_rm_instance.generate_boh.assert_called_once_with(results_path)
+        self.mock_rm_instance.generate_boh.assert_called_once_with(
+            results_path, thresholds_path=None, skip_validation=False
+        )
         mock_results_viewer.assert_called_once()
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
@@ -943,7 +948,7 @@ class TestCli(unittest.TestCase):
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = workspace_dir
 
-        def mock_analyze_results():
+        def mock_analyze_results(**kwargs):
             boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")

@@ -457,6 +457,8 @@ class TestRambleManager(unittest.TestCase):
                                 base_log_dir=f"{self.tmp_dir}/ws1",
                                 cluster_type="slurm",
                                 gcs_base_path="gs://my-bucket/workspaces/ws1",
+                                thresholds_path=None,
+                                skip_validation=False,
                             )
                         mock_boh_gen.return_value.generate.assert_called_once()
                         mock_cancel.assert_called_once()

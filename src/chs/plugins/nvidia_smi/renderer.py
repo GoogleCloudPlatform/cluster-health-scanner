@@ -32,15 +32,24 @@ class NvidiaSmiRenderer(DefaultRenderer):
                 if res.target_resource_ids
                 else "Unknown Node"
             )
+            validation_status = "N/A"
+            if res.result_status == pb.RESULT_STATUS_SUCCESS:
+                validation_status = "[green]PASS[/]"
+            elif res.result_status == pb.RESULT_STATUS_FAILED:
+                validation_status = "[red]FAIL[/]"
+
             if nodes not in node_data:
                 node_data[nodes] = {
                     "summary": {
                         "Driver Version": "N/A",
                         "CUDA Version": "N/A",
                         "GPU Count": "N/A",
+                        "Validation": validation_status,
                     },
                     "gpus": {},
                 }
+            else:
+                node_data[nodes]["summary"]["Validation"] = validation_status
 
             for m in res.metrics:
                 key = m.key
@@ -94,6 +103,7 @@ class NvidiaSmiRenderer(DefaultRenderer):
         summary_table.add_column("Driver Version")
         summary_table.add_column("CUDA Version")
         summary_table.add_column("GPU Count", justify="right")
+        summary_table.add_column("Validation")
 
         for node, data in node_data.items():
             summary_table.add_row(
@@ -101,6 +111,7 @@ class NvidiaSmiRenderer(DefaultRenderer):
                 data["summary"]["Driver Version"],
                 data["summary"]["CUDA Version"],
                 data["summary"]["GPU Count"],
+                data["summary"].get("Validation", "N/A"),
             )
         return summary_table
 

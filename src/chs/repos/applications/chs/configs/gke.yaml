@@ -44,11 +44,6 @@ a3-ultra:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
@@ -150,11 +145,6 @@ a4:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
@@ -438,12 +428,6 @@ a4x:
           --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]

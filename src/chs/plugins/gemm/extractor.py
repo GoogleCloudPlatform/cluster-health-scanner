@@ -3,6 +3,11 @@ from chs.core.default_plugin.extractor import DefaultExtractor
 
 
 class GemmExtractor(DefaultExtractor):
+    def extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
+        """Prevent DefaultExtractor from stripping name to 'check'."""
+        workload = exp.get("workload_name", "")
+        return "gemm", workload, self.get_description("gemm")
+
     def get_required_contexts(
         self, contexts: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:

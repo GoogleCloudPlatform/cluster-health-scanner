@@ -4,7 +4,8 @@ from .renderer import StreamRenderer
 
 
 class StreamPlugin(StreamRenderer, DefaultExtractor, TestPlugin):
-    pass
+    def get_relative_fom_keys(self) -> list[tuple[str, str]]:
+        return [("Rate", "PEAK Bandwidth")]
 
 
 __chs_plugin__ = {
