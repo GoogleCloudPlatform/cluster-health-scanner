@@ -58,6 +58,7 @@ class RambleManager:
 
         self._base_dir = base_dir
         self._workspace_name = workspace_name
+
         self._path = os.path.join(self._base_dir, self._workspace_name)
         self._app_data = ChsAppData()
 
@@ -147,32 +148,30 @@ class RambleManager:
                 )
                 log_file.flush()
 
-                process = subprocess.run(
+                completed_process = subprocess.run(
                     cmd,
                     cwd=cwd,
                     env=run_env,
-                    capture_output=True,
-                    # We use text=True to get strings instead of bytes
+                    capture_output=capture_output,
                     text=True,
-                    check=False,  # We handle check manually
+                    check=False,
                 )
+                if completed_process.stdout:
+                    log_file.write(completed_process.stdout)
+                if completed_process.stderr:
+                    log_file.write(completed_process.stderr)
 
-                if process.stdout:
-                    log_file.write(process.stdout)
-
-                if process.stderr:
-                    log_file.write(process.stderr)
-
-                if check and process.returncode != 0:
+                if check and completed_process.returncode != 0:
                     msg = (
-                        f"Command failed with exit code {process.returncode}. "
+                        f"Command failed with exit code "
+                        f"{completed_process.returncode}. "
                         f"See {log_file_path} for details."
                     )
                     if error_context:
                         msg = f"{error_context}. {msg}"
                     raise ex.ChsException(msg)
 
-                return process
+                return completed_process
 
         except Exception as e:
             msg = (
@@ -204,6 +203,8 @@ class RambleManager:
           capture_output: Whether to capture stdout/stderr.
           env: A dictionary of environment variables to add to the command
             execution.
+          error_context: Optional context message to prepend to the error
+            message if the command fails.
           check: If True, raises a ChsException if the command returns a
             non-zero exit code.
 
@@ -338,6 +339,19 @@ class RambleManager:
             error_context="Failed to setup workspace",
         )
 
+    def _register_initial_run(self) -> None:
+        """Registers an initial empty run in the app data."""
+        run_entry = {
+            "run_id": self._workspace_name,
+            "workspace_path": self.path,
+            "job_entries": {},
+            "submission_time": (
+                datetime.datetime.now(datetime.timezone.utc).isoformat()
+            ),
+            "scheduler": self._scheduler.name,
+        }
+        self._app_data.update_run(self._workspace_name, run_entry)
+
     def execute_experiments(self) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
@@ -351,6 +365,9 @@ class RambleManager:
         """
 
         logger.debug("Executing experiments in %s...", self.path)
+
+        self._register_initial_run()
+
         output = self._execute_ramble_command(
             subcommand="on",
             args=[],
@@ -360,40 +377,37 @@ class RambleManager:
         ).stdout
 
         job_ids = self._scheduler.parse_job_ids(output)
-        logger.debug("Captured Job IDs: %s", job_ids)
+        if job_ids:
+            self._update_registry(job_ids)
 
-        self._update_registry(job_ids)
         return job_ids
 
     def cancel_experiments(self) -> None:
         """Cancels running experiments in the Ramble workspace.
 
-        This retrieves job IDs from the registry and cancels them via the
-        scheduler.
+        This calls the scheduler to cancel all jobs matching the workspace's
+        unique prefix, guaranteeing stateless cleanup even if jobs weren't
+        registered.
 
         Raises:
           click.ClickException: If the experiment cancellation command fails.
         """
         registry_entry = self._app_data.get_run(self._workspace_name)
-        if not registry_entry:
-            logger.warning("No registry entry found. Cannot cancel jobs.")
-            click.echo(
-                f"No registry entry found for run {self._workspace_name}."
-            )
-            return
-
-        job_ids = self.get_job_ids()
-        if not job_ids:
-            logger.warning("No job IDs found in registry. Cannot cancel jobs.")
-            click.echo(f"No job IDs found for run {self._workspace_name}.")
-            return
-
-        scheduler_name = registry_entry.get("scheduler", "slurm")
+        scheduler_name = (
+            registry_entry.get("scheduler", "slurm")
+            if registry_entry
+            else "slurm"
+        )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
         scheduler = get_scheduler(scheduler_name)
 
-        logger.debug("Canceling experiments %s in %s...", job_ids, self.path)
-        scheduler.cancel_jobs(job_ids)
+        prefix = "chs-"
+        logger.debug(
+            "Canceling experiments with prefix %s in %s...", prefix, self.path
+        )
+
+        # Delete jobs statelessly by prefix to guarantee cleanup.
+        scheduler.cancel_jobs_by_prefix(prefix)
 
     def _update_registry(self, job_ids: list[str]) -> None:
         """Updates the runs registry with the current run information."""

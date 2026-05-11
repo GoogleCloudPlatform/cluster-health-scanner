@@ -591,11 +591,12 @@ class TestCli(unittest.TestCase):
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
+        self.mock_app_data.get_latest_run_id.return_value = "some_run_id"
         self.mock_rm_instance.check_jobs_running.return_value = True
         self.mock_rm_instance.cancel_experiments.side_effect = (
             exceptions.ChsCancellationException("Cancellation failed")
         )
-        result = self.runner.invoke(cli.cli, ["cancel", "some_run_id"])
+        result = self.runner.invoke(cli.cli, ["cancel"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
         self.mock_rm_instance.archive.assert_called_once()

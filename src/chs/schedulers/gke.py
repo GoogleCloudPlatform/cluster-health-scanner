@@ -558,3 +558,37 @@ class GKEScheduler(BaseScheduler):
         except subprocess.CalledProcessError as e:
             logger.error("Failed to delete JobSets. Error: %s", e.stderr)
             click.echo(f"Failed to delete JobSets: {e.stderr}")
+
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all JobSets matching the specified prefix natively."""
+        logger.debug("Attempting native cancel for prefix: %s", prefix)
+        # Match the sanitized prefix as a substring in the JobSet name.
+        sanitized_match = prefix.replace("_", "-").replace(".", "-").lower()
+
+        try:
+            # List all JobSets
+            output = self._run_kubectl(["get", "jobset", "-o", "name"])
+            if not output:
+                return
+
+            job_ids = []
+            for line in output.splitlines():
+                if sanitized_match in line:
+                    job_name = line.split("/")[-1]
+                    job_ids.append(job_name)
+
+            if job_ids:
+                logger.info(
+                    "Found %d JobSets to cancel matching %s.",
+                    len(job_ids),
+                    prefix,
+                )
+                self.cancel_jobs(job_ids)
+            else:
+                logger.debug("No matching JobSets found for %s.", prefix)
+        except FileNotFoundError:
+            logger.warning(
+                "kubectl command not found. Cannot perform native cancel."
+            )
+        except Exception as e:
+            logger.warning("Native cancel failed: %s", e)

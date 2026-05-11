@@ -81,6 +81,11 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all jobs matching the specified prefix."""
+        pass
+
+    @abc.abstractmethod
     def check_jobs_running(self, job_ids: list[str]) -> bool:
         """Checks if the given jobs are still running."""
         pass
@@ -91,10 +96,6 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given jobs."""
-        pass
-
     @abc.abstractmethod
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs.

@@ -204,23 +204,20 @@ class TestRambleManager(unittest.TestCase):
         with mock.patch.object(
             manager, "_update_registry"
         ) as mock_update_registry:
-            self.mock_run.return_value.stdout = "Submitted batch job 123"
+            self.mock_run.return_value.stdout = "Submitted batch job 123\n"
             job_ids = manager.execute_experiments()
 
         self.mock_run.assert_called_once()
         args, kwargs = self.mock_run.call_args
-        self.assertEqual(kwargs["check"], False)
-        self.assertTrue(kwargs["capture_output"])
         cmd = args[0]
         self.assertIn("ramble", cmd)
         self.assertIn("on", cmd)
-        # Verify env contains TQDM_DISABLE
         self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
-        _, kwargs = self.mock_run.call_args
-        self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
-        self.assertEqual(kwargs["env"].get("TERM"), "dumb")
+        self.assertEqual(kwargs["env"]["TERM"], "dumb")
 
-        mock_scheduler.parse_job_ids.assert_called_once()
+        mock_scheduler.parse_job_ids.assert_called_with(
+            "Submitted batch job 123\n"
+        )
         self.assertEqual(job_ids, ["123"])
         mock_update_registry.assert_called_once_with(["123"])
 

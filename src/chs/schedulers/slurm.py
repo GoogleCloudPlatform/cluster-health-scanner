@@ -416,3 +416,47 @@ class SlurmScheduler(BaseScheduler):
             raise ex.ChsCancellationException(
                 f"Failed to cancel jobs: {e}"
             ) from e
+
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all jobs matching the specified prefix natively."""
+        logger.debug("Attempting native cancel for prefix: %s", prefix)
+        try:
+            # List jobs for current user and extract job IDs matching the prefix
+            cmd = [
+                "squeue",
+                "-h",
+                "-o",
+                "%i %j",
+                "-u",
+                os.environ.get("USER", ""),
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "Failed to list jobs via squeue for cancellation."
+                )
+                return
+
+            job_ids = []
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].startswith(prefix):
+                    job_ids.append(parts[0])
+
+            if job_ids:
+                logger.info(
+                    "Found %d jobs to cancel for prefix %s.",
+                    len(job_ids),
+                    prefix,
+                )
+                self.cancel_jobs(job_ids)
+            else:
+                logger.debug("No matching jobs found for prefix %s.", prefix)
+        except FileNotFoundError:
+            logger.warning(
+                "squeue command not found. Cannot perform native cancel."
+            )
+        except Exception as e:
+            logger.warning("Native cancel failed: %s", e)

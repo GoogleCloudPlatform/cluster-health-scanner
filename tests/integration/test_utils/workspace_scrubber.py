@@ -57,6 +57,7 @@ class WorkspaceScrubber:
     def __init__(self, workspace_root: str):
         self.workspace_root = workspace_root
         self.home_dir = os.path.expanduser("~")
+        self.workspace_name = os.path.basename(workspace_root)
 
     def scrub_text(self, content: str) -> str:
         content = content.replace(self.workspace_root, "<WORKSPACE_ROOT>")

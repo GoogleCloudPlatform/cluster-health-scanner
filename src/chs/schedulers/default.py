@@ -43,6 +43,7 @@ class DefaultScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
+        workspace_hash: str,
         timeout: int | None = None,
         deadline: int | None = None,
     ) -> None:
@@ -63,8 +64,8 @@ class DefaultScheduler(BaseScheduler):
         """Parses job IDs from the experiment execution output."""
         return []
 
-    def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given jobs."""
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all jobs matching the specified prefix."""
         pass
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:

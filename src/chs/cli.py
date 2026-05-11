@@ -77,6 +77,25 @@ def archive_workspace(
             ramble_manager.archive()
 
 
+@contextmanager
+def cancel_jobs_on_failure(
+    scheduler_obj: BaseScheduler, prefix: str, active: bool = True
+):
+    """Context manager to ensure jobs are cancelled on failure."""
+    try:
+        yield
+    except BaseException:
+        if active:
+            logger.info(
+                "Run failed or interrupted. Cleaning up spawned jobs..."
+            )
+            try:
+                scheduler_obj.cancel_jobs_by_prefix(prefix)
+            except Exception as e:
+                logger.error(f"Failed to cancel jobs during cleanup: {e}")
+        raise
+
+
 def _get_suites_list() -> list[str]:
     """Returns lines for available suites."""
     suites = list(resources.SUPPORTED_SUITES.keys())
@@ -762,38 +781,45 @@ def run(
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
-
-    logger.debug("Workspaces base directory: %s", workspaces_base_dir)
-    job_ids = run_action(
-        suite=suite,
-        scheduler_obj=scheduler_obj,
-        tests=parsed_tests,
-        workspace_name=workspace_name,
-        workspaces_base_dir=workspaces_base_dir,
-        machine_type=machine_type,
-        dry_run=dry_run,
-        timeout=timeout,
-        deadline=deadline,
-        validation=validation,
-        skip_validation=skip_validation,
-    )
     logger.info("Request ID (Workspace Name): %s", workspace_name)
+    logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
-    result = RunExecutionResult(
-        suite=suite,
-        scheduler_name=scheduler_obj.name,
-        tests=parsed_tests,
-        workspace_name=workspace_name,
-        workspaces_base_dir=workspaces_base_dir,
-        job_ids=job_ids,
-    )
+    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+        job_ids = run_action(
+            suite=suite,
+            scheduler_obj=scheduler_obj,
+            tests=parsed_tests,
+            workspace_name=workspace_name,
+            workspaces_base_dir=workspaces_base_dir,
+            machine_type=machine_type,
+            dry_run=dry_run,
+            timeout=timeout,
+            deadline=deadline,
+            validation=validation,
+            skip_validation=skip_validation,
+        )
 
-    if dry_run:
-        logger.info("Dry run completed. Workspace setup is ready.")
-        return result
+        result = RunExecutionResult(
+            suite=suite,
+            scheduler_name=scheduler_obj.name,
+            tests=parsed_tests,
+            workspace_name=workspace_name,
+            workspaces_base_dir=workspaces_base_dir,
+            job_ids=job_ids,
+        )
 
-    logger.info("Run submitted successfully.")
-    logger.info("Job IDs: %s", ", ".join(job_ids))
+        if dry_run:
+            logger.info("Dry run completed. Workspace setup is ready.")
+            return result
+
+        if not job_ids:
+            raise ex.JobSubmissionFailureException(
+                f"Job submission failed for workspace: {workspace_name}. "
+                "Please check internal.log for details."
+            )
+
+        logger.info("Run submitted successfully.")
+        logger.info("Job IDs: %s", ", ".join(job_ids))
 
     # Automatically trigger analysis
     analyze_action(
@@ -855,30 +881,11 @@ def analyze(
 
 @cli.command()
 @handle_chs_exceptions
-@click.argument(
-    "run_id", required=False, callback=validators.validate_non_empty_string
-)
 @click.pass_obj
-def cancel(obj, run_id: str | None) -> str:
-    """Cancel running jobs for a test run.
-
-    If no run_id is provided, the most recent run from the workspaces directory
-    will be used.
-
-    \b
-    Args:
-      obj: Click object containing app_data.
-      run_id: The ID of the test run to cancel.
-
-    Returns:
-      The run_id of the canceled test run.
-    """
+def cancel(obj) -> str:
+    """Cancel all running CHS jobs (using scheduler from latest run)."""
     app_data = obj["app_data"]
-    if not run_id:
-        run_id = app_data.get_latest_run_id()
-        logger.info("No run_id provided. Using latest run: %s", run_id)
-        logger.info("Canceling latest run: %s", run_id)
-
+    run_id = app_data.get_latest_run_id()
     return cancel_action(app_data, run_id)
 
 
