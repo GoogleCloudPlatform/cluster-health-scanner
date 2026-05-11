@@ -45,19 +45,33 @@ class BOHGenerator:
     def _load_thresholds(self) -> dict:
         """Loads thresholds from workspace or default path."""
         path = self.thresholds_path
+        explicit = bool(path)
         if not path and self.file_path:
             workspace_dir = os.path.dirname(self.file_path)
             path = os.path.join(workspace_dir, "thresholds.yaml")
 
-        if path and os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    logger.info("Loading thresholds from %s", path)
-                    return yaml.safe_load(f) or {}
-            except Exception as e:
-                logger.warning("Failed to load thresholds from %s: %s", path, e)
-        else:
-            logger.warning("Thresholds file not found at %s", path)
+        if path:
+            if os.path.exists(path):
+                try:
+                    with open(path, "r") as f:
+                        logger.info("Loading thresholds from %s", path)
+                        data = yaml.safe_load(f) or {}
+                        return data
+                except (yaml.YAMLError, OSError) as e:
+                    logger.warning(
+                        "Failed to load thresholds from %s: %s", path, e
+                    )
+                    if explicit:
+                        raise ValueError(
+                            f"Failed to load explicit thresholds file {path}: "
+                            f"{e}"
+                        ) from e
+            else:
+                if explicit:
+                    raise FileNotFoundError(
+                        f"Explicit thresholds file not found at {path}"
+                    )
+                logger.warning("Thresholds file not found at %s", path)
 
         internal_path = os.path.join(
             os.path.dirname(__file__), "configs", "thresholds.yaml"
@@ -69,8 +83,9 @@ class BOHGenerator:
                         "Loading default internal thresholds from %s",
                         internal_path,
                     )
-                    return yaml.safe_load(f) or {}
-            except Exception as e:
+                    data = yaml.safe_load(f) or {}
+                    return data
+            except (yaml.YAMLError, OSError) as e:
                 logger.warning("Failed to load internal thresholds: %s", e)
         return {}
 

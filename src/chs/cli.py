@@ -241,7 +241,11 @@ def _parse_str_to_list(value: str | None) -> list[str] | None:
 
 
 def _validate_run_args(
-    scheduler: str, machine_type: str, tests: str | None, suite: str | None
+    scheduler: str,
+    machine_type: str,
+    tests: str | None,
+    suite: str | None,
+    validation: str | None = None,
 ) -> None:
     """Validates core run arguments against supported lists.
 
@@ -250,6 +254,7 @@ def _validate_run_args(
       machine_type: Machine type string.
       tests: Comma-separated list of tests, or None.
       suite: Suite name, or None.
+      validation: Path to thresholds validation file, or None.
 
     Raises:
       ex.ChsValidationError: If validation fails.
@@ -261,6 +266,7 @@ def _validate_run_args(
             "machine_type": machine_type,
             "suite": suite,
             "tests": _parse_str_to_list(tests),
+            "thresholds_path": validation,
         }
     )
     if errors:
@@ -717,7 +723,7 @@ def run(
             " complete or cancel it before submitting a new run."
         )
 
-    _validate_run_args(scheduler, machine_type, tests, suite)
+    _validate_run_args(scheduler, machine_type, tests, suite, validation)
 
     timeout = resources.DEFAULT_TIMEOUT
     deadline = resources.DEFAULT_DEADLINE
@@ -897,6 +903,13 @@ def analyze(
         run_id = app_data.get_latest_run_id()
         logger.info("No run_id provided. Using latest run: %s", run_id)
         logger.info("Analyzing latest run: %s", run_id)
+
+    if validation:
+        errors = validators.ThresholdsValidator().validate(
+            {"thresholds_path": validation}
+        )
+        if errors:
+            raise ex.ChsValidationError("\n".join(errors))
 
     return analyze_action(
         app_data, run_id, validation=validation, skip_validation=skip_validation

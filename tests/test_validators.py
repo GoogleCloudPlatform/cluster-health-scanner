@@ -1,5 +1,6 @@
 """Unit tests for the Cluster Health Scanner (CHS) validators package."""
 
+import os
 import unittest
 import click
 from unittest import mock
@@ -192,6 +193,78 @@ class TestValidators(unittest.TestCase):
         self.assertTrue(any("Suite" in e for e in errors))
         self.assertTrue(any("Scheduler" in e for e in errors))
         self.assertTrue(any("Machine type" in e for e in errors))
+
+    def test_thresholds_validator_valid(self):
+        import tempfile
+        import yaml
+
+        v = validators.ThresholdsValidator()
+        valid_data = {
+            "default": {
+                "my-test": {
+                    "type": "min",
+                    "thresholds": {"bandwidth": 80},
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            yaml.dump(valid_data, f)
+            f_path = f.name
+
+        try:
+            errors = v.validate({"thresholds_path": f_path})
+            self.assertEqual(errors, [])
+        finally:
+            os.remove(f_path)
+
+    def test_thresholds_validator_invalid_yaml(self):
+        import tempfile
+
+        v = validators.ThresholdsValidator()
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            f.write("invalid: yaml: [")
+            f_path = f.name
+
+        try:
+            errors = v.validate({"thresholds_path": f_path})
+            self.assertTrue(any("Failed to parse YAML" in e for e in errors))
+        finally:
+            os.remove(f_path)
+
+    def test_thresholds_validator_invalid_schema(self):
+        import tempfile
+        import yaml
+
+        v = validators.ThresholdsValidator()
+        invalid_data = {
+            "default": {
+                "my-test": {
+                    "type": "invalid_type",
+                    "thresholds": {"bandwidth": 80},
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            yaml.dump(invalid_data, f)
+            f_path = f.name
+
+        try:
+            errors = v.validate({"thresholds_path": f_path})
+            self.assertTrue(
+                any("Invalid type 'invalid_type'" in e for e in errors)
+            )
+        finally:
+            os.remove(f_path)
+
+    def test_thresholds_validator_file_not_found(self):
+        v = validators.ThresholdsValidator()
+        errors = v.validate({"thresholds_path": "/nonexistent/file.yaml"})
+        self.assertTrue(any("Thresholds file not found" in e for e in errors))
+
+    def test_thresholds_validator_no_path(self):
+        v = validators.ThresholdsValidator()
+        errors = v.validate({})
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

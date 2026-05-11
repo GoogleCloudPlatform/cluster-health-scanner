@@ -801,6 +801,15 @@ class TestBOHGenerator(unittest.TestCase):
         # Verify that other fields are NOT there
         self.assertNotIn("scheduler", report.system_info.metadata.fields)
 
+    def test_load_thresholds_invalid_yaml(self):
+        """Test that invalid YAML logs warning and falls back."""
+        thresh_file = os.path.join(self.test_dir.name, "bad_yaml.yaml")
+        with open(thresh_file, "w") as f:
+            f.write("invalid: yaml: [")
+
+        with self.assertRaises(ValueError):
+            BOHGenerator(self.test_json_path, thresholds_path=thresh_file)
+
 
 if __name__ == "__main__":
     unittest.main()
