@@ -198,6 +198,55 @@ class TestTestHelper(unittest.TestCase):
             call_args = mock_create.call_args[0]
             self.assertEqual(call_args[0], "test-node-{node}")
 
+    def test_tpu_collectives_single_node_test(self):
+        variables = {
+            "scheduler": "gke",
+            "machine_type": "tpuv6e",
+            "tpu_topology": "4x4",
+            "cores_per_chip": 1,
+            "nodes": ["node1"],
+        }
+        configs = {
+            "tpuv6e": {
+                "tpu_topology": "4x4",
+                "tpu-collectives-single-node": {
+                    "variables": {
+                        "driver_escape_overrides": "export TPU_TOPOLOGY=2x2x1"
+                    },
+                },
+            }
+        }
+
+        mock_yaml_content = """
+        benchmarks:
+          all_gather:
+            mesh_shape: "__MESH__"
+            ici_size: __ICI__
+        """
+
+        with (
+            mock.patch(
+                "chs.repos.applications.chs.test_helper.create_context_from_dict"
+            ) as mock_create,
+            mock.patch(
+                "chs.repos.applications.chs.test_helper.TestHelper._load_benchmark_config",
+                return_value=mock_yaml_content,
+            ),
+        ):
+            mock_create.side_effect = lambda name, ctx: ctx
+
+            ctx = TestHelper.tpu_collectives_single_node_test(
+                variables, "test-collectives", configs
+            )
+
+            escaped_config = ctx["variables"]["benchmarks_yaml_escaped"]
+            unescaped = escaped_config.replace("\\n", "\n").replace(
+                "\\\\", "\\"
+            )
+
+            self.assertIn('mesh_shape: "2x2x1"', unescaped)
+            self.assertIn("ici_size: 4", unescaped)
+
 
 if __name__ == "__main__":
     unittest.main()

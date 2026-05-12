@@ -518,9 +518,13 @@ podAntiAffinity:
     @staticmethod
     def _inject_tpu_collectives_params(ctx_vars: dict) -> None:
         """Applies mesh shape and topology replacements to the escaped config."""
-        if "tpu_topology" not in ctx_vars:
-            raise ValueError("tpu_topology not found in variables")
-        topology = ctx_vars["tpu_topology"]
+        topology = ctx_vars.get("execution_topology") or ctx_vars.get(
+            "tpu_topology"
+        )
+        if not topology:
+            raise ValueError(
+                "Neither execution_topology nor tpu_topology found in variables"
+            )
         if "cores_per_chip" not in ctx_vars:
             raise ValueError("cores_per_chip not found in variables")
         cores_per_chip = int(ctx_vars["cores_per_chip"])
