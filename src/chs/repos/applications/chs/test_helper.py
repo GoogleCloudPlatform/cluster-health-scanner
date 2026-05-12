@@ -200,6 +200,7 @@ podAntiAffinity:
         ramble_app_name: str,
         nodes_list: list[str] = None,
         extra_context: dict = None,
+        default_config_file: str = None,
     ) -> dict:
         ctx_vars = copy.deepcopy(variables)
         scheduler = ctx_vars.get("scheduler", "gke")
@@ -212,7 +213,7 @@ podAntiAffinity:
         ctx_vars["n_nodes"] = len(nodes_list)
         sched_nodes_str = TestHelper._get_nodes_str(scheduler, nodes_list)
 
-        return TestHelper._prepare_base_context(
+        context_dict = TestHelper._prepare_base_context(
             ctx_vars,
             configs,
             ramble_app_name,
@@ -220,15 +221,21 @@ podAntiAffinity:
             extra_context=extra_context,
         )
 
+        if default_config_file:
+            TestHelper._load_and_escape_benchmark_config(
+                context_dict["variables"], default_config_file
+            )
+
+        return context_dict
+
     @staticmethod
-    def _create_node_test_context(
+    def _prepare_node_context(
         variables: dict,
-        experiment_name: str,
         configs: dict,
         ramble_app_name: str,
         extra_context: dict = None,
         extra_sbatch_headers: dict = None,
-    ) -> Context:
+    ) -> dict:
         ctx_vars = copy.deepcopy(variables)
         scheduler = ctx_vars.get("scheduler", "gke")
 
@@ -239,9 +246,8 @@ podAntiAffinity:
             if scheduler == "slurm"
             else TestHelper._yaml_block(" - {node}", 12)
         )
-        exp_name = f"{experiment_name}-{{node}}"
 
-        context_dict = TestHelper._prepare_base_context(
+        return TestHelper._prepare_base_context(
             ctx_vars,
             configs,
             ramble_app_name,
@@ -249,6 +255,31 @@ podAntiAffinity:
             extra_context=extra_context,
             extra_sbatch_headers=extra_sbatch_headers,
         )
+
+    @staticmethod
+    def _create_node_test_context(
+        variables: dict,
+        experiment_name: str,
+        configs: dict,
+        ramble_app_name: str,
+        extra_context: dict = None,
+        extra_sbatch_headers: dict = None,
+        default_config_file: str = None,
+    ) -> Context:
+        context_dict = TestHelper._prepare_node_context(
+            variables,
+            configs,
+            ramble_app_name,
+            extra_context=extra_context,
+            extra_sbatch_headers=extra_sbatch_headers,
+        )
+
+        if default_config_file:
+            TestHelper._load_and_escape_benchmark_config(
+                context_dict["variables"], default_config_file
+            )
+
+        exp_name = f"{experiment_name}-{{node}}"
         return create_context_from_dict(exp_name, context_dict)
 
     @staticmethod
@@ -446,53 +477,15 @@ podAntiAffinity:
         ctx_vars["benchmarks_yaml_escaped"] = escaped
 
     @staticmethod
-    def tpu_benchmark_test(
-        variables: dict,
-        experiment_name: str,
-        configs: dict,
-        ramble_app_name: str,
-        default_config_file: str,
-    ) -> Context:
-        ctx_vars = copy.deepcopy(variables)
-        if "driver_escape_overrides" in ctx_vars:
-            ctx_vars["driver_escape_overrides"] = ctx_vars[
-                "driver_escape_overrides"
-            ].strip()
-
-        scheduler = ctx_vars.get("scheduler", "gke")
-
-        ctx_vars["node"] = ctx_vars.get("nodes")
-
-        nodes_str = (
-            "{node}"
-            if scheduler == "slurm"
-            else TestHelper._yaml_block(" - {node}", 12)
-        )
-        exp_name = f"{experiment_name}-{{node}}"
-
-        context_dict = TestHelper._prepare_base_context(
-            ctx_vars,
-            configs,
-            ramble_app_name,
-            nodes_str,
-            extra_context={"modifiers": []},
-        )
-
-        TestHelper._load_and_escape_benchmark_config(
-            context_dict["variables"], default_config_file
-        )
-
-        return create_context_from_dict(exp_name, context_dict)
-
-    @staticmethod
     def tpu_gemm_test(
         variables: dict, experiment_name: str, configs: dict
     ) -> Context:
-        return TestHelper.tpu_benchmark_test(
+        return TestHelper._create_node_test_context(
             variables,
             experiment_name,
             configs,
             ramble_app_name="tpu-gemm",
+            extra_context={"modifiers": []},
             default_config_file="gemm_16384_bf16.yaml",
         )
 
@@ -500,11 +493,12 @@ podAntiAffinity:
     def tpu_hbm_test(
         variables: dict, experiment_name: str, configs: dict
     ) -> Context:
-        return TestHelper.tpu_benchmark_test(
+        return TestHelper._create_node_test_context(
             variables,
             experiment_name,
             configs,
             ramble_app_name="tpu-hbm",
+            extra_context={"modifiers": []},
             default_config_file="hbm_copy_bf16.yaml",
         )
 
@@ -512,10 +506,53 @@ podAntiAffinity:
     def tpu_host_device_test(
         variables: dict, experiment_name: str, configs: dict
     ) -> Context:
-        return TestHelper.tpu_benchmark_test(
+        return TestHelper._create_node_test_context(
             variables,
             experiment_name,
             configs,
             ramble_app_name="tpu-host-device",
+            extra_context={"modifiers": []},
             default_config_file="host_device.yaml",
         )
+
+    @staticmethod
+    def _inject_tpu_collectives_params(ctx_vars: dict) -> None:
+        """Applies mesh shape and topology replacements to the escaped config."""
+        topology = ctx_vars.get("tpu_topology", "2x2x1")
+        cores_per_chip = int(ctx_vars.get("cores_per_chip", 1))
+
+        dims = [int(d) for d in topology.split("x") if d.isdigit()]
+        if not dims:
+            raise ValueError(f"Invalid topology detected {topology}")
+
+        ici = cores_per_chip
+        for d in dims:
+            ici *= d
+
+        scaled_dims = [dims[0] * cores_per_chip] + dims[1:]
+        mesh_shape = "x".join(str(d) for d in scaled_dims)
+
+        escaped = ctx_vars.get("benchmarks_yaml_escaped", "")
+        escaped = (
+            escaped.replace("__MESH__", mesh_shape)
+            .replace("__SHARDING__", mesh_shape)
+            .replace("__ICI__", str(ici))
+            .replace("__START__", str(max(8, ici)))
+        )
+        ctx_vars["benchmarks_yaml_escaped"] = escaped
+
+    @staticmethod
+    def tpu_collectives_test(
+        variables: dict,
+        experiment_name: str,
+        configs: dict,
+    ) -> Context:
+        context_dict = TestHelper._prepare_cluster_context(
+            variables,
+            configs,
+            ramble_app_name="tpu-collectives",
+            extra_context={"modifiers": []},
+            default_config_file="collectives_all_gather.yaml",
+        )
+        TestHelper._inject_tpu_collectives_params(context_dict["variables"])
+        return create_context_from_dict(experiment_name, context_dict)

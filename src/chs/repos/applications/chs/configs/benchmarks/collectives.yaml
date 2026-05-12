@@ -1,0 +1,24 @@
+benchmarks:
+- benchmark_name: all_gather
+  benchmark_sweep_params:
+  - {matrix_dim_range: {start: __START__, end: 16384, multiplier: 2}, dtype: "float32", mesh_shape: "__MESH__", ici_size_range: __ICI__, sharding_strategy: "__SHARDING__", op_dimension: 1, num_runs: 20}
+  trace_dir: "../microbenchmarks/collectives/all_gather"
+  csv_path: "../microbenchmarks/collectives/all_gather"
+  xlml_metrics_dir: "../microbenchmarks/collectives/all_gather"
+  xla_dump_dir: "../microbenchmarks/collectives/all_gather/hlo_graphs"
+
+- benchmark_name: psum
+  benchmark_sweep_params:
+  - {matrix_dim_range: {start: __START__, end: 16384, multiplier: 2}, dtype: "float32", mesh_shape: "__MESH__", ici_size_range: __ICI__, sharding_strategy: "__SHARDING__", op_dimension: 1, num_runs: 20}
+  trace_dir: "../microbenchmarks/collectives/psum"
+  csv_path: "../microbenchmarks/collectives/psum"
+  xlml_metrics_dir: "../microbenchmarks/collectives/psum"
+  xla_dump_dir: "../microbenchmarks/collectives/psum/hlo_graphs"
+
+- benchmark_name: all_to_all
+  benchmark_sweep_params:
+  - {matrix_dim_range: {start: __START__, end: 16384, multiplier: 2}, dtype: "float32", mesh_shape: "__MESH__", ici_size_range: __ICI__, sharding_strategy: "__SHARDING__", op_dimension: 1, num_runs: 20}
+  trace_dir: "../microbenchmarks/collectives/all_to_all"
+  csv_path: "../microbenchmarks/collectives/all_to_all"
+  xlml_metrics_dir: "../microbenchmarks/collectives/all_to_all"
+  xla_dump_dir: "../microbenchmarks/collectives/all_to_all/hlo_graphs"

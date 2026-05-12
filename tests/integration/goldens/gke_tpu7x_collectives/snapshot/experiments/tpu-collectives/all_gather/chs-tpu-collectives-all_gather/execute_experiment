@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "tpu-collectives" = "chs" ]; then
+    echo "Skipping JobSet submission for tpu-collectives scaffolding experiment."
+    echo "Submitted chs-tpu-collectives-all_gather at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-collectives/all_gather/chs-tpu-collectives-all_gather/chs-tpu-collectives-all_gather.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/tpu-collectives/all_gather/chs-tpu-collectives-all_gather/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/tpu-collectives/all_gather/chs-tpu-collectives-all_gather/jobset.yaml"
+echo "Submitted chs-tpu-collectives-all_gather at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-collectives/all_gather/chs-tpu-collectives-all_gather/chs-tpu-collectives-all_gather.out
+

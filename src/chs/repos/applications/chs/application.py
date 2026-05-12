@@ -326,6 +326,28 @@ class Chs(ExecutableApplication):
                 self.experiment_set.render_chained_experiments(
                     application_name, "check", context
                 )
+            elif test.name == "collectives":
+                application_name = "tpu-collectives"
+                workloads = (
+                    test.workloads
+                    if test.workloads
+                    else ["all_gather", "psum", "all_to_all"]
+                )
+
+                for workload in workloads:
+                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
+
+                    config_file = f"collectives_{workload}.yaml"
+                    local_vars["benchmarks_yaml_file"] = config_file
+
+                    context = TestHelper.tpu_collectives_test(
+                        local_vars, experiment_name, deepcopy(configs)
+                    )
+                    self.experiment_set.render_chained_experiments(
+                        application_name, workload, context
+                    )
             elif test.name == "tpu-info":
                 application_name = "tpu-info"
                 experiment_name = f"{self.expander.experiment_name}-{test.name}"
