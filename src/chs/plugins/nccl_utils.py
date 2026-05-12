@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import theme
+from chs.core.default_plugin.renderer import DefaultRenderer
 
 from rich.table import Table
 from rich.text import Text
@@ -54,7 +55,9 @@ def get_topological_context(
 
 
 def create_nccl_table(
-    resource_column_name: str, include_topology: bool = False
+    resource_column_name: str,
+    include_topology: bool = False,
+    has_thresholds: bool = False,
 ) -> Table:
     """Creates a standardized Table for NCCL metrics."""
     table = theme.create_styled_table(
@@ -67,7 +70,8 @@ def create_nccl_table(
         table.add_column("Topological Context")
     table.add_column("Peak Bandwidth (GB/s)", justify="right")
     table.add_column("Msg Size (GB)", justify="right")
-    table.add_column("Validation")
+    if has_thresholds:
+        table.add_column("Validation")
     return table
 
 
@@ -82,6 +86,8 @@ def render_nccl_detail(
         return Text(
             "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
         )
+
+    has_thresholds = DefaultRenderer._has_validation_criteria(test_results)
 
     node_to_location = {}
     if topology:
@@ -101,7 +107,9 @@ def render_nccl_detail(
                 break
 
     table = create_nccl_table(
-        resource_column_name, include_topology=include_topology
+        resource_column_name,
+        include_topology=include_topology,
+        has_thresholds=has_thresholds,
     )
 
     for res in test_results:
@@ -136,7 +144,8 @@ def render_nccl_detail(
         elif res.result_status == pb.RESULT_STATUS_FAILED:
             validation_status = "[red]FAIL[/]"
 
-        row.append(validation_status)
+        if has_thresholds:
+            row.append(validation_status)
 
         table.add_row(*row)
 

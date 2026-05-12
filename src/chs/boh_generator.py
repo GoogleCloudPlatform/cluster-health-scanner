@@ -138,7 +138,7 @@ class BOHGenerator:
         )
 
         if not default_cfg and not machine_cfg:
-            self._fallback_string_match(test_result)
+            test_result.result_status = pb.RESULT_STATUS_UNKNOWN
             return
 
         merged_thresholds = {}
@@ -271,44 +271,6 @@ class BOHGenerator:
             if overall_success
             else pb.RESULT_STATUS_FAILED
         )
-
-    def _fallback_string_match(self, test_result: pb.TestResult) -> None:
-        """Fallback: search string metrics for 'PASS' (case-insensitive)."""
-        overall_success = False
-        found_string_metric = False
-
-        for m in test_result.metrics:
-            if m.value.HasField("string_value"):
-                found_string_metric = True
-                val = m.value.string_value
-                if "pass" in val.lower():
-                    overall_success = True
-                    validation = pb.ValidationCriteria(
-                        comparator=pb.Comparator.COMPARATOR_CONTAINS,
-                        result_status=pb.RESULT_STATUS_SUCCESS,
-                        name="default_fallback",
-                    )
-                    validation.expected_value.string_value = "PASS"
-                    m.validation_criteria.CopyFrom(validation)
-                elif "fail" in val.lower():
-                    validation = pb.ValidationCriteria(
-                        comparator=pb.Comparator.COMPARATOR_CONTAINS,
-                        result_status=pb.RESULT_STATUS_FAILED,
-                        name="default_fallback",
-                    )
-                    validation.expected_value.string_value = "PASS"
-                    m.validation_criteria.CopyFrom(validation)
-                    overall_success = False
-                    break
-
-        if found_string_metric:
-            test_result.result_status = (
-                pb.RESULT_STATUS_SUCCESS
-                if overall_success
-                else pb.RESULT_STATUS_FAILED
-            )
-        else:
-            test_result.result_status = pb.RESULT_STATUS_SUCCESS
 
     def _extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         """Extracts test name and level, delegating to plugins if available."""

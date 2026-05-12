@@ -497,7 +497,7 @@ class TestBOHGenerator(unittest.TestCase):
         )
 
     def test_generate_fallback_string_match(self):
-        """Test fallback string matching when no thresholds are defined."""
+        """Test fallback string match is disabled when no thresholds defined."""
         data_pass = {
             "experiments": [
                 {
@@ -520,7 +520,7 @@ class TestBOHGenerator(unittest.TestCase):
         generator = BOHGenerator(self.test_json_path)
         report = generator.generate()
         self.assertEqual(
-            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+            report.test_results[0].result_status, pb.RESULT_STATUS_UNKNOWN
         )
 
         data_fail = {
@@ -542,7 +542,7 @@ class TestBOHGenerator(unittest.TestCase):
         generator = BOHGenerator(self.test_json_path)
         report = generator.generate()
         self.assertEqual(
-            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+            report.test_results[0].result_status, pb.RESULT_STATUS_UNKNOWN
         )
 
     def test_generate_metadata_relative_log(self):

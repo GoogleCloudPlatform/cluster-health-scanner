@@ -26,13 +26,16 @@ class GemmRenderer(DefaultRenderer):
         if not test_results:
             return Text("No detailed metrics available.", style="yellow")
 
+        has_thresholds = self._has_validation_criteria(test_results)
+
         table = create_styled_table(expand=False)
         table.add_column("Workload")
         table.add_column("Node")
         table.add_column("Min (TFLOPS)", justify="right")
         table.add_column("Median (TFLOPS)", justify="right")
         table.add_column("Max (TFLOPS)", justify="right")
-        table.add_column("Validation")
+        if has_thresholds:
+            table.add_column("Validation")
 
         parsed_results: list[GemmParsedResult] = []
         for res in test_results:
@@ -93,14 +96,16 @@ class GemmRenderer(DefaultRenderer):
             min_str, median_str, max_str = map(
                 format_val, [min_tflops, median_tflops, max_tflops]
             )
-            table.add_row(
+            row = [
                 item.test_level,
                 item.nodes,
                 min_str,
                 median_str,
                 max_str,
-                item.validation_status,
-            )
+            ]
+            if has_thresholds:
+                row.append(item.validation_status)
+            table.add_row(*row)
 
         return Group(
             Text("\nGEMM Detail", style="bold"),

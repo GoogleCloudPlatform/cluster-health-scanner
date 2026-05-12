@@ -8,6 +8,15 @@ from chs.utils import create_styled_table
 class DefaultRenderer:
     """Default visualization logic using Rich."""
 
+    @staticmethod
+    def _has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
+        """Checks if any metric in the test results has validation criteria."""
+        return any(
+            m.HasField("validation_criteria") and m.validation_criteria.name
+            for res in test_results
+            for m in res.metrics
+        )
+
     def render_detail(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
