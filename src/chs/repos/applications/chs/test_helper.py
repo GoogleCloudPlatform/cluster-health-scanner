@@ -156,6 +156,105 @@ podAntiAffinity:
         _merge(app_cfg, "variables", context_dict, "variables")
 
     @staticmethod
+    def _prepare_base_context(
+        ctx_vars: dict,
+        configs: dict,
+        ramble_app_name: str,
+        nodes_str: str,
+        extra_context: dict = None,
+        extra_sbatch_headers: dict = None,
+    ) -> dict:
+        scheduler = ctx_vars.get("scheduler", "gke")
+        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+
+        context_dict = {
+            "variables": ctx_vars,
+        }
+        if extra_context:
+            context_dict.update(extra_context)
+
+        TestHelper._merge_configs(
+            context_dict, configs, machine_type, ramble_app_name
+        )
+
+        if scheduler == "slurm":
+            headers_dict = TestHelper._build_common_sbatch_headers(
+                ctx_vars, nodes_str
+            )
+            if extra_sbatch_headers:
+                headers_dict.update(extra_sbatch_headers)
+            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
+                headers_dict
+            )
+        elif scheduler == "gke":
+            nodes_list = ctx_vars.get("nodes")
+            nodes_list = nodes_list if isinstance(nodes_list, list) else None
+            TestHelper._k8s_settings(ctx_vars, nodes_str, nodes_list=nodes_list)
+
+        return context_dict
+
+    @staticmethod
+    def _prepare_cluster_context(
+        variables: dict,
+        configs: dict,
+        ramble_app_name: str,
+        nodes_list: list[str] = None,
+        extra_context: dict = None,
+    ) -> dict:
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "gke")
+
+        if nodes_list is not None:
+            ctx_vars["nodes"] = nodes_list
+        else:
+            nodes_list = ctx_vars.get("nodes", [])
+
+        ctx_vars["n_nodes"] = len(nodes_list)
+        sched_nodes_str = TestHelper._get_nodes_str(scheduler, nodes_list)
+
+        return TestHelper._prepare_base_context(
+            ctx_vars,
+            configs,
+            ramble_app_name,
+            nodes_str=sched_nodes_str,
+            extra_context=extra_context,
+        )
+
+    @staticmethod
+    def _create_node_test_context(
+        variables: dict,
+        experiment_name: str,
+        configs: dict,
+        ramble_app_name: str,
+        extra_context: dict = None,
+        extra_sbatch_headers: dict = None,
+        set_n_nodes: bool = False,
+    ) -> Context:
+        ctx_vars = copy.deepcopy(variables)
+        scheduler = ctx_vars.get("scheduler", "gke")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+        if set_n_nodes:
+            ctx_vars["n_nodes"] = len(ctx_vars.get("nodes", []))
+
+        nodes_str = (
+            "{node}"
+            if scheduler == "slurm"
+            else TestHelper._yaml_block(" - {node}", 12)
+        )
+        exp_name = f"{experiment_name}-{{node}}"
+
+        context_dict = TestHelper._prepare_base_context(
+            ctx_vars,
+            configs,
+            ramble_app_name,
+            nodes_str,
+            extra_context=extra_context,
+            extra_sbatch_headers=extra_sbatch_headers,
+        )
+        return create_context_from_dict(exp_name, context_dict)
+
+    @staticmethod
     def _nccl_context(
         variables,
         experiment_name,
@@ -163,32 +262,12 @@ podAntiAffinity:
         nodes_list,
         test_type="nccl-cluster",
     ):
-        ctx_vars = copy.deepcopy(variables)
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
-        scheduler = ctx_vars.get("scheduler", "slurm")
-        ctx_vars["nodes"] = nodes_list
-        ctx_vars["n_nodes"] = len(nodes_list)
-        sched_nodes_str = TestHelper._get_nodes_str(scheduler, nodes_list)
-
-        context_dict = {
-            "variables": ctx_vars,
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "nccl-tests"
+        context_dict = TestHelper._prepare_cluster_context(
+            variables,
+            configs,
+            ramble_app_name="nccl-tests",
+            nodes_list=nodes_list,
         )
-
-        if scheduler == "slurm":
-            headers_dict = TestHelper._build_common_sbatch_headers(
-                ctx_vars, sched_nodes_str
-            )
-            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
-                headers_dict
-            )
-
-        elif scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, sched_nodes_str, nodes_list=nodes_list
-            )
 
         if test_type == "nccl-pairwise":
             experiment_name = (
@@ -199,6 +278,7 @@ podAntiAffinity:
             context_dict.setdefault("env_vars", {}).setdefault("set", {})[
                 "NCCL_NET"
             ] = "Socket"
+
         return create_context_from_dict(experiment_name, context_dict)
 
     @staticmethod
@@ -289,156 +369,57 @@ podAntiAffinity:
 
     @staticmethod
     def nvidia_smi_test(variables, experiment_name, configs):
-        ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "slurm")
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
-
-        ctx_vars["node"] = ctx_vars.get("nodes")
-
-        experiment_template_name = f"{experiment_name}-{{node}}"
-
-        context_dict = {
-            "variables": ctx_vars,
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "nvidia-smi"
+        return TestHelper._create_node_test_context(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="nvidia-smi",
         )
-
-        if scheduler == "slurm":
-            headers_dict = TestHelper._build_common_sbatch_headers(
-                ctx_vars, "{node}"
-            )
-            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
-                headers_dict
-            )
-        elif scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-        return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
     def dcgm_test(variables, experiment_name, configs):
-        ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "slurm")
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
-
-        ctx_vars["node"] = ctx_vars.get("nodes")
-
-        modifiers = []
-        experiment_template_name = f"{experiment_name}-{{node}}"
-
-        context_dict = {
-            "variables": ctx_vars,
-            "matrix": ["node", "diag_level"],
-            "modifiers": modifiers,
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "nvidia-dcgm"
+        return TestHelper._create_node_test_context(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="nvidia-dcgm",
+            extra_context={
+                "matrix": ["node", "diag_level"],
+                "modifiers": [],
+            },
         )
-
-        if scheduler == "slurm":
-            headers_dict = TestHelper._build_common_sbatch_headers(
-                ctx_vars, "{node}"
-            )
-            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
-                headers_dict
-            )
-        elif scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-        return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
     def stream_test(variables, experiment_name, configs):
-        ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "slurm")
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
-
-        ctx_vars["node"] = ctx_vars.get("nodes")
-
-        modifiers = []
-        experiment_template_name = f"{experiment_name}-{{node}}"
-
-        context_dict = {
-            "variables": ctx_vars,
-            "modifiers": modifiers,
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "nvidia-stream"
+        return TestHelper._create_node_test_context(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="nvidia-stream",
+            extra_context={"modifiers": []},
+            extra_sbatch_headers={"--gpu-bind": "single:1"},
         )
-
-        if scheduler == "slurm":
-            headers_dict = TestHelper._build_common_sbatch_headers(
-                ctx_vars, "{node}"
-            )
-            headers_dict["--gpu-bind"] = "single:1"
-            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
-                headers_dict
-            )
-        elif scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-        return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
     def gemm_test(variables, experiment_name, configs):
-        ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "slurm")
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
-
-        ctx_vars["node"] = ctx_vars.get("nodes")
-
-        modifiers = []
-        experiment_template_name = f"{experiment_name}-{{node}}"
-
-        context_dict = {
-            "variables": ctx_vars,
-            "modifiers": modifiers,
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "nvidia-gemm"
+        return TestHelper._create_node_test_context(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="nvidia-gemm",
+            extra_context={"modifiers": []},
         )
-
-        if scheduler == "slurm":
-            headers_dict = TestHelper._build_common_sbatch_headers(
-                ctx_vars, "{node}"
-            )
-            ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
-                headers_dict
-            )
-        elif scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-        return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
     def tpu_info_test(variables, experiment_name, configs):
-        ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "gke")
-        machine_type = ctx_vars.get("machine_type", "tpu7x")
-
-        ctx_vars["node"] = ctx_vars.get("nodes")
-        ctx_vars["n_nodes"] = len(ctx_vars["nodes"])
-        modifiers = []
-        experiment_template_name = f"{experiment_name}-{{node}}"
-
-        context_dict = {
-            "variables": ctx_vars,
-            "modifiers": modifiers,
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, "tpu-info"
+        return TestHelper._create_node_test_context(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-info",
+            extra_context={"modifiers": []},
+            set_n_nodes=True,
         )
-
-        if scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, TestHelper._yaml_block(" - {node}", 12)
-            )
-        return create_context_from_dict(experiment_template_name, context_dict)
 
     @staticmethod
     def _load_benchmark_config(filename):
@@ -476,30 +457,17 @@ podAntiAffinity:
         ramble_app_name: str,
         default_config_file: str,
     ) -> Context:
-        ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "gke")
-        machine_type = ctx_vars.get("machine_type", "tpu7x")
-        nodes_list = ctx_vars.get("nodes", [])
-
-        ctx_vars["n_nodes"] = len(nodes_list)
-        sched_nodes_str = TestHelper._get_nodes_str(scheduler, nodes_list)
-
-        context_dict = {
-            "variables": ctx_vars,
-            "modifiers": [],
-        }
-        TestHelper._merge_configs(
-            context_dict, configs, machine_type, ramble_app_name
+        context_dict = TestHelper._prepare_cluster_context(
+            variables,
+            configs,
+            ramble_app_name=ramble_app_name,
+            extra_context={"modifiers": []},
         )
 
         TestHelper._load_and_escape_benchmark_config(
-            ctx_vars, default_config_file
+            context_dict["variables"], default_config_file
         )
 
-        if scheduler == "gke":
-            TestHelper._k8s_settings(
-                ctx_vars, sched_nodes_str, nodes_list=nodes_list
-            )
         return create_context_from_dict(experiment_name, context_dict)
 
     @staticmethod

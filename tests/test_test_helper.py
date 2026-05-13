@@ -116,6 +116,93 @@ class TestTestHelper(unittest.TestCase):
             self.assertEqual(results[0].context_name, "test-exp-node1-node2")
             self.assertEqual(results[1].context_name, "test-exp-node3-node4")
 
+    def test_prepare_base_context(self):
+        ctx_vars = {
+            "scheduler": "slurm",
+            "machine_type": "a3-ultra",
+            "timeout": 600,
+            "deadline": 3600,
+            "nodes": ["node1"],
+        }
+        configs = {
+            "a3-ultra": {
+                "my-app": {
+                    "variables": {"default_var": "val"},
+                }
+            }
+        }
+        context_dict = TestHelper._prepare_base_context(
+            ctx_vars,
+            configs,
+            ramble_app_name="my-app",
+            nodes_str="node1",
+            extra_context={"custom_key": "custom_val"},
+            extra_sbatch_headers={"--gpu-bind": "single:1"},
+        )
+        self.assertEqual(context_dict["custom_key"], "custom_val")
+        self.assertEqual(context_dict["variables"]["default_var"], "val")
+        self.assertIn(
+            "#SBATCH --gpu-bind=single:1",
+            context_dict["variables"]["extra_sbatch_headers"],
+        )
+
+    def test_prepare_cluster_context(self):
+        variables = {
+            "scheduler": "gke",
+            "machine_type": "tpu7x",
+        }
+        configs = {
+            "tpu7x": {
+                "my-app": {
+                    "variables": {},
+                }
+            }
+        }
+        context_dict = TestHelper._prepare_cluster_context(
+            variables,
+            configs,
+            ramble_app_name="my-app",
+            nodes_list=["node1", "node2"],
+        )
+        self.assertEqual(context_dict["variables"]["n_nodes"], 2)
+        self.assertEqual(context_dict["variables"]["nodes"], ["node1", "node2"])
+        self.assertIn(
+            "device.pool == 'node1'",
+            context_dict["variables"]["cel_filter_expression"],
+        )
+
+    def test_create_node_test_context(self):
+        variables = {
+            "scheduler": "slurm",
+            "machine_type": "a3-ultra",
+            "timeout": 600,
+            "deadline": 3600,
+            "nodes": ["node1"],
+        }
+        configs = {
+            "a3-ultra": {
+                "my-app": {
+                    "variables": {},
+                }
+            }
+        }
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict"
+        ) as mock_create:
+            mock_create.return_value = "mock_context"
+            result = TestHelper._create_node_test_context(
+                variables,
+                "test-node",
+                configs,
+                ramble_app_name="my-app",
+                set_n_nodes=True,
+            )
+            self.assertEqual(result, "mock_context")
+            mock_create.assert_called_once()
+            call_args = mock_create.call_args[0]
+            self.assertEqual(call_args[0], "test-node-{node}")
+            self.assertEqual(call_args[1]["variables"]["n_nodes"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
