@@ -65,6 +65,12 @@ class GkeJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="suspend_jobset",
+        default="false",
+        description="Whether to suspend the JobSet (used for Kueue)",
+    )
+
+    workflow_manager_variable(
         name="jobset_annotations_yaml",
         default="",
         description="Raw YAML string for JobSet metadata.annotations",
@@ -301,7 +307,11 @@ class GkeJobset(WorkflowManagerBase):
         ).replace(raw_job_name, sanitized_job_name)
 
         priv_key, pub_key = self._generate_ssh_keys()
+        suspend = expander.expand_var_name("suspend_jobset")
+        suspend_section = "suspend: true" if suspend == "true" else ""
+
         return {
+            "suspend_section": suspend_section,
             "custom_resources_section": custom_res,
             "pod_resource_claims_section": pod_claims,
             "jobset_labels_section": jl,

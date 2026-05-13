@@ -3,9 +3,11 @@ kind: JobSet
 metadata:
   name: chs-nvidia-gemm-check-<HASH>
   namespace: default
-
+  labels:
+    kueue.x-k8s.io/queue-name: chs-local-queue
 
 spec:
+  suspend: true
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true

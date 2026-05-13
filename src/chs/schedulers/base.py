@@ -23,12 +23,28 @@ class BaseScheduler(abc.ABC):
     def run_preflight_checks(
         self,
         tests: list[dict[str, Any]] | None = None,
+        workspace_name: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Runs preflight checks for the scheduler. Optional to implement."""
         return tests
 
-    def cleanup(self) -> None:
-        """Cleans up resources created by the scheduler. Optional."""
+    def setup_scheduler_resources(
+        self,
+        workspace_config_dir: str,
+        tests: list[dict[str, Any]] | None = None,
+        machine_type: str = "",
+        workspace_name: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Sets up scheduler-specific infrastructure resources.
+
+        Optional to implement.
+        """
+        return tests
+
+    def cleanup_scheduler_resources(
+        self, workspace_name: str | None = None
+    ) -> None:
+        """Cleans up scheduler-specific resources. Optional to implement."""
         pass
 
     @property
@@ -70,6 +86,7 @@ class BaseScheduler(abc.ABC):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -95,7 +112,6 @@ class BaseScheduler(abc.ABC):
         """Parses job IDs from the experiment execution output."""
         pass
 
-    @abc.abstractmethod
     @abc.abstractmethod
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs.

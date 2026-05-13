@@ -18,7 +18,8 @@ if TYPE_CHECKING:
 
 
 from chs.schedulers.base import BaseScheduler
-from chs.exceptions import NetworkDiscoveryException
+from chs.utils.kueue import KueueManager
+from chs.exceptions import NetworkDiscoveryException, KueueException
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.gke_preflight import GkePreflightChecker
 
@@ -47,6 +48,11 @@ class GKEScheduler(BaseScheduler):
         self.nodes_arg = nodes
         self.nodepool_arg = nodepool
         self._resolved_nodes: list[str] | None = None
+        self.workspace_config_dir: str | None = None
+        self.workspace_name: str | None = None
+        self.kueue_supported: bool = False
+        self._jobset_labels_yaml: str = ""
+        self._suspend_jobset: str = "false"
         if nodelist:
             logger.warning(
                 "nodelist argument is ignored for GKE scheduler. Did you want"
@@ -61,10 +67,54 @@ class GKEScheduler(BaseScheduler):
     def run_preflight_checks(
         self,
         tests: list[dict[str, Any]] | None = None,
+        workspace_name: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Checks for JobSet and Kueue dependencies on GKE."""
         preflight_checker = GkePreflightChecker(self)
-        return preflight_checker.check(tests)
+        filtered_tests, kueue_supported = preflight_checker.check(tests)
+        self.kueue_supported = kueue_supported
+        if workspace_name:
+            self.workspace_name = workspace_name
+            if self._app_data:
+                run_entry = self._app_data.get_run(workspace_name) or {}
+                run_entry.update({"run_id": workspace_name})
+                self._app_data.update_run(workspace_name, run_entry)
+        return filtered_tests
+
+    def setup_scheduler_resources(
+        self,
+        workspace_config_dir: str,
+        tests: list[dict[str, Any]] | None = None,
+        machine_type: str = "",
+        workspace_name: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Sets up scheduler-specific resources like Kueue configurations."""
+        self.workspace_config_dir = workspace_config_dir
+        os.makedirs(workspace_config_dir, exist_ok=True)
+
+        if self.kueue_supported:
+            try:
+                nodes = self.get_nodes_under_test()
+                kueue_mgr = KueueManager(self)
+                self._jobset_labels_yaml = kueue_mgr.setup(
+                    workspace_config_dir, machine_type, nodes or []
+                )
+                self._suspend_jobset = "true"
+            except KueueException as e:
+                logger.warning(
+                    "Failed to setup Kueue resources: %s. "
+                    "Falling back to standard scheduling without Kueue.",
+                    e,
+                )
+                self.kueue_supported = False
+
+                filtered_tests = (
+                    GkePreflightChecker(self)._filter_tests_without_kueue(tests)
+                    or []
+                )
+                return filtered_tests
+
+        return tests
 
     @property
     def name(self) -> str:
@@ -244,7 +294,9 @@ class GKEScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
+        self.workspace_config_dir = workspace_config_dir
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with gke_template.yaml")
         template_path = pkg_resources.files("chs.schedulers").joinpath(
@@ -285,6 +337,11 @@ class GKEScheduler(BaseScheduler):
             topology = self._discover_tpu_topology(nodes[0])
             if topology:
                 variables["tpu_topology"] = topology
+
+        if self._jobset_labels_yaml:
+            variables["jobset_labels_yaml"] = self._jobset_labels_yaml
+        if self._suspend_jobset == "true":
+            variables["suspend_jobset"] = "true"
 
         logger.debug("Configuration: %r", config)
 
@@ -542,6 +599,37 @@ class GKEScheduler(BaseScheduler):
             r"([a-zA-Z0-9.-]+)\s+(?:created|configured|unchanged)"
         )
         return re.findall(regex, output)
+
+    def cleanup_scheduler_resources(
+        self,
+        workspace_name: str | None = None,
+        run_entry: dict[str, Any] | None = None,
+    ) -> None:
+        """Cleans up scheduler-specific resources like Kueue configurations."""
+        if not run_entry and workspace_name and self._app_data:
+            run_entry = self._app_data.get_run(workspace_name) or {}
+        else:
+            run_entry = run_entry or {}
+
+        workspace_path = run_entry.get("workspace_path")
+        config_dir = self.workspace_config_dir
+        if not config_dir and workspace_path:
+            config_dir = os.path.join(workspace_path, "configs")
+
+        kueue_config_path = ""
+        if config_dir:
+            kueue_config_path = os.path.join(config_dir, "kueue-configs.yaml")
+
+        file_exists = kueue_config_path and os.path.exists(kueue_config_path)
+
+        if file_exists:
+            kueue_mgr = KueueManager(self)
+            kueue_mgr.cleanup(kueue_config_path)
+        else:
+            logger.debug(
+                "Kueue configuration file not found at %s; skipping deletion.",
+                kueue_config_path,
+            )
 
     def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given JobSets using kubectl delete."""

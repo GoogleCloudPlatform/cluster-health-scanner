@@ -19,6 +19,7 @@ metadata:
 {jobset_labels_section}
 {jobset_annotations_section}
 spec:
+  {suspend_section}
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true

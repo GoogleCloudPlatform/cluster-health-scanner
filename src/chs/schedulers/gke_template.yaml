@@ -15,6 +15,8 @@ ramble:
     all_interfaces_json: ""
     timeout: 0
     deadline: 0
+    jobset_labels_yaml: ""
+    suspend_jobset: false
 
   applications:
     chs:

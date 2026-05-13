@@ -27,9 +27,10 @@ class TestGkePreflightChecker(unittest.TestCase):
         with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [crd_output, version_output]
             original_tests = [{"name": "test1"}, {"name": "nccl-cluster"}]
-            filtered_tests = self.checker.check(original_tests)
+            filtered_tests, kueue_supported = self.checker.check(original_tests)
             self.assertEqual(mock_run.call_count, 2)
             self.assertEqual(filtered_tests, original_tests)
+            self.assertTrue(kueue_supported)
 
     def test_check_crds_installed_version_invalid(self):
         """Test that 'nccl-cluster' is removed if Kueue version < 0.14.5."""
@@ -41,8 +42,9 @@ class TestGkePreflightChecker(unittest.TestCase):
         with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [crd_output, version_output]
             tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            filtered = self.checker.check(tests)
+            filtered, kueue_supported = self.checker.check(tests)
             self.assertEqual(filtered, [{"name": "nvidia-smi"}])
+            self.assertFalse(kueue_supported)
 
     def test_check_crds_missing_raises_exception(self):
         """Test that missing JobSet causes it to fail fast."""
@@ -63,8 +65,9 @@ class TestGkePreflightChecker(unittest.TestCase):
             self.checker, "_run_kubectl", return_value=crd_output
         ):
             tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            filtered = self.checker.check(tests)
+            filtered, kueue_supported = self.checker.check(tests)
             self.assertEqual(filtered, [{"name": "nvidia-smi"}])
+            self.assertFalse(kueue_supported)
 
     def test_check_crds_query_failure_raises_exception(self):
         """Test that Error when getting CRDs raises ChsPreflightException."""
@@ -92,8 +95,9 @@ class TestGkePreflightChecker(unittest.TestCase):
             with mock.patch(
                 "chs.preflights.gke_preflight.logger.warning"
             ) as mock_warn:
-                filtered = self.checker.check(tests)
+                filtered, kueue_supported = self.checker.check(tests)
                 self.assertEqual(filtered, [{"name": "nvidia-smi"}])
+                self.assertFalse(kueue_supported)
                 mock_warn.assert_called()
                 self.assertTrue(
                     any(
@@ -112,8 +116,9 @@ class TestGkePreflightChecker(unittest.TestCase):
             self.checker, "_run_kubectl", return_value=crd_output
         ):
             tests = [{"name": "nvidia-smi"}, {"name": "dcgm"}]
-            filtered = self.checker.check(tests)
+            filtered, kueue_supported = self.checker.check(tests)
             self.assertEqual(filtered, tests)
+            self.assertFalse(kueue_supported)
 
     def test_check_with_none_tests_returns_none(self):
         """Test that checking without tests returns None."""
@@ -124,8 +129,9 @@ class TestGkePreflightChecker(unittest.TestCase):
         version_output = "registry.k8s.io/kueue/kueue:v0.14.5"
         with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [crd_output, version_output]
-            filtered = self.checker.check(None)
+            filtered, kueue_supported = self.checker.check(None)
             self.assertIsNone(filtered)
+            self.assertTrue(kueue_supported)
 
 
 if __name__ == "__main__":

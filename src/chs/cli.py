@@ -93,6 +93,7 @@ def cancel_jobs_on_failure(
             )
             try:
                 scheduler_obj.cancel_jobs_by_prefix(prefix)
+                scheduler_obj.cleanup_scheduler_resources()
             except Exception as e:
                 logger.error(f"Failed to cancel jobs during cleanup: {e}")
         raise
@@ -321,7 +322,20 @@ def run_action(
         try:
             logger.info("Running preflight checks")
             if scheduler_obj:
-                tests = scheduler_obj.run_preflight_checks(tests)
+                tests = scheduler_obj.run_preflight_checks(
+                    tests, workspace_name=workspace_name
+                )
+                workspace_config_dir = os.path.join(
+                    ramble_manager.path, "configs"
+                )
+                setup_tests = scheduler_obj.setup_scheduler_resources(
+                    workspace_config_dir=workspace_config_dir,
+                    tests=tests,
+                    machine_type=machine_type,
+                    workspace_name=workspace_name,
+                )
+                if setup_tests is not None:
+                    tests = setup_tests
 
             ramble_manager.create_workspace()
             if not skip_validation:

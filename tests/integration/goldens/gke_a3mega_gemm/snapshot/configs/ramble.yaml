@@ -19,6 +19,8 @@ ramble:
       "eth1", "network": "gpu-net-1"}]'
     timeout: 600
     deadline: 2400
+    jobset_labels_yaml: 'kueue.x-k8s.io/queue-name: chs-local-queue'
+    suspend_jobset: 'true'
   applications:
     chs:
       workloads:

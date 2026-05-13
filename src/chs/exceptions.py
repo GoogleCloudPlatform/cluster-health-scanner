@@ -75,3 +75,9 @@ class ChsArchiveException(ChsException):
 
 class NetworkDiscoveryException(ChsException):
     """Raised when network discovery fails to find required networks."""
+
+
+class KueueException(ChsException):
+    """Raised for Kueue-related errors."""
+
+    pass

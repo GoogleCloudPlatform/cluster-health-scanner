@@ -43,9 +43,9 @@ class DefaultScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
-        workspace_hash: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
         p = pkg_resources.files(chs).joinpath("ramble.yaml")
         with pkg_resources.as_file(p) as file_path:

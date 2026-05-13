@@ -321,6 +321,7 @@ class RambleManager:
             machine_type=machine_type,
             timeout=timeout,
             deadline=deadline,
+            workspace_name=self._workspace_name,
         )
 
     def setup_workspace(self) -> None:
@@ -341,15 +342,18 @@ class RambleManager:
 
     def _register_initial_run(self) -> None:
         """Registers an initial empty run in the app data."""
-        run_entry = {
-            "run_id": self._workspace_name,
-            "workspace_path": self.path,
-            "job_entries": {},
-            "submission_time": (
-                datetime.datetime.now(datetime.timezone.utc).isoformat()
-            ),
-            "scheduler": self._scheduler.name,
-        }
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry.update(
+            {
+                "run_id": self._workspace_name,
+                "workspace_path": self.path,
+                "job_entries": {},
+                "submission_time": (
+                    datetime.datetime.now(datetime.timezone.utc).isoformat()
+                ),
+                "scheduler": self._scheduler.name,
+            }
+        )
         self._app_data.update_run(self._workspace_name, run_entry)
 
     def execute_experiments(self) -> list[str]:
@@ -399,7 +403,7 @@ class RambleManager:
             else "slurm"
         )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name)
+        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
 
         prefix = "chs-"
         logger.debug(
@@ -408,6 +412,9 @@ class RambleManager:
 
         # Delete jobs statelessly by prefix to guarantee cleanup.
         scheduler.cancel_jobs_by_prefix(prefix)
+        # Clean up associated infrastructure configurations like Kueue
+        # statelessly.
+        scheduler.cleanup_scheduler_resources(self._workspace_name)
 
     def _update_registry(self, job_ids: list[str]) -> None:
         """Updates the runs registry with the current run information."""
@@ -416,18 +423,21 @@ class RambleManager:
             self._workspace_name,
             job_ids,
         )
-        run_entry = {
-            "run_id": self._workspace_name,
-            "workspace_path": self.path,
-            "job_entries": {
-                job_id: {"status": JobStatus.PENDING.value}
-                for job_id in job_ids
-            },
-            "submission_time": (
-                datetime.datetime.now(datetime.timezone.utc).isoformat()
-            ),
-            "scheduler": self._scheduler.name,
-        }
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry.update(
+            {
+                "run_id": self._workspace_name,
+                "workspace_path": self.path,
+                "job_entries": {
+                    job_id: {"status": JobStatus.PENDING.value}
+                    for job_id in job_ids
+                },
+                "submission_time": (
+                    datetime.datetime.now(datetime.timezone.utc).isoformat()
+                ),
+                "scheduler": self._scheduler.name,
+            }
+        )
         self._app_data.update_run(self._workspace_name, run_entry)
 
     def get_job_ids(self) -> list[str]:
@@ -451,7 +461,7 @@ class RambleManager:
 
         scheduler_name = registry_entry.get("scheduler", "slurm")
         logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name)
+        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
 
         return scheduler.check_jobs_running(job_ids)
 
@@ -546,7 +556,7 @@ class RambleManager:
         """
         job_log_map = self._map_jobs_to_log_paths()
         pending_log_fetches = set(job_log_map.keys())
-        scheduler = get_scheduler(self.get_scheduler_type())
+        scheduler = get_scheduler(self.get_scheduler_type(), app_data=app_data)
 
         registry_jobs = set(self.get_job_ids())
         if not registry_jobs:

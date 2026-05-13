@@ -23,22 +23,24 @@ class GkePreflightChecker:
     def check(
         self,
         tests: list[dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]] | None:
+    ) -> tuple[list[dict[str, Any]] | None, bool]:
         """Runs preflight checks on GKE.
 
         Args:
             tests: Optional list of tests to be run and potentially filtered.
 
         Returns:
-            Filtered list of tests if Kueue is missing or incompatible.
+            A tuple of (filtered_tests, kueue_supported).
         """
         installed_crds = self._get_installed_crds()
         self._check_jobset(installed_crds)
 
-        if not self._check_kueue(installed_crds):
-            return self._filter_tests_without_kueue(tests)
+        kueue_supported = self._check_kueue(installed_crds)
 
-        return tests
+        if not kueue_supported:
+            return self._filter_tests_without_kueue(tests), kueue_supported
+
+        return tests, kueue_supported
 
     def _get_installed_crds(self) -> list[str]:
         """Fetches installed CRDs from the cluster."""

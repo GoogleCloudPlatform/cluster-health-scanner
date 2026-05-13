@@ -98,6 +98,9 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.run_preflight_checks.side_effect = (
             lambda tests, *args, **kwargs: tests
         )
+        self.mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, *args, **kwargs: tests
+        )
 
         self.mock_load_suite = self.enterContext(
             mock.patch("chs.cli.load_suite", autospec=True)
@@ -341,6 +344,12 @@ class TestCli(unittest.TestCase):
             s.get_nodes_under_test.return_value = ["node1"]
             s.run_preflight_checks.side_effect = (
                 lambda tests=None, *args, **kwargs: tests
+            )
+            s.setup_scheduler_resources.side_effect = (
+                lambda workspace_config_dir=None,
+                tests=None,
+                *args,
+                **kwargs: tests
             )
             return s
 

@@ -264,6 +264,7 @@ class SlurmScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()

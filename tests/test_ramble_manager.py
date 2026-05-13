@@ -221,6 +221,42 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(job_ids, ["123"])
         mock_update_registry.assert_called_once_with(["123"])
 
+    def test_register_initial_run_preserves_custom_fields(self):
+        """Test _register_initial_run preserves custom flags."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "gke"
+        manager._scheduler = mock_scheduler
+
+        self.mock_app_data.get_run.return_value = {
+            "kueue_supported": True,
+            "custom_flag": "yes",
+        }
+
+        manager._register_initial_run()
+
+        self.mock_app_data.update_run.assert_called_once()
+        updated_run = self.mock_app_data.update_run.call_args[0][1]
+        self.assertTrue(updated_run.get("kueue_supported"))
+        self.assertEqual(updated_run.get("custom_flag"), "yes")
+        self.assertEqual(updated_run.get("scheduler"), "gke")
+
+    def test_update_registry_preserves_custom_fields(self):
+        """Test _update_registry preserves custom flags."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "gke"
+        manager._scheduler = mock_scheduler
+
+        self.mock_app_data.get_run.return_value = {"kueue_supported": True}
+
+        manager._update_registry(["job1"])
+
+        self.mock_app_data.update_run.assert_called_once()
+        updated_run = self.mock_app_data.update_run.call_args[0][1]
+        self.assertTrue(updated_run.get("kueue_supported"))
+        self.assertIn("job1", updated_run.get("job_entries", {}))
+
     def test_configure_workspace_runs(self):
         """Test configure_workspace runs without error."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
@@ -243,6 +279,7 @@ class TestRambleManager(unittest.TestCase):
             machine_type="a3-high",
             timeout=None,
             deadline=None,
+            workspace_name="ws1",
         )
 
     def test_check_jobs_running_true(self):
@@ -264,7 +301,9 @@ class TestRambleManager(unittest.TestCase):
 
             self.assertTrue(result)
             self.assertEqual(self.mock_app_data.get_run.call_count, 2)
-            mock_get_scheduler.assert_called_once_with("mock_scheduler")
+            mock_get_scheduler.assert_called_once_with(
+                "mock_scheduler", app_data=self.mock_app_data
+            )
             mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
 
     def test_check_jobs_running_false(self):
@@ -286,7 +325,9 @@ class TestRambleManager(unittest.TestCase):
 
             self.assertFalse(result)
             self.assertEqual(self.mock_app_data.get_run.call_count, 2)
-            mock_get_scheduler.assert_called_once_with("mock_scheduler")
+            mock_get_scheduler.assert_called_once_with(
+                "mock_scheduler", app_data=self.mock_app_data
+            )
             mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
 
     def test_check_jobs_running_no_entry(self):

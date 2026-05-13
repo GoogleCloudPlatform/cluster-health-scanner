@@ -33,7 +33,7 @@ where = ["src"]
 
 
 [tool.setuptools.package-data]
-"chs" = ["**/*.yaml", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+"chs" = ["**/*.yaml", "**/*.tpl", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
 
 [tool.ruff]
 exclude = [
