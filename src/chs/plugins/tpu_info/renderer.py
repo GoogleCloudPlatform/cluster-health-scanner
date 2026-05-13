@@ -36,8 +36,6 @@ class TpuInfoRenderer(DefaultRenderer):
                 node_data[nodes] = {
                     "summary": {},
                     "chips": defaultdict(dict),
-                    "utilization": defaultdict(dict),
-                    "cores": defaultdict(dict),
                 }
 
             for m in res.metrics:
@@ -57,20 +55,6 @@ class TpuInfoRenderer(DefaultRenderer):
 
                 if not context or context == "null":
                     node_data[nodes]["summary"][key] = val
-                elif context.startswith("Core ") and context.endswith(
-                    " Utilization"
-                ):
-                    core_id = context.removeprefix("Core ").removesuffix(
-                        " Utilization"
-                    )
-                    node_data[nodes]["cores"][core_id][key] = val
-                elif context.startswith("Chip") and context.endswith(
-                    " Utilization"
-                ):
-                    chip_id = context.removeprefix("Chip ").removesuffix(
-                        " Utilization"
-                    )
-                    node_data[nodes]["utilization"][chip_id][key] = val
                 elif context.startswith("Chip"):
                     node_data[nodes]["chips"][context.removeprefix("Chip ")][
                         key
@@ -112,44 +96,6 @@ class TpuInfoRenderer(DefaultRenderer):
                         chip_path,
                         info.get("Chip Type", "N/A"),
                         info.get("Chip Devices", "N/A"),
-                    )
-                elements.append(table)
-
-            if util := data["utilization"]:
-                elements.append(
-                    Text(f"\nTPU Chip Utilization for {node}", style="bold")
-                )
-                table = create_styled_table(expand=False)
-                table.add_column("Chip ID")
-                table.add_column("HBM Usage")
-                table.add_column("Duty Cycle")
-
-                for chip_id, info in sorted(
-                    util.items(),
-                    key=lambda x: int(x[0]),
-                ):
-                    table.add_row(
-                        f"Chip {chip_id}",
-                        info.get("HBM Usage", "N/A"),
-                        info.get("Duty Cycle", "N/A"),
-                    )
-                elements.append(table)
-
-            if cores := data["cores"]:
-                elements.append(
-                    Text(f"\nTensorCore Utilization for {node}", style="bold")
-                )
-                table = create_styled_table(expand=False)
-                table.add_column("Core ID")
-                table.add_column("Utilization")
-
-                for core_id, info in sorted(
-                    cores.items(),
-                    key=lambda x: int(x[0]),
-                ):
-                    table.add_row(
-                        f"Core {core_id}",
-                        info.get("TensorCore Utilization", "N/A"),
                     )
                 elements.append(table)
 
