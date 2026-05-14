@@ -23,11 +23,11 @@ metadata:
 spec:
   namespaceSelector: {{}}
   resourceGroups:
-  - coveredResources: ["nvidia.com/gpu"]
+  - coveredResources: ["{resource_name}"]
     flavors:
     - name: chs-flavor
       resources:
-      - name: "nvidia.com/gpu"
+      - name: "{resource_name}"
         nominalQuota: "{nominal_quota}"
 ---
 apiVersion: kueue.x-k8s.io/v1beta1

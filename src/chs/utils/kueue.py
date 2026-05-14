@@ -130,8 +130,9 @@ class KueueManager:
                 f"'{machine_type}' in MACHINE_TYPE_RESOURCE_MAP."
             )
 
-        gpus_per_node = resource_map.get("gpus", 0)
-        nominal_quota = len(nodes) * gpus_per_node
+        accelerators_per_node = resource_map.get("accelerators", 0)
+        nominal_quota = len(nodes) * accelerators_per_node
+        resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
 
         try:
             result = self._run_kubectl(
@@ -157,7 +158,9 @@ class KueueManager:
                 kueue_tpl = f.read()
 
         rendered_kueue = kueue_tpl.format(
-            instance_type=instance_type, nominal_quota=str(nominal_quota)
+            instance_type=instance_type,
+            nominal_quota=str(nominal_quota),
+            resource_name=resource_name,
         )
 
         kueue_config_path = os.path.join(

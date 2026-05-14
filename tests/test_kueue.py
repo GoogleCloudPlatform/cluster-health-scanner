@@ -56,7 +56,27 @@ class TestKueueManager(unittest.TestCase):
         with open(config_path, "r") as f:
             content = f.read()
             self.assertIn("a3-megagpu-8g", content)
+            self.assertIn("nvidia.com/gpu", content)
             self.assertIn('nominalQuota: "16"', content)
+
+    def test_setup_tpu_success_renders_and_verifies(self):
+        """Test setup for TPU renders correct resource flavor and name."""
+        self.mock_scheduler._run_kubectl.side_effect = [
+            subprocess.CalledProcessError(1, "kubectl"),
+            "",
+            "",
+        ]
+
+        label = self.kueue_mgr.setup(self.tmp_dir, "tpu7x", ["node1", "node2"])
+        self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
+
+        config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
+        self.assertTrue(os.path.exists(config_path))
+        with open(config_path, "r") as f:
+            content = f.read()
+            self.assertIn("tpu7x-standard-4t", content)
+            self.assertIn("google.com/tpu", content)
+            self.assertIn('nominalQuota: "8"', content)
 
     def test_apply_and_verify_permission_error_raises(self):
         """Test applying config with kubectl error raises KueueException."""
