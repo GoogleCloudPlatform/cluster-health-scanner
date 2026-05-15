@@ -30,6 +30,7 @@ class _ListActionKwargs:
     tests: bool = False
     schedulers: bool = False
     from_suite: str | None = None
+    machine_type: str | None = None
 
 
 @dataclasses.dataclass
@@ -169,17 +170,39 @@ class TestCli(unittest.TestCase):
             )
         )
 
-    def test_list_tests_implementation_hint(self):
-        """Test _get_tests_list returns hint when listing all tests."""
+    def test_list_tests_implementation_both_hints(self):
+        """Test _get_tests_list returns both hints."""
         lines = cli._get_tests_list(from_suite=None, tests_flag=True)
+        hint = (
+            "  (Hint: Use --from-suite <suite_name> or "
+            "--machine-type <machine_type> to filter tests)"
+        )
+        self.assertIn(hint, lines)
+
+    def test_list_tests_implementation_machine_type_hint(self):
+        """Test _get_tests_list returns machine-type hint."""
+        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
+        hint = "  (Hint: Use --machine-type <machine_type> to filter tests)"
+        self.assertIn(hint, lines)
+
+    @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
+    def test_list_tests_implementation_suite_hint(self, mock_get_tests):
+        """Test _get_tests_list returns suite hint."""
+        mock_get_tests.return_value = ["test1", "test2"]
+        lines = cli._get_tests_list(
+            from_suite=None, tests_flag=True, machine_type="a3-ultra"
+        )
         hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
         self.assertIn(hint, lines)
 
-    def test_list_tests_implementation_no_hint(self):
-        """Test _get_tests_list does not return hint when filtering by suite."""
-        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
-        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        self.assertNotIn(hint, lines)
+    @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
+    def test_list_tests_implementation_no_hint(self, mock_get_tests):
+        """Test _get_tests_list returns no hint."""
+        mock_get_tests.return_value = ["test1", "test2"]
+        lines = cli._get_tests_list(
+            from_suite="suite1", tests_flag=True, machine_type="a3-ultra"
+        )
+        self.assertFalse(any("Hint:" in line for line in lines))
 
     @mock.patch.object(cli, "list_action", autospec=True)
     def test_list_command(self, mock_list_action):
@@ -281,6 +304,14 @@ class TestCli(unittest.TestCase):
                 expected_kwargs=_ListActionKwargs(
                     tests=True,
                     from_suite="suite1, suite2 ,suite3",
+                ),
+            ),
+            _ListCommandTestCase(
+                name="machine_type",
+                args_list=["list", "--tests", "--machine-type", "a3-ultra"],
+                expected_kwargs=_ListActionKwargs(
+                    tests=True,
+                    machine_type="a3-ultra",
                 ),
             ),
         ]
@@ -1111,7 +1142,7 @@ class TestCli(unittest.TestCase):
                 kwargs=_ListActionKwargs(),
                 expected_result=True,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, False),
+                expected_tests_call_args=(None, False, None),
                 expected_schedulers_calls=1,
             ),
             _ListActionTestCase(
@@ -1130,7 +1161,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=0,
-                expected_tests_call_args=("s1", True),
+                expected_tests_call_args=("s1", True, None),
                 expected_schedulers_calls=0,
             ),
             _ListActionTestCase(
@@ -1149,7 +1180,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, True),
+                expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=0,
             ),
             _ListActionTestCase(
@@ -1160,7 +1191,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=0,
-                expected_tests_call_args=(None, True),
+                expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=1,
             ),
             _ListActionTestCase(
@@ -1172,7 +1203,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, True),
+                expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=1,
             ),
         ]

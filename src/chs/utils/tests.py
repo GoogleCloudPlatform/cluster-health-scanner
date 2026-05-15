@@ -20,11 +20,10 @@ def get_all_supported_tests() -> list[str]:
 
 def get_all_supported_machine_types() -> list[str]:
     """Derives list of all supported machine types from tests.yaml."""
-    data = _load_tests()
+    tests_map = get_tests_map()
     machine_types = set()
-    for test in data.get("tests", []):
-        for platform in test.get("platforms", []):
-            machine_types.add(platform.get("machine_type"))
+    for scheduler in tests_map.data:
+        machine_types.update(tests_map.data[scheduler].keys())
     return sorted(list(machine_types))
 
 
@@ -66,3 +65,13 @@ def get_tests_map() -> TestsMap:
             if name not in tests_map[scheduler][mt]:
                 tests_map[scheduler][mt].append(name)
     return TestsMap(data=tests_map)
+
+
+def get_tests_by_machine_type(machine_type: str) -> list[str]:
+    """Returns list of tests supported on a specific machine type."""
+    tests_map = get_tests_map()
+    tests = set()
+    for scheduler in tests_map.data:
+        if machine_type in tests_map.data[scheduler]:
+            tests.update(tests_map.data[scheduler][machine_type])
+    return sorted(list(tests))

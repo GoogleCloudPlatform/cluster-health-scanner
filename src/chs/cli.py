@@ -109,7 +109,9 @@ def _get_suites_list() -> list[str]:
     return ["No suites found."]
 
 
-def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
+def _get_tests_list(
+    from_suite: str | None, tests_flag: bool, machine_type: str | None = None
+) -> list[str]:
     """Returns lines for available tests."""
     if from_suite:
         suite_cfg = load_suite(from_suite)
@@ -117,6 +119,13 @@ def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
             t.get("name") if isinstance(t, dict) else t
             for t in suite_cfg.get("tests", [])
         ]
+        if machine_type:
+            supported_tests = utils.tests.get_tests_by_machine_type(
+                machine_type
+            )
+            tests = [t for t in tests if t in supported_tests]
+    elif machine_type:
+        tests = utils.tests.get_tests_by_machine_type(machine_type)
     else:
         tests = utils.tests.get_all_supported_tests()
 
@@ -126,10 +135,20 @@ def _get_tests_list(from_suite: str | None, tests_flag: bool) -> list[str]:
             lines.append(f"Available Tests for suite '{from_suite}':")
         else:
             lines.append("Available Tests:")
-            if tests_flag:
+
+        if tests_flag:
+            hints = []
+            if not from_suite:
+                hints.append("--from-suite <suite_name>")
+            if not machine_type:
+                hints.append("--machine-type <machine_type>")
+            if hints:
                 lines.append(
-                    "  (Hint: Use --from-suite <suite_name> to filter tests)"
+                    f"  (Hint: Use {' or '.join(hints)} to filter tests)"
                 )
+
+        if machine_type:
+            lines.insert(1, f"  (Filtered by machine type: {machine_type})")
         lines.extend(f"  - {t}" for t in tests)
         return lines
     return ["No tests found."]
@@ -146,7 +165,12 @@ def _get_schedulers_list() -> list[str]:
 
 
 def list_action(
-    *, suites: bool, tests: bool, schedulers: bool, from_suite: str | None
+    *,
+    suites: bool,
+    tests: bool,
+    schedulers: bool,
+    from_suite: str | None,
+    machine_type: str | None = None,
 ) -> bool:
     """Orchestrates listing of available CHS resources.
 
@@ -159,17 +183,19 @@ def list_action(
       schedulers: If True, includes schedulers in the list.
       from_suite: If provided, filters tests listed to those belonging to the
         specified suite.
+      machine_type: If provided, filters tests by machine type.
 
     Returns:
       True if all resource types were listed, False otherwise.
     """
     logger.debug(
         "list_action called with: suites=%r, tests=%r, schedulers=%r,"
-        " from_suite=%r",
+        " from_suite=%r, machine_type=%r",
         suites,
         tests,
         schedulers,
         from_suite,
+        machine_type,
     )
     show_all = not (suites or tests or schedulers)
     all_lines = []
@@ -179,7 +205,7 @@ def list_action(
         all_lines.append("")
 
     if tests or show_all:
-        all_lines.extend(_get_tests_list(from_suite, tests))
+        all_lines.extend(_get_tests_list(from_suite, tests, machine_type))
         all_lines.append("")
 
     if schedulers or show_all:
@@ -611,8 +637,18 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     help="Specify the suite to list tests from (only used with --tests)",
     callback=validators.validate_non_empty_string,
 )
+@click.option(
+    "--machine-type",
+    help="Filter tests by machine type (only used with --tests)",
+    callback=validators.validate_non_empty_string,
+)
 def list_command(
-    *, suites: bool, tests: bool, schedulers: bool, from_suite: str | None
+    *,
+    suites: bool,
+    tests: bool,
+    schedulers: bool,
+    from_suite: str | None,
+    machine_type: str | None,
 ) -> bool:
     """Lists available resources.
 
@@ -622,13 +658,30 @@ def list_command(
       tests: Whether to list available tests.
       schedulers: Whether to list available schedulers.
       from_suite: Optional suite name to filter tests.
+      machine_type: Optional machine type to filter tests.
     """
     if from_suite and not tests:
         raise click.UsageError(
             "Option '--from-suite' requires option '--tests'."
         )
+    if machine_type and not tests:
+        raise click.UsageError(
+            "Option '--machine-type' requires option '--tests'."
+        )
+    if machine_type:
+        supported_mts = utils.tests.get_all_supported_machine_types()
+        if machine_type not in supported_mts:
+            raise click.UsageError(
+                f"Unsupported machine type '{machine_type}'. "
+                f"Supported types are: {', '.join(supported_mts)}"
+            )
+
     return list_action(
-        suites=suites, tests=tests, schedulers=schedulers, from_suite=from_suite
+        suites=suites,
+        tests=tests,
+        schedulers=schedulers,
+        from_suite=from_suite,
+        machine_type=machine_type,
     )
 
 

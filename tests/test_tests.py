@@ -12,6 +12,7 @@ from chs.utils.tests import (
     get_all_supported_schedulers,
     get_tests_map,
     TestsMap,
+    get_tests_by_machine_type,
 )
 
 
@@ -178,6 +179,42 @@ class TestTests(unittest.TestCase):
         ):
             with self.assertRaises(Exception):  # Yaml parser generic exception
                 _load_tests()
+
+    def test_get_tests_by_machine_type(self):
+        """Test deriving tests by machine type."""
+        data = {
+            "tests": [
+                {
+                    "name": "t1",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m1"},
+                        {"scheduler": "s2", "machine_type": "m2"},
+                    ],
+                },
+                {
+                    "name": "t2",
+                    "platforms": [
+                        {"scheduler": "s1", "machine_type": "m2"},
+                        {"scheduler": "s2", "machine_type": "m3"},
+                    ],
+                },
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            tests_m1 = get_tests_by_machine_type("m1")
+            tests_m2 = get_tests_by_machine_type("m2")
+            tests_m3 = get_tests_by_machine_type("m3")
+            tests_m4 = get_tests_by_machine_type("m4")
+
+        self.assertEqual(tests_m1, ["t1"])
+        self.assertEqual(tests_m2, ["t1", "t2"])
+        self.assertEqual(tests_m3, ["t2"])
+        self.assertEqual(tests_m4, [])
 
 
 if __name__ == "__main__":

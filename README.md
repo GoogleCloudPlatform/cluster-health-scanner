@@ -91,11 +91,14 @@ Lists available resources (suites, tests, schedulers).
 -   `--tests`: List available tests.
 -   `--schedulers`: List available schedulers.
 -   `--from-suite <SUITE_NAME>`: specialized filter to list tests belonging to a specific suite (requires `--tests`).
+-   `--machine-type <MACHINE_TYPE>`: Filter tests by machine type (requires `--tests`).
 
 **Example:**
 ```bash
 chs list --suites
 chs list --tests --from-suite lite
+chs list --tests --machine-type a3-ultra
+chs list --tests --machine-type a3-ultra --from-suite lite
 ```
 
 #### 2. `configure`
@@ -336,7 +339,7 @@ a3-ultra:
     thresholds:
       bandwidth: 80
 ```
-For a complete reference of supported tests and default values, see `src/chs/configs/thresholds.yaml`.
+
 
 ## Known Limitations
 
