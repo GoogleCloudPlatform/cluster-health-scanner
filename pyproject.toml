@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click",
-    "ramble @ git+https://github.com/GoogleCloudPlatform/ramble.git@develop",
+    "ramble @ git+https://github.com/GoogleCloudPlatform/ramble.git@fbe8ae277e411ffc3e87b8069529a223e62c6a9e",  # May 13, 2026
     "platformdirs",
     "protobuf",
     "rich",
