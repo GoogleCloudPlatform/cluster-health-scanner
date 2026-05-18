@@ -1,0 +1,9 @@
+benchmarks:
+- benchmark_name: host_device
+  num_runs: 20
+  benchmark_sweep_params:
+  - {
+      data_size_mib_list: [1, 16, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+    }
+  csv_path: "../microbenchmarks/host_device"
+  trace_dir: "../microbenchmarks/host_device/trace"

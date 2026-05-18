@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import re
 from rich.console import Group
 from rich.text import Text
 from chs.utils import create_styled_table
@@ -20,8 +19,6 @@ class HostDeviceResult:
 class TpuHostDeviceRenderer(DefaultRenderer):
     """Renders details for tpu-host-device tests."""
 
-    CONTEXT_PATTERN = re.compile(r"^(?P<node>[a-zA-Z0-9-]+),(?P<size>\d+)MiB$")
-
     def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
         """Renders detail tables for host-device tests per node and size."""
         if not test_results:
@@ -38,11 +35,13 @@ class TpuHostDeviceRenderer(DefaultRenderer):
 
         return Group(*elements)
 
-    def _parse_context(self, ctx_name: str) -> tuple[str, int] | None:
-        """Parses node and size from context name (e.g. 'node1,1024MiB')."""
-        match = self.CONTEXT_PATTERN.match(ctx_name)
-        if match:
-            return match.group("node"), int(match.group("size"))
+    def _parse_context(self, ctx_name: str) -> int | None:
+        """Parses size from context name (e.g. '1024MiB')."""
+        if ctx_name.endswith("MiB"):
+            try:
+                return int(ctx_name[:-3])
+            except ValueError:
+                pass
         return None
 
     def _extract_node_data(
@@ -52,6 +51,11 @@ class TpuHostDeviceRenderer(DefaultRenderer):
         aggregated: dict[tuple[str, int], HostDeviceResult] = {}
 
         for res in test_results:
+            node = (
+                res.target_resource_ids[0]
+                if res.target_resource_ids
+                else "unknown"
+            )
             for m in res.metrics:
                 if not m.value.HasField("number_value"):
                     continue
@@ -60,10 +64,10 @@ class TpuHostDeviceRenderer(DefaultRenderer):
                 ctx_name = ctx_field.string_value if ctx_field else ""
 
                 parsed_ctx = self._parse_context(ctx_name)
-                if not parsed_ctx:
+                if parsed_ctx is None:
                     continue
 
-                node, size = parsed_ctx
+                size = parsed_ctx
                 key = (node, size)
 
                 if key not in aggregated:

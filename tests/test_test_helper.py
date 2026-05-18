@@ -191,17 +191,12 @@ class TestTestHelper(unittest.TestCase):
         ) as mock_create:
             mock_create.return_value = "mock_context"
             result = TestHelper._create_node_test_context(
-                variables,
-                "test-node",
-                configs,
-                ramble_app_name="my-app",
-                set_n_nodes=True,
+                variables, "test-node", configs, ramble_app_name="my-app"
             )
             self.assertEqual(result, "mock_context")
             mock_create.assert_called_once()
             call_args = mock_create.call_args[0]
             self.assertEqual(call_args[0], "test-node-{node}")
-            self.assertEqual(call_args[1]["variables"]["n_nodes"], 1)
 
 
 if __name__ == "__main__":

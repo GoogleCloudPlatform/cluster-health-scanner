@@ -46,12 +46,16 @@ class TpuGemm(ExecutableApplication):
         description="Path to config file",
     )
 
+    variable(
+        "driver_escape_overrides",
+        default="",
+        description="Optional Driver Escape overrides injected before execution",
+    )
+
     executable(
         "execute",
         template=[
-            "cd {run_dir} && \\",
-            'printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && \\',
-            'python3 {run_script} --config {config_file} 2>&1 | sed "s/^/[$MY_NODE_NAME] /"',
+            "{driver_escape_overrides} && cd {run_dir} && printf '%b' '{benchmarks_yaml_escaped}' > {config_file} && python3 {run_script} --config {config_file} 2>&1",
         ],
         use_mpi=False,
     )
@@ -59,8 +63,8 @@ class TpuGemm(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*Running .* with params:.*'m': (?P<m>\d+), 'k': (?P<k>\d+), 'n': (?P<n>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
-        output_format="{node},{m}x{n}x{k},{dtype}",
+        regex=r"Running .* with params:.*'m': (?P<m>\d+), 'k': (?P<k>\d+), 'n': (?P<n>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
+        output_format="{m}x{n}x{k}-{dtype}",
     )
 
     figure_of_merit(

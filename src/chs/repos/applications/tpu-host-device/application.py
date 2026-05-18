@@ -46,12 +46,16 @@ class TpuHostDevice(ExecutableApplication):
         description="Path to config file",
     )
 
+    variable(
+        "driver_escape_overrides",
+        default="",
+        description="Optional Driver Escape overrides injected before execution",
+    )
+
     executable(
         "execute",
         template=[
-            "cd {run_dir} && \\",
-            'printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && \\',
-            'python3 {run_script} --config {config_file} 2>&1 | sed "s/^/[$MY_NODE_NAME] /"',
+            "{driver_escape_overrides} && cd {run_dir} && printf '%b' '{benchmarks_yaml_escaped}' > {config_file} && python3 {run_script} --config {config_file} 2>&1",
         ],
         use_mpi=False,
     )
@@ -59,13 +63,13 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*Running .* with params:.*'data_size_mib': (?P<size>\d+)",
-        output_format="{node},{size}MiB",
+        regex=r"Running .* with params:.*'data_size_mib': (?P<size>\d+)",
+        output_format="{size}MiB",
     )
 
     figure_of_merit(
         "H2D Bandwidth",
-        fom_regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*.*(?:Host-to-Device|H2D).*?:\s*(?P<h2d_bandwidth>\d+\.\d+)",
+        fom_regex=r".*(?:Host-to-Device|H2D).*?:\s*(?P<h2d_bandwidth>\d+\.\d+)",
         group_name="h2d_bandwidth",
         units="GB/s",
         contexts=["params"],
@@ -73,7 +77,7 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit(
         "D2H Bandwidth",
-        fom_regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*.*(?:Device-to-Host|D2H).*?:\s*(?P<d2h_bandwidth>\d+\.\d+)",
+        fom_regex=r".*(?:Device-to-Host|D2H).*?:\s*(?P<d2h_bandwidth>\d+\.\d+)",
         group_name="d2h_bandwidth",
         units="GB/s",
         contexts=["params"],

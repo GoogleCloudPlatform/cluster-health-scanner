@@ -53,32 +53,25 @@ class TpuGemmRenderer(DefaultRenderer):
                 if ctx == "unknown" or ctx == "null":
                     continue
 
-                parts = ctx.split(",")
-                if len(parts) >= 3:
-                    node = parts[0]
-                    clean_ctx = f"{parts[1]}-{parts[2]}"
-                else:
-                    node = (
-                        ", ".join(res.target_resource_ids)
-                        if res.target_resource_ids
-                        else "Unknown Node"
-                    )
-                    clean_ctx = ctx
-
-                if clean_ctx not in parsed_map:
-                    parsed_map[clean_ctx] = []
+                node = (
+                    res.target_resource_ids[0]
+                    if res.target_resource_ids
+                    else "Unknown Node"
+                )
+                if ctx not in parsed_map:
+                    parsed_map[ctx] = []
 
                 parsed = None
-                for p in parsed_map[clean_ctx]:
+                for p in parsed_map[ctx]:
                     if p.nodes == node:
                         parsed = p
                         break
 
                 if parsed is None:
                     parsed = TpuGemmParsedResult(
-                        test_level=test_level, nodes=node, sweep_param=clean_ctx
+                        test_level=test_level, nodes=node, sweep_param=ctx
                     )
-                    parsed_map[clean_ctx].append(parsed)
+                    parsed_map[ctx].append(parsed)
 
                 val = (
                     m.value.number_value
@@ -97,8 +90,8 @@ class TpuGemmRenderer(DefaultRenderer):
                 elif m.key == "Total FLOPs":
                     parsed.total_flops = val
 
-        for clean_ctx in sorted(parsed_map.keys()):
-            items = parsed_map[clean_ctx]
+        for context in sorted(parsed_map.keys()):
+            items = parsed_map[context]
 
             for i, item in enumerate(items):
                 tflops_str = (
@@ -123,7 +116,7 @@ class TpuGemmRenderer(DefaultRenderer):
                     else "N/A"
                 )
 
-                param_column = clean_ctx if i == 0 else ""
+                param_column = context if i == 0 else ""
 
                 table.add_row(
                     param_column,

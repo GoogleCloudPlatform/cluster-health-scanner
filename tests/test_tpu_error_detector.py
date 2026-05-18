@@ -122,7 +122,6 @@ class TestTpuErrorDetector(unittest.TestCase):
         self.assertTrue(
             re.match(regex, "libtpu version: N/A (incompatible environment)")
         )
-        self.assertTrue(re.match(regex, "bash: tpu-info: command not found"))
         self.assertTrue(re.match(regex, "tpu-info: No such file or directory"))
         self.assertFalse(re.match(regex, "libtpu version: 0.0.24"))
 

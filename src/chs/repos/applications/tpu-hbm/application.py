@@ -46,12 +46,16 @@ class TpuHbm(ExecutableApplication):
         description="Path to config file",
     )
 
+    variable(
+        "driver_escape_overrides",
+        default="",
+        description="Optional Driver Escape overrides injected before execution",
+    )
+
     executable(
         "execute",
         template=[
-            "cd {run_dir} && \\",
-            'printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && \\',
-            'python3 {run_script} --config {config_file} 2>&1 | sed "s/^/[$MY_NODE_NAME] /"',
+            "{driver_escape_overrides} && cd {run_dir} && printf '%b' '{benchmarks_yaml_escaped}' > {config_file} && python3 {run_script} --config {config_file} 2>&1",
         ],
         use_mpi=False,
     )
@@ -59,13 +63,13 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit_context(
         "node_params",
-        regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*Running .* with params:.*'num_elements': (?P<num_elements>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
-        output_format="{node}-{num_elements}-{dtype}",
+        regex=r"Running .* with params:.*'num_elements': (?P<num_elements>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
+        output_format="{num_elements}-{dtype}",
     )
 
     figure_of_merit(
         "Bandwidth (median)",
-        fom_regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*.*bandwidth.*?:\s*(?P<bandwidth>\d+\.\d+)",
+        fom_regex=r".*bandwidth.*?:\s*(?P<bandwidth>\d+\.\d+)",
         group_name="bandwidth",
         units="GB/s",
         contexts=["node_params"],
@@ -73,7 +77,7 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit(
         "Time Taken (median)",
-        fom_regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*.*?time taken.*?:\s*(?P<time>\d+\.\d+)",
+        fom_regex=r".*?time taken.*?:\s*(?P<time>\d+\.\d+)",
         group_name="time",
         units="ms",
         fom_type=FomType.INFO,
@@ -82,7 +86,7 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit(
         "Tensor Size",
-        fom_regex=r"^\[(?P<node>[a-zA-Z0-9-]+)\]\s*Tensor size:\s*(?P<tensor_size>\d+\.\d+)\s*MB",
+        fom_regex=r"Tensor size:\s*(?P<tensor_size>\d+\.\d+)\s*MB",
         group_name="tensor_size",
         units="MB",
         fom_type=FomType.INFO,

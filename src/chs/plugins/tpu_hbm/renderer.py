@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import re
 from rich.console import Group
 from rich.text import Text
 from chs.utils import create_styled_table
@@ -22,10 +21,6 @@ class HbmResult:
 class TpuHbmRenderer(DefaultRenderer):
     """Renders details for tpu-hbm tests."""
 
-    CONTEXT_PATTERN = re.compile(
-        r"^(?P<node>[a-zA-Z0-9-]+)-(?P<num_elements>\d+)-(?P<dtype>[a-zA-Z0-9_]+)$"
-    )
-
     def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
         """Renders detail tables for hbm tests per node."""
         if not test_results:
@@ -40,15 +35,14 @@ class TpuHbmRenderer(DefaultRenderer):
 
         return Group(*elements)
 
-    def _parse_context(self, ctx_name: str) -> tuple[str, int, str] | None:
-        """Parses node, num_elements, and dtype from context name."""
-        match = self.CONTEXT_PATTERN.match(ctx_name)
-        if match:
-            return (
-                match.group("node"),
-                int(match.group("num_elements")),
-                match.group("dtype"),
-            )
+    def _parse_context(self, ctx_name: str) -> tuple[int, str] | None:
+        """Parses num_elements, and dtype from context name."""
+        parts = ctx_name.split("-")
+        if len(parts) == 2:
+            try:
+                return int(parts[0]), parts[1]
+            except ValueError:
+                pass
         return None
 
     def _extract_node_data(
@@ -58,6 +52,11 @@ class TpuHbmRenderer(DefaultRenderer):
         aggregated: dict[tuple[str, int, str], HbmResult] = {}
 
         for res in test_results:
+            node = (
+                res.target_resource_ids[0]
+                if res.target_resource_ids
+                else "unknown"
+            )
             for m in res.metrics:
                 if not m.value.HasField("number_value"):
                     continue
@@ -69,7 +68,7 @@ class TpuHbmRenderer(DefaultRenderer):
                 if not parsed_ctx:
                     continue
 
-                node, num_elements, dtype = parsed_ctx
+                num_elements, dtype = parsed_ctx
                 key = (node, num_elements, dtype)
 
                 if key not in aggregated:

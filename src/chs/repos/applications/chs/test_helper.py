@@ -228,14 +228,11 @@ podAntiAffinity:
         ramble_app_name: str,
         extra_context: dict = None,
         extra_sbatch_headers: dict = None,
-        set_n_nodes: bool = False,
     ) -> Context:
         ctx_vars = copy.deepcopy(variables)
         scheduler = ctx_vars.get("scheduler", "gke")
 
         ctx_vars["node"] = ctx_vars.get("nodes")
-        if set_n_nodes:
-            ctx_vars["n_nodes"] = len(ctx_vars.get("nodes", []))
 
         nodes_str = (
             "{node}"
@@ -418,7 +415,6 @@ podAntiAffinity:
             configs,
             ramble_app_name="tpu-info",
             extra_context={"modifiers": []},
-            set_n_nodes=True,
         )
 
     @staticmethod
@@ -444,7 +440,7 @@ podAntiAffinity:
         content = TestHelper._load_benchmark_config(benchmarks_yaml_file)
         escaped = (
             content.replace("\\", "\\\\")
-            .replace('"', '\\"')
+            .replace("'", "'\\''")
             .replace("\n", "\\n")
         )
         ctx_vars["benchmarks_yaml_escaped"] = escaped
@@ -457,10 +453,28 @@ podAntiAffinity:
         ramble_app_name: str,
         default_config_file: str,
     ) -> Context:
-        context_dict = TestHelper._prepare_cluster_context(
-            variables,
+        ctx_vars = copy.deepcopy(variables)
+        if "driver_escape_overrides" in ctx_vars:
+            ctx_vars["driver_escape_overrides"] = ctx_vars[
+                "driver_escape_overrides"
+            ].strip()
+
+        scheduler = ctx_vars.get("scheduler", "gke")
+
+        ctx_vars["node"] = ctx_vars.get("nodes")
+
+        nodes_str = (
+            "{node}"
+            if scheduler == "slurm"
+            else TestHelper._yaml_block(" - {node}", 12)
+        )
+        exp_name = f"{experiment_name}-{{node}}"
+
+        context_dict = TestHelper._prepare_base_context(
+            ctx_vars,
             configs,
-            ramble_app_name=ramble_app_name,
+            ramble_app_name,
+            nodes_str,
             extra_context={"modifiers": []},
         )
 
@@ -468,7 +482,7 @@ podAntiAffinity:
             context_dict["variables"], default_config_file
         )
 
-        return create_context_from_dict(experiment_name, context_dict)
+        return create_context_from_dict(exp_name, context_dict)
 
     @staticmethod
     def tpu_gemm_test(
