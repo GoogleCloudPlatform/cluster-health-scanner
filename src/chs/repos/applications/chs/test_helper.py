@@ -518,8 +518,12 @@ podAntiAffinity:
     @staticmethod
     def _inject_tpu_collectives_params(ctx_vars: dict) -> None:
         """Applies mesh shape and topology replacements to the escaped config."""
-        topology = ctx_vars.get("tpu_topology", "2x2x1")
-        cores_per_chip = int(ctx_vars.get("cores_per_chip", 1))
+        if "tpu_topology" not in ctx_vars:
+            raise ValueError("tpu_topology not found in variables")
+        topology = ctx_vars["tpu_topology"]
+        if "cores_per_chip" not in ctx_vars:
+            raise ValueError("cores_per_chip not found in variables")
+        cores_per_chip = int(ctx_vars["cores_per_chip"])
 
         dims = [int(d) for d in topology.split("x") if d.isdigit()]
         if not dims:
@@ -556,3 +560,24 @@ podAntiAffinity:
         )
         TestHelper._inject_tpu_collectives_params(context_dict["variables"])
         return create_context_from_dict(experiment_name, context_dict)
+
+    @staticmethod
+    def tpu_collectives_single_node_test(
+        variables: dict,
+        experiment_name: str,
+        configs: dict,
+    ) -> Context:
+        ctx_vars = copy.deepcopy(variables)
+        ctx_vars["execution_topology"] = "2x2x1"
+        context_dict = TestHelper._prepare_node_context(
+            ctx_vars,
+            configs,
+            ramble_app_name="tpu-collectives-single-node",
+            extra_context={"modifiers": []},
+        )
+        TestHelper._load_and_escape_benchmark_config(
+            context_dict["variables"], "collectives_all_gather.yaml"
+        )
+        TestHelper._inject_tpu_collectives_params(context_dict["variables"])
+        exp_name = f"{experiment_name}-{{node}}"
+        return create_context_from_dict(exp_name, context_dict)

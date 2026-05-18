@@ -38,13 +38,20 @@ class TpuCollectives(ExecutableApplication):
         description="Path to config file",
     )
 
+    variable(
+        "driver_escape_overrides",
+        default="",
+        description="Optional Driver Escape overrides injected before execution",
+    )
+
     executable(
         "execute",
         template=(
-            'cd {run_dir} && printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && python3 {run_script} --config {config_file} 2>&1'
+            '{driver_escape_overrides} cd {run_dir} && printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && python3 {run_script} --config {config_file} 2>&1'
         ),
         use_mpi=False,
     )
+
     workload("all_gather", executables=["execute"])
     workload("psum", executables=["execute"])
     workload("all_to_all", executables=["execute"])

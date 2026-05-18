@@ -163,3 +163,10 @@ tests:
         machine_type: tpu7x
       - scheduler: gke
         machine_type: tpuv6e
+
+  - name: collectives-single-node
+    platforms:
+      - scheduler: gke
+        machine_type: tpu7x
+      - scheduler: gke
+        machine_type: tpuv6e

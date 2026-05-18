@@ -55,7 +55,7 @@ class TpuGemm(ExecutableApplication):
     executable(
         "execute",
         template=[
-            "{driver_escape_overrides} && cd {run_dir} && printf '%b' '{benchmarks_yaml_escaped}' > {config_file} && python3 {run_script} --config {config_file} 2>&1",
+            "{driver_escape_overrides} cd {run_dir} && printf '%b' '{benchmarks_yaml_escaped}' > {config_file} && python3 {run_script} --config {config_file} 2>&1",
         ],
         use_mpi=False,
     )
