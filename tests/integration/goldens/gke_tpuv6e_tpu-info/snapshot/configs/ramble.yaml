@@ -16,8 +16,8 @@ ramble:
     - name: tpu-info
     default_interface_name: eth0
     all_interfaces_json: '[{"interfaceName": "eth0", "network": "default"}]'
-    timeout: 600
-    deadline: 2400
+    timeout: 1200
+    deadline: 4200
     jobset_labels_yaml: 'kueue.x-k8s.io/queue-name: chs-local-queue'
     suspend_jobset: 'true'
     tpu_topology: 2x2x1

@@ -59,6 +59,8 @@ tests:
         machine_type: tpu7x
       - scheduler: gke
         machine_type: tpuv6e
+      - scheduler: slurm
+        machine_type: tpuv6e
 
   - name: nccl-single-node
     platforms:
@@ -142,6 +144,8 @@ tests:
         machine_type: tpu7x
       - scheduler: gke
         machine_type: tpuv6e
+      - scheduler: slurm
+        machine_type: tpuv6e
 
   - name: hbm
     platforms:
@@ -149,12 +153,16 @@ tests:
         machine_type: tpu7x
       - scheduler: gke
         machine_type: tpuv6e
+      - scheduler: slurm
+        machine_type: tpuv6e
 
   - name: host-device
     platforms:
       - scheduler: gke
         machine_type: tpu7x
       - scheduler: gke
+        machine_type: tpuv6e
+      - scheduler: slurm
         machine_type: tpuv6e
 
   - name: collectives

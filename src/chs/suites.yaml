@@ -1,7 +1,7 @@
 suites:
 - name: lite
-  timeout: 600
-  deadline: 2400
+  timeout: 1200
+  deadline: 4200
   tests:
   - name: nvidia-smi
   - name: dcgm

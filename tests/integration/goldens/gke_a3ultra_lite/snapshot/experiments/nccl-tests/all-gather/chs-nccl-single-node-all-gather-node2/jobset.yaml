@@ -31,7 +31,7 @@ spec:
         spec:
           parallelism: 1
           completions: 1
-          activeDeadlineSeconds: 2400
+          activeDeadlineSeconds: 4200
           template:
             metadata:
 
@@ -133,15 +133,15 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-single-node-all-gather-node2/chs-nccl-single-node-all-gather-node2.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-single-node-all-gather-node2/chs-nccl-single-node-all-gather-node2.out"
-                    if [ -d "/usr/local/gib/scripts" ]; then
-                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
-                    fi
+                    nvidia-smi -pm 1 || true
                     export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
                     export NCCL_DEBUG=INFO;
                     export NCCL_NET=Socket;
                     export NCCL_TESTS_SPLIT_MASK="";
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
-                    nvidia-smi -pm 1 || true
+                    if [ -d "/usr/local/gib/scripts" ]; then
+                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
+                    fi
                     mpirun -n 8 -N 8 \
                       --hostfile /tmp/hostfile --bind-to none \
                       --mca btl self,tcp --mca btl_tcp_if_include eth0 \

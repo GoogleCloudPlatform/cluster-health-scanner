@@ -4,7 +4,7 @@
 #SBATCH --gpu-bind=single:1
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
-#SBATCH --time=10
+#SBATCH --time=20
 #SBATCH -J chs-stream
 #SBATCH -N 1
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/slurm-%j.err

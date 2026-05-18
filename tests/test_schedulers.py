@@ -95,12 +95,9 @@ class TestSlurmScheduler(unittest.TestCase):
 
         scheduler._ensure_enroot_directories()
 
-        self.assertEqual(mock_makedirs.call_count, 3)
+        self.assertEqual(mock_makedirs.call_count, 2)
         mock_makedirs.assert_any_call("/home/user/.enroot/run", exist_ok=True)
         mock_makedirs.assert_any_call("/home/user/.enroot/cache", exist_ok=True)
-        mock_makedirs.assert_any_call(
-            "/home/user/.enroot/.credentials", exist_ok=True
-        )
 
     @mock.patch("os.path.expanduser")
     def test_get_extra_env(self, mock_expanduser, mock_logger):

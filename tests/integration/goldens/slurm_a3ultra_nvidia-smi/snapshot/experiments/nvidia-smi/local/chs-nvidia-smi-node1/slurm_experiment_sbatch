@@ -3,7 +3,7 @@
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
-#SBATCH --time=10
+#SBATCH --time=20
 #SBATCH -J chs-nvidia-smi
 #SBATCH -N 1
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node1/slurm-%j.err

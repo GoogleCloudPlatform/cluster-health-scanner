@@ -21,14 +21,14 @@ class TpuGemm(ExecutableApplication):
     tags("diagnostics", "tpu", "gemm")
 
     variable(
-        "run_dir",
+        "container_app_dir",
         default="/app/accelerator-microbenchmarks",
-        description="Directory of accelerator-microbenchmarks",
+        description="Directory of accelerator-microbenchmarks inside the container",
     )
     variable(
         "run_script",
         default="Ironwood/src/run_benchmark.py",
-        description="Path to run_benchmark.py relative to run_dir",
+        description="Path to run_benchmark.py relative to container_app_dir",
     )
     variable(
         "benchmarks_yaml_file",
@@ -42,7 +42,7 @@ class TpuGemm(ExecutableApplication):
     )
     variable(
         "config_file",
-        default="Ironwood/configs/chs_tpu_gemm.yaml",
+        default="{experiment_run_dir}/chs_tpu_gemm.yaml",
         description="Path to config file",
     )
 
@@ -51,11 +51,17 @@ class TpuGemm(ExecutableApplication):
         default="",
         description="Optional Driver Escape overrides injected before execution",
     )
+    variable(
+        "tpu_run_wrapper",
+        default="",
+        description="Wrapper command for running TPU benchmarks (e.g. srun on Slurm)",
+    )
 
     executable(
         "execute",
         template=[
-            "{driver_escape_overrides} cd {run_dir} && printf '%b' '{benchmarks_yaml_escaped}' > {config_file} && python3 {run_script} --config {config_file} 2>&1",
+            "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
+            "{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1",
         ],
         use_mpi=False,
     )

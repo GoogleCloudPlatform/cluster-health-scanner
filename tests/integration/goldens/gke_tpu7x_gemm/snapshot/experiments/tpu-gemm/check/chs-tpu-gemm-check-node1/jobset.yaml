@@ -18,7 +18,7 @@ spec:
         spec:
           parallelism: 1
           completions: 1
-          activeDeadlineSeconds: 2400
+          activeDeadlineSeconds: 4200
           template:
             metadata:
 
@@ -75,7 +75,8 @@ spec:
                   cd "<WORKSPACE_ROOT>/experiments/tpu-gemm/check/chs-tpu-gemm-check-node1"
                   rm -f "<WORKSPACE_ROOT>/experiments/tpu-gemm/check/chs-tpu-gemm-check-node1/chs-tpu-gemm-check-node1.out"
                   touch "<WORKSPACE_ROOT>/experiments/tpu-gemm/check/chs-tpu-gemm-check-node1/chs-tpu-gemm-check-node1.out"
-                  export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 && cd /app/accelerator-microbenchmarks && printf '%b' 'benchmarks:\n- benchmark_name: gemm_multiple_run\n  trace_dir: "../microbenchmarks/gemm_multiple_run_bf16"\n  csv_path: "../microbenchmarks/gemm_multiple_run_bf16"\n  xlml_metrics_dir: "../microbenchmarks/gemm_multiple_run_bf16"\n  xla_dump_dir: "../microbenchmarks/gemm_multiple_run_bf16/hlo_graphs"\n  benchmark_sweep_params:\n  - {m: 16384, k: 16384, n: 16384, num_runs: 100, dtype: '\''bfloat16'\''}\n' > Ironwood/configs/chs_tpu_gemm.yaml && python3 Ironwood/src/run_benchmark.py --config Ironwood/configs/chs_tpu_gemm.yaml 2>&1 
+                  printf '%b' 'benchmarks:\n- benchmark_name: gemm_multiple_run\n  trace_dir: "../microbenchmarks/gemm_multiple_run_bf16"\n  csv_path: "../microbenchmarks/gemm_multiple_run_bf16"\n  xlml_metrics_dir: "../microbenchmarks/gemm_multiple_run_bf16"\n  xla_dump_dir: "../microbenchmarks/gemm_multiple_run_bf16/hlo_graphs"\n  benchmark_sweep_params:\n  - {m: 16384, k: 16384, n: 16384, num_runs: 100, dtype: '\''bfloat16'\''}\n' | tee <WORKSPACE_ROOT>/experiments/tpu-gemm/check/chs-tpu-gemm-check-node1/chs_tpu_gemm.yaml 
+                  export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&  python3 -u /app/accelerator-microbenchmarks/Ironwood/src/run_benchmark.py --config <WORKSPACE_ROOT>/experiments/tpu-gemm/check/chs-tpu-gemm-check-node1/chs_tpu_gemm.yaml 2>&1 
 
               restartPolicy: Never
 

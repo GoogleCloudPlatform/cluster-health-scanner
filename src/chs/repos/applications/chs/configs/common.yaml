@@ -21,10 +21,10 @@ a4x:
 tpu7x:
   variables:
     tpu_chips_per_node: 4
-    processes_per_node: "{tpu_chips_per_node}"
-    n_ranks: "{tpu_chips_per_node}*{n_nodes}"
+    processes_per_node: 1
+    n_ranks: "{processes_per_node}*{n_nodes}"
 tpuv6e:
   variables:
     tpu_chips_per_node: 4
-    processes_per_node: "{tpu_chips_per_node}"
-    n_ranks: "{tpu_chips_per_node}*{n_nodes}"
+    processes_per_node: 1
+    n_ranks: "{processes_per_node}*{n_nodes}"

@@ -3,7 +3,7 @@
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
-#SBATCH --time=10
+#SBATCH --time=20
 #SBATCH -J chs-nccl-cluster-all-reduce
 #SBATCH -N 2
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/chs-nccl-cluster-all-reduce/slurm-%j.err
