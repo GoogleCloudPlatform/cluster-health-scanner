@@ -31,6 +31,7 @@ export NCCL_NET=gIB;
 export NCCL_TESTS_SPLIT_MASK="";
 export OMPI_MCA_btl=tcp,self;
 export OMPI_MCA_btl_tcp_if_include="enp0s1,enp0s2";
+export XDG_RUNTIME_DIR="$HOME/.enroot";
 if [ -d "/usr/local/gib/scripts" ]; then
     NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
 fi

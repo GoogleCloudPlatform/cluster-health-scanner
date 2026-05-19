@@ -1,6 +1,9 @@
 a3-mega:
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -8,6 +11,9 @@ a3-mega:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -20,6 +26,9 @@ a3-mega:
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -40,6 +49,7 @@ a3-mega:
     env_vars:
       set:
         NCCL_FASTRAK_CTRL_DEV: enp0s12
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
         NCCL_FASTRAK_IFNAME: enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0
         NCCL_SOCKET_IFNAME: enp0s12
         NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: /dev/aperture_devices
@@ -53,6 +63,9 @@ a3-mega:
       begin_message_size: "256M"
       end_message_size: "8G"
   nvidia-smi:
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -63,6 +76,7 @@ a3-ultra:
     env_vars:
       set:
         NCCL_NET: gIB
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
         NCCL_DEBUG: INFO
@@ -75,6 +89,9 @@ a3-ultra:
       end_message_size: "8G"
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -82,6 +99,9 @@ a3-ultra:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -94,6 +114,9 @@ a3-ultra:
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -110,6 +133,9 @@ a3-ultra:
       n: 20480
       k: 20480
   nvidia-smi:
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -120,6 +146,7 @@ a4:
     env_vars:
       set:
         NCCL_NET: gIB
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
         NCCL_DEBUG: INFO
@@ -132,6 +159,9 @@ a4:
       end_message_size: "8G"
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -139,6 +169,9 @@ a4:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -151,6 +184,9 @@ a4:
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -167,6 +203,9 @@ a4:
       n: 32768
       k: 32768
   nvidia-smi:
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -174,6 +213,9 @@ a4:
 a4x:
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -181,6 +223,9 @@ a4x:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -193,6 +238,9 @@ a4x:
       mem_affinity: "0:0:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -209,6 +257,9 @@ a4x:
       n: 51200
       k: 51200
   nvidia-smi:
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -218,6 +269,7 @@ a4x:
     env_vars:
       set:
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
         NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
         LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
         NCCL_NET: gIB

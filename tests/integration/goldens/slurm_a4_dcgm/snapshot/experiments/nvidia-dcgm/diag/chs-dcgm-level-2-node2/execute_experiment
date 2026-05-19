@@ -27,5 +27,6 @@ cd "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2"
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/chs-dcgm-level-2-node2.out"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/chs-dcgm-level-2-node2.out"
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/.slurm_config
+export XDG_RUNTIME_DIR="$HOME/.enroot";
 dcgmi diag -r 2 >> "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/chs-dcgm-level-2-node2.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node2/.slurm_script_end_time

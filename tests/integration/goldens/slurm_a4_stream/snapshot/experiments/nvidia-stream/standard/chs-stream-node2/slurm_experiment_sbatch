@@ -26,6 +26,7 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/ch
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/chs-stream-node2.out"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/chs-stream-node2.out"
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_config
+export XDG_RUNTIME_DIR="$HOME/.enroot";
 srun -l --container-workdir /workspace --container-image <HOME_DIR>/.local/share/chs/images/hpc-benchmarks:25.09.sqsh --container-writable --wait=60 ./stream-gpu-test.sh --n 2040000000 --gpu-affinity  --cpu-affinity 0-55:0-55:0-55:0-55:56-111:56-111:56-111:56-111 --mem-affinity 0:0:0:0:1:1:1:1 >> "<WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/chs-stream-node2.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nvidia-stream/standard/chs-stream-node2/.slurm_script_end_time
 
