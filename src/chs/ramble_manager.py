@@ -20,6 +20,8 @@ import time
 from typing import Any
 import click
 from google.protobuf.json_format import MessageToJson
+from google.cloud import storage
+from google.api_core.exceptions import GoogleAPICallError
 
 from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
@@ -857,14 +859,19 @@ class RambleManager:
         logger.info("Uploading Bill of Health to %s", upload_url)
 
         try:
-            self._execute_shell_command(
-                ["gcloud", "storage", "cp", boh_path, upload_url],
-                error_context="Failed to upload Bill of Health",
-            )
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(f"bills_of_health/{self._workspace_name}.json")
+            blob.upload_from_filename(boh_path)
             logger.info("Bill of Health uploaded successfully.")
         except Exception as e:
+            prefix = (
+                "API error"
+                if isinstance(e, GoogleAPICallError)
+                else "Unexpected error"
+            )
             raise ex.ChsArchiveException(
-                f"Unexpected error during BOH archival: {e}"
+                f"{prefix} during BOH archival: {e}"
             ) from e
 
     def archive_and_upload_workspace(self) -> None:

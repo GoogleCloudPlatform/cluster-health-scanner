@@ -645,8 +645,9 @@ mycriteria:
             mock_exec.side_effect = ChsException("Archive failed")
             manager.archive_and_upload_workspace()
 
-    def test_archive_and_upload_boh_success(self):
-        """Test archive_and_upload_boh uses gcloud storage cp."""
+    @mock.patch("chs.ramble_manager.storage")
+    def test_archive_and_upload_boh_success(self, mock_storage):
+        """Test archive_and_upload_boh uses google-cloud-storage."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         self.mock_app_data.get_bucket.return_value = "my-bucket"
 
@@ -656,18 +657,21 @@ mycriteria:
             else self.real_os_path_exists(p)
         )
 
-        with mock.patch.object(manager, "_execute_shell_command") as mock_shell:
-            manager.archive_and_upload_boh()
+        mock_client_instance = mock_storage.Client.return_value
+        mock_bucket = mock_client_instance.bucket.return_value
+        mock_blob = mock_bucket.blob.return_value
 
-            mock_shell.assert_called_once()
-            args = mock_shell.call_args[0][0]
-            self.assertEqual(args[0], "gcloud")
-            self.assertEqual(args[1], "storage")
-            self.assertEqual(args[2], "cp")
-            self.assertIn("bill_of_health.json", args[3])
-            self.assertEqual(args[4], "gs://my-bucket/bills_of_health/ws1.json")
+        manager.archive_and_upload_boh()
 
-    def test_archive_and_upload_boh_failure(self):
+        mock_storage.Client.assert_called_once()
+        mock_client_instance.bucket.assert_called_once_with("my-bucket")
+        mock_bucket.blob.assert_called_once_with("bills_of_health/ws1.json")
+        mock_blob.upload_from_filename.assert_called_once_with(
+            os.path.join(manager.path, "bill_of_health.json")
+        )
+
+    @mock.patch("chs.ramble_manager.storage")
+    def test_archive_and_upload_boh_failure(self, mock_storage):
         """Test archive_and_upload_boh raises on failure."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         self.mock_app_data.get_bucket.return_value = "my-bucket"
@@ -677,10 +681,13 @@ mycriteria:
             else self.real_os_path_exists(p)
         )
 
-        with mock.patch.object(manager, "_execute_shell_command") as mock_shell:
-            mock_shell.side_effect = ChsException("Upload failed")
-            with self.assertRaises(ChsArchiveException):
-                manager.archive_and_upload_boh()
+        mock_client_instance = mock_storage.Client.return_value
+        mock_bucket = mock_client_instance.bucket.return_value
+        mock_blob = mock_bucket.blob.return_value
+        mock_blob.upload_from_filename.side_effect = Exception("Upload failed")
+
+        with self.assertRaises(ChsArchiveException):
+            manager.archive_and_upload_boh()
 
     def test_archive_success(self):
         """Test archive calls both archival methods."""

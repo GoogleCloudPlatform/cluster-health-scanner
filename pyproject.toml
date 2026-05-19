@@ -16,6 +16,7 @@ dependencies = [
     "rich",
     "pre_commit",
     "google-cloud-storage",
+    "google-cloud-compute",
 ]
 
 [project.optional-dependencies]

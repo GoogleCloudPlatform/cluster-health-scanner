@@ -5,8 +5,10 @@ import logging
 import os
 import re
 import subprocess
-import json
 import yaml
+from google.cloud import compute_v1
+import google.auth
+from google.api_core.exceptions import GoogleAPICallError
 
 
 from typing import Any, TYPE_CHECKING
@@ -193,52 +195,55 @@ class SlurmScheduler(BaseScheduler):
             return {}
 
         try:
-            # Batch filter: name=(node1 OR node2 ...)
-            nodes_filter_str = f"name=({' '.join(nodes)})"
-            args = [
-                "gcloud",
-                "compute",
-                "instances",
-                "list",
-                f"--filter={nodes_filter_str}",
-                "--format=json(name,resourceStatus.physicalHostTopology)",
-            ]
-
-            output = subprocess.run(
-                args,
-                text=True,
-                capture_output=True,
-                check=True,
-            ).stdout
-
-            if not output:
+            credentials, project = google.auth.default()
+            if not project:
+                logger.warning(
+                    "Could not determine GCP project. "
+                    "Skipping topology discovery."
+                )
                 return {}
 
-            data = json.loads(output)
+            client = compute_v1.InstancesClient()
+            # TODO: Batch GCE API requests to avoid URL length
+            # limits if nodes list is large.
+            filter_str = " OR ".join([f'name = "{node}"' for node in nodes])
+            request = compute_v1.AggregatedListInstancesRequest(
+                project=project,
+                filter=filter_str,
+            )
+            page_result = client.aggregated_list(request=request)
 
             topology: dict[str, dict[str, list[str]]] = {}
-            for item in data:
-                name = item.get("name")
-                if not name:
-                    continue
+            for zone, instances_in_zone in page_result:
+                if instances_in_zone.instances:
+                    for item in instances_in_zone.instances:
+                        name = item.name
+                        if not name:
+                            continue
 
-                topo_info = item.get("resourceStatus", {}).get(
-                    "physicalHostTopology", {}
-                )
-                block = topo_info.get("block", "default-block")
-                subblock = topo_info.get("subblock", "default-subblock")
+                        resource_status = getattr(item, "resource_status", None)
+                        if not resource_status:
+                            continue
+                        topo_info = getattr(
+                            resource_status, "physical_host_topology", None
+                        )
+                        if not topo_info:
+                            continue
 
-                topology.setdefault(block, {}).setdefault(subblock, []).append(
-                    name
-                )
+                        block = topo_info.block or "default-block"
+                        subblock = topo_info.subblock or "default-subblock"
+
+                        topology.setdefault(block, {}).setdefault(
+                            subblock, []
+                        ).append(name)
 
             return topology
 
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logger.warning("Failed to get node topology via gcloud: %s", e)
+        except GoogleAPICallError as e:
+            logger.warning("Failed to get node topology via API: %s", e)
             return {}
-        except json.JSONDecodeError as e:
-            logger.warning("Failed to parse gcloud output: %s", e)
+        except Exception as e:
+            logger.error("Unexpected error getting node topology: %s", e)
             return {}
 
     def _ensure_enroot_directories(self) -> None:
