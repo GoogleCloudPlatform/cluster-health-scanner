@@ -160,10 +160,24 @@ class TestCli(unittest.TestCase):
                 return_value=TestsMap(
                     data={
                         "slurm": {
-                            "a3-high": ["t1", "t2", "t3"],
+                            "a3-high": [
+                                "t1",
+                                "t2",
+                                "t3",
+                                "nccl-cluster",
+                                "nccl-pairwise",
+                                "dcgm",
+                            ],
                         },
                         "gke": {
-                            "a3-high": ["t1", "t2", "t3"],
+                            "a3-high": [
+                                "t1",
+                                "t2",
+                                "t3",
+                                "nccl-cluster",
+                                "nccl-pairwise",
+                                "dcgm",
+                            ],
                         },
                     }
                 ),

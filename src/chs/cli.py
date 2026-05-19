@@ -801,6 +801,21 @@ def run(
 
         suite_cfg = load_suite(suite)
         resolved_tests = suite_cfg.get("tests", [])
+
+        supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
+            machine_type, scheduler
+        )
+        resolved_tests = [
+            t
+            for t in resolved_tests
+            if (t.get("name") if isinstance(t, dict) else t) in supported_tests
+        ]
+        if not resolved_tests:
+            raise ex.ChsValidationError(
+                f"No supported tests found in suite '{suite}' for"
+                f"scheduler '{scheduler}' and machine type '{machine_type}'."
+            )
+
         try:
             timeout = int(suite_cfg.get("timeout"))
         except (ValueError, TypeError):

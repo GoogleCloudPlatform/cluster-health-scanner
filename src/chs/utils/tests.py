@@ -75,3 +75,14 @@ def get_tests_by_machine_type(machine_type: str) -> list[str]:
         if machine_type in tests_map.data[scheduler]:
             tests.update(tests_map.data[scheduler][machine_type])
     return sorted(list(tests))
+
+
+def get_tests_by_machine_type_and_scheduler(
+    machine_type: str, scheduler: str
+) -> list[str]:
+    """Returns list of tests supported on a specific machine and scheduler."""
+    tests_map = get_tests_map()
+    scheduler_map = tests_map.get(scheduler)
+    if not scheduler_map:
+        return []
+    return scheduler_map.get(machine_type, [])
