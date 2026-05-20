@@ -4,6 +4,7 @@ a3-mega:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -14,6 +15,7 @@ a3-mega:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -29,6 +31,7 @@ a3-mega:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -50,6 +53,7 @@ a3-mega:
       set:
         NCCL_FASTRAK_CTRL_DEV: enp0s12
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         NCCL_FASTRAK_IFNAME: enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0
         NCCL_SOCKET_IFNAME: enp0s12
         NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: /dev/aperture_devices
@@ -66,6 +70,7 @@ a3-mega:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -77,12 +82,13 @@ a3-ultra:
       set:
         NCCL_NET: gIB
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
         NCCL_DEBUG: INFO
     variables:
       container_name: nccl-plugin-gib-diagnostic:v1.1.0
-      container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
       srun_args: "--mpi=pmix --export=ALL --container-workdir /third_party/nccl-tests/build/ --container-image {container_path} --container-mounts \"/var/tmp\" --container-writable --wait=60"
       nccl-tests_path: "/third_party/nccl-tests/build/"
       begin_message_size: "256M"
@@ -92,6 +98,7 @@ a3-ultra:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -102,6 +109,7 @@ a3-ultra:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -117,6 +125,7 @@ a3-ultra:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -136,6 +145,7 @@ a3-ultra:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -147,12 +157,13 @@ a4:
       set:
         NCCL_NET: gIB
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
         NCCL_DEBUG: INFO
     variables:
       container_name: nccl-plugin-gib-diagnostic:v1.1.0
-      container_uri: "docker://us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0"
       srun_args: "--mpi=pmix --export=ALL --container-workdir /third_party/nccl-tests/build/ --container-image {container_path} --container-mounts \"/var/tmp\" --container-writable --wait=60"
       nccl-tests_path: "/third_party/nccl-tests/build/"
       begin_message_size: "256M"
@@ -162,6 +173,7 @@ a4:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -172,6 +184,7 @@ a4:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -187,6 +200,7 @@ a4:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -206,6 +220,7 @@ a4:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -216,6 +231,7 @@ a4x:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -226,6 +242,7 @@ a4x:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -241,6 +258,7 @@ a4x:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -260,6 +278,7 @@ a4x:
     env_vars:
       set:
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -270,6 +289,7 @@ a4x:
       set:
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
         LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
         NCCL_NET: gIB

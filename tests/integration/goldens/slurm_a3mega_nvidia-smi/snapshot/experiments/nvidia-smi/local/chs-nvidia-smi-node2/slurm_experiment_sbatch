@@ -24,8 +24,9 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvid
 
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/chs-nvidia-smi-node2.out"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/chs-nvidia-smi-node2.out"
-export XDG_RUNTIME_DIR="$HOME/.enroot";
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/.slurm_config
+export ENROOT_RUNTIME_PATH="$HOME/.enroot/run";
+export XDG_RUNTIME_DIR="$HOME/.enroot";
 nvidia-smi --query-gpu=index,name,driver_version,pstate,pci.bus_id,serial,uuid,power.draw,power.limit,clocks.gr,clocks.mem --format=csv,noheader,nounits >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/chs-nvidia-smi-node2.out" 2>&1
 echo "GPU Count: $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)" >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/chs-nvidia-smi-node2.out" 2>&1
 nvidia-smi | grep -o "CUDA Version: [0-9.]*" || true >> "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node2/chs-nvidia-smi-node2.out" 2>&1
