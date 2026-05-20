@@ -416,7 +416,7 @@ a4x:
         NCCL_NET: gIB
     variables:
       jobset_template: jobset_mpi.yaml.tpl
-      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.0.6
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
       ssh_port: 222
       nccl-tests_path: /third_party/nccl-tests
       mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
