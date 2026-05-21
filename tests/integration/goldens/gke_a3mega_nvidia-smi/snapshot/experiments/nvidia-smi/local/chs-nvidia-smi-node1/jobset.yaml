@@ -94,7 +94,7 @@ spec:
                   nvidia-smi -pm 1 || true
                   nvidia-smi --query-gpu=index,name,driver_version,pstate,pci.bus_id,serial,uuid,power.draw,power.limit,clocks.gr,clocks.mem --format=csv,noheader,nounits 
                   echo "GPU Count: $(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)" 
-                  nvidia-smi | grep -o "CUDA Version: [0-9.]*" || true 
+                  (nvidia-smi | grep -o "CUDA Version: [0-9.]*" || true) 
                 volumeMounts:
                   - name: shared-memory
                     mountPath: /dev/shm
