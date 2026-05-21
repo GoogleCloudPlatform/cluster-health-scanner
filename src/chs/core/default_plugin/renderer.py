@@ -43,6 +43,13 @@ class DefaultRenderer:
                 table.add_column("Status", style="bold")
 
             for metric in test_result.metrics:
+                # Filter non-validated INFO metrics to prevent terminal noise
+                # during validated runs.
+                if has_validation and not metric.HasField(
+                    "validation_criteria"
+                ):
+                    continue
+
                 if metric.value.HasField("number_value"):
                     val = metric.value.number_value
                 elif metric.value.HasField("bool_value"):
