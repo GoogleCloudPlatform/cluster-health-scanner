@@ -8,9 +8,11 @@ import dataclasses
 import datetime
 import unittest
 from unittest import mock
+from typing import Any
 
 from chs import cli
 from chs import exceptions
+from chs.utils.tests import TestsMap
 from click import testing
 import shutil
 import tempfile
@@ -28,6 +30,7 @@ class _ListActionKwargs:
     tests: bool = False
     schedulers: bool = False
     from_suite: str | None = None
+    machine_type: str | None = None
 
 
 @dataclasses.dataclass
@@ -61,6 +64,14 @@ class _ListActionTestCase:
     expected_schedulers_calls: int
 
 
+@dataclasses.dataclass
+class _HistoryTestCase:
+    name: str
+    mock_runs: dict[str, Any]
+    expected_strings: list[str]
+    unexpected_strings: list[str] = dataclasses.field(default_factory=list)
+
+
 class TestCli(unittest.TestCase):
     """Tests the CLI logic and command invocation."""
 
@@ -85,6 +96,12 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        self.mock_scheduler.run_preflight_checks.side_effect = (
+            lambda tests, *args, **kwargs: tests
+        )
+        self.mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, *args, **kwargs: tests
+        )
 
         self.mock_load_suite = self.enterContext(
             mock.patch("chs.cli.load_suite", autospec=True)
@@ -105,50 +122,101 @@ class TestCli(unittest.TestCase):
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
 
-        # Mock resources to allow test dummy values
+        # Mock suites utilities to return test dummy values
         self.enterContext(
             mock.patch(
-                "chs.resources.SUPPORTED_MACHINE_TYPES",
-                new=["a3-ultra", "a4", "a3-mega", "a3-high"],
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["a3-ultra", "a4", "a3-mega", "a3-high"],
             )
         )
         self.enterContext(
             mock.patch(
-                "chs.resources.SUPPORTED_SUITES",
-                new={
-                    "lite": [],
-                    "standard": [],
-                    "burn-in": [],
-                    "suite1": [],
-                    "s1": [],
-                },
+                "chs.utils.suites.get_all_suites",
+                return_value=["lite", "standard", "burn-in", "suite1", "s1"],
             )
         )
         self.enterContext(
             mock.patch(
-                "chs.resources.MAP_TESTS_BY_SCHEDULER_AND_MACHINE_TYPE",
-                new={
-                    "slurm": {
-                        "a3-high": ["t1", "t2", "t3"],
-                    },
-                    "gke": {
-                        "a3-high": ["t1", "t2", "t3"],
-                    },
-                },
+                "chs.utils.tests.get_all_supported_schedulers",
+                return_value=["slurm", "gke"],
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=[
+                    "t1",
+                    "t2",
+                    "t3",
+                    "nccl-cluster",
+                    "nccl-pairwise",
+                    "dcgm",
+                ],
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=TestsMap(
+                    data={
+                        "slurm": {
+                            "a3-high": [
+                                "t1",
+                                "t2",
+                                "t3",
+                                "nccl-cluster",
+                                "nccl-pairwise",
+                                "dcgm",
+                            ],
+                        },
+                        "gke": {
+                            "a3-high": [
+                                "t1",
+                                "t2",
+                                "t3",
+                                "nccl-cluster",
+                                "nccl-pairwise",
+                                "dcgm",
+                            ],
+                        },
+                    }
+                ),
             )
         )
 
-    def test_list_tests_implementation_hint(self):
-        """Test _get_tests_list returns hint when listing all tests."""
+    def test_list_tests_implementation_both_hints(self):
+        """Test _get_tests_list returns both hints."""
         lines = cli._get_tests_list(from_suite=None, tests_flag=True)
+        hint = (
+            "  (Hint: Use --from-suite <suite_name> or "
+            "--machine-type <machine_type> to filter tests)"
+        )
+        self.assertIn(hint, lines)
+
+    def test_list_tests_implementation_machine_type_hint(self):
+        """Test _get_tests_list returns machine-type hint."""
+        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
+        hint = "  (Hint: Use --machine-type <machine_type> to filter tests)"
+        self.assertIn(hint, lines)
+
+    @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
+    def test_list_tests_implementation_suite_hint(self, mock_get_tests):
+        """Test _get_tests_list returns suite hint."""
+        mock_get_tests.return_value = ["test1", "test2"]
+        lines = cli._get_tests_list(
+            from_suite=None, tests_flag=True, machine_type="a3-ultra"
+        )
         hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
         self.assertIn(hint, lines)
 
-    def test_list_tests_implementation_no_hint(self):
-        """Test _get_tests_list does not return hint when filtering by suite."""
-        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
-        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        self.assertNotIn(hint, lines)
+    @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
+    def test_list_tests_implementation_no_hint(self, mock_get_tests):
+        """Test _get_tests_list returns no hint."""
+        mock_get_tests.return_value = ["test1", "test2"]
+        lines = cli._get_tests_list(
+            from_suite="suite1", tests_flag=True, machine_type="a3-ultra"
+        )
+        self.assertFalse(any("Hint:" in line for line in lines))
 
     @mock.patch.object(cli, "list_action", autospec=True)
     def test_list_command(self, mock_list_action):
@@ -252,6 +320,14 @@ class TestCli(unittest.TestCase):
                     from_suite="suite1, suite2 ,suite3",
                 ),
             ),
+            _ListCommandTestCase(
+                name="machine_type",
+                args_list=["list", "--tests", "--machine-type", "a3-ultra"],
+                expected_kwargs=_ListActionKwargs(
+                    tests=True,
+                    machine_type="a3-ultra",
+                ),
+            ),
         ]
         for case in test_cases:
             with self.subTest(case.name):
@@ -311,6 +387,15 @@ class TestCli(unittest.TestCase):
             s = mock.Mock()
             s.name = name
             s.get_nodes_under_test.return_value = ["node1"]
+            s.run_preflight_checks.side_effect = (
+                lambda tests=None, *args, **kwargs: tests
+            )
+            s.setup_scheduler_resources.side_effect = (
+                lambda workspace_config_dir=None,
+                tests=None,
+                *args,
+                **kwargs: tests
+            )
             return s
 
         mock_get_scheduler.side_effect = get_scheduler_side_effect
@@ -567,7 +652,10 @@ class TestCli(unittest.TestCase):
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
                 mock_analyze_action.assert_called_once_with(
-                    self.mock_app_data, MOCK_WORKSPACE_NAME
+                    self.mock_app_data,
+                    MOCK_WORKSPACE_NAME,
+                    validation=None,
+                    skip_validation=False,
                 )
 
     def test_analyze_action_exception_handling(self):
@@ -582,11 +670,12 @@ class TestCli(unittest.TestCase):
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
+        self.mock_app_data.get_latest_run_id.return_value = "some_run_id"
         self.mock_rm_instance.check_jobs_running.return_value = True
         self.mock_rm_instance.cancel_experiments.side_effect = (
             exceptions.ChsCancellationException("Cancellation failed")
         )
-        result = self.runner.invoke(cli.cli, ["cancel", "some_run_id"])
+        result = self.runner.invoke(cli.cli, ["cancel"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
         self.mock_rm_instance.archive.assert_called_once()
@@ -628,7 +717,7 @@ class TestCli(unittest.TestCase):
     def test_run_action_chs_exception(self):
         """Test that run_action handles ChsException and archives."""
         self.mock_scheduler.name = "slurm"
-        self.mock_rm_instance.create_workspace.side_effect = (
+        self.mock_rm_instance.setup_workspace.side_effect = (
             exceptions.ChsException("Mock failure")
         )
         result = self.runner.invoke(
@@ -647,7 +736,7 @@ class TestCli(unittest.TestCase):
 
         self.mock_scheduler.name = "slurm"
 
-        self.mock_rm_instance.create_workspace.side_effect = OSError(
+        self.mock_rm_instance.setup_workspace.side_effect = OSError(
             "Permission denied"
         )
         result = self.runner.invoke(
@@ -904,7 +993,7 @@ class TestCli(unittest.TestCase):
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = workspace_dir
 
-        def mock_generate_boh(results_path):
+        def mock_generate_boh(results_path, **kwargs):
             boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")
@@ -919,7 +1008,9 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         self.mock_rm_instance.wait_for_jobs.assert_not_called()
-        self.mock_rm_instance.generate_boh.assert_called_once_with(results_path)
+        self.mock_rm_instance.generate_boh.assert_called_once_with(
+            results_path, thresholds_path=None, skip_validation=False
+        )
         mock_results_viewer.assert_called_once()
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
@@ -937,7 +1028,7 @@ class TestCli(unittest.TestCase):
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = workspace_dir
 
-        def mock_analyze_results():
+        def mock_analyze_results(**kwargs):
             boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")
@@ -1065,7 +1156,7 @@ class TestCli(unittest.TestCase):
                 kwargs=_ListActionKwargs(),
                 expected_result=True,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, False),
+                expected_tests_call_args=(None, False, None),
                 expected_schedulers_calls=1,
             ),
             _ListActionTestCase(
@@ -1084,7 +1175,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=0,
-                expected_tests_call_args=("s1", True),
+                expected_tests_call_args=("s1", True, None),
                 expected_schedulers_calls=0,
             ),
             _ListActionTestCase(
@@ -1103,7 +1194,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, True),
+                expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=0,
             ),
             _ListActionTestCase(
@@ -1114,7 +1205,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=0,
-                expected_tests_call_args=(None, True),
+                expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=1,
             ),
             _ListActionTestCase(
@@ -1126,7 +1217,7 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, True),
+                expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=1,
             ),
         ]
@@ -1191,6 +1282,63 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["analyze", "missing_run"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Workspace 'missing_run' not found", result.output)
+
+
+class TestCliHistory(unittest.TestCase):
+    """Tests the 'chs history' command."""
+
+    def setUp(self):
+        super().setUp()
+        self.runner = testing.CliRunner()
+        self.mock_app_data_cls = self.enterContext(
+            mock.patch("chs.cli.ChsAppData", autospec=True)
+        )
+        self.mock_app_data = self.mock_app_data_cls.return_value
+
+    def test_history_command(self):
+        """Test history command with various scenarios."""
+        test_cases = [
+            _HistoryTestCase(
+                name="no_runs",
+                mock_runs={},
+                expected_strings=["No runs found."],
+            ),
+            _HistoryTestCase(
+                name="with_runs",
+                mock_runs={
+                    "run1": {
+                        "run_id": "run1",
+                        "submission_time": "2023-01-01T12:00:00Z",
+                        "scheduler": "slurm",
+                    },
+                    "run2": {
+                        "run_id": "run2",
+                        "submission_time": "2023-01-02T12:00:00Z",
+                        "command_statement": "chs run --scheduler gke",
+                    },
+                },
+                expected_strings=[
+                    "Workspace",
+                    "Details",
+                    "run1",
+                    "run2",
+                    "chs run --scheduler slurm",
+                    "chs run --scheduler gke",
+                ],
+                unexpected_strings=["Alias", "my_alias", "alias not set"],
+            ),
+        ]
+        for case in test_cases:
+            with self.subTest(case.name):
+                self.mock_app_data.get_latest_runs.return_value = case.mock_runs
+                result = self.runner.invoke(cli.cli, ["history"])
+                self.assertEqual(result.exit_code, 0)
+                self.mock_app_data.get_latest_runs.assert_called_once_with(5)
+                self.mock_app_data.get_latest_runs.reset_mock()
+                for expected in case.expected_strings:
+                    self.assertIn(expected, result.output)
+                for unexpected in case.unexpected_strings:
+                    self.assertNotIn(unexpected, result.output)
 
 
 if __name__ == "__main__":

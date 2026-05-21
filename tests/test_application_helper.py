@@ -30,7 +30,7 @@ sys.modules["spack"] = MagicMock()
 sys.modules["spack.util.spack_yaml"] = MagicMock()
 
 from chs.repos.applications.chs.test_helper import TestHelper  # noqa: E402
-from chs.repos.applications.chs.application import Chs  # noqa: E402
+from chs.repos.applications.chs.application import Chs, is_tpu  # noqa: E402
 
 
 @dataclasses.dataclass
@@ -54,6 +54,14 @@ class _MergeConfigsTestCase:
 
 
 class TestApplicationHelper(unittest.TestCase):
+    def test_is_tpu(self):
+        self.assertTrue(is_tpu("tpu7x"))
+        self.assertTrue(is_tpu("tpuv6e"))
+        self.assertFalse(is_tpu("a3-ultra"))
+        self.assertFalse(is_tpu("a3-high"))
+        self.assertFalse(is_tpu(""))
+        self.assertFalse(is_tpu(None))
+
     def test_deep_merge_cases(self):
         # For _deep_merge(dest, src):
         #    - dest: Base configuration (common.yaml).

@@ -47,6 +47,29 @@ def mock_cluster_env(tmp_path, monkeypatch):
         '      echo \'{"items": [{"metadata": {"name": "default"}, '
         '"spec": {"type": "L3"}}, {"metadata": {"name": "gpu-net-1"}, '
         '"spec": {"type": "Device"}}]}\'\n'
+        '    elif [[ "$*" == *"get crd"* ]]; then\n'
+        '      if [[ "$MOCK_KUEUE_MISSING" == "1" ]]; then\n'
+        '        echo "jobsets.jobset.sigs.k8s.io"\n'
+        "      else\n"
+        '        echo -e "jobsets.jobset.sigs.k8s.io\\n'
+        'kueues.kueue.sigs.k8s.io"\n'
+        "      fi\n"
+        '    elif [[ "$*" == *"apply -f"* ]]; then\n'
+        '      if [[ "$MOCK_KUEUE_APPLY_FAIL" == "1" ]]; then\n'
+        '        echo "apply failed due to permissions" >&2\n'
+        "        exit 1\n"
+        "      fi\n"
+        "      exit 0\n"
+        '    elif [[ "$*" == *"get deployment -n kueue-system"* ]]; then\n'
+        '      echo "registry.k8s.io/kueue/kueue:v0.14.5"\n'
+        '    elif [[ "$*" == *"get node"* ]]; then\n'
+        '      echo \'{"metadata": {"labels": '
+        '{"cloud.google.com/gke-tpu-topology": "2x2x1"}}}\'\n'
+        '    elif [[ "$*" == *"get clusterqueue"* ]]; then\n'
+        '      if [[ "$MOCK_KUEUE_APPLY_FAIL" == "1" ]]; then\n'
+        "        exit 1\n"
+        "      fi\n"
+        '      echo "True"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"
@@ -73,13 +96,19 @@ def mock_cluster_env(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("test_case", get_test_cases())
-def test_golden_config(test_case, tmp_path, mock_cluster_env, mocker):
+def test_golden_config(
+    test_case, tmp_path, mock_cluster_env, mocker, monkeypatch
+):
     runner = CliRunner()
     test_dir = GOLDENS_DIR / test_case
     config_path = test_dir / "test_config.yaml"
     snapshot_dir = test_dir / "snapshot"
 
     config = yaml.safe_load(config_path.read_text())
+
+    env_vars = config.get("env", {})
+    for k, v in env_vars.items():
+        monkeypatch.setenv(k, str(v))
 
     command = config.get("command", [])
 

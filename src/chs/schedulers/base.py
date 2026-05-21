@@ -1,6 +1,8 @@
 """Base scheduler module."""
 
 import abc
+import json
+import os
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -18,6 +20,33 @@ class BaseScheduler(abc.ABC):
         """
         self._app_data = app_data
 
+    def run_preflight_checks(
+        self,
+        tests: list[dict[str, Any]] | None = None,
+        workspace_name: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Runs preflight checks for the scheduler. Optional to implement."""
+        return tests
+
+    def setup_scheduler_resources(
+        self,
+        workspace_config_dir: str,
+        tests: list[dict[str, Any]] | None = None,
+        machine_type: str = "",
+        workspace_name: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Sets up scheduler-specific infrastructure resources.
+
+        Optional to implement.
+        """
+        return tests
+
+    def cleanup_scheduler_resources(
+        self, workspace_name: str | None = None
+    ) -> None:
+        """Cleans up scheduler-specific resources. Optional to implement."""
+        pass
+
     @property
     @abc.abstractmethod
     def name(self) -> str:
@@ -33,6 +62,18 @@ class BaseScheduler(abc.ABC):
         return {}
 
     @abc.abstractmethod
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Determine the network topology of the cluster."""
+        pass
+
+    def _write_topology_json(self, workspace_config_dir: str) -> None:
+        """Writes the topology to topology.json in the workspace directory."""
+        workspace_dir = os.path.dirname(workspace_config_dir)
+        topo_path = os.path.join(workspace_dir, "topology.json")
+        with open(topo_path, "w") as f:
+            json.dump(self.get_topology(), f)
+
+    @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:
         """Determine which nodes to test based on provided parameters."""
         pass
@@ -45,6 +86,7 @@ class BaseScheduler(abc.ABC):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -56,6 +98,11 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all jobs matching the specified prefix."""
+        pass
+
+    @abc.abstractmethod
     def check_jobs_running(self, job_ids: list[str]) -> bool:
         """Checks if the given jobs are still running."""
         pass
@@ -63,11 +110,6 @@ class BaseScheduler(abc.ABC):
     @abc.abstractmethod
     def parse_job_ids(self, output: str) -> list[str]:
         """Parses job IDs from the experiment execution output."""
-        pass
-
-    @abc.abstractmethod
-    def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given jobs."""
         pass
 
     @abc.abstractmethod

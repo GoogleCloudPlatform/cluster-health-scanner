@@ -44,11 +44,6 @@ a3-ultra:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
@@ -150,11 +145,6 @@ a4:
           -x CUDA_VISIBLE_DEVICES \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars}
-    success_criteria:
-      avg_bus_bw:
-        mode: fom_comparison
-        fom_name: "Avg. Bus Bandwidth"
-        formula: "{value} > 80"
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
@@ -225,14 +215,81 @@ a3-mega:
       - name: shared-memory
         emptyDir:
           medium: "Memory"
+      - name: nvidia
+        hostPath:
+          path: /home/kubernetes/bin/nvidia/lib64
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: proc-sys
+        hostPath:
+          path: /proc/sys
+      - name: aperture-devices
+        hostPath:
+          path: /dev/aperture_devices
     extra_volume_mounts_yaml: |
       - name: shared-memory
         mountPath: /dev/shm
+      - name: nvidia
+        mountPath: /usr/local/nvidia/lib64
+      - name: aperture-devices
+        mountPath: /dev/aperture_devices
     container_resources_yaml: |
       limits:
-        nvidia.com/gpu: 8
+        nvidia.com/gpu: {gpus_per_node}
     container_security_context_yaml: |
       privileged: true
+  nccl-tests:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        OMPI_ALLOW_RUN_AS_ROOT: 1
+        NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: "/dev/aperture_devices"
+        NCCL_LIB_DIR: "/usr/local/nvidia/lib64"
+        NCCL_DEBUG: INFO
+    variables:
+      jobset_template: jobset_mpi.yaml.tpl
+      init_containers_yaml: |
+        - name: tcpxo-daemon
+          image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.21
+          imagePullPolicy: Always
+          restartPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -ex
+              chmod 755 /fts/entrypoint_rxdm_container.sh
+              /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_BIND_SERVICE
+          volumeMounts:
+            - name: nvidia
+              mountPath: /usr/local/nvidia/lib64
+            - name: sys
+              mountPath: /hostsysfs
+            - name: proc-sys
+              mountPath: /hostprocsysfs
+            - name: aperture-devices
+              mountPath: /dev/aperture_devices
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.15
+      ssh_port: 222
+      nccl-tests_path: /scripts
+      processes_per_node: {gpus_per_node}
+      mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
+      mpi_command: |
+        WORKLOAD_NAME=$(basename $(dirname $(pwd)))
+        BINARY=$(echo $WORKLOAD_NAME | tr '-' '_')_perf
+        mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 \
+          --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_args "-p {ssh_port}" \
+          -np $(( {n_nodes} * {processes_per_node} )) \
+          --hostfile /tmp/hostfile \
+          -x {mpi_env_vars} \
+          taskset -c 32-63 /scripts/demo_mpi_entry_with_config_profile.sh $BINARY -b 8 -e 8G -f 2 -g 1 -w 5 --iters 20
+
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
@@ -289,9 +346,13 @@ a3-mega:
 a4x:
   variables:
     pod_annotations_yaml: |
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
+      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
+    jobset_labels_yaml: |
+      chs-run: {job_name}
     node_selector_yaml: "node.kubernetes.io/instance-type: a4x-highgpu-4g"
     tolerations_yaml: |
       - key: nvidia.com/gpu
@@ -315,6 +376,59 @@ a4x:
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
+    claims:
+      - name: compute-domain-channel
+    pod_resource_claims_yaml: |
+      - name: compute-domain-channel
+        resourceClaimTemplateName: {job_name}-compute-domain-channel
+    custom_resources_yaml: |
+      apiVersion: resource.nvidia.com/v1beta1
+      kind: ComputeDomain
+      metadata:
+        name: {job_name}-compute-domain
+        labels:
+          chs-run: {job_name}
+      spec:
+        numNodes: {n_nodes}
+        channel:
+          resourceClaimTemplate:
+            name: {job_name}-compute-domain-channel
+      ---
+      apiVersion: resource.k8s.io/v1beta1
+      kind: ResourceClaimTemplate
+      metadata:
+        name: {job_name}-compute-domain-channel
+      spec:
+        spec:
+          devices:
+            requests:
+            - name: gpu-channel
+              deviceClassName: compute-domain-default-channel.nvidia.com
+              selectors:
+              - cel:
+                  expression: {cel_filter_expression}
+      ---
+  nccl-tests:
+    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
+    env_vars:
+      set:
+        OMPI_ALLOW_RUN_AS_ROOT: 1
+        NCCL_NET: gIB
+    variables:
+      jobset_template: jobset_mpi.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.0.6
+      ssh_port: 222
+      nccl-tests_path: /third_party/nccl-tests
+      mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
+      mpi_command: |
+        mpirun -n {n_ranks} -N {processes_per_node} \
+          --hostfile /tmp/hostfile --bind-to none \
+          --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+          --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+          --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+          -x PATH="{nccl-tests_path}/build:$PATH" \
+          -x {mpi_env_vars}
+
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:
@@ -325,6 +439,7 @@ a4x:
       n_ranks: 1
       n_nodes: 1
       mpi_command: ""
+
   nvidia-smi:
     modifiers: [{name: "gpu-persistence-mode"}]
     variables:
@@ -367,3 +482,158 @@ a4x:
       m: 51200
       n: 51200
       k: 51200
+
+tpu7x:
+  variables:
+    cores_per_chip: 2
+    node_selector_yaml: |
+      node.kubernetes.io/instance-type: tpu7x-standard-4t
+      cloud.google.com/gke-tpu-accelerator: tpu7x
+      cloud.google.com/gke-tpu-topology: {tpu_topology}
+    tolerations_yaml: |
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    container_resources_yaml: |
+      limits:
+        google.com/tpu: {tpu_chips_per_node}
+    container_security_context_yaml: |
+      privileged: true
+  tpu-info:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-gemm:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "tpu7x/gemm_16384_bf16.yaml"
+  tpu-hbm:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "tpu7x/hbm_copy_bf16.yaml"
+  tpu-host-device:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "tpu7x/host_device.yaml"
+  tpu-collectives:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-collectives-single-node:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+tpuv6e:
+  variables:
+    cores_per_chip: 1
+    node_selector_yaml: |
+      node.kubernetes.io/instance-type: ct6e-standard-4t
+      cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+      cloud.google.com/gke-tpu-topology: {tpu_topology}
+    tolerations_yaml: |
+      - key: "google.com/tpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    container_resources_yaml: |
+      limits:
+        google.com/tpu: {tpu_chips_per_node}
+    container_security_context_yaml: |
+      privileged: true
+  tpu-info:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-gemm:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "tpuv6e/gemm_16384_bf16.yaml"
+  tpu-hbm:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "tpuv6e/hbm_copy_bf16.yaml"
+  tpu-host-device:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+      benchmarks_yaml_file: "tpuv6e/host_device.yaml"
+  tpu-collectives:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-collectives-single-node:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""

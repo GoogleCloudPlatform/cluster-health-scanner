@@ -1,6 +1,8 @@
 from copy import deepcopy
+import logging
 import sys
 import os
+import json
 import spack.util.spack_yaml as yaml
 from ramble.repository import ObjectTypes, paths
 
@@ -13,7 +15,8 @@ sys.path.append(config_dir)
 
 from test_helper import TestHelper
 from ramble.appkit import *
-from ramble.appkit import *
+
+logger = logging.getLogger(__name__)
 
 
 class TestModel:
@@ -60,6 +63,11 @@ def parse_tests_config(raw_input) -> TestsModel:
     return TestsModel(tests=[])
 
 
+def is_tpu(machine_type: str) -> bool:
+    """Returns True if the machine type is a TPU."""
+    return machine_type.startswith("tpu") if machine_type else False
+
+
 class Chs(ExecutableApplication):
     """Cluster health scanner for running diagnostics"""
 
@@ -81,7 +89,15 @@ class Chs(ExecutableApplication):
         "machine_type",
         default="",
         description="Machine type to test",
-        values=["a3-high", "a3-ultra", "a4", "a3-mega", "a4x"],
+        values=[
+            "a3-high",
+            "a3-ultra",
+            "a4",
+            "a3-mega",
+            "a4x",
+            "tpu7x",
+            "tpuv6e",
+        ],
     )
 
     executable(
@@ -133,15 +149,17 @@ class Chs(ExecutableApplication):
                     slurm_configs = yaml.load(f) or {}
                 self._deep_merge(configs, slurm_configs)
 
-        tests_str = self.expander.expand_var_name("tests", typed=True)
-        if not tests_str:
+        tests_raw = self.variables.get("tests", [])
+        tests_expanded = self.expander.expand_var(tests_raw, typed=True)
+
+        if not tests_expanded:
             logger.warn(
                 f"No tests defined for {self.name}. Skipping experiments generation."
             )
             return
 
         try:
-            tests_config = parse_tests_config(tests_str)
+            tests_config = parse_tests_config(tests_expanded)
         except Exception as e:
             logger.error(f"Failed to parse tests configuration: {e}")
             raise ChsExecutionException(
@@ -170,6 +188,30 @@ class Chs(ExecutableApplication):
                 "nccl-pairwise",
                 "nccl-single-node",
             ]:
+                topology = None
+                if test.name == "nccl-pairwise":
+                    workspace_dir = self.expander.expand_var_name(
+                        "workspace_dir"
+                    )
+                    topo_path = os.path.join(workspace_dir, "topology.json")
+
+                    if os.path.exists(topo_path):
+                        try:
+                            with open(topo_path, "r") as f:
+                                topology = json.load(f)
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                "Failed to parse topology JSON from %s: %s",
+                                topo_path,
+                                e,
+                            )
+                        except IOError as e:
+                            logger.warning(
+                                "Failed to read topology file %s: %s",
+                                topo_path,
+                                e,
+                            )
+
                 workloads = (
                     test.workloads
                     if test.workloads
@@ -179,8 +221,14 @@ class Chs(ExecutableApplication):
 
                 for workload in workloads:
                     experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
                     contexts = TestHelper.nccl_test(
-                        test_vars, experiment_name, configs, test.name
+                        local_vars,
+                        experiment_name,
+                        configs,
+                        test.name,
+                        topology,
                     )
                     for context in contexts:
                         self.experiment_set.render_chained_experiments(
@@ -188,45 +236,155 @@ class Chs(ExecutableApplication):
                         )
             elif test.name == "dcgm":
                 application_name = "nvidia-dcgm"
-                experiment_name = self.expander.experiment_name
+                experiment_name = f"{self.expander.experiment_name}-{test.name}-level-{{diag_level}}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
 
                 context = TestHelper.dcgm_test(
-                    test_vars, experiment_name, deepcopy(configs)
+                    local_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "diag", context
                 )
             elif test.name == "stream":
                 application_name = "nvidia-stream"
-                experiment_name = self.expander.experiment_name
+                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
 
                 context = TestHelper.stream_test(
-                    test_vars, experiment_name, deepcopy(configs)
+                    local_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "standard", context
                 )
             elif test.name == "nvidia-smi":
                 application_name = "nvidia-smi"
-                experiment_name = self.expander.experiment_name
+                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
 
                 context = TestHelper.nvidia_smi_test(
-                    test_vars, experiment_name, deepcopy(configs)
+                    local_vars, experiment_name, deepcopy(configs)
                 )
                 self.experiment_set.render_chained_experiments(
                     application_name, "local", context
                 )
             elif test.name == "gemm":
-                application_name = "nvidia-gemm"
+                machine_type = self.expander.expand_var_name(
+                    "machine_type", typed=True
+                )
+                is_tpu_machine = is_tpu(machine_type)
+                application_name = (
+                    "tpu-gemm" if is_tpu_machine else "nvidia-gemm"
+                )
                 workloads = test.workloads if test.workloads else ["check"]
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
-                    context = TestHelper.gemm_test(
-                        test_vars, experiment_name, deepcopy(configs)
+                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
+                    if is_tpu_machine:
+                        context = TestHelper.tpu_gemm_test(
+                            local_vars, experiment_name, deepcopy(configs)
+                        )
+                    else:
+                        context = TestHelper.gemm_test(
+                            local_vars, experiment_name, deepcopy(configs)
+                        )
+                    self.experiment_set.render_chained_experiments(
+                        application_name, workload, context
+                    )
+            elif test.name == "hbm":
+                application_name = "tpu-hbm"
+                experiment_name = (
+                    f"{self.expander.experiment_name}-{application_name}"
+                )
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                context = TestHelper.tpu_hbm_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "check", context
+                )
+            elif test.name == "host-device":
+                application_name = "tpu-host-device"
+                experiment_name = (
+                    f"{self.expander.experiment_name}-{application_name}"
+                )
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                context = TestHelper.tpu_host_device_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "check", context
+                )
+            elif test.name == "collectives":
+                application_name = "tpu-collectives"
+                workloads = (
+                    test.workloads
+                    if test.workloads
+                    else ["all_gather", "psum", "all_to_all"]
+                )
+
+                for workload in workloads:
+                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
+
+                    config_file = f"collectives_{workload}.yaml"
+                    local_vars["benchmarks_yaml_file"] = config_file
+
+                    context = TestHelper.tpu_collectives_test(
+                        local_vars, experiment_name, deepcopy(configs)
                     )
                     self.experiment_set.render_chained_experiments(
                         application_name, workload, context
                     )
+            elif test.name == "collectives-single-node":
+                application_name = "tpu-collectives"
+                workloads = (
+                    test.workloads
+                    if test.workloads
+                    else ["all_gather", "psum", "all_to_all"]
+                )
+
+                for workload in workloads:
+                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
+
+                    config_file = f"collectives_{workload}.yaml"
+                    local_vars["benchmarks_yaml_file"] = config_file
+
+                    context = TestHelper.tpu_collectives_single_node_test(
+                        local_vars, experiment_name, deepcopy(configs)
+                    )
+                    self.experiment_set.render_chained_experiments(
+                        application_name, workload, context
+                    )
+
+            elif test.name == "tpu-info":
+                application_name = "tpu-info"
+                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                context = TestHelper.tpu_info_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                self.experiment_set.render_chained_experiments(
+                    application_name, "local", context
+                )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

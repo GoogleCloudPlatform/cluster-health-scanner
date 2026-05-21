@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "tpu-info" = "chs" ]; then
+    echo "Skipping JobSet submission for tpu-info scaffolding experiment."
+    echo "Submitted chs-tpu-info-node2 at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-info/local/chs-tpu-info-node2/chs-tpu-info-node2.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-tpu-info-node2/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-tpu-info-node2/jobset.yaml"
+echo "Submitted chs-tpu-info-node2 at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-info/local/chs-tpu-info-node2/chs-tpu-info-node2.out
+

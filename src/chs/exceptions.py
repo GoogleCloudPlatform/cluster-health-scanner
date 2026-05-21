@@ -9,6 +9,10 @@ class ChsValidationError(ChsException):
     """Raised when configuration or arguments fail validation."""
 
 
+class ChsPreflightException(ChsException):
+    """Raised when a preflight check fails."""
+
+
 class NoPreviousRunsFoundException(ChsException):
     """Raised when no previous CHS runs are found."""
 
@@ -71,3 +75,9 @@ class ChsArchiveException(ChsException):
 
 class NetworkDiscoveryException(ChsException):
     """Raised when network discovery fails to find required networks."""
+
+
+class KueueException(ChsException):
+    """Raised for Kueue-related errors."""
+
+    pass

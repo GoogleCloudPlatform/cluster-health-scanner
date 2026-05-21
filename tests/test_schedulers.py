@@ -173,6 +173,7 @@ class TestGKEScheduler(unittest.TestCase):
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
         self.mock_app_data = mock.Mock()
+        self.mock_app_data.get_run.return_value = {}
 
     def test_init(self, mock_logger):
         """Test initialization."""
@@ -368,6 +369,119 @@ ramble:
         self.assertEqual(variables["timeout"], 600)
         self.assertEqual(variables["deadline"], 1800)
 
+    @mock.patch("chs.schedulers.gke.KueueManager")
+    def test_setup_scheduler_resources_kueue_success(
+        self, mock_kueue_mgr_class, mock_logger
+    ):
+        """Test setup_scheduler_resources caches labels on success."""
+        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler.kueue_supported = True
+        self.mock_app_data.get_run.return_value = {"kueue_supported": True}
+
+        mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
+        mock_kueue_mgr_instance.setup.return_value = (
+            "kueue.x-k8s.io/queue-name: chs-local-queue"
+        )
+
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+
+        tests = scheduler.setup_scheduler_resources(
+            workspace_config_dir,
+            [{"name": "nccl-cluster"}],
+            "a3-high",
+            workspace_name="ws1",
+        )
+
+        self.assertEqual(tests, [{"name": "nccl-cluster"}])
+        self.assertEqual(
+            scheduler._jobset_labels_yaml,
+            "kueue.x-k8s.io/queue-name: chs-local-queue",
+        )
+        self.assertEqual(scheduler._suspend_jobset, "true")
+
+    @mock.patch("chs.schedulers.gke.KueueManager")
+    def test_setup_scheduler_resources_kueue_fallback(
+        self, mock_kueue_mgr_class, mock_logger
+    ):
+        """Test setup_scheduler_resources falls back if Kueue setup fails."""
+        from chs.exceptions import KueueException
+
+        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler.kueue_supported = True
+        self.mock_app_data.get_run.return_value = {"kueue_supported": True}
+
+        mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
+        mock_kueue_mgr_instance.setup.side_effect = KueueException(
+            "setup failed"
+        )
+
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+
+        tests = scheduler.setup_scheduler_resources(
+            workspace_config_dir,
+            [{"name": "nccl-cluster"}, {"name": "test1"}],
+            "a3-high",
+            workspace_name="ws1",
+        )
+
+        self.assertEqual(tests, [{"name": "test1"}])
+        self.assertFalse(scheduler.kueue_supported)
+        self.assertEqual(scheduler._jobset_labels_yaml, "")
+        self.assertEqual(scheduler._suspend_jobset, "false")
+
+    def test_write_ramble_config_uses_cached_labels(self, mock_logger):
+        """Test write_ramble_config writes cached properties."""
+        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler._jobset_labels_yaml = "kueue/queue: local-q"
+        scheduler._suspend_jobset = "true"
+
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        with open(template_path, "w") as f:
+            f.write("""
+ramble:
+  variables:
+    nodes: []
+    machine_type: ""
+    tests: []
+    default_interface_name: ""
+    all_interfaces_json: ""
+    jobset_labels_yaml: ""
+    suspend_jobset: false
+""")
+
+        @contextlib.contextmanager
+        def mock_as_file_func(path):
+            yield template_path
+
+        with mock.patch.object(
+            GKEScheduler,
+            "_discover_networks",
+            return_value=(["default"], ["rdma-0"]),
+        ):
+            with mock.patch(
+                "chs.schedulers.gke.pkg_resources.as_file",
+                side_effect=mock_as_file_func,
+            ):
+                scheduler.write_ramble_config(
+                    workspace_config_dir,
+                    [{"name": "test1"}],
+                    "a3-high",
+                )
+
+        output_path = os.path.join(workspace_config_dir, "ramble.yaml")
+        import yaml
+
+        with open(output_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        variables = data["ramble"]["variables"]
+        self.assertEqual(
+            variables["jobset_labels_yaml"], "kueue/queue: local-q"
+        )
+        self.assertEqual(variables["suspend_jobset"], "true")
+
     @mock.patch("subprocess.run")
     def test_discover_networks_success(self, mock_run, mock_logger):
         """Test _discover_networks with success and grouping."""
@@ -450,6 +564,119 @@ ramble:
         ):
             with self.assertRaises(NetworkDiscoveryException):
                 scheduler.write_ramble_config("/tmp", ["test1"], "a3-high")
+
+    @mock.patch("subprocess.run")
+    def test_get_topology(self, mock_run, mock_logger):
+        """Test get_topology returns mapped nodes."""
+        scheduler = GKEScheduler(
+            nodes="node1,node2", app_data=self.mock_app_data
+        )
+
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {
+                    "metadata": {
+                        "name": "node1",
+                        "labels": {
+                            "cloud.google.com/gce-topology-block": "block1"
+                        },
+                    }
+                },
+                {
+                    "metadata": {
+                        "name": "node2",
+                        "labels": {
+                            "cloud.google.com/gce-topology-block": "block2"
+                        },
+                    }
+                },
+            ],
+        }
+        mock_run.return_value.stdout = json.dumps(mock_nodes_json)
+
+        topology = scheduler.get_topology()
+
+        self.assertEqual(len(topology), 2)
+        self.assertEqual(topology["block1"]["default-subblock"], ["node1"])
+        self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
+
+    @mock.patch("subprocess.run")
+    def test_get_topology_missing_label(self, mock_run, mock_logger):
+        """Test get_topology falls back to default-block."""
+        scheduler = GKEScheduler(
+            nodes="node1,node2", app_data=self.mock_app_data
+        )
+
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {"metadata": {"name": "node1", "labels": {}}},
+                {
+                    "metadata": {
+                        "name": "node2",
+                        "labels": {
+                            "cloud.google.com/gce-topology-block": "block2"
+                        },
+                    }
+                },
+            ],
+        }
+        mock_run.return_value.stdout = json.dumps(mock_nodes_json)
+
+        topology = scheduler.get_topology()
+
+        self.assertEqual(len(topology), 2)
+        self.assertEqual(
+            topology["default-block"]["default-subblock"], ["node1"]
+        )
+        self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
+
+    @mock.patch("chs.schedulers.gke.KueueManager")
+    def test_cleanup_scheduler_resources(
+        self, mock_kueue_mgr_class, mock_logger
+    ):
+        """Test cleanup_scheduler_resources invokes KueueManager."""
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = os.path.join(tmpdir, "configs")
+            os.makedirs(config_dir, exist_ok=True)
+            config_path = os.path.join(config_dir, "kueue-configs.yaml")
+            with open(config_path, "w") as f:
+                f.write("dummy")
+
+            scheduler.workspace_config_dir = config_dir
+            scheduler.kueue_supported = True
+
+            scheduler.cleanup_scheduler_resources()
+
+            mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
+            mock_kueue_mgr_instance.cleanup.assert_called_once_with(config_path)
+
+    @mock.patch("chs.schedulers.gke.KueueManager")
+    def test_cleanup_scheduler_resources_file_backstop(
+        self, mock_kueue_mgr_class, mock_logger
+    ):
+        """Test cleanup_scheduler_resources cleans up statelessly."""
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = os.path.join(tmpdir, "configs")
+            os.makedirs(config_dir, exist_ok=True)
+            config_path = os.path.join(config_dir, "kueue-configs.yaml")
+            with open(config_path, "w") as f:
+                f.write("dummy")
+
+            self.mock_app_data.get_run.return_value = {
+                "kueue_supported": False,
+                "workspace_path": tmpdir,
+            }
+            scheduler.kueue_supported = False
+            scheduler.workspace_config_dir = None
+
+            scheduler.cleanup_scheduler_resources(workspace_name="ws1")
+
+            mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
+            mock_kueue_mgr_instance.cleanup.assert_called_once_with(config_path)
 
 
 if __name__ == "__main__":

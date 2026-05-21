@@ -1,0 +1,2 @@
+description: "Tests the JAX 'hbm' test against a gke scheduler for tpu7x"
+command: ["run", "--tests", "hbm", "--scheduler", "gke", "--machine-type", "tpu7x", "--nodes", "node1", "--dry-run"]

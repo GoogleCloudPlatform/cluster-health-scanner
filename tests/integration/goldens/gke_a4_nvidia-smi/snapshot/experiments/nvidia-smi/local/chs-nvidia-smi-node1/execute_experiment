@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "nvidia-smi" = "chs" ]; then
+    echo "Skipping JobSet submission for nvidia-smi scaffolding experiment."
+    echo "Submitted chs-nvidia-smi-node1 at $(date)" > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node1/chs-nvidia-smi-node1.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node1/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node1/jobset.yaml"
+echo "Submitted chs-nvidia-smi-node1 at $(date)" > <WORKSPACE_ROOT>/experiments/nvidia-smi/local/chs-nvidia-smi-node1/chs-nvidia-smi-node1.out
+

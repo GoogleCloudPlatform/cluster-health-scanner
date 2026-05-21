@@ -65,6 +65,12 @@ class GkeJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="suspend_jobset",
+        default="false",
+        description="Whether to suspend the JobSet (used for Kueue)",
+    )
+
+    workflow_manager_variable(
         name="jobset_annotations_yaml",
         default="",
         description="Raw YAML string for JobSet metadata.annotations",
@@ -113,6 +119,12 @@ class GkeJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="init_containers_yaml",
+        default="",
+        description="Raw YAML string for extra initContainers",
+    )
+
+    workflow_manager_variable(
         name="container_image",
         default="",
         description="url to the container image",
@@ -152,6 +164,18 @@ class GkeJobset(WorkflowManagerBase):
         name="container_security_context_yaml",
         default="",
         description="Raw YAML for container securityContext (e.g. privileged)",
+    )
+
+    workflow_manager_variable(
+        name="custom_resources_yaml",
+        default="",
+        description="Raw YAML for extra top-level Kubernetes resources",
+    )
+
+    workflow_manager_variable(
+        name="pod_resource_claims_yaml",
+        default="",
+        description="Raw YAML for Pod spec.template.spec.resourceClaims",
     )
 
     def _yaml_block(self, var_name, key_name, indent_spaces):
@@ -205,12 +229,16 @@ class GkeJobset(WorkflowManagerBase):
         raw_job_name = expander.expand_var_name("job_name")
         # K8S resource names can be max 63 chars and no `_` is supported
         sanitized_job_name = raw_job_name.replace("_", "-").lower()
-        if len(sanitized_job_name) > 50:
-            name_hash = uuid.uuid4().hex[:6]
 
+        u = uuid.uuid4().hex[:6]
+        max_base_len = 40
+
+        if len(sanitized_job_name) > max_base_len:
             sanitized_job_name = (
-                sanitized_job_name[:43].strip("-") + "-" + name_hash
+                sanitized_job_name[:max_base_len].strip("-") + "-" + u
             )
+        else:
+            sanitized_job_name = sanitized_job_name.strip("-") + "-" + u
 
         raw_cmd = expander.expand_var_name("command")
         raw_cmd = re.sub(r'>>\s*"[^"]+"\s*2>&1', "", raw_cmd)
@@ -267,12 +295,25 @@ class GkeJobset(WorkflowManagerBase):
         # Standard templating (where 'volumes' keys are entirely optional)
         svol = self._yaml_block("extra_volumes_yaml", "volumes", 14)
         smnt = self._yaml_block("extra_volume_mounts_yaml", "volumeMounts", 16)
-
+        init_c = self._yaml_block("init_containers_yaml", "initContainers", 14)
         mvol_add = self._yaml_append("extra_volumes_yaml", 14)
         mmnt_add = self._yaml_append("extra_volume_mounts_yaml", 16)
 
+        custom_res = self.app_inst.expander.expand_var_name(
+            "custom_resources_yaml"
+        ).replace(raw_job_name, sanitized_job_name)
+        pod_claims = self._yaml_block(
+            "pod_resource_claims_yaml", "resourceClaims", 14
+        ).replace(raw_job_name, sanitized_job_name)
+
         priv_key, pub_key = self._generate_ssh_keys()
+        suspend = expander.expand_var_name("suspend_jobset")
+        suspend_section = "suspend: true" if suspend == "true" else ""
+
         return {
+            "suspend_section": suspend_section,
+            "custom_resources_section": custom_res,
+            "pod_resource_claims_section": pod_claims,
             "jobset_labels_section": jl,
             "jobset_annotations_section": ja,
             "pod_labels_section": pl,
@@ -282,6 +323,7 @@ class GkeJobset(WorkflowManagerBase):
             "tolerations_section": tol,
             "standard_volumes_section": svol,
             "standard_volume_mounts_section": smnt,
+            "init_containers_section": init_c,
             "mpi_volumes_append": mvol_add,
             "mpi_volume_mounts_append": mmnt_add,
             "sanitized_job_name": sanitized_job_name,

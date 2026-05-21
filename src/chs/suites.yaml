@@ -14,6 +14,10 @@ suites:
     variables:
       begin_message_size: 256M
       end_message_size: 8G
+  - name: tpu-info
+  - name: hbm
+  - name: host-device
+  - name: collectives-single-node
 - name: standard
   timeout: 900
   deadline: 3000
@@ -33,6 +37,8 @@ suites:
     variables:
       begin_message_size: 256M
       end_message_size: 8G
+  - name: tpu-info
+  - name: collectives
 - name: burn-in
   tests:
   - name: dcgm

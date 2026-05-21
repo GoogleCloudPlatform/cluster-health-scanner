@@ -1,0 +1,82 @@
+# TODO: Calibrate and refine baseline numbers for production environments
+default:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth: 50
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 50
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth: 50
+
+a3-ultra:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth: 80
+  stream:
+    type: relative
+    thresholds:
+      efficiency: 0.8
+  gemm:
+    type: min
+    thresholds:
+      performance: 100
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 8
+
+a3-mega:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth: 80
+
+a4:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth: 80
+
+a4x:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth: 80

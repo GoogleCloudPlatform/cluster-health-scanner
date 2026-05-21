@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from chs import resources
+from chs.utils import tests as utils_tests
 from chs.validators.base import Validator
 
 
@@ -27,10 +27,11 @@ class MachineTypeValidator(Validator):
         if machine_type is None:
             return ["'machine_type' is missing in the configuration."]
 
-        if machine_type not in resources.SUPPORTED_MACHINE_TYPES:
+        supported_machine_types = utils_tests.get_all_supported_machine_types()
+        if machine_type not in supported_machine_types:
             return [
                 f"Machine type '{machine_type}' is not supported. "
                 "Supported types: "
-                f"{', '.join(resources.SUPPORTED_MACHINE_TYPES)}"
+                f"{', '.join(supported_machine_types)}"
             ]
         return []

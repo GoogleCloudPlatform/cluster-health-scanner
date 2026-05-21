@@ -15,6 +15,7 @@ class GemmParsedResult:
     min_val: float | None
     median_val: float | None
     max_val: float | None
+    validation_status: str
 
 
 class GemmRenderer(DefaultRenderer):
@@ -25,12 +26,16 @@ class GemmRenderer(DefaultRenderer):
         if not test_results:
             return Text("No detailed metrics available.", style="yellow")
 
+        has_thresholds = self._has_validation_criteria(test_results)
+
         table = create_styled_table(expand=False)
         table.add_column("Workload")
         table.add_column("Node")
         table.add_column("Min (TFLOPS)", justify="right")
         table.add_column("Median (TFLOPS)", justify="right")
         table.add_column("Max (TFLOPS)", justify="right")
+        if has_thresholds:
+            table.add_column("Validation")
 
         parsed_results: list[GemmParsedResult] = []
         for res in test_results:
@@ -57,9 +62,21 @@ class GemmRenderer(DefaultRenderer):
                 else "Unknown Node"
             )
             test_level = res.test_level if res.test_level else "Unknown"
+
+            validation_status = "N/A"
+            if res.result_status == pb.RESULT_STATUS_SUCCESS:
+                validation_status = "[green]PASS[/]"
+            elif res.result_status == pb.RESULT_STATUS_FAILED:
+                validation_status = "[red]FAIL[/]"
+
             parsed_results.append(
                 GemmParsedResult(
-                    test_level, nodes, min_val, median_val, max_val
+                    test_level=test_level,
+                    nodes=nodes,
+                    min_val=min_val,
+                    median_val=median_val,
+                    max_val=max_val,
+                    validation_status=validation_status,
                 )
             )
 
@@ -79,13 +96,16 @@ class GemmRenderer(DefaultRenderer):
             min_str, median_str, max_str = map(
                 format_val, [min_tflops, median_tflops, max_tflops]
             )
-            table.add_row(
+            row = [
                 item.test_level,
                 item.nodes,
                 min_str,
                 median_str,
                 max_str,
-            )
+            ]
+            if has_thresholds:
+                row.append(item.validation_status)
+            table.add_row(*row)
 
         return Group(
             Text("\nGEMM Detail", style="bold"),

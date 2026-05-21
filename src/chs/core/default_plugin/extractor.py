@@ -13,7 +13,7 @@ class DefaultExtractor:
         level = exp.get("workload_name", "")
 
         # Strip common CHS prefix if no specific plugin handled it
-        if name.startswith("cluster_health_diagnostics-"):
+        if name.startswith("chs-"):
             parts = name.split("-")
             if len(parts) >= 2:
                 name = parts[1]

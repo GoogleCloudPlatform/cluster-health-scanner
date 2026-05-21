@@ -5,7 +5,12 @@ import logging
 import os
 import re
 import subprocess
-import json
+import yaml
+from google.cloud import compute_v1
+import google.auth
+from google.api_core.exceptions import GoogleAPICallError
+
+
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,6 +22,13 @@ from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
+
+
+def boolean_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:bool", str(data))
+
+
+yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +72,7 @@ class SlurmScheduler(BaseScheduler):
     def name(self) -> str:
         return "slurm"
 
-    def _run_srun(self, args: list[str], timeout: int = 300) -> str:
+    def _run_srun(self, args: list[str], timeout: int = 60) -> str:
         """Runs a command via srun and returns filtered output."""
         cmd = ["srun", "-N1", "-n1"]
         if self.partition_arg:
@@ -172,6 +184,68 @@ class SlurmScheduler(BaseScheduler):
         self._resolved_nodes = all_nodes
         return self._resolved_nodes
 
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Discovers network topology using the GCE API via gcloud.
+
+        Returns a dictionary mapping block names to dicts of subblocks to lists
+        of nodes.
+        """
+        nodes = self.get_nodes_under_test()
+        if not nodes:
+            return {}
+
+        try:
+            credentials, project = google.auth.default()
+            if not project:
+                logger.warning(
+                    "Could not determine GCP project. "
+                    "Skipping topology discovery."
+                )
+                return {}
+
+            client = compute_v1.InstancesClient()
+            # TODO: Batch GCE API requests to avoid URL length
+            # limits if nodes list is large.
+            filter_str = " OR ".join([f'name = "{node}"' for node in nodes])
+            request = compute_v1.AggregatedListInstancesRequest(
+                project=project,
+                filter=filter_str,
+            )
+            page_result = client.aggregated_list(request=request)
+
+            topology: dict[str, dict[str, list[str]]] = {}
+            for zone, instances_in_zone in page_result:
+                if instances_in_zone.instances:
+                    for item in instances_in_zone.instances:
+                        name = item.name
+                        if not name:
+                            continue
+
+                        resource_status = getattr(item, "resource_status", None)
+                        if not resource_status:
+                            continue
+                        topo_info = getattr(
+                            resource_status, "physical_host_topology", None
+                        )
+                        if not topo_info:
+                            continue
+
+                        block = topo_info.block or "default-block"
+                        subblock = topo_info.subblock or "default-subblock"
+
+                        topology.setdefault(block, {}).setdefault(
+                            subblock, []
+                        ).append(name)
+
+            return topology
+
+        except GoogleAPICallError as e:
+            logger.warning("Failed to get node topology via API: %s", e)
+            return {}
+        except Exception as e:
+            logger.error("Unexpected error getting node topology: %s", e)
+            return {}
+
     def _ensure_enroot_directories(self) -> None:
         """Ensures that Enroot runtime and cache directories exist."""
         for d in self._enroot_paths.values():
@@ -195,6 +269,7 @@ class SlurmScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -204,14 +279,7 @@ class SlurmScheduler(BaseScheduler):
         )
         with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
-                template_content = f.read()
-
-        if nodes:
-            nodes_str = json.dumps(nodes)
-        else:
-            nodes_str = "[]"
-
-        tests_str = json.dumps(tests) if tests else "[]"
+                config = yaml.safe_load(f)
 
         tcp_interfaces = self._discover_network_interfaces()
         if not tcp_interfaces:
@@ -226,19 +294,21 @@ class SlurmScheduler(BaseScheduler):
             self._app_data and self._app_data.get_images_dir()
         ) or "{workload_input_dir}"
 
-        rendered_content = template_content.format(
-            nodes=nodes_str,
-            machine_type=machine_type,
-            tests=tests_str,
-            images_dir=images_dir_value,
-            tcp_interfaces=tcp_interfaces_str,
-            timeout=timeout,
-            deadline=deadline,
-        )
-        logger.debug("Configuration: %r", rendered_content)
+        variables = config["ramble"]["variables"]
+        variables["nodes"] = nodes or []
+        variables["machine_type"] = machine_type
+        variables["tests"] = tests or []
+        variables["container_dir"] = images_dir_value
+        variables["tcp_interfaces"] = tcp_interfaces_str
+        variables["timeout"] = timeout
+        variables["deadline"] = deadline
+
+        logger.debug("Configuration: %r", config)
+
+        self._write_topology_json(workspace_config_dir)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
-            f.write(rendered_content)
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     def check_jobs_running(self, job_ids: list[str]) -> bool:
         """Checks if the given jobs are still running."""
@@ -249,7 +319,12 @@ class SlurmScheduler(BaseScheduler):
             )
             return False
 
-        cmd = ["squeue", "--jobs", ",".join(job_ids), "--noheader"]
+        cmd = [
+            "squeue",
+            "--jobs",
+            ",".join(job_ids),
+            "--noheader",
+        ]
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=False
@@ -331,12 +406,63 @@ class SlurmScheduler(BaseScheduler):
 
         cmd = ["scancel", ",".join(job_ids)]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
-            logger.debug("Successfully canceled jobs: %s", job_ids)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode == 0:
+                logger.debug("Successfully canceled jobs: %s", job_ids)
+            else:
+                logger.warning(
+                    "scancel returned non-zero exit code: %s", result.stderr
+                )
         except FileNotFoundError:
             logger.warning("scancel command not found. Cannot cancel jobs.")
-        except subprocess.CalledProcessError as e:
-            logger.error("Failed to cancel jobs. Error: %s", e.stderr)
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.error("Failed to cancel jobs. Error: %s", e)
             raise ex.ChsCancellationException(
-                f"Failed to cancel jobs: {e.stderr}"
+                f"Failed to cancel jobs: {e}"
             ) from e
+
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all jobs matching the specified prefix natively."""
+        logger.debug("Attempting native cancel for prefix: %s", prefix)
+        try:
+            # List jobs for current user and extract job IDs matching the prefix
+            cmd = [
+                "squeue",
+                "-h",
+                "-o",
+                "%i %j",
+                "-u",
+                os.environ.get("USER", ""),
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "Failed to list jobs via squeue for cancellation."
+                )
+                return
+
+            job_ids = []
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].startswith(prefix):
+                    job_ids.append(parts[0])
+
+            if job_ids:
+                logger.info(
+                    "Found %d jobs to cancel for prefix %s.",
+                    len(job_ids),
+                    prefix,
+                )
+                self.cancel_jobs(job_ids)
+            else:
+                logger.debug("No matching jobs found for prefix %s.", prefix)
+        except FileNotFoundError:
+            logger.warning(
+                "squeue command not found. Cannot perform native cancel."
+            )
+        except Exception as e:
+            logger.warning("Native cancel failed: %s", e)

@@ -34,6 +34,10 @@ class DefaultScheduler(BaseScheduler):
     def get_nodes_under_test(self) -> list[str]:
         return []
 
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Determine the network topology of the cluster."""
+        return {}
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
@@ -41,9 +45,13 @@ class DefaultScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
-        with pkg_resources.path(chs, "ramble.yaml") as p:
-            shutil.copy(p, os.path.join(workspace_config_dir, "ramble.yaml"))
+        p = pkg_resources.files(chs).joinpath("ramble.yaml")
+        with pkg_resources.as_file(p) as file_path:
+            shutil.copy(
+                file_path, os.path.join(workspace_config_dir, "ramble.yaml")
+            )
             logger.debug(
                 "Copied default ramble.yaml to %s", workspace_config_dir
             )
@@ -56,8 +64,8 @@ class DefaultScheduler(BaseScheduler):
         """Parses job IDs from the experiment execution output."""
         return []
 
-    def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given jobs."""
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all jobs matching the specified prefix."""
         pass
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:

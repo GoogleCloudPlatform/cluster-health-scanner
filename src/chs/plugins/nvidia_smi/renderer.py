@@ -17,8 +17,12 @@ class NvidiaSmiRenderer(DefaultRenderer):
 
         node_data = self._extract_node_data(test_results)
 
+        has_thresholds = self._has_validation_criteria(test_results)
+
         render_elements = [Text("\nNVIDIA SMI Summary", style="bold")]
-        render_elements.append(self._build_summary_table(node_data))
+        render_elements.append(
+            self._build_summary_table(node_data, has_thresholds)
+        )
         render_elements.extend(self._build_detailed_tables(node_data))
 
         return Group(*render_elements)
@@ -32,15 +36,24 @@ class NvidiaSmiRenderer(DefaultRenderer):
                 if res.target_resource_ids
                 else "Unknown Node"
             )
+            validation_status = "N/A"
+            if res.result_status == pb.RESULT_STATUS_SUCCESS:
+                validation_status = "[green]PASS[/]"
+            elif res.result_status == pb.RESULT_STATUS_FAILED:
+                validation_status = "[red]FAIL[/]"
+
             if nodes not in node_data:
                 node_data[nodes] = {
                     "summary": {
                         "Driver Version": "N/A",
                         "CUDA Version": "N/A",
                         "GPU Count": "N/A",
+                        "Validation": validation_status,
                     },
                     "gpus": {},
                 }
+            else:
+                node_data[nodes]["summary"]["Validation"] = validation_status
 
             for m in res.metrics:
                 key = m.key
@@ -87,21 +100,26 @@ class NvidiaSmiRenderer(DefaultRenderer):
                         node_data[nodes]["summary"]["Driver Version"] = val
         return node_data
 
-    def _build_summary_table(self, node_data: dict):
+    def _build_summary_table(self, node_data: dict, has_thresholds: bool):
         """Builds the summary table for all nodes."""
         summary_table = create_styled_table(expand=False)
         summary_table.add_column("Node")
         summary_table.add_column("Driver Version")
         summary_table.add_column("CUDA Version")
         summary_table.add_column("GPU Count", justify="right")
+        if has_thresholds:
+            summary_table.add_column("Validation")
 
         for node, data in node_data.items():
-            summary_table.add_row(
+            row = [
                 node,
                 data["summary"]["Driver Version"],
                 data["summary"]["CUDA Version"],
                 data["summary"]["GPU Count"],
-            )
+            ]
+            if has_thresholds:
+                row.append(data["summary"].get("Validation", "N/A"))
+            summary_table.add_row(*row)
         return summary_table
 
     def _build_detailed_tables(self, node_data: dict) -> list:

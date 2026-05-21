@@ -6,7 +6,8 @@ from .renderer import NcclSingleNodeRenderer
 class NcclSingleNodePlugin(
     NcclSingleNodeRenderer, NcclSingleNodeExtractor, TestPlugin
 ):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"bandwidth": "Avg. Bus Bandwidth"}
 
 
 __chs_plugin__ = {

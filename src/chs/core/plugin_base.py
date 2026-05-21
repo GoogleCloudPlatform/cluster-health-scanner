@@ -36,3 +36,13 @@ class TestPlugin(ABC):
         Defaults to returning all contexts for maximum data extraction.
         """
         return contexts
+
+    def get_fom_aliases(self) -> dict[str, str]:
+        """Maps clean keys to raw FOM names."""
+        return {}
+
+    def get_relative_fom_keys(self) -> list[tuple[str, str]]:
+        """For relative tests, returns list of (achieved_fom_key,
+        peak_fom_key).
+        """
+        return []

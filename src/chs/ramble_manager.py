@@ -20,6 +20,8 @@ import time
 from typing import Any
 import click
 from google.protobuf.json_format import MessageToJson
+from google.cloud import storage
+from google.api_core.exceptions import GoogleAPICallError
 
 from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
@@ -58,6 +60,7 @@ class RambleManager:
 
         self._base_dir = base_dir
         self._workspace_name = workspace_name
+
         self._path = os.path.join(self._base_dir, self._workspace_name)
         self._app_data = ChsAppData()
 
@@ -147,32 +150,30 @@ class RambleManager:
                 )
                 log_file.flush()
 
-                process = subprocess.run(
+                completed_process = subprocess.run(
                     cmd,
                     cwd=cwd,
                     env=run_env,
-                    capture_output=True,
-                    # We use text=True to get strings instead of bytes
+                    capture_output=capture_output,
                     text=True,
-                    check=False,  # We handle check manually
+                    check=False,
                 )
+                if completed_process.stdout:
+                    log_file.write(completed_process.stdout)
+                if completed_process.stderr:
+                    log_file.write(completed_process.stderr)
 
-                if process.stdout:
-                    log_file.write(process.stdout)
-
-                if process.stderr:
-                    log_file.write(process.stderr)
-
-                if check and process.returncode != 0:
+                if check and completed_process.returncode != 0:
                     msg = (
-                        f"Command failed with exit code {process.returncode}. "
+                        f"Command failed with exit code "
+                        f"{completed_process.returncode}. "
                         f"See {log_file_path} for details."
                     )
                     if error_context:
                         msg = f"{error_context}. {msg}"
                     raise ex.ChsException(msg)
 
-                return process
+                return completed_process
 
         except Exception as e:
             msg = (
@@ -204,6 +205,8 @@ class RambleManager:
           capture_output: Whether to capture stdout/stderr.
           env: A dictionary of environment variables to add to the command
             execution.
+          error_context: Optional context message to prepend to the error
+            message if the command fails.
           check: If True, raises a ChsException if the command returns a
             non-zero exit code.
 
@@ -244,6 +247,31 @@ class RambleManager:
             error_context="Failed to create workspace",
         )
 
+    def copy_thresholds(self, thresholds_path: str | None = None) -> None:
+        """Copies the thresholds configuration file into the workspace."""
+        import shutil
+
+        dest_thresholds = os.path.join(self.path, "thresholds.yaml")
+        if thresholds_path:
+            shutil.copyfile(thresholds_path, dest_thresholds)
+            logger.info(
+                "Copied user thresholds from %s to %s",
+                thresholds_path,
+                dest_thresholds,
+            )
+        else:
+            internal_thresholds = os.path.join(
+                os.path.dirname(__file__), "configs", "thresholds.yaml"
+            )
+            if os.path.exists(internal_thresholds):
+                shutil.copyfile(internal_thresholds, dest_thresholds)
+                logger.info("Copied default thresholds to %s", dest_thresholds)
+            else:
+                logger.warning(
+                    "Default thresholds file not found at %s",
+                    internal_thresholds,
+                )
+
     def add_custom_repository(self) -> None:
         """Adds the internal custom CHS repository to the Ramble workspace.
 
@@ -253,7 +281,8 @@ class RambleManager:
         import chs
 
         logger.debug("Adding custom CHS repository to workspace...")
-        with pkg_resources.path(chs, "repos") as p:
+        repo_path = pkg_resources.files(chs).joinpath("repos")
+        with pkg_resources.as_file(repo_path) as p:
             self._execute_ramble_command(
                 subcommand="repo",
                 args=["add", str(p)],
@@ -294,6 +323,7 @@ class RambleManager:
             machine_type=machine_type,
             timeout=timeout,
             deadline=deadline,
+            workspace_name=self._workspace_name,
         )
 
     def setup_workspace(self) -> None:
@@ -312,6 +342,22 @@ class RambleManager:
             error_context="Failed to setup workspace",
         )
 
+    def _register_initial_run(self) -> None:
+        """Registers an initial empty run in the app data."""
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry.update(
+            {
+                "run_id": self._workspace_name,
+                "workspace_path": self.path,
+                "job_entries": {},
+                "submission_time": (
+                    datetime.datetime.now(datetime.timezone.utc).isoformat()
+                ),
+                "scheduler": self._scheduler.name,
+            }
+        )
+        self._app_data.update_run(self._workspace_name, run_entry)
+
     def execute_experiments(self) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
@@ -325,6 +371,9 @@ class RambleManager:
         """
 
         logger.debug("Executing experiments in %s...", self.path)
+
+        self._register_initial_run()
+
         output = self._execute_ramble_command(
             subcommand="on",
             args=[],
@@ -334,40 +383,40 @@ class RambleManager:
         ).stdout
 
         job_ids = self._scheduler.parse_job_ids(output)
-        logger.debug("Captured Job IDs: %s", job_ids)
+        if job_ids:
+            self._update_registry(job_ids)
 
-        self._update_registry(job_ids)
         return job_ids
 
     def cancel_experiments(self) -> None:
         """Cancels running experiments in the Ramble workspace.
 
-        This retrieves job IDs from the registry and cancels them via the
-        scheduler.
+        This calls the scheduler to cancel all jobs matching the workspace's
+        unique prefix, guaranteeing stateless cleanup even if jobs weren't
+        registered.
 
         Raises:
           click.ClickException: If the experiment cancellation command fails.
         """
         registry_entry = self._app_data.get_run(self._workspace_name)
-        if not registry_entry:
-            logger.warning("No registry entry found. Cannot cancel jobs.")
-            click.echo(
-                f"No registry entry found for run {self._workspace_name}."
-            )
-            return
-
-        job_ids = self.get_job_ids()
-        if not job_ids:
-            logger.warning("No job IDs found in registry. Cannot cancel jobs.")
-            click.echo(f"No job IDs found for run {self._workspace_name}.")
-            return
-
-        scheduler_name = registry_entry.get("scheduler", "slurm")
+        scheduler_name = (
+            registry_entry.get("scheduler", "slurm")
+            if registry_entry
+            else "slurm"
+        )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name)
+        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
 
-        logger.debug("Canceling experiments %s in %s...", job_ids, self.path)
-        scheduler.cancel_jobs(job_ids)
+        prefix = "chs-"
+        logger.debug(
+            "Canceling experiments with prefix %s in %s...", prefix, self.path
+        )
+
+        # Delete jobs statelessly by prefix to guarantee cleanup.
+        scheduler.cancel_jobs_by_prefix(prefix)
+        # Clean up associated infrastructure configurations like Kueue
+        # statelessly.
+        scheduler.cleanup_scheduler_resources(self._workspace_name)
 
     def _update_registry(self, job_ids: list[str]) -> None:
         """Updates the runs registry with the current run information."""
@@ -376,18 +425,21 @@ class RambleManager:
             self._workspace_name,
             job_ids,
         )
-        run_entry = {
-            "run_id": self._workspace_name,
-            "workspace_path": self.path,
-            "job_entries": {
-                job_id: {"status": JobStatus.PENDING.value}
-                for job_id in job_ids
-            },
-            "submission_time": (
-                datetime.datetime.now(datetime.timezone.utc).isoformat()
-            ),
-            "scheduler": self._scheduler.name,
-        }
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry.update(
+            {
+                "run_id": self._workspace_name,
+                "workspace_path": self.path,
+                "job_entries": {
+                    job_id: {"status": JobStatus.PENDING.value}
+                    for job_id in job_ids
+                },
+                "submission_time": (
+                    datetime.datetime.now(datetime.timezone.utc).isoformat()
+                ),
+                "scheduler": self._scheduler.name,
+            }
+        )
         self._app_data.update_run(self._workspace_name, run_entry)
 
     def get_job_ids(self) -> list[str]:
@@ -411,7 +463,7 @@ class RambleManager:
 
         scheduler_name = registry_entry.get("scheduler", "slurm")
         logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name)
+        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
 
         return scheduler.check_jobs_running(job_ids)
 
@@ -506,7 +558,7 @@ class RambleManager:
         """
         job_log_map = self._map_jobs_to_log_paths()
         pending_log_fetches = set(job_log_map.keys())
-        scheduler = get_scheduler(self.get_scheduler_type())
+        scheduler = get_scheduler(self.get_scheduler_type(), app_data=app_data)
 
         registry_jobs = set(self.get_job_ids())
         if not registry_jobs:
@@ -689,7 +741,9 @@ class RambleManager:
 
         return mapping_result
 
-    def analyze_results(self) -> str:
+    def analyze_results(
+        self, thresholds_path: str | None = None, skip_validation: bool = False
+    ) -> str:
         """Analyzes and stores the results of the Ramble experiments.
 
         Analyzes the results and stores BoH in GCS/ BigQuery for later
@@ -727,13 +781,23 @@ class RambleManager:
                 "rerunning the command."
             )
         self._cleanup_inputs_dir()
-        return self.generate_boh(results_json_path)
+        return self.generate_boh(
+            results_json_path,
+            thresholds_path=thresholds_path,
+            skip_validation=skip_validation,
+        )
 
-    def generate_boh(self, results_json_path: str) -> str:
+    def generate_boh(
+        self,
+        results_json_path: str,
+        thresholds_path: str | None = None,
+        skip_validation: bool = False,
+    ) -> str:
         """Generates Bill of Health from results.latest.json.
 
         Args:
           results_json_path: Path to the results.latest.json file.
+          thresholds_path: Path to thresholds YAML file.
 
         Returns:
           The path to the directory containing the analysis results and Bill of
@@ -742,10 +806,20 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
+        bucket_name = self._app_data.get_bucket()
+        gcs_base_path = None
+        if bucket_name:
+            gcs_base_path = (
+                f"gs://{bucket_name}/workspaces/{self._workspace_name}"
+            )
+
         boh_generator = BOHGenerator(
             results_json_path,
             base_log_dir=str(workspace_dir),
             cluster_type=self.get_scheduler_type(),
+            gcs_base_path=gcs_base_path,
+            thresholds_path=thresholds_path,
+            skip_validation=skip_validation,
         )
         logger.debug("Generating Bill of Health from %s", results_json_path)
         boh = boh_generator.generate()
@@ -785,14 +859,19 @@ class RambleManager:
         logger.info("Uploading Bill of Health to %s", upload_url)
 
         try:
-            self._execute_shell_command(
-                ["gcloud", "storage", "cp", boh_path, upload_url],
-                error_context="Failed to upload Bill of Health",
-            )
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(f"bills_of_health/{self._workspace_name}.json")
+            blob.upload_from_filename(boh_path)
             logger.info("Bill of Health uploaded successfully.")
         except Exception as e:
+            prefix = (
+                "API error"
+                if isinstance(e, GoogleAPICallError)
+                else "Unexpected error"
+            )
             raise ex.ChsArchiveException(
-                f"Unexpected error during BOH archival: {e}"
+                f"{prefix} during BOH archival: {e}"
             ) from e
 
     def archive_and_upload_workspace(self) -> None:
@@ -811,9 +890,7 @@ class RambleManager:
             )
             return
 
-        upload_url = (
-            f"gs://{bucket_name}/workspaces/{self._workspace_name}.tar.gz"
-        )
+        upload_url = f"gs://{bucket_name}/workspaces/"
         logger.info("Archiving workspace to %s", upload_url)
 
         try:
@@ -844,6 +921,16 @@ class RambleManager:
 
     def archive(self) -> None:
         """Orchestrates archival and upload of BoH and workspace."""
+        if not os.path.exists(self.path) or not os.path.exists(
+            os.path.join(self.path, ".ramble-workspace")
+        ):
+            logger.debug(
+                "Workspace %s is not a valid Ramble workspace. "
+                "Skipping archival.",
+                self.path,
+            )
+            return
+
         try:
             self.archive_and_upload_boh()
         finally:

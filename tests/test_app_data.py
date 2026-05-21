@@ -73,8 +73,10 @@ class TestChsAppData(unittest.TestCase):
     @mock.patch("pathlib.Path.mkdir")
     def test_get_images_dir_failure(self, mock_mkdir):
         mock_mkdir.side_effect = OSError("Permission denied")
-        images_dir = self.app_data.get_images_dir()
+        with self.assertLogs(app_data.logger, level="WARNING") as cm:
+            images_dir = self.app_data.get_images_dir()
         self.assertIsNone(images_dir)
+        self.assertIn("Failed to create images directory", cm.output[0])
 
     def test_update_run_status_success(self):
         self.app_data.update_run(
@@ -95,6 +97,23 @@ class TestChsAppData(unittest.TestCase):
 
         run = self.app_data.get_run("run1")
         self.assertEqual(run["job_entries"], {"job1": {"status": "COMPLETED"}})
+
+    def test_get_latest_runs(self):
+        self.app_data.update_run(
+            "run1", {"submission_time": "2023-01-01T12:00:00Z"}
+        )
+        self.app_data.update_run(
+            "run2", {"submission_time": "2023-01-02T12:00:00Z"}
+        )
+        self.app_data.update_run(
+            "run3", {"submission_time": "2023-01-03T12:00:00Z"}
+        )
+
+        latest_runs = self.app_data.get_latest_runs(limit=2)
+        self.assertEqual(len(latest_runs), 2)
+        keys = list(latest_runs.keys())
+        self.assertEqual(keys[0], "run3")
+        self.assertEqual(keys[1], "run2")
 
 
 if __name__ == "__main__":

@@ -91,11 +91,14 @@ Lists available resources (suites, tests, schedulers).
 -   `--tests`: List available tests.
 -   `--schedulers`: List available schedulers.
 -   `--from-suite <SUITE_NAME>`: specialized filter to list tests belonging to a specific suite (requires `--tests`).
+-   `--machine-type <MACHINE_TYPE>`: Filter tests by machine type (requires `--tests`).
 
 **Example:**
 ```bash
 chs list --suites
 chs list --tests --from-suite lite
+chs list --tests --machine-type a3-ultra
+chs list --tests --machine-type a3-ultra --from-suite lite
 ```
 
 #### 2. `configure`
@@ -134,6 +137,8 @@ Executes a test suite on a specified cluster.
 -   `--nodepool`: GKE node pool to run on.
 -   `--partition`: Slurm partition to run on.
 -   `--dry-run`: Set up the workspace but do not execute experiments or analyze.
+-   `--validation`: Path to a user-defined thresholds YAML file (optional).
+-   `--skip-validation`: Skip threshold evaluation entirely.
 
 ### Supported Suites and Tests
 
@@ -203,6 +208,10 @@ Analyzes the results of a test run and generates a Bill of Health.
 **Arguments:**
 -   `RUN_ID` (Optional): The ID (Workspace Name) of the run to analyze.
     *   *Default:* The most recent run found in the workspaces directory.
+
+**Options:**
+-   `--validation`: Path to a user-defined thresholds YAML file to override the workspace copy (optional).
+-   `--skip-validation`: Skip threshold evaluation entirely.
 
 **Example:**
 ```bash
@@ -278,6 +287,25 @@ chs results
 chs results --tests nccl-cluster
 ```
 
+#### 7. `history`
+Shows the history of the last 5 runs.
+
+**Example:**
+```bash
+chs history
+```
+
+**Output:**
+Displays a table with Workspace and Details.
+
+**Example Output:**
+```
+Workspace                     Details
+------------------------------------------------------------------------------------------
+2026-05-05_16.23.13.228716    chs run --scheduler gke --machine-type a3-ultra --dry-run
+2026-05-04_19.05.29.792632    chs run --scheduler gke
+```
+
 
 ## Configuration
 
@@ -289,17 +317,44 @@ CHS stores all run data, configurations, and logs in a dedicated workspaces dire
 ### Ramble Integration
 CHS expects a standard Ramble installation. It looks for the Ramble setup script (`setup-env.sh`) relative to the installed `chs` package location (typically inside `site-packages/share/ramble`).
 
+### Validation Thresholds Configuration
+
+When using the `--validation` flag, you can provide a YAML file to define custom success criteria. The file follows a hierarchical structure where you can define `default` thresholds and machine-specific overrides.
+
+Example `validation.yaml`:
+```yaml
+default:
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 50
+  gemm:
+    type: min
+    thresholds:
+      performance: 100
+
+a3-ultra:
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+```
+
+
 ## Known Limitations
 
 -   **A4X on GKE**: NCCL tests are currently not working on A4X machine types within GKE.
--   **Topological Pairwise Testing**: Topology-aware pairwise testing is not yet implemented.
 -   **GCS Bucket Configuration**: For the `chs configure bucket` command, the specified GCS bucket must already exist; CHS does not create it automatically.
+
+## Support and Feedback
+
+To report bugs or request new features, please [create a new issue in Buganizer](https://github.com/GoogleCloudPlatform/cluster-health-scanner/issues).
 
 ## Development & TODOs
 
 The following features are currently in development or planned:
 
--   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs, and Bare Metals is planned.
+-   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs and Bare Metals is planned.
 -   **Dynamic Listing**: The `list` command currently acts as a placeholder and needs to be connected to the Ramble registry to dynamically list available suites and tests.
 -   **Workspace Cleanup**: A `cleanup` command or logic to manage old workspaces is pending implementation.
 -   **Configurable Paths**: Support for user-defined workspace directories via configuration or flags.

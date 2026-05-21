@@ -4,6 +4,9 @@ import importlib.resources as pkg_resources
 import json
 import logging
 import os
+import yaml
+
+
 import re
 import subprocess
 import click
@@ -15,8 +18,17 @@ if TYPE_CHECKING:
 
 
 from chs.schedulers.base import BaseScheduler
-from chs.exceptions import NetworkDiscoveryException
+from chs.utils.kueue import KueueManager
+from chs.exceptions import NetworkDiscoveryException, KueueException
 from chs.utils.lifecycle import JobStatus
+from chs.preflights.gke_preflight import GkePreflightChecker
+
+
+def boolean_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:bool", str(data))
+
+
+yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +48,11 @@ class GKEScheduler(BaseScheduler):
         self.nodes_arg = nodes
         self.nodepool_arg = nodepool
         self._resolved_nodes: list[str] | None = None
-
+        self.workspace_config_dir: str | None = None
+        self.workspace_name: str | None = None
+        self.kueue_supported: bool = False
+        self._jobset_labels_yaml: str = ""
+        self._suspend_jobset: str = "false"
         if nodelist:
             logger.warning(
                 "nodelist argument is ignored for GKE scheduler. Did you want"
@@ -47,6 +63,58 @@ class GKEScheduler(BaseScheduler):
                 "partition argument is ignored for GKE scheduler. Did you want"
                 " to use nodes or nodepool?"
             )
+
+    def run_preflight_checks(
+        self,
+        tests: list[dict[str, Any]] | None = None,
+        workspace_name: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Checks for JobSet and Kueue dependencies on GKE."""
+        preflight_checker = GkePreflightChecker(self)
+        filtered_tests, kueue_supported = preflight_checker.check(tests)
+        self.kueue_supported = kueue_supported
+        if workspace_name:
+            self.workspace_name = workspace_name
+            if self._app_data:
+                run_entry = self._app_data.get_run(workspace_name) or {}
+                run_entry.update({"run_id": workspace_name})
+                self._app_data.update_run(workspace_name, run_entry)
+        return filtered_tests
+
+    def setup_scheduler_resources(
+        self,
+        workspace_config_dir: str,
+        tests: list[dict[str, Any]] | None = None,
+        machine_type: str = "",
+        workspace_name: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Sets up scheduler-specific resources like Kueue configurations."""
+        self.workspace_config_dir = workspace_config_dir
+        os.makedirs(workspace_config_dir, exist_ok=True)
+
+        if self.kueue_supported:
+            try:
+                nodes = self.get_nodes_under_test()
+                kueue_mgr = KueueManager(self)
+                self._jobset_labels_yaml = kueue_mgr.setup(
+                    workspace_config_dir, machine_type, nodes or []
+                )
+                self._suspend_jobset = "true"
+            except KueueException as e:
+                logger.warning(
+                    "Failed to setup Kueue resources: %s. "
+                    "Falling back to standard scheduling without Kueue.",
+                    e,
+                )
+                self.kueue_supported = False
+
+                filtered_tests = (
+                    GkePreflightChecker(self)._filter_tests_without_kueue(tests)
+                    or []
+                )
+                return filtered_tests
+
+        return tests
 
     @property
     def name(self) -> str:
@@ -62,6 +130,23 @@ class GKEScheduler(BaseScheduler):
             check=True,
         )
         return result.stdout.strip()
+
+    def _discover_tpu_topology(self, node_name: str) -> str:
+        """Queries node labels to discover TPU topology."""
+        try:
+            args = ["get", "node", node_name, "-o", "json"]
+            output = self._run_kubectl(args)
+            if not output:
+                return ""
+
+            data = json.loads(output)
+            labels = data.get("metadata", {}).get("labels", {})
+            return labels.get("cloud.google.com/gke-tpu-topology", "")
+        except Exception as e:
+            logger.warning(
+                "Failed to discover TPU topology for node %s: %s", node_name, e
+            )
+            return ""
 
     def _discover_networks(self) -> tuple[list[str], list[str]]:
         """Discovers all network names using kubectl and groups them by type.
@@ -153,6 +238,55 @@ class GKEScheduler(BaseScheduler):
 
         return self._resolved_nodes
 
+    def get_topology(self) -> dict[str, dict[str, list[str]]]:
+        """Discovers network topology using kubectl to get node labels.
+
+        Returns a dictionary mapping block names to dicts of subblocks to lists
+        of nodes.
+        """
+        nodes = self.get_nodes_under_test()
+        if not nodes:
+            return {}
+
+        try:
+            args = ["get", "nodes"] + nodes + ["-o", "json"]
+            output = self._run_kubectl(args)
+            if not output:
+                return {}
+
+            data = json.loads(output)
+            items = (
+                data.get("items", [data])
+                if data.get("kind") == "List"
+                else [data]
+            )
+
+            topology = defaultdict(lambda: defaultdict(list))
+            for item in items:
+                metadata = item.get("metadata", {})
+                name = metadata.get("name")
+                labels = metadata.get("labels", {})
+
+                block = labels.get(
+                    "cloud.google.com/gce-topology-block", "default-block"
+                )
+                subblock = labels.get(
+                    "cloud.google.com/gce-topology-subblock", "default-subblock"
+                )
+
+                if name:
+                    topology[block][subblock].append(name)
+
+            # Convert defaultdict to regular dict
+            return {b: dict(s) for b, s in topology.items()}
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning("Failed to get node topology via kubectl: %s", e)
+            return {}
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse kubectl output as JSON: %s", e)
+            return {}
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
@@ -160,7 +294,9 @@ class GKEScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        workspace_name: str | None = None,
     ) -> None:
+        self.workspace_config_dir = workspace_config_dir
         nodes = self.get_nodes_under_test()
         logger.debug("Configuring workspace with gke_template.yaml")
         template_path = pkg_resources.files("chs.schedulers").joinpath(
@@ -168,21 +304,18 @@ class GKEScheduler(BaseScheduler):
         )
         with pkg_resources.as_file(template_path) as p:
             with open(p, "r") as f:
-                template_content = f.read()
+                config = yaml.safe_load(f)
 
-        if nodes:
-            nodes_str = json.dumps(nodes)
+        if machine_type.startswith("tpu"):
+            l3_networks = ["default"]
+            device_networks = []
         else:
-            nodes_str = "[]"
-
-        tests_str = json.dumps(tests) if tests else "[]"
-
-        l3_networks, device_networks = self._discover_networks()
-        if not l3_networks or not device_networks:
-            raise NetworkDiscoveryException(
-                "Network discovery failed on GKE. "
-                "Could not identify L3 or Device networks."
-            )
+            l3_networks, device_networks = self._discover_networks()
+            if not l3_networks or not device_networks:
+                raise NetworkDiscoveryException(
+                    "Network discovery failed on GKE. "
+                    "Could not identify L3 or Device networks."
+                )
         all_networks = l3_networks + device_networks
         all_interfaces = [
             {"interfaceName": f"eth{i}", "network": net_name}
@@ -190,21 +323,32 @@ class GKEScheduler(BaseScheduler):
         ]
 
         default_interface_name = "eth0"
-        all_interfaces_json = json.dumps(all_interfaces)
 
-        rendered_content = template_content.format(
-            nodes=nodes_str,
-            machine_type=machine_type,
-            tests=tests_str,
-            default_interface_name=default_interface_name,
-            all_interfaces_json=all_interfaces_json,
-            timeout=timeout,
-            deadline=deadline,
-        )
-        logger.debug("Configuration: %r", rendered_content)
+        variables = config["ramble"]["variables"]
+        variables["nodes"] = nodes or []
+        variables["machine_type"] = machine_type
+        variables["tests"] = tests or []
+        variables["default_interface_name"] = default_interface_name
+        variables["all_interfaces_json"] = json.dumps(all_interfaces)
+        variables["timeout"] = timeout
+        variables["deadline"] = deadline
+
+        if machine_type.startswith("tpu") and nodes:
+            topology = self._discover_tpu_topology(nodes[0])
+            if topology:
+                variables["tpu_topology"] = topology
+
+        if self._jobset_labels_yaml:
+            variables["jobset_labels_yaml"] = self._jobset_labels_yaml
+        if self._suspend_jobset == "true":
+            variables["suspend_jobset"] = "true"
+
+        logger.debug("Configuration: %r", config)
+
+        self._write_topology_json(workspace_config_dir)
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
-            f.write(rendered_content)
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     def check_jobs_running(self, job_ids: list[str]) -> bool:
         """Checks if the given jobs are still running."""
@@ -214,6 +358,7 @@ class GKEScheduler(BaseScheduler):
             )
             return False
 
+        still_running = False
         try:
             # Pass all job IDs at once and ignore ones that were already deleted
             args = (
@@ -235,8 +380,6 @@ class GKEScheduler(BaseScheduler):
                 if data.get("kind") == "List"
                 else [data]
             )
-
-            still_running = False
 
             for job_data in items:
                 conditions = job_data.get("status", {}).get("conditions", [])
@@ -270,37 +413,57 @@ class GKEScheduler(BaseScheduler):
 
         return still_running
 
-    def _any_job_exceeded_deadline(self, jobset_id: str) -> bool:
-        """Checks individual jobs under a failed JobSet for deadline."""
+    def _check_and_update_deadlines(
+        self, failed_jobset_ids: list[str], statuses: dict[str, str]
+    ) -> None:
+        """Batch checks jobs for deadline exceeded and updates statuses."""
         try:
+            label_selector = (
+                "jobset.sigs.k8s.io/jobset-name in "
+                f"({','.join(failed_jobset_ids)})"
+            )
             args = [
                 "get",
                 "jobs",
                 "-l",
-                f"jobset.sigs.k8s.io/jobset-name={jobset_id}",
+                label_selector,
                 "-o",
                 "json",
             ]
             jobs_output = self._run_kubectl(args)
             if not jobs_output:
-                return False
+                return
 
             jobs_data = json.loads(jobs_output).get("items", [])
+            deadlined_jobsets = set()
+
             for job in jobs_data:
+                jobset_name = (
+                    job.get("metadata", {})
+                    .get("labels", {})
+                    .get("jobset.sigs.k8s.io/jobset-name")
+                )
+                if not jobset_name or jobset_name in deadlined_jobsets:
+                    continue
+
                 for condition in job.get("status", {}).get("conditions", []):
                     if (
                         condition.get("type") == "Failed"
                         and condition.get("status") == "True"
                         and condition.get("reason") == "DeadlineExceeded"
                     ):
-                        return True
-        except Exception as e:
-            logger.debug(
-                "Failed to check exceeded deadline for %s: %s", jobset_id, e
-            )
-        return False
+                        deadlined_jobsets.add(jobset_name)
+                        statuses[jobset_name] = JobStatus.DEADLINE.value
+                        break
+        except (
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+            AttributeError,
+            TypeError,
+        ) as e:
+            logger.debug("Failed to batch check deadlines: %s", e)
 
-    def _evaluate_jobset_status(self, jobset_id: str, jobset_data: dict) -> str:
+    def _evaluate_jobset_status(self, jobset_data: dict) -> str:
         """Evaluates JobSet conditions and fallbacks to active count."""
         status = jobset_data.get("status", {})
 
@@ -312,8 +475,6 @@ class GKEScheduler(BaseScheduler):
             if condition_type == "Completed" and is_true:
                 return "Completed"
             elif condition_type == "Failed" and is_true:
-                if self._any_job_exceeded_deadline(jobset_id):
-                    return "Deadline"
                 return "Failed"
 
         replicated_jobs = status.get("replicatedJobsStatus", [])
@@ -344,11 +505,17 @@ class GKEScheduler(BaseScheduler):
                 data.get("items", []) if data.get("kind") == "List" else [data]
             )
 
+            failed_jobset_ids = []
             for item in items:
                 job_id = item.get("metadata", {}).get("name")
                 if job_id in statuses:
-                    raw_status = self._evaluate_jobset_status(job_id, item)
+                    raw_status = self._evaluate_jobset_status(item)
+                    if raw_status == "Failed":
+                        failed_jobset_ids.append(job_id)
                     statuses[job_id] = JobStatus.from_string(raw_status)
+
+            if failed_jobset_ids:
+                self._check_and_update_deadlines(failed_jobset_ids, statuses)
         except (
             subprocess.CalledProcessError,
             json.JSONDecodeError,
@@ -359,12 +526,16 @@ class GKEScheduler(BaseScheduler):
 
         return statuses
 
-    def fetch_job_log(self, job_id: str, log_path: str) -> None:
-        """Fetches the log for a completed GKE job."""
-        logger.debug("Fetching logs for JobSet %s to %s", job_id, log_path)
-        try:
-            # Find the head pod (rank 0)
-            # This logic mirrors batch_wait.tpl
+    @staticmethod
+    def _is_tpu_job(job_id: str) -> bool:
+        """Checks if the job is a TPU benchmark based on naming convention."""
+        return "tpu-" in job_id
+
+    def _get_pod_names(
+        self, job_id: str, head_pod_only: bool = False
+    ) -> list[str]:
+        """Queries GKE for pod names."""
+        if head_pod_only:
             args = [
                 "get",
                 "pods",
@@ -373,22 +544,47 @@ class GKEScheduler(BaseScheduler):
                 "-o",
                 "jsonpath={.items[0].metadata.name}",
             ]
-            head_pod = self._run_kubectl(args)
+        else:
+            args = [
+                "get",
+                "pods",
+                "-l",
+                f"jobset.sigs.k8s.io/jobset-name={job_id}",
+                "-o",
+                "jsonpath={.items[*].metadata.name}",
+            ]
+        try:
+            output = self._run_kubectl(args)
+            return [p for p in output.split() if p]
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to query pods for JobSet %s: %s", job_id, e)
+            return []
 
-            if not head_pod:
-                logger.warning("Head pod not found for JobSet %s.", job_id)
+    def fetch_job_log(self, job_id: str, log_path: str) -> None:
+        """Fetches the log for a completed GKE job."""
+        logger.debug("Fetching logs for JobSet %s to %s", job_id, log_path)
+        try:
+            is_tpu = self._is_tpu_job(job_id)
+            pod_names = self._get_pod_names(job_id, head_pod_only=not is_tpu)
+
+            if not pod_names:
+                logger.warning(
+                    "No pods found to fetch logs for JobSet %s.", job_id
+                )
                 return
 
-            logger.debug("Found head pod: %s", head_pod)
+            logger.debug(
+                "Fetching logs from %d pods: %s", len(pod_names), pod_names
+            )
 
-            # Streaming logs to file
             with open(log_path, "w") as f:
-                subprocess.run(
-                    ["kubectl", "logs", head_pod],
-                    stdout=f,
-                    check=True,
-                    text=True,
-                )
+                for pod_name in pod_names:
+                    subprocess.run(
+                        ["kubectl", "logs", pod_name],
+                        stdout=f,
+                        check=True,
+                        text=True,
+                    )
             logger.debug("Logs saved to %s", log_path)
 
         except subprocess.CalledProcessError as e:
@@ -404,21 +600,83 @@ class GKEScheduler(BaseScheduler):
         )
         return re.findall(regex, output)
 
+    def cleanup_scheduler_resources(
+        self,
+        workspace_name: str | None = None,
+        run_entry: dict[str, Any] | None = None,
+    ) -> None:
+        """Cleans up scheduler-specific resources like Kueue configurations."""
+        if not run_entry and workspace_name and self._app_data:
+            run_entry = self._app_data.get_run(workspace_name) or {}
+        else:
+            run_entry = run_entry or {}
+
+        workspace_path = run_entry.get("workspace_path")
+        config_dir = self.workspace_config_dir
+        if not config_dir and workspace_path:
+            config_dir = os.path.join(workspace_path, "configs")
+
+        kueue_config_path = ""
+        if config_dir:
+            kueue_config_path = os.path.join(config_dir, "kueue-configs.yaml")
+
+        file_exists = kueue_config_path and os.path.exists(kueue_config_path)
+
+        if file_exists:
+            kueue_mgr = KueueManager(self)
+            kueue_mgr.cleanup(kueue_config_path)
+        else:
+            logger.debug(
+                "Kueue configuration file not found at %s; skipping deletion.",
+                kueue_config_path,
+            )
+
     def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given JobSets using kubectl delete."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
             return
 
-        for job_id in job_ids:
-            try:
-                args = ["delete", "jobset", job_id]
-                self._run_kubectl(args)
-                logger.debug("Successfully deleted JobSet: %s", job_id)
-            except FileNotFoundError:
-                logger.warning("kubectl command not found. Cannot cancel jobs.")
-            except subprocess.CalledProcessError as e:
-                logger.error(
-                    "Failed to delete JobSet %s. Error: %s", job_id, e.stderr
+        try:
+            args = ["delete", "jobset"] + job_ids + ["--ignore-not-found"]
+            self._run_kubectl(args)
+            logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
+        except FileNotFoundError:
+            logger.warning("kubectl command not found. Cannot cancel jobs.")
+        except subprocess.CalledProcessError as e:
+            logger.error("Failed to delete JobSets. Error: %s", e.stderr)
+            click.echo(f"Failed to delete JobSets: {e.stderr}")
+
+    def cancel_jobs_by_prefix(self, prefix: str) -> None:
+        """Cancels all JobSets matching the specified prefix natively."""
+        logger.debug("Attempting native cancel for prefix: %s", prefix)
+        # Match the sanitized prefix as a substring in the JobSet name.
+        sanitized_match = prefix.replace("_", "-").replace(".", "-").lower()
+
+        try:
+            # List all JobSets
+            output = self._run_kubectl(["get", "jobset", "-o", "name"])
+            if not output:
+                return
+
+            job_ids = []
+            for line in output.splitlines():
+                if sanitized_match in line:
+                    job_name = line.split("/")[-1]
+                    job_ids.append(job_name)
+
+            if job_ids:
+                logger.info(
+                    "Found %d JobSets to cancel matching %s.",
+                    len(job_ids),
+                    prefix,
                 )
-                click.echo(f"Failed to delete JobSet {job_id}: {e.stderr}")
+                self.cancel_jobs(job_ids)
+            else:
+                logger.debug("No matching JobSets found for %s.", prefix)
+        except FileNotFoundError:
+            logger.warning(
+                "kubectl command not found. Cannot perform native cancel."
+            )
+        except Exception as e:
+            logger.warning("Native cancel failed: %s", e)

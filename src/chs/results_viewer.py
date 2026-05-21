@@ -1,6 +1,8 @@
 """Module for displaying Bill of Health results in the terminal."""
 
 import logging
+import os
+import json
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
@@ -23,17 +25,36 @@ class ResultsViewer:
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
+        self.topology = {}
+
+        workspace_dir = os.path.dirname(self.boh_path)
+        topo_path = os.path.join(workspace_dir, "topology.json")
+        if os.path.exists(topo_path):
+            try:
+                with open(topo_path, "r") as f:
+                    self.topology = json.load(f)
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "Failed to parse topology JSON from %s: %s",
+                    topo_path,
+                    e,
+                )
+            except IOError as e:
+                logger.warning(
+                    "Failed to read topology file %s: %s",
+                    topo_path,
+                    e,
+                )
 
         try:
             with open(self.boh_path, "r") as f:
                 content = f.read()
-                try:
-                    json_format.Parse(
-                        content, self.boh, ignore_unknown_fields=True
-                    )
-                except json_format.ParseError:
-                    # Fallback to TextProto (in case it was written as such)
-                    text_format.Parse(content, self.boh)
+            try:
+                json_format.Parse(content, self.boh, ignore_unknown_fields=True)
+            except json_format.ParseError:
+                # Fallback to TextProto (in case it was written as such)
+                text_format.Parse(content, self.boh)
+
         except FileNotFoundError as e:
             logger.error(
                 "Bill of Health file not found at %s: %s", self.boh_path, e
@@ -127,9 +148,15 @@ class ResultsViewer:
                 grouped_results[key] = []
             grouped_results[key].append(result)
 
+        from chs.core.default_plugin import DefaultPlugin
+        from chs.core.default_plugin.renderer import DefaultRenderer
+
         for (canonical_name, test_level), results in grouped_results.items():
             plugin = self.plugin_manager.get_plugin(canonical_name)
+            if hasattr(plugin, "set_topology"):
+                plugin.set_topology(self.topology)
             detail = plugin.render_detail(results)
+
             has_errors = any(
                 (
                     m.key.endswith("Error Detected")
@@ -139,9 +166,23 @@ class ResultsViewer:
                 for m in res.metrics
             )
 
+            has_thresholds = any(
+                m.HasField("validation_criteria") and m.validation_criteria.name
+                for res in results
+                for m in res.metrics
+            )
+
             if detail is not None or has_errors:
                 if detail is not None:
                     self.console.print(detail)
+
+                if (
+                    detail is not None
+                    and not isinstance(plugin, DefaultPlugin)
+                    and has_thresholds
+                ):
+                    raw_detail = DefaultRenderer().render_detail(results)
+                    self.console.print(raw_detail)
 
                 self._append_errors(results)
                 self.console.print()

@@ -19,7 +19,7 @@ class PluginManager:
         self._discover_plugins()
 
     def _discover_plugins(self) -> None:
-        """Iterates through chs.plugins and external dir to register plugins."""
+        """Iterates through chs.plugins to register plugins."""
         # 1. Discover internal plugins
         try:
             import chs.plugins
