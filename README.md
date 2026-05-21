@@ -317,28 +317,121 @@ CHS stores all run data, configurations, and logs in a dedicated workspaces dire
 ### Ramble Integration
 CHS expects a standard Ramble installation. It looks for the Ramble setup script (`setup-env.sh`) relative to the installed `chs` package location (typically inside `site-packages/share/ramble`).
 
-### Validation Thresholds Configuration
+## Validation Thresholds
 
-When using the `--validation` flag, you can provide a YAML file to define custom success criteria. The file follows a hierarchical structure where you can define `default` thresholds and machine-specific overrides.
+CHS utilizes validation thresholds to automatically evaluate if a completed test run meets specific performance or health criteria. During analysis, CHS evaluates the extracted metrics against thresholds and records the outcome in the Bill of Health (`bill_of_health.json`).
 
-Example `validation.yaml`:
+You can configure these thresholds by providing a YAML file containing baseline criteria.
+
+### Usage and CLI Flags
+
+* **Specify custom thresholds:** Use the `--validation <PATH>` flag during `chs run` or `chs analyze` to specify a custom thresholds YAML file:
+  ```bash
+  chs run --scheduler gke --machine-type a3-ultra --validation /path/to/custom_thresholds.yaml
+  chs analyze --validation /path/to/custom_thresholds.yaml
+  ```
+* **Skip validation:** If you want to run tests or analyze results without applying any threshold checks, use the `--skip-validation` flag.
+  ```bash
+  chs run --scheduler gke --machine-type a3-ultra --skip-validation
+  ```
+
+### Configuration Schema & Hierarchy
+
+The thresholds configuration YAML file follows a two-level hierarchical structure:
+1. **Top Level (`default` or Machine Type):** Defined either under the `default` block or under a specific hardware platform name (e.g., `a3-ultra`, `a3-mega`, `a4`, `a4x`).
+2. **Second Level (Test Configurations):** Contains individual test configurations mapped by their test names (e.g., `nccl-single-node`, `gemm`, `nvidia-smi`, `stream`).
+
+Each test configuration must specify:
+* `type`: The validation comparison type (`min`, `scalar`, or `relative`).
+* `thresholds`: A dictionary of metric names (or user-friendly aliases) mapped to threshold values.
+
+#### Merge and Precedence Rules
+* **Precedence:** Machine-specific configuration blocks (e.g., `a3-ultra`) take precedence over `default` configurations.
+* **Merging:** When a machine type is active, its test-level configurations are merged with those under `default`. If a metric threshold is defined in both the machine block and `default`, the machine-specific threshold overrides the default.
+* **No Configuration:** If a specific metric within a test has no thresholds defined under either the active machine type or `default`, that metric is not validated.
+
+### Comparison Types
+
+| Comparison Type | Evaluation Formula / Logic | Supported Types | Common Use Case Example |
+| :--- | :--- | :--- | :--- |
+| `min` | `Observed Value >= Threshold` | Numeric (`int`, `float`) | Bandwidth must be at least 80 GB/s. |
+| `scalar` | `Observed Value == Threshold` | Numeric, Boolean, String (case-insensitive) | GPU Count must equal 8; Healthy must be `true`. |
+| `relative` | `(Achieved Metric / Peak Metric) >= Threshold` | Numeric ratio (fractional value between 0 and 1) | Memory copy rate must reach at least 80% (0.8) of peak hardware bandwidth. |
+
+#### 1. `min` (Minimum Value Validation)
+
+Ensures that the metric achieves or exceeds a baseline numeric threshold.
+* **Expected Value:** An integer or floating-point number.
+* **Result Status:** `SUCCESS` if `Observed Value >= Threshold`; `FAILED` otherwise.
+
+#### 2. `scalar` (Exact Match Validation)
+
+Ensures that the metric matches the exact value specified.
+* **Expected Value:** An integer, float, boolean, or string.
+* **Result Status:**
+  * **Numeric:** `SUCCESS` if `Observed Value == Threshold`.
+  * **Boolean:** `SUCCESS` if `Observed Value == Threshold`.
+  * **String:** `SUCCESS` if `Observed Value` (case-insensitive) `==` `Threshold` (case-insensitive).
+
+#### 3. `relative` (Relative Performance Validation)
+
+Calculates the ratio of a measured achieved metric against a theoretical hardware peak metric.
+* **Expected Value:** A float (representing a fraction, e.g. `0.8` for 80%).
+* **Evaluation:**
+  * `Ratio = Achieved Metric / Peak Metric`
+  * `Pass Condition: Ratio >= Threshold`
+* **Ratio Rules & Edge Cases:**
+  > [!CAUTION]
+  > If the **Peak Metric** is missing from the results, or if its value is less than or equal to `0` (which would cause division by zero), the validation automatically **fails** with a `FAILED` status.
+
+### Plugin-Specific Metric Aliases
+
+To keep configurations simple and readable, CHS plugins translate complex raw benchmark metrics (Figures of Merit, or FOMs) into clean, human-readable aliases. You can use these aliases directly inside the `thresholds` section of your YAML file.
+
+| Test Name | YAML Key (Alias) | Translated Raw FOM Name | Typical Comparison Type |
+| :--- | :--- | :--- | :--- |
+| `nccl-single-node` | `bandwidth` | `"Avg. Bus Bandwidth"` | `min` |
+| `nccl-cluster` | `bandwidth` | `"Avg. Bus Bandwidth"` | `min` |
+| `nccl-pairwise` | `bandwidth` | `"Avg. Bus Bandwidth"` | `min` |
+| `gemm` | `performance` | `"Value"` | `min` |
+| `nvidia-smi` | `gpus` | `"GPU Count"` | `scalar` |
+| `stream` | `efficiency` | Achieved `"Rate"` vs. `"PEAK Bandwidth"` | `relative` |
+
+> [!NOTE]
+> This table lists the aliases currently supported by CHS for use in the validation YAML. Additional metrics may be available in the raw benchmark outputs but are not yet aliased for direct use in thresholds.
+
+### Example `validation.yaml` Configuration
 ```yaml
+# Default baselines for any machine type
 default:
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 50
+      bandwidth: 50 # Bandwidth must be >= 50 GB/s
   gemm:
     type: min
     thresholds:
-      performance: 100
+      performance: 100 # Performance must be >= 100 TFLOPS
 
+# Specific overrides and additional tests for a3-ultra
 a3-ultra:
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth: 80 # Overrides default bandwidth to require >= 80 GB/s
+  stream:
+    type: relative
+    thresholds:
+      efficiency: 0.8 # Achieved Rate / Peak Bandwidth must be >= 80% (0.8)
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 8 # GPU Count must be exactly 8
 ```
+
+### Error Handling & Troubleshooting
+* **Missing Metric:** If a threshold metric listed in the YAML file is not found in the test's results, a warning is logged (`Metric <name> not found in results`), and the validator skips evaluating that metric without raising an error.
+* **Invalid YAML Structure:** If the YAML file is malformed or contains incorrect field types (e.g., `type` is not `min`, `scalar`, or `relative`), CHS raises a `ChsValidationError` before execution or analysis begins.
 
 
 ## Known Limitations
