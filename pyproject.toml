@@ -17,6 +17,7 @@ dependencies = [
     "pre_commit",
     "google-cloud-storage",
     "google-cloud-compute",
+    "pyOpenSSL",
 ]
 
 [project.optional-dependencies]
