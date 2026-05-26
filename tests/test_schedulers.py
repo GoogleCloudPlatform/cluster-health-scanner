@@ -551,16 +551,57 @@ ramble:
         )
 
     @mock.patch("subprocess.run")
-    def test_write_ramble_config_discovery_failure(self, mock_run, mock_logger):
-        """Test write_ramble_config raises NetworkDiscoveryException."""
-        from chs.exceptions import NetworkDiscoveryException
+    def test_write_ramble_config_discovery_fallback(
+        self, mock_run, mock_logger
+    ):
+        """Test write_ramble_config network discovery fallback."""
+        mock_run.return_value.stdout = "{}"
+        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        with open(template_path, "w") as f:
+            f.write("""
+ramble:
+  variables:
+    nodes: {nodes}
+    machine_type: {machine_type}
+    tests: {tests}
+    default_interface_name: {default_interface_name}
+    all_interfaces_json: |
+      {all_interfaces_json}
+""")
 
-        scheduler = GKEScheduler()
+        @contextlib.contextmanager
+        def mock_as_file_func(path):
+            yield template_path
+
         with mock.patch.object(
             GKEScheduler, "_discover_networks", return_value=([], [])
         ):
-            with self.assertRaises(NetworkDiscoveryException):
-                scheduler.write_ramble_config("/tmp", ["test1"], "a3-high")
+            with mock.patch(
+                "chs.schedulers.gke.pkg_resources.as_file",
+                side_effect=mock_as_file_func,
+            ):
+                scheduler.write_ramble_config(
+                    workspace_config_dir, ["test1"], "a3-high"
+                )
+
+        output_path = os.path.join(workspace_config_dir, "ramble.yaml")
+        import yaml
+
+        with open(output_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        variables = data["ramble"]["variables"]
+        self.assertEqual(variables["default_interface_name"], "eth0")
+
+        import json
+
+        all_interfaces = json.loads(variables["all_interfaces_json"].strip())
+        self.assertEqual(len(all_interfaces), 1)
+        self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
+        self.assertEqual(all_interfaces[0]["network"], "default")
 
     @mock.patch("subprocess.run")
     def test_get_topology(self, mock_run, mock_logger):

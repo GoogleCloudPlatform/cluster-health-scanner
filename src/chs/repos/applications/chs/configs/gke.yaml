@@ -483,6 +483,94 @@ a4x:
       n: 51200
       k: 51200
 
+a4x-max:
+  variables:
+    pod_annotations_yaml: |
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
+      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
+      networking.gke.io/default-interface: {default_interface_name}
+      networking.gke.io/interfaces: |
+        {all_interfaces_json}
+    jobset_labels_yaml: |
+      chs-run: {job_name}
+    node_selector_yaml: "node.kubernetes.io/instance-type: a4x-maxgpu-4g-metal"
+    tolerations_yaml: |
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: present
+        effect: NoSchedule
+      - key: kubernetes.io/arch
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+    extra_volumes_yaml: |
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+    extra_volume_mounts_yaml: |
+      - name: shared-memory
+        mountPath: /dev/shm
+    container_resources_yaml: |
+      limits:
+        nvidia.com/gpu: {gpus_per_node}
+    container_security_context_yaml: |
+      privileged: true
+      runAsUser: 0
+    claims:
+      - name: compute-domain-channel
+    pod_resource_claims_yaml: |
+      - name: compute-domain-channel
+        resourceClaimTemplateName: {job_name}-compute-domain-channel
+    custom_resources_yaml: |
+      apiVersion: resource.nvidia.com/v1beta1
+      kind: ComputeDomain
+      metadata:
+        name: {job_name}-compute-domain
+        labels:
+          chs-run: {job_name}
+      spec:
+        numNodes: {n_nodes}
+        channel:
+          resourceClaimTemplate:
+            name: {job_name}-compute-domain-channel
+      ---
+      apiVersion: resource.k8s.io/v1beta1
+      kind: ResourceClaimTemplate
+      metadata:
+        name: {job_name}-compute-domain-channel
+      spec:
+        spec:
+          devices:
+            requests:
+            - name: gpu-channel
+              deviceClassName: compute-domain-default-channel.nvidia.com
+              selectors:
+              - cel:
+                  expression: {cel_filter_expression}
+      ---
+
+  nvidia-dcgm:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+
 tpu7x:
   variables:
     cores_per_chip: 2

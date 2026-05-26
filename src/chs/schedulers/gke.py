@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from chs.schedulers.base import BaseScheduler
 from chs.utils.kueue import KueueManager
-from chs.exceptions import NetworkDiscoveryException, KueueException
+from chs.exceptions import KueueException
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.gke_preflight import GkePreflightChecker
 
@@ -312,10 +312,12 @@ class GKEScheduler(BaseScheduler):
         else:
             l3_networks, device_networks = self._discover_networks()
             if not l3_networks or not device_networks:
-                raise NetworkDiscoveryException(
-                    "Network discovery failed on GKE. "
-                    "Could not identify L3 or Device networks."
+                logger.warning(
+                    "Network discovery did not find any GKE network resources. "
+                    "Falling back to standard default network interface."
                 )
+                l3_networks = ["default"]
+                device_networks = []
         all_networks = l3_networks + device_networks
         all_interfaces = [
             {"interfaceName": f"eth{i}", "network": net_name}

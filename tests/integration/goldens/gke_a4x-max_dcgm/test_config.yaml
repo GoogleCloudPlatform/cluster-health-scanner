@@ -1,0 +1,2 @@
+description: "Tests the 'dcgm' test against a gke scheduler for a4x-max"
+command: ["run", "--tests", "dcgm", "--scheduler", "gke", "--machine-type", "a4x-max", "--nodes", "node1,node2", "--dry-run"]

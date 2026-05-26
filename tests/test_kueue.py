@@ -32,10 +32,10 @@ class TestKueueManager(unittest.TestCase):
 
     def test_setup_already_active_returns_label(self):
         """Test setup returns queue label if ClusterQueue is already active."""
-        self.mock_scheduler._run_kubectl.return_value = "True"
+        self.mock_scheduler._run_kubectl.side_effect = ["a3-megagpu-8g", "True"]
         label = self.kueue_mgr.setup(self.tmp_dir, "a3-mega", ["node1"])
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
-        self.mock_scheduler._run_kubectl.assert_called_once()
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 2)
 
     def test_setup_success_renders_and_verifies(self):
         """Test setup renders template, applies it, and verifies readiness."""

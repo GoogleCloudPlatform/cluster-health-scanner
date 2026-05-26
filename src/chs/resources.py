@@ -21,6 +21,11 @@ MACHINE_TYPE_RESOURCE_MAP = {
         "accelerators": 4,
         "resource_name": "nvidia.com/gpu",
     },
+    "a4x-max": {
+        "instance_type": "a4x-maxgpu-4g-metal",
+        "accelerators": 4,
+        "resource_name": "nvidia.com/gpu",
+    },
     "tpu7x": {
         "instance_type": "tpu7x-standard-4t",
         "accelerators": 4,

@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import shutil
 import pytest
 import yaml
@@ -132,8 +133,20 @@ def test_golden_config(
     workspace_path = generated_workspaces[0]
 
     def normalize_content(content):
+        # Sort comma-separated env vars inside --container-env
+        # to avoid non-deterministic ordering.
+        def sort_env(m):
+            sep, envs = m.group(1), m.group(2)
+            sorted_envs = ",".join(sorted(envs.split(",")))
+            return f"--container-env{sep}{sorted_envs}"
+
+        normalized = re.sub(
+            r"--container-env([=\s])([^\-\s]+)",
+            sort_env,
+            content,
+        )
         return sorted(
-            line.rstrip() for line in content.splitlines() if line.strip()
+            line.rstrip() for line in normalized.splitlines() if line.strip()
         )
 
     scrubber = WorkspaceScrubber(str(workspace_path))

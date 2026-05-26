@@ -95,6 +95,7 @@ class Chs(ExecutableApplication):
             "a4",
             "a3-mega",
             "a4x",
+            "a4x-max",
             "tpu7x",
             "tpuv6e",
         ],
