@@ -436,7 +436,6 @@ a3-ultra:
 
 ## Known Limitations
 
--   **A4X on GKE**: NCCL tests are currently not working on A4X machine types within GKE.
 -   **GCS Bucket Configuration**: For the `chs configure bucket` command, the specified GCS bucket must already exist; CHS does not create it automatically.
 
 ## Support and Feedback
