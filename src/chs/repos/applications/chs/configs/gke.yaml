@@ -549,6 +549,31 @@ a4x-max:
                   expression: {cel_filter_expression}
       ---
 
+  nccl-tests:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        OMPI_ALLOW_RUN_AS_ROOT: 1
+        NCCL_NET: gIB
+        NCCL_DEBUG: INFO
+        NCCL_TESTS_SPLIT_MASK: "0x0"
+        LD_LIBRARY_PATH: "/usr/local/nvidia/lib64:/usr/local/gib/lib64"
+        NCCL_MNNVL_ENABLE: "0"
+    variables:
+      jobset_template: jobset_mpi.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+      ssh_port: 2222
+      nccl-tests_path: /third_party/nccl-tests
+      mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
+      mpi_command: |
+        mpirun -n {n_ranks} -N {processes_per_node} \
+          --hostfile /tmp/hostfile --bind-to none \
+          --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+          --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+          --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+          -x PATH="{nccl-tests_path}/build:$PATH" \
+          -x {mpi_env_vars}
+
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
     variables:

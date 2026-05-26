@@ -773,6 +773,7 @@ class RambleManager:
             env={"TQDM_DISABLE": "1", "TERM": "dumb"},
             error_context="Failed to analyze results",
         ).stdout
+
         results_json_path = os.path.join(self.path, "results.latest.json")
 
         if not os.path.exists(results_json_path):

@@ -84,6 +84,8 @@ tests:
         machine_type: a3-mega
       - scheduler: gke
         machine_type: a4x
+      - scheduler: gke
+        machine_type: a4x-max
 
   - name: nccl-cluster
     platforms:
@@ -103,6 +105,8 @@ tests:
         machine_type: a3-mega
       - scheduler: gke
         machine_type: a4x
+      - scheduler: gke
+        machine_type: a4x-max
 
   - name: nccl-pairwise
     platforms:
@@ -122,6 +126,8 @@ tests:
         machine_type: a3-mega
       - scheduler: gke
         machine_type: a4x
+      - scheduler: gke
+        machine_type: a4x-max
 
   - name: stream
     platforms:
