@@ -75,7 +75,7 @@ podAntiAffinity:
             return ""
         if scheduler == "slurm":
             return ",".join(nodes)
-        elif scheduler == "gke":
+        elif scheduler == "kubernetes":
             return "\n".join(
                 [TestHelper._yaml_block(f"- {n}", 12) for n in nodes]
             )
@@ -178,7 +178,7 @@ podAntiAffinity:
         extra_context: dict = None,
         extra_sbatch_headers: dict = None,
     ) -> dict:
-        scheduler = ctx_vars.get("scheduler", "gke")
+        scheduler = ctx_vars.get("scheduler", "kubernetes")
         machine_type = ctx_vars.get("machine_type", "a3-ultragpu-8g")
 
         context_dict = {
@@ -200,7 +200,7 @@ podAntiAffinity:
             ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
                 headers_dict
             )
-        elif scheduler == "gke":
+        elif scheduler == "kubernetes":
             nodes_list = ctx_vars.get("nodes")
             nodes_list = nodes_list if isinstance(nodes_list, list) else None
             TestHelper._k8s_settings(ctx_vars, nodes_str, nodes_list=nodes_list)
@@ -217,7 +217,7 @@ podAntiAffinity:
         default_config_file: str = None,
     ) -> dict:
         ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "gke")
+        scheduler = ctx_vars.get("scheduler", "kubernetes")
 
         if nodes_list is not None:
             ctx_vars["nodes"] = nodes_list
@@ -251,7 +251,7 @@ podAntiAffinity:
         extra_sbatch_headers: dict = None,
     ) -> dict:
         ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "gke")
+        scheduler = ctx_vars.get("scheduler", "kubernetes")
 
         ctx_vars["node"] = ctx_vars.get("nodes")
 

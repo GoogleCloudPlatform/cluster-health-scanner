@@ -239,7 +239,7 @@ class TestRambleManager(unittest.TestCase):
         """Test _register_initial_run preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
-        mock_scheduler.name = "gke"
+        mock_scheduler.name = "kubernetes"
         manager._scheduler = mock_scheduler
 
         self.mock_app_data.get_run.return_value = {
@@ -253,13 +253,13 @@ class TestRambleManager(unittest.TestCase):
         updated_run = self.mock_app_data.update_run.call_args[0][1]
         self.assertTrue(updated_run.get("kueue_supported"))
         self.assertEqual(updated_run.get("custom_flag"), "yes")
-        self.assertEqual(updated_run.get("scheduler"), "gke")
+        self.assertEqual(updated_run.get("scheduler"), "kubernetes")
 
     def test_update_registry_preserves_custom_fields(self):
         """Test _update_registry preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
-        mock_scheduler.name = "gke"
+        mock_scheduler.name = "kubernetes"
         manager._scheduler = mock_scheduler
 
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
@@ -369,7 +369,9 @@ class TestRambleManager(unittest.TestCase):
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            self.mock_app_data.get_run.return_value = {"scheduler": "gke"}
+            self.mock_app_data.get_run.return_value = {
+                "scheduler": "kubernetes"
+            }
             with mock.patch("chs.ramble_manager.get_scheduler"):
                 with (
                     mock.patch.object(
@@ -390,7 +392,9 @@ class TestRambleManager(unittest.TestCase):
 
                                 mock_boh_gen.assert_called_once()
                                 _, kwargs = mock_boh_gen.call_args
-                                self.assertEqual(kwargs["cluster_type"], "gke")
+                                self.assertEqual(
+                                    kwargs["cluster_type"], "kubernetes"
+                                )
                                 mock_cancel.assert_called_once()
                                 mock_cleanup.assert_called_once()
 

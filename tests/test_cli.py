@@ -109,6 +109,10 @@ class TestCli(unittest.TestCase):
         self.mock_get_scheduler = self.enterContext(
             mock.patch("chs.cli.get_scheduler", autospec=True)
         )
+        self.mock_detect_scheduler = self.enterContext(
+            mock.patch("chs.cli.detect_scheduler", autospec=True)
+        )
+        self.mock_detect_scheduler.return_value = "slurm"
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
@@ -178,7 +182,7 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch(
                 "chs.utils.tests.get_all_supported_schedulers",
-                return_value=["slurm", "gke"],
+                return_value=["slurm", "kubernetes"],
             )
         )
         self.enterContext(
@@ -209,7 +213,7 @@ class TestCli(unittest.TestCase):
                                 "dcgm",
                             ],
                         },
-                        "gke": {
+                        "kubernetes": {
                             "a3-megagpu-8g": [
                                 "t1",
                                 "t2",
@@ -454,8 +458,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -473,8 +475,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "t1,t2",
                 ],
@@ -494,8 +494,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "t1",
                 ],
@@ -515,8 +513,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "t1,",
                 ],
@@ -536,8 +532,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     ",t1",
                 ],
@@ -557,8 +551,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "t1,,t2",
                 ],
@@ -578,8 +570,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "t1, t2 ",
                 ],
@@ -599,8 +589,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "t1, t2 ,t3 ",
                 ],
@@ -620,8 +608,6 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--nodes",
                     "node1,node2",
                 ],
@@ -703,8 +689,6 @@ class TestCli(unittest.TestCase):
                 "run",
                 "--suite",
                 "suite1",
-                "--scheduler",
-                "slurm",
                 "--run-id",
                 "customrun",
             ],
@@ -740,9 +724,8 @@ class TestCli(unittest.TestCase):
                 "run",
                 "--suite",
                 "suite1",
-                "--scheduler",
-                "slurm",
                 "--dry-run",
+                "slurm",
             ],
             standalone_mode=False,
         )
@@ -829,7 +812,7 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run", "-sch", "slurm"],
+            ["run"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Mock failure", result.output)
@@ -848,24 +831,26 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run", "-s", "s1", "-sch", "gke"],
+            ["run", "-s", "s1"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("CHS execution failed", result.output)
         self.assertIn("Permission denied", result.output)
         self.mock_rm_instance.archive.assert_called_once()
 
+    @mock.patch("chs.cli.detect_scheduler")
     @mock.patch("chs.cli.get_scheduler")
     @mock.patch("chs.cli.analyze_action", autospec=True)
     def test_run_command_passes_nodepool_to_scheduler(
-        self, mock_analyze_action, mock_get_scheduler
+        self, mock_analyze_action, mock_get_scheduler, mock_detect_scheduler
     ):
         """Test that nodepools argument is passed to get_scheduler."""
+        mock_detect_scheduler.return_value = "kubernetes"
         self.mock_app_data.get_workspaces_dir.return_value = (
             "/mocked/workspaces"
         )
         mock_scheduler = mock.Mock()
-        mock_scheduler.name = "gke"
+        mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
         mock_get_scheduler.return_value = mock_scheduler
@@ -874,8 +859,6 @@ class TestCli(unittest.TestCase):
             cli.cli,
             [
                 "run",
-                "--scheduler",
-                "gke",
                 "--nodepools",
                 "pool1",
             ],
@@ -902,7 +885,7 @@ class TestCli(unittest.TestCase):
         os.makedirs(os.path.join(ws_dir, "latest_run"), exist_ok=True)
 
         self.mock_rm_instance.check_jobs_running.return_value = True
-        result = self.runner.invoke(cli.cli, ["run", "-sch", "slurm"])
+        result = self.runner.invoke(cli.cli, ["run"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("The latest CHS run is still in progress", result.output)
 
@@ -913,7 +896,7 @@ class TestCli(unittest.TestCase):
             "a3-megagpu-8g",
             "a3-ultragpu-8g",
         ]
-        result = self.runner.invoke(cli.cli, ["run", "-sch", "slurm"])
+        result = self.runner.invoke(cli.cli, ["run"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
         self.assertIn("--partitions", result.output)
@@ -931,85 +914,30 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--tests",
                     "",
                 ],
                 expected_output="cannot be an empty string",
             ),
             _CommandErrorTestCase(
-                name="unknown_scheduler",
+                name="invalid_dry_run_scheduler",
                 args_list=[
                     "run",
                     "--suite",
                     "suite1",
-                    "--scheduler",
+                    "--dry-run",
                     "unknown",
                 ],
-                expected_output="Scheduler 'unknown' is not supported",
-            ),
-            _CommandErrorTestCase(
-                name="missing_scheduler",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "suite1",
-                ],
-                expected_output="Missing option '--scheduler'",
-            ),
-            _CommandErrorTestCase(
-                name="suite_missing_value",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "--scheduler",
-                    "gke",
-                ],
-                expected_output="Missing option '--scheduler' / '-sch'",
-            ),
-            _CommandErrorTestCase(
-                name="scheduler_missing_value",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "s1",
-                    "--scheduler",
-                    "--tests",
-                    "t1",
-                ],
-                expected_output="Got unexpected extra argument",
-            ),
-            _CommandErrorTestCase(
-                name="tests_missing_value",
-                args_list=[
-                    "run",
-                    "--tests",
-                    "--scheduler",  # Values for tests consumes scheduler flag
-                    "slurm",
-                    "--suite",
-                    "s1",
-                ],
-                expected_output="Missing option '--scheduler'",
+                expected_output=(
+                    "Invalid value for '--dry-run': 'unknown' "
+                    "is not one of 'slurm', 'kubernetes'"
+                ),
             ),
             _CommandErrorTestCase(
                 name="empty_suite",
                 args_list=[
                     "run",
                     "--suite",
-                    "",
-                    "--scheduler",
-                    "slurm",
-                ],
-                expected_output="cannot be an empty string",
-            ),
-            _CommandErrorTestCase(
-                name="empty_scheduler",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "suite1",
-                    "--scheduler",
                     "",
                 ],
                 expected_output="cannot be an empty string",
@@ -1018,10 +946,6 @@ class TestCli(unittest.TestCase):
                 name="run_id_empty",
                 args_list=[
                     "run",
-                    "--suite",
-                    "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--run-id",
                     "",
                 ],
@@ -1031,10 +955,6 @@ class TestCli(unittest.TestCase):
                 name="run_id_uppercase",
                 args_list=[
                     "run",
-                    "--suite",
-                    "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--run-id",
                     "Uppercase",
                 ],
@@ -1044,10 +964,6 @@ class TestCli(unittest.TestCase):
                 name="run_id_too_long",
                 args_list=[
                     "run",
-                    "--suite",
-                    "suite1",
-                    "--scheduler",
-                    "slurm",
                     "--run-id",
                     "a" * 21,
                 ],
@@ -1056,12 +972,7 @@ class TestCli(unittest.TestCase):
         ]
         for case in test_cases:
             with self.subTest(case.name):
-                if "slurm" in case.args_list:
-                    self.mock_scheduler.name = "slurm"
-                elif "gke" in case.args_list:
-                    self.mock_scheduler.name = "gke"
-                else:
-                    self.mock_scheduler.name = "mock_scheduler"
+                self.mock_scheduler.name = "slurm"
 
                 if case.name == "no_nodes_provided":
                     self.mock_scheduler.get_nodes_under_test.return_value = []
@@ -1445,7 +1356,7 @@ class TestCliHistory(unittest.TestCase):
                     "run2": {
                         "run_id": "run2",
                         "submission_time": "2023-01-02T12:00:00Z",
-                        "command_statement": "chs run --scheduler gke",
+                        "command_statement": "chs run --dry-run kubernetes",
                     },
                 },
                 expected_strings=[
@@ -1453,8 +1364,8 @@ class TestCliHistory(unittest.TestCase):
                     "Details",
                     "run1",
                     "run2",
-                    "chs run --scheduler slurm",
-                    "chs run --scheduler gke",
+                    "chs run",
+                    "chs run --dry-run kubernetes",
                 ],
                 unexpected_strings=["Alias", "my_alias", "alias not set"],
             ),

@@ -92,7 +92,7 @@ class Chs(ExecutableApplication):
         "scheduler",
         default="slurm",
         description="Scheduler for the suite",
-        values=["slurm", "gke"],
+        values=["slurm", "kubernetes"],
     )
 
     variable(
@@ -136,12 +136,12 @@ class Chs(ExecutableApplication):
             with open(common_cfg_path, "r") as f:
                 configs = yaml.load(f) or {}
 
-        if scheduler == "gke":
-            gke_cfg_path = os.path.join(configs_dir, "gke.yaml")
-            if os.path.exists(gke_cfg_path):
-                with open(gke_cfg_path, "r") as f:
-                    gke_configs = yaml.load(f) or {}
-                self._deep_merge(configs, gke_configs)
+        if scheduler == "kubernetes":
+            kubernetes_cfg_path = os.path.join(configs_dir, "kubernetes.yaml")
+            if os.path.exists(kubernetes_cfg_path):
+                with open(kubernetes_cfg_path, "r") as f:
+                    kubernetes_configs = yaml.load(f) or {}
+                self._deep_merge(configs, kubernetes_configs)
 
         elif scheduler == "slurm":
             slurm_cfg_path = os.path.join(configs_dir, "slurm.yaml")

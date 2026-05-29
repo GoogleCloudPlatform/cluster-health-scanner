@@ -52,8 +52,14 @@ class TestValidators(unittest.TestCase):
                             "scheduler": "slurm",
                             "machine_type": "a3-ultragpu-8g",
                         },
-                        {"scheduler": "gke", "machine_type": "a3-megagpu-8g"},
-                        {"scheduler": "gke", "machine_type": "a3-ultragpu-8g"},
+                        {
+                            "scheduler": "kubernetes",
+                            "machine_type": "a3-megagpu-8g",
+                        },
+                        {
+                            "scheduler": "kubernetes",
+                            "machine_type": "a3-ultragpu-8g",
+                        },
                     ],
                 }
             ]
@@ -189,7 +195,7 @@ class TestValidators(unittest.TestCase):
             {
                 "suite": "unknown_suite",
                 "tests": ["unknown_test"],
-                "scheduler": "gke",
+                "scheduler": "kubernetes",
                 "machine_type": "a3-megagpu-8g",
             }
         )
@@ -319,16 +325,19 @@ class TestValidators(unittest.TestCase):
     def test_homogeneity_validator_valid(self):
         v = validators.HomogeneityValidator()
         errors = v.validate(
-            {"detected_machine_types": ["a3-megagpu-8g"], "scheduler": "gke"}
+            {
+                "detected_machine_types": ["a3-megagpu-8g"],
+                "scheduler": "kubernetes",
+            }
         )
         self.assertEqual(errors, [])
 
-    def test_homogeneity_validator_invalid_gke(self):
+    def test_homogeneity_validator_invalid_kubernetes(self):
         v = validators.HomogeneityValidator()
         errors = v.validate(
             {
                 "detected_machine_types": ["a3-megagpu-8g", "a3-ultragpu-8g"],
-                "scheduler": "gke",
+                "scheduler": "kubernetes",
             }
         )
         self.assertEqual(len(errors), 1)

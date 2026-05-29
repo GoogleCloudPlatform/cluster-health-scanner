@@ -14,10 +14,14 @@
 
 """Module for managing cluster schedulers."""
 
+import os
+import shutil
+
+from chs.exceptions import ChsSchedulerException
 from chs.schedulers.base import BaseScheduler
 from chs.schedulers.default import DefaultScheduler
 from chs.schedulers.slurm import SlurmScheduler
-from chs.schedulers.gke import GKEScheduler
+from chs.schedulers.kubernetes import KubernetesScheduler
 
 
 def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
@@ -30,10 +34,42 @@ def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
             partitions=kwargs.get("partitions"),
             app_data=app_data,
         )
-    if scheduler == "gke":
-        return GKEScheduler(
+    if scheduler == "kubernetes":
+        return KubernetesScheduler(
             nodes=kwargs.get("nodes"),
             nodepools=kwargs.get("nodepools"),
             app_data=app_data,
         )
     return DefaultScheduler(scheduler, app_data=app_data)
+
+
+def _has_kubeconfig() -> bool:
+    """Checks if a valid kubeconfig exists on the system."""
+    kubeconfig = os.environ.get("KUBECONFIG")
+    if kubeconfig:
+        for path in kubeconfig.split(os.pathsep):
+            if os.path.exists(os.path.expanduser(path.strip())):
+                return True
+        return False
+    return os.path.exists(os.path.expanduser("~/.kube/config"))
+
+
+def detect_scheduler() -> str:
+    """Detects the active scheduler by verifying connectivity."""
+
+    if shutil.which("sinfo") and shutil.which("squeue"):
+        return "slurm"
+
+    if (
+        os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token")
+        or "KUBERNETES_SERVICE_HOST" in os.environ
+    ):
+        return "kubernetes"
+
+    if shutil.which("kubectl") and _has_kubeconfig():
+        return "kubernetes"
+
+    raise ChsSchedulerException(
+        "Auto-detection failed: No active Slurm or Kubernetes "
+        "environment detected."
+    )

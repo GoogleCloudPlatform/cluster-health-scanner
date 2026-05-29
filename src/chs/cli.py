@@ -42,6 +42,7 @@ from chs import (
     ChsAppData,
     RambleManager,
     ResultsViewer,
+    detect_scheduler,
     exceptions as ex,
     get_scheduler,
     load_suite,
@@ -734,13 +735,6 @@ def list_command(
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--scheduler",
-    "-sch",
-    required=True,
-    help="Scheduler to use (e.g., slurm, gke)",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
     "--tests",
     "-t",
     help="Comma-separated list of specific tests to run (optional)",
@@ -758,7 +752,7 @@ def list_command(
 )
 @click.option(
     "--nodepools",
-    help="GKE node pools to run on",
+    help="Kubernetes node pools to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
@@ -768,8 +762,8 @@ def list_command(
 )
 @click.option(
     "--dry-run",
-    is_flag=True,
-    help="Set up the workspace but do not execute experiments or analyze.",
+    type=click.Choice(["slurm", "kubernetes"]),
+    help="Set up the workspace for the specified scheduler but do not execute.",
 )
 @click.option(
     "--validation",
@@ -794,13 +788,12 @@ def run(
     obj,
     *,
     suite: str | None,
-    scheduler: str,
     tests: str | None,
     nodes: str | None,
     nodelists: str | None,
     nodepools: str | None,
     partitions: str | None,
-    dry_run: bool,
+    dry_run: str | None,
     validation: str | None = None,
     skip_validation: bool = False,
     run_id: str | None = None,
@@ -810,11 +803,10 @@ def run(
     \b
     Args:
       suite: Name of the test suite to run.
-      scheduler: Scheduler to use (e.g., slurm, gke).
       tests: Comma-separated list of specific tests to run (optional).
       nodes: Comma-separated list of individual nodes to run on.
       nodelists: Slurm node list pattern to run on (e.g., node-[1-3]).
-      nodepools: GKE node pools to run on.
+      nodepools: Kubernetes node pools to run on.
       partitions: Slurm partitions to run on.
       dry_run: Set up the workspace but do not execute experiments or analyze.
 
@@ -827,6 +819,12 @@ def run(
             "The latest CHS run is still in progress. Please wait for it to"
             " complete or cancel it before submitting a new run."
         )
+
+    is_dry_run = dry_run is not None
+    if is_dry_run:
+        scheduler = dry_run
+    else:
+        scheduler = detect_scheduler()
 
     preflights.run_platform_preflights()
 
@@ -935,7 +933,7 @@ def run(
     logger.info("Run ID: %s", run_id)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
-    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not is_dry_run):
         job_ids = run_action(
             suite=suite,
             scheduler_obj=scheduler_obj,
@@ -943,7 +941,7 @@ def run(
             workspace_name=workspace_name,
             workspaces_base_dir=workspaces_base_dir,
             machine_type=machine_type,
-            dry_run=dry_run,
+            dry_run=is_dry_run,
             timeout=timeout,
             deadline=deadline,
             validation=validation,
@@ -981,7 +979,7 @@ def run(
             },
         )
 
-        if dry_run:
+        if is_dry_run:
             logger.info("Dry run completed. Workspace setup is ready.")
             return result
 
@@ -1126,8 +1124,7 @@ def history(obj) -> None:
         command_statement = run.get("command_statement", "")
         if not command_statement:
             # Reconstruct for old runs or runs without stored statement
-            scheduler = run.get("scheduler", "unknown")
-            command_statement = f"chs run --scheduler {scheduler}"
+            command_statement = "chs run"
 
         click.echo(f"{run_id:<30} {command_statement}")
 

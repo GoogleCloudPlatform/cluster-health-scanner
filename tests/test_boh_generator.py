@@ -111,10 +111,10 @@ class TestBOHGenerator(unittest.TestCase):
         report = generator.generate()
         self.assertEqual(report.system_info.type, "SLURM_CLUSTER")
 
-        # Test GKE
-        generator = BOHGenerator(self.test_json_path, cluster_type="gke")
+        # Test Kubernetes
+        generator = BOHGenerator(self.test_json_path, cluster_type="kubernetes")
         report = generator.generate()
-        self.assertEqual(report.system_info.type, "GKE_CLUSTER")
+        self.assertEqual(report.system_info.type, "KUBERNETES_CLUSTER")
 
         # Test custom
         generator = BOHGenerator(self.test_json_path, cluster_type="custom")

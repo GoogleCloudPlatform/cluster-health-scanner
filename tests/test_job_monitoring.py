@@ -24,7 +24,7 @@ MOCK_MODULES = {
 
 with patch.dict("sys.modules", MOCK_MODULES):
     from chs.ramble_manager import RambleManager  # noqa: E402
-    from chs.schedulers.gke import GKEScheduler  # noqa: E402
+    from chs.schedulers.kubernetes import KubernetesScheduler  # noqa: E402
     from chs.schedulers.slurm import SlurmScheduler  # noqa: E402
 
 
@@ -37,8 +37,9 @@ class TestJobMonitoring(unittest.TestCase):
                 workspace_name="test_run",
                 run_command=self.mock_run_command,
             )
-        # Default to GKE for existing tests, can override in specific tests
-        self.manager._scheduler = GKEScheduler()
+        # Default to Kubernetes for existing tests, can override in
+        # specific tests
+        self.manager._scheduler = KubernetesScheduler()
 
     @patch("chs.ramble_manager.get_scheduler")
     @patch("chs.ramble_manager.RambleManager.get_job_ids")
@@ -86,7 +87,7 @@ class TestJobMonitoring(unittest.TestCase):
     @patch("chs.ramble_manager.RambleManager.get_job_ids")
     @patch("chs.ramble_manager.RambleManager._map_jobs_to_log_paths")
     @patch("time.sleep")
-    def test_monitor_jobs_fetches_logs_gke(
+    def test_monitor_jobs_fetches_logs_kubernetes(
         self, mock_sleep, mock_map, mock_get_job_ids, mock_get_scheduler
     ):
         # Setup
@@ -193,9 +194,9 @@ class TestJobMonitoring(unittest.TestCase):
         # Should NOT have called fetch_job_log (no map)
         mock_scheduler.fetch_job_log.assert_not_called()
 
-    def test_gke_scheduler_get_nodes_under_test(self):
-        # Quick test for GKE scheduler node resolution
-        scheduler = GKEScheduler(nodes="node1,node2")
+    def test_kubernetes_scheduler_get_nodes_under_test(self):
+        # Quick test for Kubernetes scheduler node resolution
+        scheduler = KubernetesScheduler(nodes="node1,node2")
         self.assertEqual(scheduler.get_nodes_under_test(), ["node1", "node2"])
 
 

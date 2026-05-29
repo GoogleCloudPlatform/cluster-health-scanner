@@ -1,10 +1,9 @@
+description: Tests the 'dcgm' test against a slurm scheduler for a3-mega
 command:
 - run
 - --tests
 - dcgm
-- --scheduler
-- slurm
 - --nodes
 - node1,node2
 - --dry-run
-description: Tests the 'dcgm' test against a slurm scheduler for a3-mega
+- slurm

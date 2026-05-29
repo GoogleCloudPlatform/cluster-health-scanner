@@ -41,7 +41,7 @@ class HomogeneityValidator(Validator):
                 "homogeneous set of nodes.",
                 f"Detected machine types: {', '.join(detected_machine_types)}",
             ]
-            if scheduler == "gke":
+            if scheduler == "kubernetes":
                 error_msg.append(
                     "Please target a homogeneous subset using: "
                     "--nodepools <pool_names> or --nodes <node_names>"

@@ -162,7 +162,7 @@ class TestTestHelper(unittest.TestCase):
 
     def test_prepare_cluster_context(self):
         variables = {
-            "scheduler": "gke",
+            "scheduler": "kubernetes",
             "machine_type": "tpu7x",
         }
         configs = {
@@ -214,7 +214,7 @@ class TestTestHelper(unittest.TestCase):
 
     def test_tpu_collectives_single_node_test(self):
         variables = {
-            "scheduler": "gke",
+            "scheduler": "kubernetes",
             "machine_type": "tpuv6e",
             "tpu_topology": "4x4",
             "cores_per_chip": 1,

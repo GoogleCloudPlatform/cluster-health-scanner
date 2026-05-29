@@ -79,7 +79,7 @@ class TestApplicationHelper(unittest.TestCase):
     def test_deep_merge_cases(self):
         # For _deep_merge(dest, src):
         #    - dest: Base configuration (common.yaml).
-        #    - src: Overriding configuration (gke.yaml or slurm.yaml).
+        #    - src: Overriding configuration (kubernetes.yaml or slurm.yaml).
         chs_app = Chs()
 
         circular_src = {}
@@ -169,7 +169,7 @@ class TestApplicationHelper(unittest.TestCase):
         # For TestHelper._merge_configs(context_dict, configs, ...):
         #    - context_dict (dest): Suite variables (higher precedence).
         #    - configs (src): Default configurations from deep_merge of
-        #     common.yaml with gke.yaml or slurm.yaml (lower precedence).
+        #     common.yaml with kubernetes.yaml or slurm.yaml (lower precedence).
         test_cases = [
             _MergeConfigsTestCase(
                 name="precedence",

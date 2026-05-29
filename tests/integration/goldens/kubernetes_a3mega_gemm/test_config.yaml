@@ -1,0 +1,9 @@
+description: Tests the 'gemm' test against a kubernetes scheduler for a3-mega
+command:
+- run
+- --tests
+- gemm
+- --nodes
+- node1,node2
+- --dry-run
+- kubernetes

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kueue resource management module for GKE scheduler."""
+"""Kueue resource management module for Kubernetes scheduler."""
 
 import importlib.resources as pkg_resources
 import logging

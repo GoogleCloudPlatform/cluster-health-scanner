@@ -1,10 +1,9 @@
+description: Tests the 'gemm' test against a slurm scheduler for a4
 command:
 - run
 - --tests
 - gemm
-- --scheduler
-- slurm
 - --nodes
 - node1,node2
 - --dry-run
-description: Tests the 'gemm' test against a slurm scheduler for a4
+- slurm

@@ -22,8 +22,10 @@ import unittest
 import json
 from unittest import mock
 from chs.schedulers.default import DefaultScheduler
-from chs.schedulers.gke import GKEScheduler
+from chs.schedulers.kubernetes import KubernetesScheduler
 from chs.schedulers.slurm import SlurmScheduler
+from chs.schedulers import detect_scheduler
+from chs.exceptions import ChsSchedulerException
 import click
 from chs import exceptions as ex
 
@@ -190,25 +192,25 @@ class TestDefaultScheduler(unittest.TestCase):
     """Tests for DefaultScheduler."""
 
     def test_name(self):
-        scheduler = DefaultScheduler("gke", app_data=mock.Mock())
-        self.assertEqual(scheduler.name, "gke")
+        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
+        self.assertEqual(scheduler.name, "kubernetes")
 
     def test_get_nodes_under_test(self):
-        scheduler = DefaultScheduler("gke", app_data=mock.Mock())
+        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
         self.assertEqual(scheduler.get_nodes_under_test(), [])
 
     def test_check_jobs_running(self):
-        scheduler = DefaultScheduler("gke", app_data=mock.Mock())
+        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
         self.assertFalse(scheduler.check_jobs_running(["123"]))
 
     def test_parse_job_ids(self):
-        scheduler = DefaultScheduler("gke", app_data=mock.Mock())
+        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
         self.assertEqual(scheduler.parse_job_ids("output"), [])
 
 
-@mock.patch("chs.schedulers.gke.logger")
-class TestGKEScheduler(unittest.TestCase):
-    """Tests for GKEScheduler."""
+@mock.patch("chs.schedulers.kubernetes.logger")
+class TestKubernetesScheduler(unittest.TestCase):
+    """Tests for KubernetesScheduler."""
 
     def setUp(self):
         super().setUp()
@@ -220,25 +222,25 @@ class TestGKEScheduler(unittest.TestCase):
 
     def test_init(self, mock_logger):
         """Test initialization."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodes="node1,node2", app_data=self.mock_app_data
         )
-        self.assertEqual(scheduler.name, "gke")
+        self.assertEqual(scheduler.name, "kubernetes")
         self.assertEqual(scheduler.nodes_arg, "node1,node2")
         self.assertIsNone(scheduler.nodepools_arg)
 
     def test_init_nodepool(self, mock_logger):
         """Test initialization with nodepools."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodepools="pool-1", app_data=self.mock_app_data
         )
-        self.assertEqual(scheduler.name, "gke")
+        self.assertEqual(scheduler.name, "kubernetes")
         self.assertIsNone(scheduler.nodes_arg)
         self.assertEqual(scheduler.nodepools_arg, "pool-1")
 
     def test_get_nodes_under_test(self, mock_logger):
         """Test get_nodes_under_test returns parsed nodes."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodes="node1, node2 ", app_data=self.mock_app_data
         )
         self.assertEqual(scheduler.get_nodes_under_test(), ["node1", "node2"])
@@ -246,7 +248,7 @@ class TestGKEScheduler(unittest.TestCase):
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_empty(self, mock_run, mock_logger):
         """Test get_nodes_under_test returns empty list if no nodes."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
 
         self.assertEqual(scheduler.get_nodes_under_test(), [])
@@ -254,7 +256,7 @@ class TestGKEScheduler(unittest.TestCase):
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_nodepool(self, mock_run, mock_logger):
         """Test get_nodes_under_test uses nodepools to fetch nodes."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodepools="pool-1", app_data=self.mock_app_data
         )
         mock_run.return_value.stdout = "node-1 node-2"
@@ -271,7 +273,7 @@ class TestGKEScheduler(unittest.TestCase):
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_nodes_precedence(self, mock_run, mock_logger):
         """Test nodes arg takes precedence over nodepools."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodes="node-1", nodepools="pool-1", app_data=self.mock_app_data
         )
 
@@ -282,14 +284,16 @@ class TestGKEScheduler(unittest.TestCase):
 
     def test_write_ramble_config(self, mock_logger):
         """Test write_ramble_config generates correct YAML."""
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
         os.makedirs(workspace_config_dir, exist_ok=True)
 
         mock_template_content = """
 ramble:
   variants:
-    workflow_manager: gke-suite-configs
+    workflow_manager: kubernetes-jobset
   variables:
     nodes: {nodes}
     machine_type: {machine_type}
@@ -298,11 +302,11 @@ ramble:
     all_interfaces_json: {all_interfaces_json}
 """
         with mock.patch.object(
-            GKEScheduler,
+            KubernetesScheduler,
             "_discover_networks",
             return_value=(["default", "gvnic-1"], ["gpu-net-1"]),
         ):
-            with mock.patch("chs.schedulers.gke.pkg_resources.as_file"):
+            with mock.patch("chs.schedulers.kubernetes.pkg_resources.as_file"):
                 with mock.patch(
                     "builtins.open",
                     mock.mock_open(read_data=mock_template_content),
@@ -313,10 +317,12 @@ ramble:
 
     def test_write_ramble_config_integration(self, mock_logger):
         """Integration-like test for write_ramble_config using real template."""
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
         os.makedirs(workspace_config_dir, exist_ok=True)
-        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        template_path = os.path.join(self.tmp_dir, "kubernetes_template.yaml")
         with open(template_path, "w") as f:
             f.write("""
 ramble:
@@ -334,12 +340,12 @@ ramble:
             yield template_path
 
         with mock.patch.object(
-            GKEScheduler,
+            KubernetesScheduler,
             "_discover_networks",
             return_value=(["default"], ["rdma-0"]),
         ):
             with mock.patch(
-                "chs.schedulers.gke.pkg_resources.as_file",
+                "chs.schedulers.kubernetes.pkg_resources.as_file",
                 side_effect=mock_as_file_func,
             ):
                 scheduler.write_ramble_config(
@@ -367,10 +373,12 @@ ramble:
 
     def test_write_ramble_config_with_timeout(self, mock_logger):
         """Test write_ramble_config injects timeout and deadline."""
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
         os.makedirs(workspace_config_dir, exist_ok=True)
-        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        template_path = os.path.join(self.tmp_dir, "kubernetes_template.yaml")
         with open(template_path, "w") as f:
             f.write("""
 ramble:
@@ -390,12 +398,12 @@ ramble:
             yield template_path
 
         with mock.patch.object(
-            GKEScheduler,
+            KubernetesScheduler,
             "_discover_networks",
             return_value=(["default"], ["rdma-0"]),
         ):
             with mock.patch(
-                "chs.schedulers.gke.pkg_resources.as_file",
+                "chs.schedulers.kubernetes.pkg_resources.as_file",
                 side_effect=mock_as_file_func,
             ):
                 scheduler.write_ramble_config(
@@ -416,12 +424,14 @@ ramble:
         self.assertEqual(variables["timeout"], 600)
         self.assertEqual(variables["deadline"], 1800)
 
-    @mock.patch("chs.schedulers.gke.KueueManager")
+    @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_setup_scheduler_resources_kueue_success(
         self, mock_kueue_mgr_class, mock_logger
     ):
         """Test setup_scheduler_resources caches labels on success."""
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         scheduler.kueue_supported = True
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
 
@@ -446,14 +456,16 @@ ramble:
         )
         self.assertEqual(scheduler._suspend_jobset, "true")
 
-    @mock.patch("chs.schedulers.gke.KueueManager")
+    @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_setup_scheduler_resources_kueue_fallback(
         self, mock_kueue_mgr_class, mock_logger
     ):
         """Test setup_scheduler_resources falls back if Kueue setup fails."""
         from chs.exceptions import KueueException
 
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         scheduler.kueue_supported = True
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
 
@@ -478,13 +490,15 @@ ramble:
 
     def test_write_ramble_config_uses_cached_labels(self, mock_logger):
         """Test write_ramble_config writes cached properties."""
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         scheduler._jobset_labels_yaml = "kueue/queue: local-q"
         scheduler._suspend_jobset = "true"
 
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
         os.makedirs(workspace_config_dir, exist_ok=True)
-        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        template_path = os.path.join(self.tmp_dir, "kubernetes_template.yaml")
         with open(template_path, "w") as f:
             f.write("""
 ramble:
@@ -503,12 +517,12 @@ ramble:
             yield template_path
 
         with mock.patch.object(
-            GKEScheduler,
+            KubernetesScheduler,
             "_discover_networks",
             return_value=(["default"], ["rdma-0"]),
         ):
             with mock.patch(
-                "chs.schedulers.gke.pkg_resources.as_file",
+                "chs.schedulers.kubernetes.pkg_resources.as_file",
                 side_effect=mock_as_file_func,
             ):
                 scheduler.write_ramble_config(
@@ -532,7 +546,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_discover_networks_success(self, mock_run, mock_logger):
         """Test _discover_networks with success and grouping."""
-        scheduler = GKEScheduler()
+        scheduler = KubernetesScheduler()
         mock_run.return_value.stdout = json.dumps(
             {
                 "items": [
@@ -563,7 +577,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_discover_networks_failure(self, mock_run, mock_logger):
         """Test _discover_networks with failure."""
-        scheduler = GKEScheduler()
+        scheduler = KubernetesScheduler()
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
 
         networks = scheduler._discover_networks()
@@ -573,7 +587,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_discover_networks_no_default(self, mock_run, mock_logger):
         """Test _discover_networks fails if default L3 network is missing."""
-        scheduler = GKEScheduler()
+        scheduler = KubernetesScheduler()
         mock_run.return_value.stdout = json.dumps(
             {
                 "items": [
@@ -591,7 +605,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_discover_networks_malformed_items(self, mock_run, mock_logger):
         """Test _discover_networks handles non-list items field."""
-        scheduler = GKEScheduler()
+        scheduler = KubernetesScheduler()
         mock_run.return_value.stdout = json.dumps({"items": "not-a-list"})
         networks_l3, networks_device = scheduler._discover_networks()
         self.assertEqual(networks_l3, [])
@@ -606,10 +620,12 @@ ramble:
     ):
         """Test write_ramble_config network discovery fallback."""
         mock_run.return_value.stdout = "{}"
-        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(
+            nodes="node1", app_data=self.mock_app_data
+        )
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
         os.makedirs(workspace_config_dir, exist_ok=True)
-        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        template_path = os.path.join(self.tmp_dir, "kubernetes_template.yaml")
         with open(template_path, "w") as f:
             f.write("""
 ramble:
@@ -627,10 +643,10 @@ ramble:
             yield template_path
 
         with mock.patch.object(
-            GKEScheduler, "_discover_networks", return_value=([], [])
+            KubernetesScheduler, "_discover_networks", return_value=([], [])
         ):
             with mock.patch(
-                "chs.schedulers.gke.pkg_resources.as_file",
+                "chs.schedulers.kubernetes.pkg_resources.as_file",
                 side_effect=mock_as_file_func,
             ):
                 scheduler.write_ramble_config(
@@ -656,7 +672,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_get_topology(self, mock_run, mock_logger):
         """Test get_topology returns mapped nodes."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodes="node1,node2", app_data=self.mock_app_data
         )
 
@@ -692,7 +708,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_get_topology_missing_label(self, mock_run, mock_logger):
         """Test get_topology falls back to default-block."""
-        scheduler = GKEScheduler(
+        scheduler = KubernetesScheduler(
             nodes="node1,node2", app_data=self.mock_app_data
         )
 
@@ -720,12 +736,12 @@ ramble:
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
-    @mock.patch("chs.schedulers.gke.KueueManager")
+    @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_cleanup_scheduler_resources(
         self, mock_kueue_mgr_class, mock_logger
     ):
         """Test cleanup_scheduler_resources invokes KueueManager."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = os.path.join(tmpdir, "configs")
             os.makedirs(config_dir, exist_ok=True)
@@ -741,12 +757,12 @@ ramble:
             mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
             mock_kueue_mgr_instance.cleanup.assert_called_once_with(config_path)
 
-    @mock.patch("chs.schedulers.gke.KueueManager")
+    @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_cleanup_scheduler_resources_file_backstop(
         self, mock_kueue_mgr_class, mock_logger
     ):
         """Test cleanup_scheduler_resources cleans up statelessly."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = os.path.join(tmpdir, "configs")
             os.makedirs(config_dir, exist_ok=True)
@@ -769,7 +785,7 @@ ramble:
     @mock.patch("subprocess.run")
     def test_cancel_jobs_deletes_secrets(self, mock_run, mock_logger):
         """Test that _cancel_jobs deletes associated secrets."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         mock_run.return_value.stdout = ""
 
         scheduler._cancel_jobs(["job1", "job2"])
@@ -786,7 +802,7 @@ ramble:
         self, mock_run, mock_logger
     ):
         """Test that cleanup_scheduler_resources deletes secrets."""
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
 
         run_entry = {
             "job_entries": {
@@ -806,8 +822,8 @@ ramble:
         self.assertIn("job2-ssh", args)
 
     @mock.patch("subprocess.run")
-    def test_resolve_project_id_gke_success(self, mock_run, mock_logger):
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+    def test_resolve_project_id_kubernetes_success(self, mock_run, mock_logger):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         mock_run.return_value.stdout = "gce://my-project-id/us-central1-a/node1"
         project_id = scheduler._resolve_project_id("node1")
         self.assertEqual(project_id, "my-project-id")
@@ -827,8 +843,10 @@ ramble:
         )
 
     @mock.patch("subprocess.run")
-    def test_resolve_project_id_gke_invalid_format(self, mock_run, mock_logger):
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+    def test_resolve_project_id_kubernetes_invalid_format(
+        self, mock_run, mock_logger
+    ):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         mock_run.return_value.stdout = "invalid-format"
         with self.assertRaisesRegex(
             ex.ChsSchedulerException, "Unexpected providerID format"
@@ -836,8 +854,8 @@ ramble:
             scheduler._resolve_project_id("node1")
 
     @mock.patch("subprocess.run")
-    def test_resolve_project_id_gke_error(self, mock_run, mock_logger):
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+    def test_resolve_project_id_kubernetes_error(self, mock_run, mock_logger):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
         with self.assertRaisesRegex(
             ex.ChsSchedulerException, "Failed to resolve project ID"
@@ -846,7 +864,7 @@ ramble:
 
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
     def test_detect_nodes_hardware_success(self, mock_query_info, mock_logger):
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -871,7 +889,7 @@ ramble:
     def test_detect_nodes_hardware_heterogeneous(
         self, mock_query_info, mock_logger
     ):
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -890,7 +908,7 @@ ramble:
 
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
     def test_detect_nodes_hardware_unknown(self, mock_query_info, mock_logger):
-        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -903,6 +921,106 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
             self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
+
+
+class TestSchedulerDetection(unittest.TestCase):
+    """Tests for detect_scheduler function."""
+
+    @mock.patch("shutil.which")
+    def test_detect_slurm_success(self, mock_which):
+        """Test that Slurm is detected if sinfo/squeue exist."""
+        mock_which.side_effect = lambda cmd: cmd in ["sinfo", "squeue"]
+
+        scheduler = detect_scheduler()
+        self.assertEqual(scheduler, "slurm")
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    def test_detect_kubernetes_in_cluster(self, mock_exists, mock_which):
+        """Test K8s detected in-cluster if token exists (and Slurm not
+        found).
+        """
+        # Slurm not found
+        mock_which.return_value = False
+
+        # In-cluster token exists
+        mock_exists.side_effect = (
+            lambda p: p == "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        )
+
+        scheduler = detect_scheduler()
+        self.assertEqual(scheduler, "kubernetes")
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {}, clear=True)
+    def test_detect_kubernetes_out_of_cluster(self, mock_exists, mock_which):
+        """Test K8s detected out-of-cluster if kubeconfig exists."""
+        # Slurm not found, kubectl found
+        mock_which.side_effect = lambda cmd: cmd == "kubectl"
+
+        # kubeconfig exists
+        mock_exists.side_effect = lambda p: p == os.path.expanduser(
+            "~/.kube/config"
+        )
+
+        scheduler = detect_scheduler()
+        self.assertEqual(scheduler, "kubernetes")
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {"KUBECONFIG": "/some/path"})
+    def test_detect_kubernetes_out_of_cluster_env(
+        self, mock_exists, mock_which
+    ):
+        """Test K8s detected out-of-cluster if KUBECONFIG env is set and
+        file exists.
+        """
+        # Slurm not found, kubectl found
+        mock_which.side_effect = lambda cmd: cmd == "kubectl"
+        mock_exists.side_effect = lambda p: p == "/some/path"
+
+        scheduler = detect_scheduler()
+        self.assertEqual(scheduler, "kubernetes")
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {"KUBECONFIG": "/path1:/path2"})
+    def test_detect_kubernetes_out_of_cluster_env_multi(
+        self, mock_exists, mock_which
+    ):
+        """Test K8s detected if KUBECONFIG has multiple paths and one exists."""
+        # Slurm not found, kubectl found
+        mock_which.side_effect = lambda cmd: cmd == "kubectl"
+        # /path2 exists, /path1 does not
+        mock_exists.side_effect = lambda p: p == "/path2"
+
+        scheduler = detect_scheduler()
+        self.assertEqual(scheduler, "kubernetes")
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {"KUBECONFIG": "/path1:/path2"})
+    def test_detect_kubernetes_out_of_cluster_env_multi_fail(
+        self, mock_exists, mock_which
+    ):
+        """Test K8s not detected if KUBECONFIG has paths but none exist."""
+        # Slurm not found, kubectl found
+        mock_which.side_effect = lambda cmd: cmd == "kubectl"
+        mock_exists.return_value = False
+
+        with self.assertRaises(ChsSchedulerException):
+            detect_scheduler()
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    def test_detect_scheduler_fail(self, mock_exists, mock_which):
+        """Test that ChsSchedulerException is raised if all checks fail."""
+        mock_which.return_value = False
+        mock_exists.return_value = False
+
+        with self.assertRaises(ChsSchedulerException):
+            detect_scheduler()
 
 
 if __name__ == "__main__":

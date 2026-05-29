@@ -42,9 +42,9 @@ EOF
 cat "${ENROOT_CONFIG_CREDENTIALS}"
 ```
 
-### GKE Configuration
+### Kubernetes Configuration
 
-To run tests on GKE, you first need to get the cluster credentials. For example:
+To run tests on Kubernetes, you first need to get the cluster credentials. For example:
 
 ```bash
 gcloud container clusters get-credentials {cluster_name} \
@@ -121,9 +121,10 @@ chs configure bucket --name my-results-bucket
 #### 3. `run`
 Executes a test suite on a specified cluster.
 
+**Scheduler Auto-detection:**
+CHS automatically detects the scheduler (`slurm` or `kubernetes`) of the active environment. Slurm detection is attempted first (by checking if `sinfo` and `squeue` are available and reachable). If Slurm is not detected, it falls back to Kubernetes (by checking for in-cluster credentials or `kubectl` connectivity).
+
 **Arguments:**
--   `--scheduler` / `-sch` **(Required)**: The scheduler to use.
-    *   *Supported values:* `slurm`, `gke`.
 -   `--machine-type` **(Required)**: The machine type of the cluster nodes.
     *   *Supported values:* `a3-ultra`, `a3-mega`, `a4`.
 -   `--suite` / `-s`: Name of the test suite to run.
@@ -134,9 +135,9 @@ Executes a test suite on a specified cluster.
     *   *Supported values:* `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`.
 -   `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
 -   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
--   `--nodepool`: GKE node pool to run on.
+-   `--nodepool`: Kubernetes node pool to run on.
 -   `--partition`: Slurm partition to run on.
--   `--dry-run`: Set up the workspace but do not execute experiments or analyze.
+-   `--dry-run` `[slurm|kubernetes]`: Set up the workspace for the specified scheduler but do not execute (developer dry-run).
 -   `--validation`: Path to a user-defined thresholds YAML file (optional).
 -   `--skip-validation`: Skip threshold evaluation entirely.
 
@@ -165,36 +166,36 @@ Below are the details of the supported test suites and the tests included in eac
 
 **Examples:**
 
-#### GKE Examples
+#### Kubernetes Examples
 
 ```bash
 # Run the lite suite (default) on a3-ultra machine
-chs run --scheduler gke --machine-type a3-ultra
+chs run --machine-type a3-ultra
 
 # Run the lite suite on a specific node pool
-chs run --scheduler gke --machine-type a3-ultra --nodepool my-node-pool
+chs run --machine-type a3-ultra --nodepool my-node-pool
 
 # Run the lite suite on specific nodes
-chs run --scheduler gke --machine-type a3-ultra --nodes node-01,node-02
+chs run --machine-type a3-ultra --nodes node-01,node-02
 
 # Run specific tests on specific nodes
-chs run --scheduler gke --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+chs run --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 #### Slurm Examples
 
 ```bash
 # Run the lite suite (default) on a3-ultra machine
-chs run --scheduler slurm --machine-type a3-ultra
+chs run --machine-type a3-ultra
 
 # Run the lite suite on a specific partition
-chs run --scheduler slurm --machine-type a3-ultra --partition my-partition
+chs run --machine-type a3-ultra --partition my-partition
 
 # Run the lite suite on specific nodes
-chs run --scheduler slurm --machine-type a3-ultra --nodes node-01,node-02
+chs run --machine-type a3-ultra --nodes node-01,node-02
 
 # Run specific tests on specific nodes
-chs run --scheduler slurm --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+chs run --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 **Output:**
@@ -302,8 +303,8 @@ Displays a table with Workspace and Details.
 ```
 Workspace                     Details
 ------------------------------------------------------------------------------------------
-2026-05-05_16.23.13.228716    chs run --scheduler gke --machine-type a3-ultra --dry-run
-2026-05-04_19.05.29.792632    chs run --scheduler gke
+2026-05-05_16.23.13.228716    chs run --machine-type a3-ultra --dry-run kubernetes
+2026-05-04_19.05.29.792632    chs run --machine-type a3-ultra
 ```
 
 
@@ -327,12 +328,12 @@ You can configure these thresholds by providing a YAML file containing baseline 
 
 * **Specify custom thresholds:** Use the `--validation <PATH>` flag during `chs run` or `chs analyze` to specify a custom thresholds YAML file:
   ```bash
-  chs run --scheduler gke --machine-type a3-ultra --validation /path/to/custom_thresholds.yaml
+  chs run --machine-type a3-ultra --validation /path/to/custom_thresholds.yaml
   chs analyze --validation /path/to/custom_thresholds.yaml
   ```
 * **Skip validation:** If you want to run tests or analyze results without applying any threshold checks, use the `--skip-validation` flag.
   ```bash
-  chs run --scheduler gke --machine-type a3-ultra --skip-validation
+  chs run --machine-type a3-ultra --skip-validation
   ```
 
 ### Configuration Schema & Hierarchy
@@ -446,7 +447,7 @@ To report bugs or request new features, please [create a new issue in Buganizer]
 
 The following features are currently in development or planned:
 
--   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs and Bare Metals is planned.
+-   **Scheduler Support**: Currently, only `slurm` and `kubernetes` are supported. Support for JBVMs and Bare Metals is planned.
 -   **Dynamic Listing**: The `list` command currently acts as a placeholder and needs to be connected to the Ramble registry to dynamically list available suites and tests.
 -   **Workspace Cleanup**: A `cleanup` command or logic to manage old workspaces is pending implementation.
 -   **Configurable Paths**: Support for user-defined workspace directories via configuration or flags.
