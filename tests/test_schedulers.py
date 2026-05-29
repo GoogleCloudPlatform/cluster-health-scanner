@@ -716,6 +716,45 @@ ramble:
             mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
             mock_kueue_mgr_instance.cleanup.assert_called_once_with(config_path)
 
+    @mock.patch("subprocess.run")
+    def test_cancel_jobs_deletes_secrets(self, mock_run, mock_logger):
+        """Test that _cancel_jobs deletes associated secrets."""
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        mock_run.return_value.stdout = ""
+
+        scheduler._cancel_jobs(["job1", "job2"])
+
+        self.assertEqual(mock_run.call_count, 2)
+        args = mock_run.call_args_list[1][0][0]
+        self.assertIn("delete", args)
+        self.assertIn("secret", args)
+        self.assertIn("job1-ssh", args)
+        self.assertIn("job2-ssh", args)
+
+    @mock.patch("subprocess.run")
+    def test_cleanup_scheduler_resources_deletes_secrets(
+        self, mock_run, mock_logger
+    ):
+        """Test that cleanup_scheduler_resources deletes secrets."""
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+
+        run_entry = {
+            "job_entries": {
+                "job1": {"status": "Completed"},
+                "job2": {"status": "Completed"},
+            }
+        }
+        mock_run.return_value.stdout = ""
+
+        scheduler.cleanup_scheduler_resources(run_entry=run_entry)
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertIn("delete", args)
+        self.assertIn("secret", args)
+        self.assertIn("job1-ssh", args)
+        self.assertIn("job2-ssh", args)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -398,7 +398,7 @@ class SlurmScheduler(BaseScheduler):
         """Parses job IDs from the experiment execution output."""
         return re.findall(r"Submitted batch job (\d+)", output)
 
-    def cancel_jobs(self, job_ids: list[str]) -> None:
+    def _cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs using scancel."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
@@ -457,7 +457,7 @@ class SlurmScheduler(BaseScheduler):
                     len(job_ids),
                     prefix,
                 )
-                self.cancel_jobs(job_ids)
+                self._cancel_jobs(job_ids)
             else:
                 logger.debug("No matching jobs found for prefix %s.", prefix)
         except FileNotFoundError:
