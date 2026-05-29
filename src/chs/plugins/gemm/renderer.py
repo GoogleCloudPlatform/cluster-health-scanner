@@ -107,7 +107,12 @@ class GemmRenderer(DefaultRenderer):
                 row.append(item.validation_status)
             table.add_row(*row)
 
-        return Group(
+        elements = [
             Text("\nGEMM Detail", style="bold"),
             table,
-        )
+        ]
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            elements.append(val_table)
+
+        return Group(*elements)

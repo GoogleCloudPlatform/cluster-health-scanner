@@ -33,6 +33,10 @@ class TpuHbmRenderer(DefaultRenderer):
         elements = [Text("\nTPU HBM Bandwidth Detail", style="bold cyan")]
         elements.extend(self._build_bandwidth_tables(node_data))
 
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            elements.append(val_table)
+
         return Group(*elements)
 
     def _parse_context(self, ctx_name: str) -> tuple[int, str] | None:

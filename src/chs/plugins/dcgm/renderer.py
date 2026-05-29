@@ -124,4 +124,7 @@ class DcgmRenderer(DefaultRenderer):
                         first_level_row = False
             table.add_section()
 
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            return Group(*header_elements, table, val_table)
         return Group(*header_elements, table)

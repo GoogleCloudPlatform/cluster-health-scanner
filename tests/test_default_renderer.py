@@ -74,9 +74,9 @@ class TestDefaultRenderer(unittest.TestCase):
         self.assertIn(">= 80", output)
         self.assertIn("PASS", output)
 
-        # Metric without threshold should be filtered out
-        self.assertNotIn("metric_without_threshold", output)
-        self.assertNotIn("99.9", output)
+        # Metric without threshold should NOT be filtered out from raw metrics
+        self.assertIn("metric_without_threshold", output)
+        self.assertIn("99.9", output)
 
         # Threshold and Status columns should be printed
         self.assertIn("Threshold", output)

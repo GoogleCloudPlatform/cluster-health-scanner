@@ -1,7 +1,7 @@
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import RenderableType
 from chs.core.default_plugin.renderer import DefaultRenderer
-from chs.plugins.nccl_utils import render_nccl_detail
+from chs.plugins.utils.nccl_utils import render_nccl_detail
 
 
 class NcclPairwiseRenderer(DefaultRenderer):

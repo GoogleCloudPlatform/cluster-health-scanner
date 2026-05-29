@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import theme
-from chs.core.default_plugin.renderer import DefaultRenderer
+from . import validation_renderer
 
 from rich.table import Table
 from rich.text import Text
@@ -87,7 +87,7 @@ def render_nccl_detail(
             "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
         )
 
-    has_thresholds = DefaultRenderer._has_validation_criteria(test_results)
+    has_thresholds = validation_renderer.has_validation_criteria(test_results)
 
     node_to_location = {}
     if topology:
@@ -150,5 +150,9 @@ def render_nccl_detail(
         table.add_row(*row)
 
     renderables = [Text(f"\n{title}", style=theme.CHS_TITLE_STYLE), table]
+
+    val_table = validation_renderer.render_validation_results(test_results)
+    if val_table:
+        renderables.append(val_table)
 
     return Group(*renderables)

@@ -141,4 +141,8 @@ class StreamRenderer(DefaultRenderer):
 
             group_elements.append(table)
 
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            group_elements.append(val_table)
+
         return Group(*group_elements)

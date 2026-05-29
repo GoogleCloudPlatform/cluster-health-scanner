@@ -1,3 +1,4 @@
+from chs.plugins.utils import rendering, validation_renderer
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import RenderableType, Group
 from rich.panel import Panel
@@ -10,16 +11,13 @@ class DefaultRenderer:
 
     @staticmethod
     def _has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
-        """Checks if any metric in the test results has validation criteria."""
-        return any(
-            m.HasField("validation_criteria") and m.validation_criteria.name
-            for res in test_results
-            for m in res.metrics
-        )
+        """Checks if test results contain any validation criteria."""
+        return validation_renderer.has_validation_criteria(test_results)
 
-    def render_detail(
+    def render_raw_metrics(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
+        """Renders raw metrics in a table."""
         if not test_results:
             return Text("No detailed metrics available.", style="yellow")
 
@@ -27,8 +25,6 @@ class DefaultRenderer:
         for test_result in test_results:
             is_success = test_result.result_status == pb.RESULT_STATUS_SUCCESS
             border_color = "green" if is_success else "red"
-
-            has_validation = self._has_validation_criteria([test_result])
 
             table = create_styled_table(
                 header_style=f"bold {border_color}",
@@ -38,100 +34,23 @@ class DefaultRenderer:
             table.add_column("Key", style="cyan")
             table.add_column("Value", style="bold white")
             table.add_column("Unit", style="dim")
-            if has_validation:
-                table.add_column("Threshold", style="yellow")
-                table.add_column("Status", style="bold")
 
             for metric in test_result.metrics:
-                # Filter non-validated INFO metrics to prevent terminal noise
-                # during validated runs.
-                if has_validation and not metric.HasField(
-                    "validation_criteria"
-                ):
-                    continue
+                val = rendering.parse_value(metric.value)
 
-                if metric.value.HasField("number_value"):
-                    val = metric.value.number_value
-                elif metric.value.HasField("bool_value"):
-                    val = metric.value.bool_value
-                else:
-                    val = metric.value.string_value
+                prefix = rendering.format_context_prefix(metric)
 
-                ctx_name = (
-                    metric.metadata.fields["context"].string_value
-                    if "context" in metric.metadata.fields
-                    else ""
-                )
-                prefix = (
-                    f"[{ctx_name}] "
-                    if ctx_name and ctx_name != "unknown"
-                    else ""
-                )
+                table.add_row(f"{prefix}{metric.key}", str(val), metric.unit)
 
-                row_args = [f"{prefix}{metric.key}", str(val), metric.unit]
-
-                if has_validation:
-                    th_str = "N/A"
-                    status_str = "INFO"
-                    status_style = "cyan"
-
-                    if metric.HasField("validation_criteria"):
-                        vc = metric.validation_criteria
-                        if vc.name:
-                            if vc.HasField("expected_value"):
-                                if vc.expected_value.HasField("number_value"):
-                                    th_val = vc.expected_value.number_value
-                                    if th_val.is_integer():
-                                        th_val = int(th_val)
-                                elif vc.expected_value.HasField("bool_value"):
-                                    th_val = vc.expected_value.bool_value
-                                else:
-                                    th_val = vc.expected_value.string_value
-                            else:
-                                th_val = "complex"
-
-                            comp_str = ""
-                            if vc.comparator == pb.Comparator.COMPARATOR_GTE:
-                                comp_str = ">="
-                            elif vc.comparator == pb.Comparator.COMPARATOR_EQ:
-                                comp_str = "=="
-                            elif (
-                                vc.comparator
-                                == pb.Comparator.COMPARATOR_CONTAINS
-                            ):
-                                comp_str = "contains"
-
-                            th_str = f"{comp_str} {th_val}".strip()
-
-                            if vc.result_status == pb.RESULT_STATUS_SUCCESS:
-                                status_str = "PASS"
-                                status_style = "green"
-                            elif vc.result_status == pb.RESULT_STATUS_FAILED:
-                                status_str = "FAIL"
-                                status_style = "red"
-                            else:
-                                status_str = "UNKNOWN"
-                                status_style = "yellow"
-
-                    row_args.extend(
-                        [th_str, Text(status_str, style=status_style)]
-                    )
-
-                table.add_row(*row_args)
-
-            nodes = (
-                ", ".join(test_result.target_resource_ids)
-                if test_result.target_resource_ids
-                else "Cluster"
-            )
+            nodes_str = rendering.format_nodes(test_result.target_resource_ids)
             panels.append(
                 Panel(
                     table
                     if test_result.metrics
                     else Text("No metrics generated."),
-                    title=(
+                    title=Text(
                         f"Raw Metrics: {test_result.test_name} "
-                        f"({test_result.test_level}) - \\[{nodes}\\]"
+                        f"({test_result.test_level}) - [{nodes_str}]"
                     ),
                     expand=True,
                     border_style=border_color,
@@ -139,3 +58,18 @@ class DefaultRenderer:
             )
 
         return Group(*panels)
+
+    def render_validation_results(
+        self, test_results: list[pb.TestResult]
+    ) -> RenderableType | None:
+        """Renders validation results using the shared utility."""
+        return validation_renderer.render_validation_results(test_results)
+
+    def render_detail(
+        self, test_results: list[pb.TestResult]
+    ) -> RenderableType:
+        raw_metrics = self.render_raw_metrics(test_results)
+        validation = self.render_validation_results(test_results)
+        if validation:
+            return Group(raw_metrics, validation)
+        return raw_metrics

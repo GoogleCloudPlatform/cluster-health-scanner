@@ -128,7 +128,11 @@ class TpuGemmRenderer(DefaultRenderer):
                     flops_str,
                 )
 
-        return Group(
+        elements = [
             Text("\nTPU GEMM Performance Summary", style="bold underline cyan"),
             table,
-        )
+        ]
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            elements.append(val_table)
+        return Group(*elements)

@@ -133,4 +133,7 @@ class TpuCollectivesRenderer(DefaultRenderer):
 
             render_elements.append(node_table)
 
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            render_elements.append(val_table)
         return Group(*render_elements)

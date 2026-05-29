@@ -20,6 +20,9 @@ class TpuInfoRenderer(DefaultRenderer):
             self._build_summary_table(node_data),
         ]
         elements.extend(self._build_detailed_tables(node_data))
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            elements.append(val_table)
         return Group(*elements)
 
     def _extract_node_data(self, test_results: list[pb.TestResult]) -> dict:
