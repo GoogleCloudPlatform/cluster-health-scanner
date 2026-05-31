@@ -34,8 +34,6 @@ import time
 from typing import Any
 import click
 from google.protobuf.json_format import MessageToJson
-from google.cloud import storage
-from google.api_core.exceptions import GoogleAPICallError
 
 from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
@@ -834,12 +832,14 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
-        bucket_name = self._app_data.get_bucket()
+        storage_config = self._app_data.get_storage_config()
         gcs_base_path = None
-        if bucket_name:
-            gcs_base_path = (
-                f"gs://{bucket_name}/workspaces/{self._workspace_name}"
-            )
+        if storage_config and storage_config.get("type") == "gcs":
+            bucket_name = storage_config.get("gcs", {}).get("bucket_name")
+            if bucket_name:
+                gcs_base_path = (
+                    f"gs://{bucket_name}/workspaces/{self._workspace_name}"
+                )
 
         boh_generator = BOHGenerator(
             results_json_path,
@@ -866,8 +866,8 @@ class RambleManager:
 
         return str(workspace_dir)
 
-    def archive_and_upload_boh(self) -> None:
-        """Archives Bill of Health and uploads to GCS."""
+    def _upload_boh(self, provider) -> None:
+        """Uploads Bill of Health using the provider."""
         boh_path = os.path.join(self.path, "bill_of_health.json")
         if not os.path.exists(boh_path):
             logger.warning(
@@ -876,34 +876,19 @@ class RambleManager:
             )
             return
 
-        bucket_name = self._app_data.get_bucket()
-        if not bucket_name:
-            logger.warning("No GCS bucket configured. Skipping BOH archival.")
-            return
-
-        upload_url = (
-            f"gs://{bucket_name}/bills_of_health/{self._workspace_name}.json"
-        )
-        logger.info("Uploading Bill of Health to %s", upload_url)
-
+        logger.info("Uploading Bill of Health...")
         try:
-            client = storage.Client()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(f"bills_of_health/{self._workspace_name}.json")
-            blob.upload_from_filename(boh_path)
+            provider.upload_file(
+                boh_path, f"bills_of_health/{self._workspace_name}.json"
+            )
             logger.info("Bill of Health uploaded successfully.")
         except Exception as e:
-            prefix = (
-                "API error"
-                if isinstance(e, GoogleAPICallError)
-                else "Unexpected error"
-            )
             raise ex.ChsArchiveException(
-                f"{prefix} during BOH archival: {e}"
+                f"Failed to archive Bill of Health: {e}"
             ) from e
 
-    def archive_and_upload_workspace(self) -> None:
-        """Archives workspace artifacts and uploads to GCS."""
+    def _upload_workspace(self, provider) -> None:
+        """Archives workspace locally and uploads using the provider."""
         if not os.path.exists(self.path):
             logger.warning(
                 "Workspace path %s does not exist. Skipping archival.",
@@ -911,25 +896,14 @@ class RambleManager:
             )
             return
 
-        bucket_name = self._app_data.get_bucket()
-        if not bucket_name:
-            logger.warning(
-                "No GCS bucket configured. Skipping workspace archival."
-            )
-            return
-
-        upload_url = f"gs://{bucket_name}/workspaces/"
-        logger.info("Archiving workspace to %s", upload_url)
-
+        logger.info("Archiving workspace locally...")
         try:
-            # TODO: Add gcloud pre-flight check
+            # Archive locally (without --upload-url)
             self._execute_ramble_command(
                 "workspace",
                 [
                     "archive",
                     "-t",
-                    "--upload-url",
-                    upload_url,
                     "--archive-pattern",
                     "bill_of_health.json",
                     "--archive-pattern",
@@ -938,9 +912,39 @@ class RambleManager:
                 capture_output=True,
                 error_context="Failed to archive workspace",
             )
-            logger.info("Workspace archived and uploaded successfully.")
 
-        except (ex.ChsException, Exception) as e:
+            # Scan for the generated tarball
+            archive_dir = pathlib.Path(self.path) / "archive"
+            archives = list(archive_dir.glob("*.tar.gz")) + list(
+                archive_dir.glob("*.tgz")
+            )
+
+            if not archives:
+                raise ex.ChsArchiveException(
+                    "Workspace archive file not found."
+                )
+
+            # Use the first match (should be only one if clean)
+            archive_file = archives[0]
+            logger.info("Uploading workspace archive %s...", archive_file.name)
+
+            provider.upload_file(
+                str(archive_file), f"workspaces/{self._workspace_name}.tar.gz"
+            )
+            logger.info("Workspace archive uploaded successfully.")
+
+            # Clean up local archive
+            try:
+                archive_file.unlink()
+                logger.debug("Deleted local archive file: %s", archive_file)
+            except OSError as e:
+                logger.debug(
+                    "Failed to delete local archive file %s: %s",
+                    archive_file,
+                    e,
+                )
+
+        except Exception as e:
             logger.warning(
                 "Non-fatal failure while archiving and uploading "
                 "the workspace: %s",
@@ -948,7 +952,7 @@ class RambleManager:
             )
 
     def archive(self) -> None:
-        """Orchestrates archival and upload of BoH and workspace."""
+        """Orchestrates archival of BoH and workspace using active provider."""
         if not os.path.exists(self.path) or not os.path.exists(
             os.path.join(self.path, ".ramble-workspace")
         ):
@@ -960,9 +964,21 @@ class RambleManager:
             return
 
         try:
-            self.archive_and_upload_boh()
+            from chs.storage import StorageProviderFactory
+
+            provider = StorageProviderFactory.get_active_provider()
+        except Exception as e:
+            logger.debug(
+                "Storage provider not configured or failed to load. "
+                "Skipping archival: %s",
+                e,
+            )
+            return
+
+        try:
+            self._upload_boh(provider)
         finally:
-            self.archive_and_upload_workspace()
+            self._upload_workspace(provider)
 
     def _cleanup_inputs_dir(self) -> None:
         """Deletes the inputs directory in the workspace."""

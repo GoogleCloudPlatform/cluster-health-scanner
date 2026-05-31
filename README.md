@@ -104,18 +104,23 @@ chs list --tests --machine-type a3-ultra --from-suite lite
 #### 2. `configure`
 Configure CHS settings.
 
-*Note: Configuring a GCS bucket is optional. Setting a bucket allows CHS to upload reports and archives to GCS for persistence and sharing.*
+*Note: Configuring a storage target is optional. Setting a storage target allows CHS to upload reports and archives for persistence and sharing.*
 
 **Commands:**
--   `bucket`: Sets the GCS bucket for storing results.
+-   `storage gcs <BUCKET_NAME>`: Configures a Google Cloud Storage bucket.
+-   `storage path <DIRECTORY_PATH>`: Configures a local or mounted directory path.
 
-**Options:**
--   `--name`: GCS bucket name (default: `chs-results`).
+If no subcommand is provided (i.e., `chs configure storage`), CHS will start an interactive prompt to select and configure the storage type.
 
-**Example:**
+During configuration, CHS will validate write access to the target storage (via a canary write/delete test) and fail-fast if validation fails.
+
+**Examples:**
 ```bash
-# Set the GCS bucket name
-chs configure bucket --name my-results-bucket
+# Configure GCS bucket
+chs configure storage gcs my-results-bucket
+
+# Configure Local Path storage
+chs configure storage path /mnt/shared/chs-archive
 ```
 
 #### 3. `run`
@@ -227,31 +232,30 @@ chs analyze 2023-10-27_10.30.00.123456
 -   Generates a `bill_of_health.json` file in the run's directory.
 -   Copies experiment logs to a user-accessible directory.
 
-**Output Directory Structure:**
+**Output Directory Structure & Archiving:**
 
-Workspaces are created in: `~/.local/share/chs/workspaces`
+Workspaces are created locally in: `~/.local/share/chs/workspaces`
+The workspace name (Run ID) follows the format: `yyyy-mm-dd_hh.mm.ss.ffffff`
 
-The workspace name follows the format: `yyyy-mm-dd_hh.mm.ss.ffffff`
+Upon completion of analysis, CHS automatically archives the workspace and uploads it to the configured storage target (if configured):
+1.  **Bill of Health**: Uploaded/copied to `<storage_target>/bills_of_health/<run_id>.json`.
+2.  **Workspace Archive**: The workspace (configs, templates, and raw logs) is compressed into a tarball and uploaded/copied to `<storage_target>/workspaces/<run_id>.tar.gz`.
 
-The Bill of Health and experiment logs are located in the `chs-results` directory within the workspace.
-
-This folder is what will be uploaded to GCS.
-
+Local workspace directory structure:
 ```
 ~/.local/share/chs/workspaces/
 └── <WORKSPACE_NAME>/            # e.g., 2026-02-13_08.48.45.261141
-    └── chs-results/             # Contains Bill of Health and experiment logs
-        ├── bill_of_health.json  # The summarized Bill of Health report
-        └── experiments/         # Raw logs and experiment data
-            ├── nccl-tests/
-            │   └── ...
-            └── ...
+    ├── bill_of_health.json      # The generated Bill of Health report
+    └── experiments/             # Raw logs and experiment data (created by Ramble)
+        ├── nccl-tests/
+        │   └── ...
+        └── ...
 ```
 
-The `bill_of_health.json` contains a `log_file` field for every test, pointing to the absolute path of the log file in the `experiments` directory.
+The `bill_of_health.json` contains a `log_file` field for every test, pointing to the path of the log file relative to the workspace root.
 
-**Example Log File Path:**
-`log_file: "/usr/local/google/home/user/.local/share/chs/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
+**Example Log File Path in BoH:**
+`log_file: "experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
 #### 5. `cancel`
 Cancels running jobs for a specific test run.
 
@@ -437,7 +441,7 @@ a3-ultra:
 
 ## Known Limitations
 
--   **GCS Bucket Configuration**: For the `chs configure bucket` command, the specified GCS bucket must already exist; CHS does not create it automatically.
+-   **GCS Storage Configuration**: For the `chs configure storage gcs` command, the specified GCS bucket must already exist; CHS does not create it automatically.
 
 ## Support and Feedback
 

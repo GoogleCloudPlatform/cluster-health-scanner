@@ -770,15 +770,44 @@ class TestCli(unittest.TestCase):
         self.assertIn("Cancellation failed", result.output)
         self.mock_rm_instance.archive.assert_called_once()
 
-    def test_results_command_no_boh(self):
-        """Test `results` command when bill_of_health.json is not found."""
+    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
+    def test_results_command_no_boh_no_storage(self, mock_get_active_provider):
+        """Test results command when BoH is missing and no storage set."""
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_run.return_value = None
+        mock_get_active_provider.side_effect = Exception(
+            "No storage configured"
+        )
+
         with tempfile.TemporaryDirectory() as tmpdir:
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
             os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
             result = self.runner.invoke(cli.cli, ["results"])
-            self.assertEqual(result.exit_code, 1)
-            self.assertIn("Could not find bill of health", result.output)
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("failed to resolve storage provider", result.output)
+
+    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_results_command_download_success(
+        self, mock_viewer, mock_get_active_provider
+    ):
+        """Test results command downloads BoH from storage if missing."""
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_run.return_value = None
+
+        mock_provider = mock.Mock()
+        mock_get_active_provider.return_value = mock_provider
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.mock_app_data.get_workspaces_dir.return_value = tmpdir
+            os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
+
+            result = self.runner.invoke(cli.cli, ["results"])
+            self.assertEqual(result.exit_code, 0)
+            mock_provider.download_file.assert_called_once()
+            args, _ = mock_provider.download_file.call_args
+            self.assertEqual(args[0], "bills_of_health/latest_run.json")
+            mock_viewer.assert_called_once()
 
     def test_archive_workspace_context_manager_success(self):
         """Test archive_workspace calling archival on success."""
@@ -1301,21 +1330,73 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("No runs", result.output)
 
-    def test_configure_bucket_command(self):
-        """Test 'configure bucket' command."""
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider")
+    def test_configure_storage_gcs(self, mock_get_provider):
+        """Test 'configure storage gcs' command."""
+        mock_provider = mock.Mock()
+        mock_get_provider.return_value = mock_provider
+
         result = self.runner.invoke(
-            cli.cli, ["configure", "bucket", "--name", "my-bucket"]
+            cli.cli, ["configure", "storage", "gcs", "my-bucket"]
         )
         self.assertEqual(result.exit_code, 0)
-        self.mock_app_data.set_bucket.assert_called_once_with("my-bucket")
-        self.assertIn("GCS bucket set to: my-bucket", result.output)
+        mock_get_provider.assert_called_once_with(
+            {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
+        )
+        mock_provider.validate.assert_called_once()
+        self.mock_app_data.set_storage_config.assert_called_once_with(
+            {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
+        )
+        self.assertIn(
+            "Storage configured and validated successfully.", result.output
+        )
 
-        # Test default bucket name
-        self.mock_app_data.set_bucket.reset_mock()
-        result = self.runner.invoke(cli.cli, ["configure", "bucket"])
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider")
+    def test_configure_storage_path(self, mock_get_provider):
+        """Test 'configure storage path' command."""
+        mock_provider = mock.Mock()
+        mock_get_provider.return_value = mock_provider
+
+        result = self.runner.invoke(
+            cli.cli, ["configure", "storage", "path", "/my/path"]
+        )
         self.assertEqual(result.exit_code, 0)
-        self.mock_app_data.set_bucket.assert_called_once_with("chs-results")
-        self.assertIn("GCS bucket set to: chs-results", result.output)
+        mock_get_provider.assert_called_once_with(
+            {"type": "path", "path": {"path": "/my/path"}}
+        )
+        mock_provider.validate.assert_called_once()
+        self.mock_app_data.set_storage_config.assert_called_once_with(
+            {"type": "path", "path": {"path": "/my/path"}}
+        )
+
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider")
+    def test_configure_storage_validation_failure(self, mock_get_provider):
+        """Test 'configure storage' fails if validation fails."""
+        mock_provider = mock.Mock()
+        mock_provider.validate.side_effect = Exception("Validation failed")
+        mock_get_provider.return_value = mock_provider
+
+        result = self.runner.invoke(
+            cli.cli, ["configure", "storage", "gcs", "my-bucket"]
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.mock_app_data.set_storage_config.assert_not_called()
+        self.assertIn("Storage validation failed", result.output)
+
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider")
+    def test_configure_storage_interactive_gcs(self, mock_get_provider):
+        """Test interactive 'configure storage' for GCS."""
+        mock_provider = mock.Mock()
+        mock_get_provider.return_value = mock_provider
+
+        # Input: 1 (GCS), my-bucket
+        result = self.runner.invoke(
+            cli.cli, ["configure", "storage"], input="1\nmy-bucket\n"
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.mock_app_data.set_storage_config.assert_called_once_with(
+            {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
+        )
 
     @mock.patch("chs.cli.RambleManager")
     def test_analyze_command_workspace_not_found(self, mock_rm_cls):

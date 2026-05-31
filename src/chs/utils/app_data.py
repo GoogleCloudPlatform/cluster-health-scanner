@@ -90,19 +90,17 @@ class ChsAppData:
         except OSError as e:
             logger.warning("Failed to write to data file %s: %s", file_path, e)
 
-    def set_bucket(self, bucket_name: str) -> None:
-        """Sets the GCS bucket name in the app data."""
+    def set_storage_config(self, config: dict) -> None:
+        """Sets the storage configuration in the app data."""
         metadata = self._load_json(self._metadata_file)
-        if bucket_name.lower().startswith("gs://"):
-            bucket_name = bucket_name[5:]
-        metadata["bucket_name"] = bucket_name
+        metadata["storage"] = config
         self._save_json(self._metadata_file, metadata)
-        logger.debug("AppData: Set bucket_name to %s", bucket_name)
+        logger.debug("AppData: Set storage config to %s", config)
 
-    def get_bucket(self) -> str | None:
-        """Retrieves the GCS bucket name from the app data."""
+    def get_storage_config(self) -> dict:
+        """Retrieves the storage configuration from the app data."""
         metadata = self._load_json(self._metadata_file)
-        return metadata.get("bucket_name")
+        return metadata.get("storage", {})
 
     def update_run(self, run_id: str, run_data: dict[str, Any]) -> None:
         """Updates or adds a run entry in the app data.

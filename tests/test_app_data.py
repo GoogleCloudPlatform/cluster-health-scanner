@@ -141,6 +141,11 @@ class TestChsAppData(unittest.TestCase):
         ):
             self.app_data.resolve_run_id("non-existent")
 
+    def test_storage_config(self):
+        config = {"type": "path", "path": {"path": "/foo"}}
+        self.app_data.set_storage_config(config)
+        self.assertEqual(self.app_data.get_storage_config(), config)
+
 
 if __name__ == "__main__":
     unittest.main()
