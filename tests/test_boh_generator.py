@@ -373,6 +373,21 @@ class TestBOHGenerator(unittest.TestCase):
             self.assertEqual(name, "generic_test")
             self.assertEqual(level, "workload")
 
+    def test_extract_test_info_plugin_name(self):
+        """Test that _extract_test_info uses class attribute test_name."""
+        generator = BOHGenerator(self.test_json_path)
+
+        exp = {
+            "experiment_name": "chs-gkeramblett-standard-hvku-stream-gke-"
+            "gkeramblett-a3-ultragpu-8g-a3-ult-bf64941f-b8xs",
+            "application_name": "nvidia-stream",
+            "workload_name": "standard",
+        }
+
+        name, level, desc = generator._extract_test_info(exp)
+        self.assertEqual(name, "stream")
+        self.assertEqual(level, "standard")
+
     def test_generate_with_thresholds_scalar(self):
         """Test threshold evaluation with 'scalar' type."""
         thresholds_data = {

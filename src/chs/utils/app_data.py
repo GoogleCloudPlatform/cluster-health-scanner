@@ -4,7 +4,6 @@ This module provides the ChsAppData class, which manages the persistence of
 CHS run metadata, configuration, and workspace directories.
 """
 
-import datetime
 import json
 import logging
 import os
@@ -192,32 +191,26 @@ class ChsAppData:
             return None
 
     def get_latest_run_id(self) -> str:
-        """Finds and returns the most recent run_id from the workspaces.
-
-        Returns:
-          The run_id of the most recently created workspace.
-
-        Raises:
-          WorkspaceNotFoundException: If workspaces directory does not exist.
-          NoPreviousRunsFoundException: If no valid runs are found.
-        """
-        workspaces_dir = pathlib.Path(self.get_workspaces_dir())
-        if not workspaces_dir.exists():
-            raise ex.WorkspaceNotFoundException(
-                "No workspaces directory found."
+        """Finds and returns the user-facing run_id of the most recent run."""
+        runs = self.get_all_runs()
+        if not runs:
+            raise ex.NoPreviousRunsFoundException(
+                "No previous runs found in registry."
             )
+        sorted_runs = sorted(
+            runs.items(),
+            key=lambda item: item[1].get("submission_time", ""),
+            reverse=True,
+        )
+        return sorted_runs[0][1].get("run_id")
 
-        valid_runs = []
-        date_format = "%Y-%m-%d_%H.%M.%S.%f"
-        for d in workspaces_dir.iterdir():
-            if d.is_dir():
-                try:
-                    datetime.datetime.strptime(d.name, date_format)
-                    valid_runs.append(d.name)
-                except ValueError:
-                    continue
+    def resolve_run_id(self, run_id: str) -> str:
+        """Resolves a user-friendly run_id to its physical workspace name."""
+        runs = self.get_all_runs()
+        for ws_name, run_data in runs.items():
+            if run_data.get("run_id") == run_id:
+                return ws_name
 
-        if not valid_runs:
-            raise ex.NoPreviousRunsFoundException("No previous runs found.")
-
-        return max(valid_runs)
+        raise ex.WorkspaceNotFoundException(
+            f"Run ID '{run_id}' not found in registry."
+        )

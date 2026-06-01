@@ -20,10 +20,19 @@ class BaseScheduler(abc.ABC):
         """
         self._app_data = app_data
 
+    def get_cluster_name(self) -> str | None:
+        """Retrieves the cluster name. Overridden by subclasses.
+
+        Returns:
+            The cluster name as a string, or None.
+        """
+        return None
+
     def run_preflight_checks(
         self,
         tests: list[dict[str, Any]] | None = None,
         workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Runs preflight checks for the scheduler. Optional to implement."""
         return tests
@@ -86,7 +95,7 @@ class BaseScheduler(abc.ABC):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
-        workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -94,6 +103,9 @@ class BaseScheduler(abc.ABC):
           workspace_config_dir: Directory to write the config file to.
           tests: List of tests to run.
           machine_type: The machine type of the cluster nodes.
+          timeout: The timeout for the job in seconds.
+          deadline: The deadline for the job in seconds.
+          run_id: The user-facing run ID.
         """
         pass
 

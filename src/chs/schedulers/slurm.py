@@ -72,6 +72,32 @@ class SlurmScheduler(BaseScheduler):
     def name(self) -> str:
         return "slurm"
 
+    def get_cluster_name(self) -> str | None:
+        """Retrieves cluster name from Slurm scontrol.
+
+        Failsafe: All subprocess execution queries are wrapped in strict timeout
+        blocks.
+        """
+        try:
+            cmd = ["scontrol", "show", "config"]
+            res = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=5, check=False
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    if "ClusterName" in line:
+                        parts = line.split("=")
+                        if len(parts) == 2:
+                            val = parts[1].strip()
+                            logger.debug(
+                                "Found cluster name from scontrol: %s", val
+                            )
+                            return val
+        except Exception as e:
+            logger.debug("scontrol query failed: %s", e)
+
+        return None
+
     def _run_srun(self, args: list[str], timeout: int = 60) -> str:
         """Runs a command via srun and returns filtered output."""
         cmd = ["srun", "-N1", "-n1"]
@@ -150,6 +176,7 @@ class SlurmScheduler(BaseScheduler):
                     text=True,
                     check=True,
                     capture_output=True,
+                    timeout=5,
                 ).stdout.strip()
                 self._resolved_nodes = [n for n in output.split("\n") if n]
                 return self._resolved_nodes
@@ -269,7 +296,7 @@ class SlurmScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
-        workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -302,6 +329,8 @@ class SlurmScheduler(BaseScheduler):
         variables["tcp_interfaces"] = tcp_interfaces_str
         variables["timeout"] = timeout
         variables["deadline"] = deadline
+
+        variables["chs_run_id"] = run_id
 
         logger.debug("Configuration: %r", config)
 

@@ -235,9 +235,12 @@ def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
         if not latest_run_id:
             return False
 
+        workspace_name = app_data.resolve_run_id(latest_run_id)
         workspaces_dir = app_data.get_workspaces_dir()
         ramble_manager = RambleManager(
-            base_dir=workspaces_dir, workspace_name=latest_run_id
+            base_dir=workspaces_dir,
+            workspace_name=workspace_name,
+            run_id=latest_run_id,
         )
         if ramble_manager.check_jobs_running():
             logger.warning(
@@ -313,6 +316,7 @@ def run_action(
     deadline: int | None = None,
     validation: str | None = None,
     skip_validation: bool = False,
+    run_id: str | None = None,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -342,14 +346,16 @@ def run_action(
         tests,
     )
 
-    ramble_manager = RambleManager(workspaces_base_dir, workspace_name)
+    ramble_manager = RambleManager(
+        workspaces_base_dir, workspace_name, run_id=run_id
+    )
 
     with archive_workspace(ramble_manager, on_success=False):
         try:
             logger.info("Running preflight checks")
             if scheduler_obj:
                 tests = scheduler_obj.run_preflight_checks(
-                    tests, workspace_name=workspace_name
+                    tests, workspace_name=workspace_name, run_id=run_id
                 )
                 workspace_config_dir = os.path.join(
                     ramble_manager.path, "configs"
@@ -417,7 +423,10 @@ def analyze_action(
     logger.debug("Analyzing run_id=%r", run_id)
     workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
-    ramble_manager = RambleManager(workspaces_base_dir, run_id)
+    workspace_name = app_data.resolve_run_id(run_id)
+    ramble_manager = RambleManager(
+        workspaces_base_dir, workspace_name, run_id=run_id
+    )
 
     if not os.path.exists(ramble_manager.path):
         raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
@@ -570,7 +579,8 @@ def _show_results(
             logger.info("No run_id provided. Using latest run: %s", run_id)
             logger.info("Showing results for latest run: %s", run_id)
 
-        boh_path = workspaces_dir / run_id / "bill_of_health.json"
+        workspace_name = app_data.resolve_run_id(run_id)
+        boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
         if not boh_path.exists():
             raise ex.BillOfHealthNotFoundException(
                 f"Could not find bill of health at {boh_path}. "
@@ -600,7 +610,10 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Canceling run_id=%r", run_id)
     workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
-    ramble_manager = RambleManager(workspaces_base_dir, run_id)
+    workspace_name = app_data.resolve_run_id(run_id)
+    ramble_manager = RambleManager(
+        workspaces_base_dir, workspace_name, run_id=run_id
+    )
 
     with archive_workspace(ramble_manager, on_success=True):
         try:
@@ -750,6 +763,11 @@ def list_command(
     is_flag=True,
     help="Skip threshold evaluation entirely.",
 )
+@click.option(
+    "--run-id",
+    help="Custom run ID for this execution.",
+    callback=validators.validate_run_id,
+)
 @click.pass_obj
 def run(
     obj,
@@ -765,6 +783,7 @@ def run(
     dry_run: bool,
     validation: str | None = None,
     skip_validation: bool = False,
+    run_id: str | None = None,
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
@@ -868,12 +887,24 @@ def run(
             "Only Slurm and GKE schedulers are supported."
         )
 
-    workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
+    short_hash = utils.generate_random_suffix()
+    if not run_id:
+        if dry_run:
+            cluster_name = "dry-run-cluster"
+        else:
+            cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
+        run_id = f"{cluster_name}-{suite}"
+    run_id = f"{run_id}-{short_hash}"
+
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y%m%d-%H%M%S"
+    )
+    workspace_name = f"{timestamp}_{run_id}"
     workspaces_base_dir = app_data.get_workspaces_dir()
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
-    logger.info("Request ID (Workspace Name): %s", workspace_name)
+    logger.info("Run ID: %s", run_id)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
     with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
@@ -889,6 +920,7 @@ def run(
             deadline=deadline,
             validation=validation,
             skip_validation=skip_validation,
+            run_id=run_id,
         )
 
         result = RunExecutionResult(
@@ -908,7 +940,8 @@ def run(
         app_data.update_run(
             workspace_name,
             {
-                "run_id": workspace_name,
+                "run_id": run_id,
+                "workspace_name": workspace_name,
                 "workspace_path": os.path.join(
                     workspaces_base_dir, workspace_name
                 ),
@@ -936,7 +969,7 @@ def run(
     # Automatically trigger analysis
     analyze_action(
         app_data,
-        workspace_name,
+        run_id,
         validation=validation,
         skip_validation=skip_validation,
     )

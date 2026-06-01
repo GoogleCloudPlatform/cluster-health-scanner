@@ -3,7 +3,6 @@
 from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler, BaseScheduler
-from chs.validators import ProjectConfigValidator, validate_non_empty_string
 from chs.utils import ChsAppData, load_suite
 from chs import exceptions
 from chs import resources
@@ -14,8 +13,6 @@ __all__ = [
     "ResultsViewer",
     "get_scheduler",
     "BaseScheduler",
-    "ProjectConfigValidator",
-    "validate_non_empty_string",
     "ChsAppData",
     "load_suite",
     "exceptions",

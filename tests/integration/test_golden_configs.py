@@ -43,6 +43,13 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "      exit 0\n"
         "    fi\n"
         "    ;;\n"
+        "  scontrol)\n"
+        '    if [[ "$*" == *"show config"* ]]; then\n'
+        '      echo "ClusterName = test-cluster"\n'
+        "    else\n"
+        "      exit 0\n"
+        "    fi\n"
+        "    ;;\n"
         "  kubectl)\n"
         '    if [[ "$*" == *"get networks.networking.gke.io"* ]]; then\n'
         '      echo \'{"items": [{"metadata": {"name": "default"}, '
@@ -71,6 +78,8 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "        exit 1\n"
         "      fi\n"
         '      echo "True"\n'
+        '    elif [[ "$*" == *"config current-context"* ]]; then\n'
+        '      echo "test-cluster"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"
@@ -84,9 +93,12 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "enroot",
         "unsquashfs",
         "srun",
-        "kubectl",
-        "sinfo",
         "scontrol",
+        "sacct",
+        "squeue",
+        "scancel",
+        "sinfo",
+        "kubectl",
     ]:
         mock_path = bin_dir / mock_bin
         mock_path.write_text(mock_script)
@@ -116,9 +128,22 @@ def test_golden_config(
     workspaces_dir = tmp_path / "workspaces"
     workspaces_dir.mkdir()
 
+    app_data_dir = tmp_path / "app_data"
+    app_data_dir.mkdir()
+
+    mocker.patch(
+        "platformdirs.user_data_dir",
+        return_value=str(app_data_dir),
+    )
+
     mocker.patch(
         "chs.utils.app_data.ChsAppData.get_workspaces_dir",
         return_value=str(workspaces_dir),
+    )
+
+    mocker.patch(
+        "chs.cli.utils.generate_random_suffix",
+        return_value="mock",
     )
 
     result = runner.invoke(cli, command)
@@ -149,7 +174,13 @@ def test_golden_config(
             line.rstrip() for line in normalized.splitlines() if line.strip()
         )
 
-    scrubber = WorkspaceScrubber(str(workspace_path))
+    scrubber = WorkspaceScrubber(
+        str(workspace_path),
+        additional_replacements=[
+            (str(app_data_dir), "<APP_DATA_DIR>"),
+            (str(tmp_path), "<TMP_PATH>"),
+        ],
+    )
     temp_snapshot_dir = tmp_path / "temp_snapshot"
     scrubber.extract_and_scrub(str(temp_snapshot_dir))
 

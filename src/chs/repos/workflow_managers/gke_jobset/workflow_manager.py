@@ -36,8 +36,8 @@ class GkeJobset(WorkflowManagerBase):
 
     workflow_manager_variable(
         name="job_name",
-        default="{application_name}-{workload_name}-{experiment_name}",
-        description="GKE job name",
+        default="{chs_run_id}-{application_name}-{workload_name}",
+        description="Kubernetes JobSet resource base name",
     )
 
     workflow_manager_variable(

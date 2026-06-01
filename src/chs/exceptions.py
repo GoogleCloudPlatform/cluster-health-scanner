@@ -77,6 +77,10 @@ class NetworkDiscoveryException(ChsException):
     """Raised when network discovery fails to find required networks."""
 
 
+class ClusterDiscoveryException(ChsException):
+    """Raised when cluster discovery/retrieval fails."""
+
+
 class KueueException(ChsException):
     """Raised for Kueue-related errors."""
 

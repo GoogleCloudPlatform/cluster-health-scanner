@@ -54,14 +54,22 @@ def should_keep_file(rel_path: str) -> bool:
 
 
 class WorkspaceScrubber:
-    def __init__(self, workspace_root: str):
+    def __init__(
+        self,
+        workspace_root: str,
+        additional_replacements: list[tuple[str, str]] | None = None,
+    ):
         self.workspace_root = workspace_root
         self.home_dir = os.path.expanduser("~")
         self.workspace_name = os.path.basename(workspace_root)
+        self.additional_replacements = additional_replacements or []
 
     def scrub_text(self, content: str) -> str:
         content = content.replace(self.workspace_root, "<WORKSPACE_ROOT>")
         content = content.replace(self.home_dir, "<HOME_DIR>")
+
+        for raw, placeholder in self.additional_replacements:
+            content = content.replace(raw, placeholder)
 
         # Apply default scrubbing rules
         for pattern, replacement in SCRUBBING_RULES:

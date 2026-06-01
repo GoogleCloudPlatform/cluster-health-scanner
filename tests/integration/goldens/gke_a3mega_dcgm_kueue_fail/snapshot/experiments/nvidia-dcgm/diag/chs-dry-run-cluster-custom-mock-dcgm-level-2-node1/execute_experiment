@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "nvidia-dcgm" = "chs" ]; then
+    echo "Skipping JobSet submission for nvidia-dcgm scaffolding experiment."
+    echo "Submitted chs-dry-run-cluster-custom-mock-dcgm-level-2-node1 at $(date)" > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dry-run-cluster-custom-mock-dcgm-level-2-node1/chs-dry-run-cluster-custom-mock-dcgm-level-2-node1.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dry-run-cluster-custom-mock-dcgm-level-2-node1/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dry-run-cluster-custom-mock-dcgm-level-2-node1/jobset.yaml"
+echo "Submitted chs-dry-run-cluster-custom-mock-dcgm-level-2-node1 at $(date)" > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dry-run-cluster-custom-mock-dcgm-level-2-node1/chs-dry-run-cluster-custom-mock-dcgm-level-2-node1.out
+

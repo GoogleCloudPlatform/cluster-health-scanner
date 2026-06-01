@@ -279,7 +279,7 @@ class TestRambleManager(unittest.TestCase):
             machine_type="a3-high",
             timeout=None,
             deadline=None,
-            workspace_name="ws1",
+            run_id=None,
         )
 
     def test_check_jobs_running_true(self):

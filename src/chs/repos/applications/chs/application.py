@@ -165,6 +165,11 @@ class Chs(ExecutableApplication):
                 f"Failed to parse tests configuration: {e}"
             ) from e
 
+        chs_run_id = self.expander.expand_var_name("chs_run_id", typed=True)
+        base_prefix = (
+            f"chs-{chs_run_id}" if chs_run_id else self.expander.experiment_name
+        )
+
         for test in tests_config.tests:
             test_vars = self.non_reserved_variables(
                 workspace,
@@ -178,6 +183,7 @@ class Chs(ExecutableApplication):
                     "srun_args",
                 },
             )
+            test_vars["chs_test_name"] = test.name
 
             if test.variables:
                 test_vars.update(test.variables)
@@ -219,7 +225,7 @@ class Chs(ExecutableApplication):
                 application_name = "nccl-tests"
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    experiment_name = f"{base_prefix}-{test.name}-{workload}"
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
                     contexts = TestHelper.nccl_test(
@@ -235,7 +241,9 @@ class Chs(ExecutableApplication):
                         )
             elif test.name == "dcgm":
                 application_name = "nvidia-dcgm"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}-level-{{diag_level}}"
+                experiment_name = (
+                    f"{base_prefix}-{test.name}-level-{{diag_level}}"
+                )
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -248,7 +256,7 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "stream":
                 application_name = "nvidia-stream"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+                experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -261,7 +269,7 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "nvidia-smi":
                 application_name = "nvidia-smi"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+                experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -283,7 +291,9 @@ class Chs(ExecutableApplication):
                 workloads = test.workloads if test.workloads else ["check"]
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    experiment_name = (
+                        f"{base_prefix}-{application_name}-{workload}"
+                    )
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
                     if is_tpu_machine:
@@ -299,9 +309,7 @@ class Chs(ExecutableApplication):
                     )
             elif test.name == "hbm":
                 application_name = "tpu-hbm"
-                experiment_name = (
-                    f"{self.expander.experiment_name}-{application_name}"
-                )
+                experiment_name = f"{base_prefix}-{application_name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -314,9 +322,7 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "host-device":
                 application_name = "tpu-host-device"
-                experiment_name = (
-                    f"{self.expander.experiment_name}-{application_name}"
-                )
+                experiment_name = f"{base_prefix}-{application_name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -336,7 +342,9 @@ class Chs(ExecutableApplication):
                 )
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    experiment_name = (
+                        f"{base_prefix}-{application_name}-{workload}"
+                    )
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
 
@@ -358,7 +366,7 @@ class Chs(ExecutableApplication):
                 )
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-single-node-{workload}"
+                    experiment_name = f"{base_prefix}-{application_name}-single-node-{workload}"
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
 
@@ -374,7 +382,7 @@ class Chs(ExecutableApplication):
 
             elif test.name == "tpu-info":
                 application_name = "tpu-info"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+                experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name

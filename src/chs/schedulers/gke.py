@@ -68,6 +68,7 @@ class GKEScheduler(BaseScheduler):
         self,
         tests: list[dict[str, Any]] | None = None,
         workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Checks for JobSet and Kueue dependencies on GKE."""
         preflight_checker = GkePreflightChecker(self)
@@ -77,7 +78,8 @@ class GKEScheduler(BaseScheduler):
             self.workspace_name = workspace_name
             if self._app_data:
                 run_entry = self._app_data.get_run(workspace_name) or {}
-                run_entry.update({"run_id": workspace_name})
+                if run_id:
+                    run_entry.update({"run_id": run_id})
                 self._app_data.update_run(workspace_name, run_entry)
         return filtered_tests
 
@@ -120,7 +122,62 @@ class GKEScheduler(BaseScheduler):
     def name(self) -> str:
         return "gke"
 
-    def _run_kubectl(self, args: list[str]) -> str:
+    def get_cluster_name(self) -> str | None:
+        """Retrieves cluster name from GKE configmap or kubectl."""
+        # 1. Try ConfigMap (in-cluster GKE)
+        try:
+            val = self._run_kubectl(
+                [
+                    "get",
+                    "configmap",
+                    "gke-common-webhook",
+                    "-n",
+                    "kube-system",
+                    "-o",
+                    "jsonpath={.data.clusterName}",
+                ],
+                timeout=5,
+            )
+            if val:
+                return val
+        except Exception:
+            pass
+
+        # 2. Try node labels
+        try:
+            val = self._run_kubectl(
+                [
+                    "get",
+                    "nodes",
+                    "-o",
+                    "jsonpath={.items[0].metadata.labels}",
+                ],
+                timeout=5,
+            )
+            if val:
+                labels = json.loads(val)
+                gke_cluster = labels.get(
+                    "container.googleapis.com/cluster_name"
+                )
+                if gke_cluster:
+                    return gke_cluster
+        except Exception:
+            pass
+
+        # 3. Try current-context (local execution)
+        try:
+            val = self._run_kubectl(["config", "current-context"], timeout=5)
+            if val:
+                if val.startswith("gke_"):
+                    parts = val.split("_")
+                    if len(parts) >= 4:
+                        return parts[-1]
+                return val
+        except Exception:
+            pass
+        return None
+
+    def _run_kubectl(self, args: list[str], timeout: int | None = None) -> str:
         """Runs a kubectl command and returns filtered output."""
         cmd = ["kubectl"] + args
         result = subprocess.run(
@@ -128,6 +185,7 @@ class GKEScheduler(BaseScheduler):
             text=True,
             capture_output=True,
             check=True,
+            timeout=timeout,
         )
         return result.stdout.strip()
 
@@ -310,7 +368,7 @@ class GKEScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
-        workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         self.workspace_config_dir = workspace_config_dir
         nodes = self.get_nodes_under_test()
@@ -350,6 +408,8 @@ class GKEScheduler(BaseScheduler):
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
         variables["timeout"] = timeout
         variables["deadline"] = deadline
+
+        variables["chs_run_id"] = run_id
 
         if machine_type.startswith("tpu") and nodes:
             topology = self._discover_tpu_topology(nodes[0])

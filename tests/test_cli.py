@@ -21,7 +21,7 @@ import pathlib
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
-MOCK_WORKSPACE_NAME = MOCK_DATETIME.strftime("%Y-%m-%d_%H.%M.%S.%f")
+MOCK_WORKSPACE_NAME = "20230101-120000_mockcluster-suite1-mockhash"
 
 
 @dataclasses.dataclass
@@ -82,6 +82,8 @@ class TestCli(unittest.TestCase):
             mock.patch("chs.cli.RambleManager", autospec=True)
         )
         self.mock_rm_instance = self.mock_rm_cls.return_value
+        self.mock_rm_instance.workspace_name = MOCK_WORKSPACE_NAME
+        self.mock_rm_instance.path = f"/mocked/workspaces/{MOCK_WORKSPACE_NAME}"
         self.mock_rm_instance.execute_experiments.return_value = []
         self.mock_rm_instance.check_jobs_running.return_value = False
 
@@ -121,6 +123,19 @@ class TestCli(unittest.TestCase):
             "/mocked/workspaces"
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.resolve_run_id.side_effect = lambda x: x
+
+        self.mock_get_cluster_name = self.enterContext(
+            mock.patch(
+                "chs.cli.utils.get_sanitized_cluster_name",
+                return_value="mockcluster",
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.cli.utils.generate_random_suffix", return_value="mockhash"
+            )
+        )
 
         # Mock suites utilities to return test dummy values
         self.enterContext(
@@ -637,7 +652,9 @@ class TestCli(unittest.TestCase):
 
                 self.mock_app_data.get_workspaces_dir.assert_called()
                 self.mock_rm_cls.assert_any_call(
-                    mock_default_dir, MOCK_WORKSPACE_NAME
+                    mock_default_dir,
+                    MOCK_WORKSPACE_NAME,
+                    run_id=f"mockcluster-{case.expected_return.suite}-mockhash",
                 )
                 self.mock_rm_instance.create_workspace.assert_called_once()
                 self.mock_rm_instance.configure_workspace.assert_called_once()
@@ -653,13 +670,94 @@ class TestCli(unittest.TestCase):
                 self.mock_rm_instance.execute_experiments.assert_called_once()
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data,
-                    MOCK_WORKSPACE_NAME,
+                    f"mockcluster-{case.expected_return.suite}-mockhash",
                     validation=None,
                     skip_validation=False,
                 )
 
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_custom_run_id(self, mock_analyze_action):
+        """Test 'run' command with a custom run ID."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "slurm"
+
+        result = self.runner.invoke(
+            cli.cli,
+            [
+                "-v",
+                "run",
+                "--suite",
+                "suite1",
+                "--scheduler",
+                "slurm",
+                "--machine-type",
+                "a3-high",
+                "--run-id",
+                "customrun",
+            ],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        expected_run_id = "customrun-mockhash"
+        expected_workspace_name = f"20230101-120000_{expected_run_id}"
+
+        self.mock_rm_cls.assert_any_call(
+            mock_default_dir, expected_workspace_name, run_id=expected_run_id
+        )
+        mock_analyze_action.assert_called_once_with(
+            self.mock_app_data,
+            expected_run_id,
+            validation=None,
+            skip_validation=False,
+        )
+
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_dry_run(self, mock_analyze_action):
+        """Test 'run' command with dry-run."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_rm_instance.execute_experiments.return_value = []
+        self.mock_scheduler.name = "slurm"
+
+        result = self.runner.invoke(
+            cli.cli,
+            [
+                "-v",
+                "run",
+                "--suite",
+                "suite1",
+                "--scheduler",
+                "slurm",
+                "--machine-type",
+                "a3-high",
+                "--dry-run",
+            ],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        expected_run_id = "dry-run-cluster-suite1-mockhash"
+        expected_workspace_name = f"20230101-120000_{expected_run_id}"
+
+        self.mock_rm_cls.assert_any_call(
+            mock_default_dir, expected_workspace_name, run_id=expected_run_id
+        )
+        mock_analyze_action.assert_not_called()
+        self.mock_get_cluster_name.assert_not_called()
+
     def test_analyze_action_exception_handling(self):
         """Test that analyze_action wraps exceptions in ClickException."""
+        ws_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, ws_dir)
+        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
+
+        run_dir = os.path.join(ws_dir, "some_run_id")
+        os.makedirs(run_dir)
+        self.mock_rm_instance.path = run_dir
+
         self.mock_rm_instance.wait_for_jobs.side_effect = (
             exceptions.ChsAnalysisException("Analysis failed")
         )
@@ -786,9 +884,15 @@ class TestCli(unittest.TestCase):
 
     def test_run_command_latest_run_active(self):
         """Test `run` command when the latest run is active."""
-        self.mock_app_data.get_latest_run_id.return_value = (
-            "2023-01-01_00.00.00.000000"
-        )
+        ws_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, ws_dir)
+        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
+
+        latest_run_id = "latest_run"
+        self.mock_app_data.get_latest_run_id.return_value = latest_run_id
+
+        os.makedirs(os.path.join(ws_dir, "latest_run"), exist_ok=True)
+
         self.mock_rm_instance.check_jobs_running.return_value = True
         result = self.runner.invoke(
             cli.cli, ["run", "-sch", "slurm", "--machine-type", "a3-high"]
@@ -926,6 +1030,51 @@ class TestCli(unittest.TestCase):
                 ],
                 expected_output="cannot be an empty string",
             ),
+            _CommandErrorTestCase(
+                name="run_id_empty",
+                args_list=[
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--scheduler",
+                    "slurm",
+                    "--machine-type",
+                    "a3-high",
+                    "--run-id",
+                    "",
+                ],
+                expected_output="cannot be an empty string",
+            ),
+            _CommandErrorTestCase(
+                name="run_id_uppercase",
+                args_list=[
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--scheduler",
+                    "slurm",
+                    "--machine-type",
+                    "a3-high",
+                    "--run-id",
+                    "Uppercase",
+                ],
+                expected_output="Run ID must consist of lowercase alphanumeric",
+            ),
+            _CommandErrorTestCase(
+                name="run_id_too_long",
+                args_list=[
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--scheduler",
+                    "slurm",
+                    "--machine-type",
+                    "a3-high",
+                    "--run-id",
+                    "a" * 21,
+                ],
+                expected_output="Run ID must be 20 characters or less",
+            ),
         ]
         for case in test_cases:
             with self.subTest(case.name):
@@ -1041,7 +1190,11 @@ class TestCli(unittest.TestCase):
             ["analyze", "my_run_id"],
             standalone_mode=False,
         )
-        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(
+            result.exit_code,
+            0,
+            f"Exception: {result.exception}\nOutput: {result.output}",
+        )
         self.mock_rm_instance.wait_for_jobs.assert_called_once()
         self.mock_rm_instance.analyze_results.assert_called_once()
         self.mock_rm_instance.archive.assert_called_once()

@@ -4,6 +4,7 @@ ramble:
   config:
     overwrite_inventories: True
   variables:
+    chs_run_id: dry-run-cluster-standard-mock
     scheduler: gke
     nodes:
     - node1

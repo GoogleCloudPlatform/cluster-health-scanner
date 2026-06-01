@@ -266,6 +266,37 @@ class TestValidators(unittest.TestCase):
         errors = v.validate({})
         self.assertEqual(errors, [])
 
+    def test_validate_run_id_valid(self):
+        self.assertEqual(
+            validators.validate_run_id(None, None, "my-run-id"), "my-run-id"
+        )
+        self.assertEqual(
+            validators.validate_run_id(None, None, "run123"), "run123"
+        )
+        self.assertEqual(validators.validate_run_id(None, None, "a"), "a")
+        self.assertEqual(
+            validators.validate_run_id(None, None, "a-b-c"), "a-b-c"
+        )
+        self.assertEqual(validators.validate_run_id(None, None, None), None)
+
+    def test_validate_run_id_invalid(self):
+        import click
+
+        invalid_cases = [
+            "",  # Empty
+            "   ",  # Whitespace
+            "Uppercase-Name",  # Uppercase
+            "name_with_underscore",  # Underscore
+            "name_with_special!",  # Special character
+            "-start-with-dash",  # Starts with dash
+            "end-with-dash-",  # Ends with dash
+            "a" * 36,  # Too long (36 chars)
+        ]
+        for case in invalid_cases:
+            with self.subTest(case):
+                with self.assertRaises(click.BadParameter):
+                    validators.validate_run_id(None, None, case)
+
 
 if __name__ == "__main__":
     unittest.main()

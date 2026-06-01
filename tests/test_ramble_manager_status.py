@@ -16,6 +16,7 @@ class TestRambleManagerStatus(unittest.TestCase):
         with patch.object(RambleManager, "__init__", return_value=None):
             manager = RambleManager()
             manager._workspace_name = "run1"
+            manager._run_id = "run1"
 
             # Mock other methods used in _monitor_jobs
             manager.get_job_ids = Mock(return_value=["job1"])
@@ -44,6 +45,7 @@ class TestRambleManagerStatus(unittest.TestCase):
         with patch.object(RambleManager, "__init__", return_value=None):
             manager = RambleManager()
             manager._workspace_name = "run1"
+            manager._run_id = "run1"
 
             manager.get_job_ids = Mock(return_value=["job1"])
             manager._map_jobs_to_log_paths = Mock(return_value={})

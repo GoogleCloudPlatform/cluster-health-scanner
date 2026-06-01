@@ -8,14 +8,8 @@ class DefaultExtractor:
     def extract_test_info(
         self: TestPlugin, exp: dict[str, Any]
     ) -> tuple[str, str, str]:
-        """Extracts test metadata with basic canonicalization."""
-        name = exp.get("experiment_name", "")
         level = exp.get("workload_name", "")
-
-        # Strip common CHS prefix if no specific plugin handled it
-        if name.startswith("chs-"):
-            parts = name.split("-")
-            if len(parts) >= 2:
-                name = parts[1]
-
+        name = exp.get("RAMBLE_VARIABLES", {}).get("chs_test_name")
+        if not name and hasattr(self, "test_name") and self.test_name:
+            name = self.test_name
         return name, level, self.get_description(name)

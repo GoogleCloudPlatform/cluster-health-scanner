@@ -44,14 +44,16 @@ class RambleManager:
         run_command: Callable[
             ..., subprocess.CompletedProcess[str]
         ] = subprocess.run,
+        run_id: str | None = None,
     ) -> None:
         """Initializes the RambleManager.
 
         Args:
           base_dir: The base directory where Ramble workspaces will be created.
-          workspace_name: A unique name for this CHS workspace.
+          workspace_name: The physical workspace directory name.
           run_command: The function to use for running subprocess commands.
             Defaults to `subprocess.run`.
+          run_id: The user-facing run ID.
 
         Raises:
           click.UsageError: If the Ramble setup script is not found.
@@ -60,15 +62,17 @@ class RambleManager:
 
         self._base_dir = base_dir
         self._workspace_name = workspace_name
-
-        self._path = os.path.join(self._base_dir, self._workspace_name)
+        self._run_id = run_id
         self._app_data = ChsAppData()
+        self._path = os.path.join(self._base_dir, self._workspace_name)
 
         # Ensure the directory exists for logging and execution
         os.makedirs(self._path, exist_ok=True)
 
         logger.debug(
-            "Initialized manager with workspace_name='%s', path='%s'",
+            "Initialized manager with run_id='%s', workspace_name='%s', "
+            "path='%s'",
+            self._run_id,
             self._workspace_name,
             self._path,
         )
@@ -87,7 +91,8 @@ class RambleManager:
 
     def __repr__(self) -> str:
         return (
-            f"RambleManager(workspace_name='{self._workspace_name}',"
+            f"RambleManager(run_id='{self._run_id}',"
+            f" workspace_name='{self._workspace_name}',"
             f" path='{self._path}')"
         )
 
@@ -95,6 +100,16 @@ class RambleManager:
     def path(self) -> str:
         """The absolute path to the Ramble workspace."""
         return self._path
+
+    @property
+    def workspace_name(self) -> str:
+        """The physical workspace directory name."""
+        return self._workspace_name
+
+    @property
+    def run_id(self) -> str | None:
+        """The user-facing run ID."""
+        return self._run_id
 
     def _prepare_ramble_command(self, cmd: list[str]) -> list[str]:
         """Prepares a Ramble command by sourcing setup script."""
@@ -323,7 +338,7 @@ class RambleManager:
             machine_type=machine_type,
             timeout=timeout,
             deadline=deadline,
-            workspace_name=self._workspace_name,
+            run_id=self.run_id,
         )
 
     def setup_workspace(self) -> None:
@@ -347,7 +362,7 @@ class RambleManager:
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry.update(
             {
-                "run_id": self._workspace_name,
+                "run_id": self.run_id,
                 "workspace_path": self.path,
                 "job_entries": {},
                 "submission_time": (
@@ -428,7 +443,7 @@ class RambleManager:
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry.update(
             {
-                "run_id": self._workspace_name,
+                "run_id": self.run_id,
                 "workspace_path": self.path,
                 "job_entries": {
                     job_id: {"status": JobStatus.PENDING.value}
@@ -545,9 +560,7 @@ class RambleManager:
             app_data: ChsAppData to update run status.
             poll_interval: Seconds to wait between checks.
         """
-        logger.info(
-            "Waiting for jobs to complete for run %s...", self._workspace_name
-        )
+        logger.info("Waiting for jobs to complete for run %s...", self._run_id)
         self._monitor_jobs(app_data, poll_interval)
 
     def _monitor_jobs(self, app_data: ChsAppData, poll_interval: int) -> None:
@@ -605,7 +618,7 @@ class RambleManager:
 
         logger.info(
             "All jobs completed and logs fetched for run %s.",
-            self._workspace_name,
+            self._run_id,
         )
 
     def get_scheduler_type(self) -> str:
@@ -833,7 +846,7 @@ class RambleManager:
         # Cleanup jobs after successful analysis
         try:
             self.cancel_experiments()
-            logger.debug("Cleaned up jobs for run %s", self._workspace_name)
+            logger.debug("Cleaned up jobs for run %s", self._run_id)
         except Exception as e:
             logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
