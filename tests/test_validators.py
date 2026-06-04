@@ -47,10 +47,13 @@ class TestValidators(unittest.TestCase):
                 {
                     "name": "nvidia-smi",
                     "platforms": [
-                        {"scheduler": "slurm", "machine_type": "a3-mega"},
-                        {"scheduler": "slurm", "machine_type": "a3-ultra"},
-                        {"scheduler": "gke", "machine_type": "a3-mega"},
-                        {"scheduler": "gke", "machine_type": "a3-ultra"},
+                        {"scheduler": "slurm", "machine_type": "a3-megagpu-8g"},
+                        {
+                            "scheduler": "slurm",
+                            "machine_type": "a3-ultragpu-8g",
+                        },
+                        {"scheduler": "gke", "machine_type": "a3-megagpu-8g"},
+                        {"scheduler": "gke", "machine_type": "a3-ultragpu-8g"},
                     ],
                 }
             ]
@@ -62,7 +65,7 @@ class TestValidators(unittest.TestCase):
 
     def test_machine_type_validator_valid(self):
         v = validators.MachineTypeValidator()
-        errors = v.validate({"machine_type": "a3-mega"})
+        errors = v.validate({"machine_type": "a3-megagpu-8g"})
         self.assertEqual(errors, [])
 
     def test_machine_type_validator_invalid(self):
@@ -92,7 +95,9 @@ class TestValidators(unittest.TestCase):
 
     def test_project_config_validator_valid(self):
         v = validators.ProjectConfigValidator()
-        errors = v.validate({"scheduler": "slurm", "machine_type": "a3-mega"})
+        errors = v.validate(
+            {"scheduler": "slurm", "machine_type": "a3-megagpu-8g"}
+        )
         self.assertEqual(errors, [])
 
     def test_project_config_validator_invalid(self):
@@ -185,7 +190,7 @@ class TestValidators(unittest.TestCase):
                 "suite": "unknown_suite",
                 "tests": ["unknown_test"],
                 "scheduler": "gke",
-                "machine_type": "a3-mega",
+                "machine_type": "a3-megagpu-8g",
             }
         )
         self.assertEqual(len(errors), 2)
@@ -310,6 +315,37 @@ class TestValidators(unittest.TestCase):
             with self.subTest(case):
                 with self.assertRaises(click.BadParameter):
                     validators.validate_run_id(None, None, case)
+
+    def test_homogeneity_validator_valid(self):
+        v = validators.HomogeneityValidator()
+        errors = v.validate(
+            {"detected_machine_types": ["a3-megagpu-8g"], "scheduler": "gke"}
+        )
+        self.assertEqual(errors, [])
+
+    def test_homogeneity_validator_invalid_gke(self):
+        v = validators.HomogeneityValidator()
+        errors = v.validate(
+            {
+                "detected_machine_types": ["a3-megagpu-8g", "a3-ultragpu-8g"],
+                "scheduler": "gke",
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Heterogeneous cluster detected", errors[0])
+        self.assertIn("--nodepools", errors[0])
+
+    def test_homogeneity_validator_invalid_slurm(self):
+        v = validators.HomogeneityValidator()
+        errors = v.validate(
+            {
+                "detected_machine_types": ["a3-megagpu-8g", "a3-ultragpu-8g"],
+                "scheduler": "slurm",
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Heterogeneous cluster detected", errors[0])
+        self.assertIn("--partitions", errors[0])
 
 
 if __name__ == "__main__":

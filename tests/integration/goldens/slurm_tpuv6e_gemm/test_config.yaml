@@ -1,2 +1,10 @@
-description: "Tests the JAX 'gemm' test against a slurm scheduler for tpuv6e"
-command: ["run", "--tests", "gemm", "--scheduler", "slurm", "--machine-type", "tpuv6e", "--nodes", "node1,node2", "--dry-run"]
+command:
+- run
+- --tests
+- gemm
+- --scheduler
+- slurm
+- --nodes
+- node1,node2
+- --dry-run
+description: Tests the JAX 'gemm' test against a slurm scheduler for tpuv6e

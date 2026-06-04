@@ -179,7 +179,7 @@ podAntiAffinity:
         extra_sbatch_headers: dict = None,
     ) -> dict:
         scheduler = ctx_vars.get("scheduler", "gke")
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+        machine_type = ctx_vars.get("machine_type", "a3-ultragpu-8g")
 
         context_dict = {
             "variables": ctx_vars,

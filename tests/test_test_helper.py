@@ -114,7 +114,7 @@ class TestTestHelper(unittest.TestCase):
                 context_name=name
             )
             configs = {
-                "a3-ultra": {
+                "a3-ultragpu-8g": {
                     "nccl-tests": {
                         "variables": {},
                         "env_vars": {},
@@ -133,13 +133,13 @@ class TestTestHelper(unittest.TestCase):
     def test_prepare_base_context(self):
         ctx_vars = {
             "scheduler": "slurm",
-            "machine_type": "a3-ultra",
+            "machine_type": "a3-ultragpu-8g",
             "timeout": 600,
             "deadline": 3600,
             "nodes": ["node1"],
         }
         configs = {
-            "a3-ultra": {
+            "a3-ultragpu-8g": {
                 "my-app": {
                     "variables": {"default_var": "val"},
                 }
@@ -188,13 +188,13 @@ class TestTestHelper(unittest.TestCase):
     def test_create_node_test_context(self):
         variables = {
             "scheduler": "slurm",
-            "machine_type": "a3-ultra",
+            "machine_type": "a3-ultragpu-8g",
             "timeout": 600,
             "deadline": 3600,
             "nodes": ["node1"],
         }
         configs = {
-            "a3-ultra": {
+            "a3-ultragpu-8g": {
                 "my-app": {
                     "variables": {},
                 }

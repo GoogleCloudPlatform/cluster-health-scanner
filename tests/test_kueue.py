@@ -47,7 +47,7 @@ class TestKueueManager(unittest.TestCase):
     def test_setup_already_active_returns_label(self):
         """Test setup returns queue label if ClusterQueue is already active."""
         self.mock_scheduler._run_kubectl.side_effect = ["a3-megagpu-8g", "True"]
-        label = self.kueue_mgr.setup(self.tmp_dir, "a3-mega", ["node1"])
+        label = self.kueue_mgr.setup(self.tmp_dir, "a3-megagpu-8g", ["node1"])
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
         self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 2)
 
@@ -61,7 +61,7 @@ class TestKueueManager(unittest.TestCase):
         ]
 
         label = self.kueue_mgr.setup(
-            self.tmp_dir, "a3-mega", ["node1", "node2"]
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
 
@@ -81,7 +81,9 @@ class TestKueueManager(unittest.TestCase):
             "",
         ]
 
-        label = self.kueue_mgr.setup(self.tmp_dir, "tpu7x", ["node1", "node2"])
+        label = self.kueue_mgr.setup(
+            self.tmp_dir, "tpu7x-standard-4t", ["node1", "node2"]
+        )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
 
         config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")

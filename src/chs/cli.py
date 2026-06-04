@@ -45,6 +45,7 @@ from chs import (
     exceptions as ex,
     get_scheduler,
     load_suite,
+    preflights,
     resources,
     utils,
     validators,
@@ -286,7 +287,7 @@ def _parse_str_to_list(value: str | None) -> list[str] | None:
 
 def _validate_run_args(
     scheduler: str,
-    machine_type: str,
+    detected_machine_types: list[str],
     tests: str | None,
     suite: str | None,
     validation: str | None = None,
@@ -295,7 +296,7 @@ def _validate_run_args(
 
     Args:
       scheduler: Name of the scheduler.
-      machine_type: Machine type string.
+      detected_machine_types: List of detected machine types.
       tests: Comma-separated list of tests, or None.
       suite: Suite name, or None.
       validation: Path to thresholds validation file, or None.
@@ -303,6 +304,18 @@ def _validate_run_args(
     Raises:
       ex.ChsValidationError: If validation fails.
     """
+    homogeneity_validator = validators.HomogeneityValidator()
+    errors = homogeneity_validator.validate(
+        {
+            "detected_machine_types": detected_machine_types,
+            "scheduler": scheduler,
+        }
+    )
+    if errors:
+        raise ex.ChsValidationError("\n".join(errors))
+
+    machine_type = detected_machine_types[0]
+
     validator = validators.ProjectConfigValidator()
     errors = validator.validate(
         {
@@ -739,24 +752,18 @@ def list_command(
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--nodelist",
-    help="Slurm node list pattern to run on (e.g., node-[1-3])",
+    "--nodelists",
+    help="Slurm nodelists to run on (e.g., node-[1-3],node-[4-5])",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--nodepool",
-    help="GKE node pool to run on",
+    "--nodepools",
+    help="GKE node pools to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--partition",
-    help="Slurm partition to run on",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
-    "--machine-type",
-    required=True,
-    help="The machine type of the cluster nodes (e.g., a3-high).",
+    "--partitions",
+    help="Slurm partitions to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
@@ -790,10 +797,9 @@ def run(
     scheduler: str,
     tests: str | None,
     nodes: str | None,
-    nodelist: str | None,
-    nodepool: str | None,
-    partition: str | None,
-    machine_type: str,
+    nodelists: str | None,
+    nodepools: str | None,
+    partitions: str | None,
     dry_run: bool,
     validation: str | None = None,
     skip_validation: bool = False,
@@ -807,10 +813,9 @@ def run(
       scheduler: Scheduler to use (e.g., slurm, gke).
       tests: Comma-separated list of specific tests to run (optional).
       nodes: Comma-separated list of individual nodes to run on.
-      nodelist: Slurm node list pattern to run on (e.g., node-[1-3]).
-      nodepool: GKE node pool to run on.
-      partition: Slurm partition to run on.
-      machine_type: The machine type of the cluster nodes (e.g., a3-high).
+      nodelists: Slurm node list pattern to run on (e.g., node-[1-3]).
+      nodepools: GKE node pools to run on.
+      partitions: Slurm partitions to run on.
       dry_run: Set up the workspace but do not execute experiments or analyze.
 
     Returns:
@@ -823,7 +828,35 @@ def run(
             " complete or cancel it before submitting a new run."
         )
 
-    _validate_run_args(scheduler, machine_type, tests, suite, validation)
+    preflights.run_platform_preflights()
+
+    scheduler_obj = get_scheduler(
+        scheduler,
+        nodes=nodes,
+        nodelists=nodelists,
+        nodepools=nodepools,
+        partitions=partitions,
+        app_data=app_data,
+    )
+
+    nodes_under_test = scheduler_obj.get_nodes_under_test()
+    if not nodes_under_test:
+        raise ex.NoNodesProvidedException("No nodes provided to run on.")
+
+    detected_machine_types = scheduler_obj.detect_nodes_hardware(
+        nodes_under_test
+    )
+
+    if not detected_machine_types or "unknown" in detected_machine_types:
+        raise ex.MachineTypeDiscoveryException(
+            "Failed to detect machine type of some nodes"
+        )
+
+    _validate_run_args(
+        scheduler, detected_machine_types, tests, suite, validation
+    )
+
+    machine_type = detected_machine_types[0]
 
     timeout = resources.DEFAULT_TIMEOUT
     deadline = resources.DEFAULT_DEADLINE
@@ -881,25 +914,6 @@ def run(
         )
         if not suite:
             suite = "custom"
-
-    scheduler_obj = get_scheduler(
-        scheduler,
-        nodes=nodes,
-        nodelist=nodelist,
-        nodepool=nodepool,
-        partition=partition,
-        app_data=app_data,
-    )
-
-    if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
-        nodes_under_test = scheduler_obj.get_nodes_under_test()
-        if not nodes_under_test:
-            raise ex.NoNodesProvidedException("No nodes provided to run on.")
-    else:
-        # TODO: Add support for other schedulers.
-        raise ex.UnsupportedSchedulerException(
-            "Only Slurm and GKE schedulers are supported."
-        )
 
     short_hash = utils.generate_random_suffix()
     if not run_id:

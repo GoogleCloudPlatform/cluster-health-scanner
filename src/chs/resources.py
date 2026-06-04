@@ -15,42 +15,55 @@
 """Supported resources for CHS."""
 
 MACHINE_TYPE_RESOURCE_MAP = {
-    "a3-ultra": {
-        "instance_type": "a3-ultragpu-8g",
+    "a3-ultragpu-8g": {
         "accelerators": 8,
         "resource_name": "nvidia.com/gpu",
     },
-    "a3-mega": {
-        "instance_type": "a3-megagpu-8g",
+    "a3-megagpu-8g": {
         "accelerators": 8,
         "resource_name": "nvidia.com/gpu",
     },
-    "a4": {
-        "instance_type": "a4-highgpu-8g",
+    "a4-highgpu-8g": {
         "accelerators": 8,
         "resource_name": "nvidia.com/gpu",
     },
-    "a4x": {
-        "instance_type": "a4x-highgpu-4g",
+    "a4x-highgpu-4g": {
         "accelerators": 4,
         "resource_name": "nvidia.com/gpu",
     },
-    "a4x-max": {
-        "instance_type": "a4x-maxgpu-4g-metal",
+    "a4x-maxgpu-4g-metal": {
         "accelerators": 4,
         "resource_name": "nvidia.com/gpu",
     },
-    "tpu7x": {
-        "instance_type": "tpu7x-standard-4t",
+    "tpu7x-standard-4t": {
         "accelerators": 4,
         "resource_name": "google.com/tpu",
     },
-    "tpuv6e": {
-        "instance_type": "ct6e-standard-4t",
+    "ct6e-standard-4t": {
         "accelerators": 4,
         "resource_name": "google.com/tpu",
     },
 }
+
+
+def normalize_machine_type(raw_machine_type: str) -> str:
+    """Normalizes a GCE machine type (extracts name from URL if needed)."""
+    if not raw_machine_type:
+        return "unknown"
+    machine_name = raw_machine_type.split("/")[-1]  # Handle GCE URL
+    for chs_type in MACHINE_TYPE_RESOURCE_MAP:
+        if machine_name.startswith(chs_type):
+            return chs_type
+    return machine_name
+
+
+def is_tpu(machine_type: str) -> bool:
+    """Checks if the given machine type is a TPU."""
+    return (
+        MACHINE_TYPE_RESOURCE_MAP.get(machine_type, {}).get("resource_name")
+        == "google.com/tpu"
+    )
+
 
 # Default timeout and deadline values in seconds
 DEFAULT_TIMEOUT = 1200

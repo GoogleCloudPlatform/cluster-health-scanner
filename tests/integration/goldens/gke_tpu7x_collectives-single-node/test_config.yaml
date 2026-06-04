@@ -1,2 +1,11 @@
-description: "Tests the JAX 'collectives-single-node' test against a gke scheduler for tpu7x"
-command: ["run", "--tests", "collectives-single-node", "--scheduler", "gke", "--machine-type", "tpu7x", "--nodes", "node1,node2", "--dry-run"]
+command:
+- run
+- --tests
+- collectives-single-node
+- --scheduler
+- gke
+- --nodes
+- node1,node2
+- --dry-run
+description: Tests the JAX 'collectives-single-node' test against a gke scheduler
+  for tpu7x

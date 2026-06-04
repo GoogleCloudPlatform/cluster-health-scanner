@@ -1,2 +1,10 @@
-description: "Tests the 'gemm' test against a gke scheduler for a4"
-command: ["run", "--tests", "gemm", "--scheduler", "gke", "--machine-type", "a4", "--nodes", "node1,node2", "--dry-run"]
+command:
+- run
+- --tests
+- gemm
+- --scheduler
+- gke
+- --nodes
+- node1,node2
+- --dry-run
+description: Tests the 'gemm' test against a gke scheduler for a4

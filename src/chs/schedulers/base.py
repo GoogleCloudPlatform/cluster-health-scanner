@@ -18,6 +18,10 @@ import abc
 import json
 import os
 from typing import Any, TYPE_CHECKING
+import logging
+from chs.utils.gcp import query_gce_instances_info
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from chs.utils.app_data import ChsAppData
@@ -33,6 +37,39 @@ class BaseScheduler(abc.ABC):
           app_data: ChsAppData instance or None.
         """
         self._app_data = app_data
+        self.node_to_instance_id: dict[
+            str, str
+        ] = {}  # Store node -> GCE instance_id
+
+    @abc.abstractmethod
+    def _resolve_project_id(self, node: str) -> str:
+        """Resolves the GCP project ID for the cluster/nodes."""
+        pass
+
+    def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
+        """Detects machine types and maps instance IDs for the given nodes.
+
+        Stores mapping node_to_instance_id for future use.
+        Returns a list of unique detected machine types (GCE names).
+        """
+        if not nodes:
+            return []
+
+        project = self._resolve_project_id(nodes[0])
+        instances_info = query_gce_instances_info(project, nodes)
+
+        unique_types = set()
+        for node in nodes:
+            instance_info = instances_info.get(node)
+            if instance_info:
+                machine_type = instance_info["machine_type"]
+                unique_types.add(machine_type)
+                self.node_to_instance_id[node] = instance_info["instance_id"]
+            else:
+                logger.warning(f"Could not retrieve GCE info for node {node}")
+                unique_types.add("unknown")
+
+        return sorted(list(unique_types))
 
     def get_cluster_name(self) -> str | None:
         """Retrieves the cluster name. Overridden by subclasses.

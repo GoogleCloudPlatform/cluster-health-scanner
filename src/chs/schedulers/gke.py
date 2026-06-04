@@ -33,9 +33,10 @@ if TYPE_CHECKING:
 
 from chs.schedulers.base import BaseScheduler
 from chs.utils.kueue import KueueManager
-from chs.exceptions import KueueException
+from chs.exceptions import ChsSchedulerException, KueueException
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.gke_preflight import GkePreflightChecker
+from chs import resources
 
 
 def boolean_representer(dumper, data):
@@ -53,29 +54,46 @@ class GKEScheduler(BaseScheduler):
     def __init__(
         self,
         nodes: str | None = None,
-        nodelist: str | None = None,
-        nodepool: str | None = None,
-        partition: str | None = None,
+        nodelists: str | None = None,
+        nodepools: str | None = None,
+        partitions: str | None = None,
         app_data: "ChsAppData | None" = None,
     ):
         super().__init__(app_data)
         self.nodes_arg = nodes
-        self.nodepool_arg = nodepool
+        self.nodepools_arg = nodepools
         self._resolved_nodes: list[str] | None = None
         self.workspace_config_dir: str | None = None
         self.workspace_name: str | None = None
         self.kueue_supported: bool = False
         self._jobset_labels_yaml: str = ""
         self._suspend_jobset: str = "false"
-        if nodelist:
+        if nodelists:
             logger.warning(
-                "nodelist argument is ignored for GKE scheduler. Did you want"
-                " to use nodes or nodepool?"
+                "nodelists argument is ignored for GKE scheduler. Did you want"
+                " to use nodes or nodepools?"
             )
-        if partition:
+        if partitions:
             logger.warning(
-                "partition argument is ignored for GKE scheduler. Did you want"
-                " to use nodes or nodepool?"
+                "partitions argument is ignored for GKE scheduler. Did you want"
+                " to use nodes or nodepools?"
+            )
+
+    def _resolve_project_id(self, node: str) -> str:
+        """Resolves GCP project ID from Kubernetes node providerID."""
+        try:
+            provider_id = self._run_kubectl(
+                ["get", "node", node, "-o", "jsonpath={.spec.providerID}"]
+            ).strip()
+            # providerID format: gce://project-id/zone/instance-name
+            if provider_id.startswith("gce://"):
+                parts = provider_id.replace("gce://", "").split("/")
+                if len(parts) >= 1:
+                    return parts[0]
+            raise ValueError(f"Unexpected providerID format: {provider_id}")
+        except Exception as e:
+            raise ChsSchedulerException(
+                f"Failed to resolve project ID from node: {e}"
             )
 
     def run_preflight_checks(
@@ -306,10 +324,20 @@ class GKEScheduler(BaseScheduler):
 
         try:
             args = ["get", "nodes"]
-            if self.nodepool_arg:
-                args.extend(
-                    ["-l", f"cloud.google.com/gke-nodepool={self.nodepool_arg}"]
-                )
+            if self.nodepools_arg:
+                pools = [
+                    p.strip()
+                    for p in self.nodepools_arg.split(",")
+                    if p.strip()
+                ]
+                if pools:
+                    pools_str = ",".join(pools)
+                    args.extend(
+                        [
+                            "-l",
+                            f"cloud.google.com/gke-nodepool in ({pools_str})",
+                        ]
+                    )
             else:
                 args.extend(["-l", "cloud.google.com/gke-nodepool!=system"])
 
@@ -394,7 +422,7 @@ class GKEScheduler(BaseScheduler):
             with open(p, "r") as f:
                 config = yaml.safe_load(f)
 
-        if machine_type.startswith("tpu"):
+        if resources.is_tpu(machine_type):
             l3_networks = ["default"]
             device_networks = []
         else:
@@ -425,7 +453,7 @@ class GKEScheduler(BaseScheduler):
 
         variables["chs_run_id"] = run_id
 
-        if machine_type.startswith("tpu") and nodes:
+        if resources.is_tpu(machine_type) and nodes:
             topology = self._discover_tpu_topology(nodes[0])
             if topology:
                 variables["tpu_topology"] = topology

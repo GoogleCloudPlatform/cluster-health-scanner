@@ -32,7 +32,7 @@ class NcclLinker(BasicModifier):
         append_execs = []
 
         machine_type = self.expander.expand_var_name("machine_type")
-        if machine_type == "a3-high":
+        if machine_type == "a3-highgpu-8g":
             if executable_name == "all-to-all-execute":
                 executable.template = [
                     'bash -c "export'
@@ -63,7 +63,7 @@ class NcclLinker(BasicModifier):
                     " LD_LIBRARY_PATH=/var/lib/tcpx/lib64:${LD_LIBRARY_PATH};"
                     ' ./sendrecv_perf {additional_args}"'
                 ]
-        if machine_type == "a3-ultra" or machine_type == "a4":
+        if machine_type == "a3-ultragpu-8g" or machine_type == "a4-highgpu-8g":
             if executable_name == "all-to-all-execute":
                 executable.template = [
                     'bash -c "export'
@@ -94,7 +94,7 @@ class NcclLinker(BasicModifier):
                     " LD_LIBRARY_PATH=/usr/local/gib/lib64:${LD_LIBRARY_PATH};"
                     ' ./sendrecv_perf {additional_args}"'
                 ]
-        if machine_type == "a3-mega":
+        if machine_type == "a3-megagpu-8g":
             if executable_name == "all-to-all-execute":
                 executable.template = [
                     'bash -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH; ./alltoall_perf {additional_args}"'

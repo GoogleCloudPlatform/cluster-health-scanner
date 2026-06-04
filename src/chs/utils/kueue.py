@@ -137,13 +137,7 @@ class KueueManager:
             )
 
         resource_map = MACHINE_TYPE_RESOURCE_MAP.get(machine_type, {})
-        instance_type = resource_map.get("instance_type")
-        if not instance_type:
-            raise KueueException(
-                f"Missing 'instance_type' mapping for machine type "
-                f"'{machine_type}' in MACHINE_TYPE_RESOURCE_MAP."
-            )
-
+        instance_type = machine_type
         accelerators_per_node = resource_map.get("accelerators", 0)
         nominal_quota = len(nodes) * accelerators_per_node
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")

@@ -85,8 +85,12 @@ def mock_cluster_env(tmp_path, monkeypatch):
         '    elif [[ "$*" == *"get deployment -n kueue-system"* ]]; then\n'
         '      echo "registry.k8s.io/kueue/kueue:v0.14.5"\n'
         '    elif [[ "$*" == *"get node"* ]]; then\n'
-        '      echo \'{"metadata": {"labels": '
+        '      if [[ "$*" == *".spec.providerID"* ]]; then\n'
+        '        echo "gce://mock-project/mock-zone/mock-node"\n'
+        "      else\n"
+        '        echo \'{"metadata": {"labels": '
         '{"cloud.google.com/gke-tpu-topology": "2x2x1"}}}\'\n'
+        "      fi\n"
         '    elif [[ "$*" == *"get clusterqueue"* ]]; then\n'
         '      if [[ "$MOCK_KUEUE_APPLY_FAIL" == "1" ]]; then\n'
         "        exit 1\n"
@@ -120,6 +124,24 @@ def mock_cluster_env(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
     return bin_dir
+
+
+def _get_machine_type_from_test_case(test_case: str) -> str:
+    if "a3mega" in test_case:
+        return "a3-megagpu-8g"
+    if "a3ultra" in test_case:
+        return "a3-ultragpu-8g"
+    if "a4x-max" in test_case:
+        return "a4x-maxgpu-4g-metal"
+    if "a4" in test_case:
+        return "a4-highgpu-8g"
+    if "tpu7x" in test_case:
+        return "tpu7x-standard-4t"
+    if "tpuv6e" in test_case:
+        return "ct6e-standard-4t"
+    raise ValueError(
+        f"Could not determine machine type from test case: {test_case}"
+    )
 
 
 @pytest.mark.parametrize("test_case", get_test_cases())
@@ -158,6 +180,27 @@ def test_golden_config(
     mocker.patch(
         "chs.cli.utils.generate_random_suffix",
         return_value="mock",
+    )
+
+    # Mock GCP credentials and preflight
+    mocker.patch(
+        "google.auth.default",
+        return_value=(None, "mock-project"),
+    )
+    mocker.patch("chs.preflights.run_platform_preflights")
+
+    # Mock GCE instances info query
+    detected_mt = _get_machine_type_from_test_case(test_case)
+
+    def mock_query_info(project, nodes):
+        return {
+            node: {"machine_type": detected_mt, "instance_id": "12345"}
+            for node in nodes
+        }
+
+    mocker.patch(
+        "chs.schedulers.base.query_gce_instances_info",
+        side_effect=mock_query_info,
     )
 
     result = runner.invoke(cli, command)

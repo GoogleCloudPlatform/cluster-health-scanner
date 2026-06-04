@@ -12,7 +12,7 @@ ramble:
     n_nodes: 1
     processes_per_node: 1
     n_ranks: 1
-    machine_type: tpuv6e
+    machine_type: ct6e-standard-4t
     tests:
     - name: tpu-info
     default_interface_name: eth0

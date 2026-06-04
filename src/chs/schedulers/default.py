@@ -41,6 +41,9 @@ class DefaultScheduler(BaseScheduler):
         super().__init__(app_data)
         self._name = name
 
+    def _resolve_project_id(self, node: str) -> str:
+        return "dummy-project"
+
     @property
     def name(self) -> str:
         return self._name

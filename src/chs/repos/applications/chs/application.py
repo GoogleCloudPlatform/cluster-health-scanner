@@ -29,6 +29,7 @@ sys.path.append(config_dir)
 
 from test_helper import TestHelper
 from ramble.appkit import *
+from chs.resources import is_tpu
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +78,6 @@ def parse_tests_config(raw_input) -> TestsModel:
     return TestsModel(tests=[])
 
 
-def is_tpu(machine_type: str) -> bool:
-    """Returns True if the machine type is a TPU."""
-    return machine_type.startswith("tpu") if machine_type else False
-
-
 class Chs(ExecutableApplication):
     """Cluster health scanner for running diagnostics"""
 
@@ -103,16 +99,6 @@ class Chs(ExecutableApplication):
         "machine_type",
         default="",
         description="Machine type to test",
-        values=[
-            "a3-high",
-            "a3-ultra",
-            "a4",
-            "a3-mega",
-            "a4x",
-            "a4x-max",
-            "tpu7x",
-            "tpuv6e",
-        ],
     )
 
     executable(

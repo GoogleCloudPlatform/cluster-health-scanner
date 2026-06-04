@@ -51,7 +51,7 @@ spec:
                   cd "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs"
                   rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/chs.out"
                   touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/chs.out"
-                  echo 'Initiating cluster health diagnostics for a3-ultra' 
+                  echo 'Initiating cluster health diagnostics for a3-ultragpu-8g' 
 
               restartPolicy: Never
 

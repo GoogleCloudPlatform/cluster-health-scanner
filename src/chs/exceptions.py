@@ -95,6 +95,10 @@ class ClusterDiscoveryException(ChsException):
     """Raised when cluster discovery/retrieval fails."""
 
 
+class MachineTypeDiscoveryException(ChsException):
+    """Raised when machine type discovery fails."""
+
+
 class KueueException(ChsException):
     """Raised for Kueue-related errors."""
 

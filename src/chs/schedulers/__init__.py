@@ -26,14 +26,14 @@ def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
     if scheduler == "slurm":
         return SlurmScheduler(
             nodes=kwargs.get("nodes"),
-            nodelist=kwargs.get("nodelist"),
-            partition=kwargs.get("partition"),
+            nodelists=kwargs.get("nodelists"),
+            partitions=kwargs.get("partitions"),
             app_data=app_data,
         )
     if scheduler == "gke":
         return GKEScheduler(
             nodes=kwargs.get("nodes"),
-            nodepool=kwargs.get("nodepool"),
+            nodepools=kwargs.get("nodepools"),
             app_data=app_data,
         )
     return DefaultScheduler(scheduler, app_data=app_data)

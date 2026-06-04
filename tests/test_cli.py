@@ -112,11 +112,17 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "a3-megagpu-8g"
+        ]
         self.mock_scheduler.run_preflight_checks.side_effect = (
             lambda tests, *args, **kwargs: tests
         )
         self.mock_scheduler.setup_scheduler_resources.side_effect = (
             lambda workspace_config_dir=None, tests=None, *args, **kwargs: tests
+        )
+        self.enterContext(
+            mock.patch("chs.preflights.run_platform_preflights", autospec=True)
         )
 
         self.mock_load_suite = self.enterContext(
@@ -155,7 +161,12 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch(
                 "chs.utils.tests.get_all_supported_machine_types",
-                return_value=["a3-ultra", "a4", "a3-mega", "a3-high"],
+                return_value=[
+                    "a3-ultragpu-8g",
+                    "a4-highgpu-8g",
+                    "a3-megagpu-8g",
+                    "a4x-highgpu-4g",
+                ],
             )
         )
         self.enterContext(
@@ -189,7 +200,7 @@ class TestCli(unittest.TestCase):
                 return_value=TestsMap(
                     data={
                         "slurm": {
-                            "a3-high": [
+                            "a3-megagpu-8g": [
                                 "t1",
                                 "t2",
                                 "t3",
@@ -199,7 +210,7 @@ class TestCli(unittest.TestCase):
                             ],
                         },
                         "gke": {
-                            "a3-high": [
+                            "a3-megagpu-8g": [
                                 "t1",
                                 "t2",
                                 "t3",
@@ -351,10 +362,15 @@ class TestCli(unittest.TestCase):
             ),
             _ListCommandTestCase(
                 name="machine_type",
-                args_list=["list", "--tests", "--machine-type", "a3-ultra"],
+                args_list=[
+                    "list",
+                    "--tests",
+                    "--machine-type",
+                    "a3-ultragpu-8g",
+                ],
                 expected_kwargs=_ListActionKwargs(
                     tests=True,
-                    machine_type="a3-ultra",
+                    machine_type="a3-ultragpu-8g",
                 ),
             ),
         ]
@@ -416,6 +432,7 @@ class TestCli(unittest.TestCase):
             s = mock.Mock()
             s.name = name
             s.get_nodes_under_test.return_value = ["node1"]
+            s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
             s.run_preflight_checks.side_effect = (
                 lambda tests=None, *args, **kwargs: tests
             )
@@ -439,8 +456,6 @@ class TestCli(unittest.TestCase):
                     "suite1",
                     "--scheduler",
                     "slurm",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -462,8 +477,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "t1,t2",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -485,8 +498,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "t1",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -508,8 +519,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "t1,",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -531,8 +540,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     ",t1",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -554,8 +561,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "t1,,t2",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -577,8 +582,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "t1, t2 ",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -600,8 +603,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "t1, t2 ,t3 ",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -623,8 +624,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--nodes",
                     "node1,node2",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
@@ -679,7 +678,7 @@ class TestCli(unittest.TestCase):
                     args[0].name, case.expected_return.scheduler_name
                 )
                 self.assertEqual(args[1], case.expected_return.tests)
-                self.assertEqual(kwargs["machine_type"], "a3-high")
+                self.assertEqual(kwargs["machine_type"], "a3-megagpu-8g")
                 self.mock_rm_instance.setup_workspace.assert_called_once()
                 self.mock_rm_instance.execute_experiments.assert_called_once()
                 mock_analyze_action.assert_called_once_with(
@@ -706,8 +705,6 @@ class TestCli(unittest.TestCase):
                 "suite1",
                 "--scheduler",
                 "slurm",
-                "--machine-type",
-                "a3-high",
                 "--run-id",
                 "customrun",
             ],
@@ -745,8 +742,6 @@ class TestCli(unittest.TestCase):
                 "suite1",
                 "--scheduler",
                 "slurm",
-                "--machine-type",
-                "a3-high",
                 "--dry-run",
             ],
             standalone_mode=False,
@@ -834,7 +829,7 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run", "-sch", "slurm", "--machine-type", "a3-high"],
+            ["run", "-sch", "slurm"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Mock failure", result.output)
@@ -853,7 +848,7 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run", "-s", "s1", "-sch", "gke", "--machine-type", "a3-high"],
+            ["run", "-s", "s1", "-sch", "gke"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("CHS execution failed", result.output)
@@ -865,13 +860,14 @@ class TestCli(unittest.TestCase):
     def test_run_command_passes_nodepool_to_scheduler(
         self, mock_analyze_action, mock_get_scheduler
     ):
-        """Test that nodepool argument is passed to get_scheduler."""
+        """Test that nodepools argument is passed to get_scheduler."""
         self.mock_app_data.get_workspaces_dir.return_value = (
             "/mocked/workspaces"
         )
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "gke"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
         mock_get_scheduler.return_value = mock_scheduler
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         result = self.runner.invoke(
@@ -880,10 +876,8 @@ class TestCli(unittest.TestCase):
                 "run",
                 "--scheduler",
                 "gke",
-                "--nodepool",
+                "--nodepools",
                 "pool1",
-                "--machine-type",
-                "a3-high",
             ],
         )
 
@@ -894,7 +888,7 @@ class TestCli(unittest.TestCase):
         )
         mock_get_scheduler.assert_called_once()
         _, kwargs = mock_get_scheduler.call_args
-        self.assertEqual(kwargs.get("nodepool"), "pool1")
+        self.assertEqual(kwargs.get("nodepools"), "pool1")
 
     def test_run_command_latest_run_active(self):
         """Test `run` command when the latest run is active."""
@@ -908,11 +902,21 @@ class TestCli(unittest.TestCase):
         os.makedirs(os.path.join(ws_dir, "latest_run"), exist_ok=True)
 
         self.mock_rm_instance.check_jobs_running.return_value = True
-        result = self.runner.invoke(
-            cli.cli, ["run", "-sch", "slurm", "--machine-type", "a3-high"]
-        )
+        result = self.runner.invoke(cli.cli, ["run", "-sch", "slurm"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("The latest CHS run is still in progress", result.output)
+
+    def test_run_command_heterogeneous_cluster_raises(self):
+        """Test `run` command when a heterogeneous cluster is detected."""
+        self.mock_scheduler.name = "slurm"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "a3-megagpu-8g",
+            "a3-ultragpu-8g",
+        ]
+        result = self.runner.invoke(cli.cli, ["run", "-sch", "slurm"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Heterogeneous cluster detected", result.output)
+        self.assertIn("--partitions", result.output)
 
     def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
@@ -931,8 +935,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--tests",
                     "",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="cannot be an empty string",
             ),
@@ -944,8 +946,6 @@ class TestCli(unittest.TestCase):
                     "suite1",
                     "--scheduler",
                     "unknown",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="Scheduler 'unknown' is not supported",
             ),
@@ -955,15 +955,8 @@ class TestCli(unittest.TestCase):
                     "run",
                     "--suite",
                     "suite1",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="Missing option '--scheduler'",
-            ),
-            _CommandErrorTestCase(
-                name="missing_machine_type",
-                args_list=["run", "--suite", "suite1", "--scheduler", "slurm"],
-                expected_output="Missing option '--machine-type'",
             ),
             _CommandErrorTestCase(
                 name="suite_missing_value",
@@ -972,8 +965,6 @@ class TestCli(unittest.TestCase):
                     "--suite",
                     "--scheduler",
                     "gke",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="Missing option '--scheduler' / '-sch'",
             ),
@@ -986,8 +977,6 @@ class TestCli(unittest.TestCase):
                     "--scheduler",
                     "--tests",
                     "t1",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="Got unexpected extra argument",
             ),
@@ -1000,8 +989,6 @@ class TestCli(unittest.TestCase):
                     "slurm",
                     "--suite",
                     "s1",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="Missing option '--scheduler'",
             ),
@@ -1013,8 +1000,6 @@ class TestCli(unittest.TestCase):
                     "",
                     "--scheduler",
                     "slurm",
-                    "--machine-type",
-                    "a3-high",
                 ],
                 expected_output="cannot be an empty string",
             ),
@@ -1025,21 +1010,6 @@ class TestCli(unittest.TestCase):
                     "--suite",
                     "suite1",
                     "--scheduler",
-                    "",
-                    "--machine-type",
-                    "a3-high",
-                ],
-                expected_output="cannot be an empty string",
-            ),
-            _CommandErrorTestCase(
-                name="empty_machine_type",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "suite1",
-                    "--scheduler",
-                    "slurm",
-                    "--machine-type",
                     "",
                 ],
                 expected_output="cannot be an empty string",
@@ -1052,8 +1022,6 @@ class TestCli(unittest.TestCase):
                     "suite1",
                     "--scheduler",
                     "slurm",
-                    "--machine-type",
-                    "a3-high",
                     "--run-id",
                     "",
                 ],
@@ -1067,8 +1035,6 @@ class TestCli(unittest.TestCase):
                     "suite1",
                     "--scheduler",
                     "slurm",
-                    "--machine-type",
-                    "a3-high",
                     "--run-id",
                     "Uppercase",
                 ],
@@ -1082,8 +1048,6 @@ class TestCli(unittest.TestCase):
                     "suite1",
                     "--scheduler",
                     "slurm",
-                    "--machine-type",
-                    "a3-high",
                     "--run-id",
                     "a" * 21,
                 ],

@@ -15,6 +15,7 @@
 """Validators package for CHS configuration."""
 
 from chs.validators.base import Validator
+from chs.validators.homogeneity import HomogeneityValidator
 from chs.validators.machine_type import MachineTypeValidator
 from chs.validators.project import ProjectConfigValidator
 from chs.validators.scheduler import SchedulerValidator
@@ -25,6 +26,7 @@ from chs.validators.utils import validate_non_empty_string, validate_run_id
 
 __all__ = [
     "Validator",
+    "HomogeneityValidator",
     "MachineTypeValidator",
     "SchedulerValidator",
     "SuiteValidator",

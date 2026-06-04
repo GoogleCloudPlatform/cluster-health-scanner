@@ -25,6 +25,7 @@ from chs.schedulers.default import DefaultScheduler
 from chs.schedulers.gke import GKEScheduler
 from chs.schedulers.slurm import SlurmScheduler
 import click
+from chs import exceptions as ex
 
 
 @mock.patch("chs.schedulers.slurm.logger")
@@ -48,15 +49,15 @@ class TestSlurmScheduler(unittest.TestCase):
 
     def test_get_nodes_under_test_multiple_args_error(self, mock_logger):
         scheduler = SlurmScheduler(
-            nodes="n1", nodelist="nl1", app_data=self.mock_app_data
+            nodes="n1", nodelists="nl1", app_data=self.mock_app_data
         )
         with self.assertRaisesRegex(click.UsageError, "Only one of"):
             scheduler.get_nodes_under_test()
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_nodelist_arg(self, mock_run, mock_logger):
+    def test_get_nodes_under_test_nodelists_arg(self, mock_run, mock_logger):
         scheduler = SlurmScheduler(
-            nodelist="node-[1-2]", app_data=self.mock_app_data
+            nodelists="node-[1-2]", app_data=self.mock_app_data
         )
         mock_run.return_value.stdout = "node-1\nnode-2"
 
@@ -68,8 +69,8 @@ class TestSlurmScheduler(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_partition_arg(self, mock_run, mock_logger):
-        """Tests get_nodes_under_test with partition argument."""
-        scheduler = SlurmScheduler(partition="p1", app_data=self.mock_app_data)
+        """Tests get_nodes_under_test with partitions argument."""
+        scheduler = SlurmScheduler(partitions="p1", app_data=self.mock_app_data)
         # sinfo -N natively outputs uncompressed extended hostnames
         mock_run.return_value.stdout = "node-1\nnode-2\n"
 
@@ -153,6 +154,37 @@ class TestSlurmScheduler(unittest.TestCase):
                 "Detected network interfaces: %r", []
             )
 
+    @mock.patch("google.auth.default")
+    def test_resolve_project_id_slurm_success(
+        self, mock_auth_default, mock_logger
+    ):
+        scheduler = SlurmScheduler(app_data=self.mock_app_data)
+        mock_auth_default.return_value = (None, "my-project-id")
+        project_id = scheduler._resolve_project_id("node1")
+        self.assertEqual(project_id, "my-project-id")
+
+    @mock.patch("google.auth.default")
+    def test_resolve_project_id_slurm_no_project(
+        self, mock_auth_default, mock_logger
+    ):
+        scheduler = SlurmScheduler(app_data=self.mock_app_data)
+        mock_auth_default.return_value = (None, None)
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Could not determine GCP project"
+        ):
+            scheduler._resolve_project_id("node1")
+
+    @mock.patch("google.auth.default")
+    def test_resolve_project_id_slurm_error(
+        self, mock_auth_default, mock_logger
+    ):
+        scheduler = SlurmScheduler(app_data=self.mock_app_data)
+        mock_auth_default.side_effect = Exception("auth error")
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Failed to get GCP credentials"
+        ):
+            scheduler._resolve_project_id("node1")
+
 
 class TestDefaultScheduler(unittest.TestCase):
     """Tests for DefaultScheduler."""
@@ -193,14 +225,16 @@ class TestGKEScheduler(unittest.TestCase):
         )
         self.assertEqual(scheduler.name, "gke")
         self.assertEqual(scheduler.nodes_arg, "node1,node2")
-        self.assertIsNone(scheduler.nodepool_arg)
+        self.assertIsNone(scheduler.nodepools_arg)
 
     def test_init_nodepool(self, mock_logger):
-        """Test initialization with nodepool."""
-        scheduler = GKEScheduler(nodepool="pool-1", app_data=self.mock_app_data)
+        """Test initialization with nodepools."""
+        scheduler = GKEScheduler(
+            nodepools="pool-1", app_data=self.mock_app_data
+        )
         self.assertEqual(scheduler.name, "gke")
         self.assertIsNone(scheduler.nodes_arg)
-        self.assertEqual(scheduler.nodepool_arg, "pool-1")
+        self.assertEqual(scheduler.nodepools_arg, "pool-1")
 
     def test_get_nodes_under_test(self, mock_logger):
         """Test get_nodes_under_test returns parsed nodes."""
@@ -219,8 +253,10 @@ class TestGKEScheduler(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_nodepool(self, mock_run, mock_logger):
-        """Test get_nodes_under_test uses nodepool to fetch nodes."""
-        scheduler = GKEScheduler(nodepool="pool-1", app_data=self.mock_app_data)
+        """Test get_nodes_under_test uses nodepools to fetch nodes."""
+        scheduler = GKEScheduler(
+            nodepools="pool-1", app_data=self.mock_app_data
+        )
         mock_run.return_value.stdout = "node-1 node-2"
 
         nodes = scheduler.get_nodes_under_test()
@@ -230,13 +266,13 @@ class TestGKEScheduler(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertIn("kubectl", cmd)
         self.assertIn("-l", cmd)
-        self.assertIn("cloud.google.com/gke-nodepool=pool-1", cmd)
+        self.assertIn("cloud.google.com/gke-nodepool in (pool-1)", cmd)
 
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_nodes_precedence(self, mock_run, mock_logger):
-        """Test nodes arg takes precedence over nodepool."""
+        """Test nodes arg takes precedence over nodepools."""
         scheduler = GKEScheduler(
-            nodes="node-1", nodepool="pool-1", app_data=self.mock_app_data
+            nodes="node-1", nodepools="pool-1", app_data=self.mock_app_data
         )
 
         nodes = scheduler.get_nodes_under_test()
@@ -272,7 +308,7 @@ ramble:
                     mock.mock_open(read_data=mock_template_content),
                 ):
                     scheduler.write_ramble_config(
-                        workspace_config_dir, ["test1"], "a3-high"
+                        workspace_config_dir, ["test1"], "a3-megagpu-8g"
                     )
 
     def test_write_ramble_config_integration(self, mock_logger):
@@ -307,7 +343,7 @@ ramble:
                 side_effect=mock_as_file_func,
             ):
                 scheduler.write_ramble_config(
-                    workspace_config_dir, ["test1"], "a3-high"
+                    workspace_config_dir, ["test1"], "a3-megagpu-8g"
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
@@ -318,7 +354,7 @@ ramble:
 
         variables = data["ramble"]["variables"]
         self.assertEqual(variables["nodes"], ["node1"])
-        self.assertEqual(variables["machine_type"], "a3-high")
+        self.assertEqual(variables["machine_type"], "a3-megagpu-8g")
         self.assertEqual(variables["tests"], ["test1"])
         self.assertEqual(variables["default_interface_name"], "eth0")
 
@@ -365,7 +401,7 @@ ramble:
                 scheduler.write_ramble_config(
                     workspace_config_dir,
                     ["test1"],
-                    "a3-high",
+                    "a3-megagpu-8g",
                     timeout=600,
                     deadline=1800,
                 )
@@ -399,7 +435,7 @@ ramble:
         tests = scheduler.setup_scheduler_resources(
             workspace_config_dir,
             [{"name": "nccl-cluster"}],
-            "a3-high",
+            "a3-megagpu-8g",
             workspace_name="ws1",
         )
 
@@ -431,7 +467,7 @@ ramble:
         tests = scheduler.setup_scheduler_resources(
             workspace_config_dir,
             [{"name": "nccl-cluster"}, {"name": "test1"}],
-            "a3-high",
+            "a3-megagpu-8g",
             workspace_name="ws1",
         )
 
@@ -478,7 +514,7 @@ ramble:
                 scheduler.write_ramble_config(
                     workspace_config_dir,
                     [{"name": "test1"}],
-                    "a3-high",
+                    "a3-megagpu-8g",
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
@@ -598,7 +634,7 @@ ramble:
                 side_effect=mock_as_file_func,
             ):
                 scheduler.write_ramble_config(
-                    workspace_config_dir, ["test1"], "a3-high"
+                    workspace_config_dir, ["test1"], "a3-megagpu-8g"
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
@@ -768,6 +804,105 @@ ramble:
         self.assertIn("secret", args)
         self.assertIn("job1-ssh", args)
         self.assertIn("job2-ssh", args)
+
+    @mock.patch("subprocess.run")
+    def test_resolve_project_id_gke_success(self, mock_run, mock_logger):
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        mock_run.return_value.stdout = "gce://my-project-id/us-central1-a/node1"
+        project_id = scheduler._resolve_project_id("node1")
+        self.assertEqual(project_id, "my-project-id")
+        mock_run.assert_called_once_with(
+            [
+                "kubectl",
+                "get",
+                "node",
+                "node1",
+                "-o",
+                "jsonpath={.spec.providerID}",
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=None,
+        )
+
+    @mock.patch("subprocess.run")
+    def test_resolve_project_id_gke_invalid_format(self, mock_run, mock_logger):
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        mock_run.return_value.stdout = "invalid-format"
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Unexpected providerID format"
+        ):
+            scheduler._resolve_project_id("node1")
+
+    @mock.patch("subprocess.run")
+    def test_resolve_project_id_gke_error(self, mock_run, mock_logger):
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Failed to resolve project ID"
+        ):
+            scheduler._resolve_project_id("node1")
+
+    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    def test_detect_nodes_hardware_success(self, mock_query_info, mock_logger):
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        with mock.patch.object(
+            scheduler, "_resolve_project_id", return_value="my-project"
+        ):
+            mock_query_info.return_value = {
+                "node1": {
+                    "machine_type": "a3-megagpu-8g",
+                    "instance_id": "12345",
+                },
+                "node2": {
+                    "machine_type": "a3-megagpu-8g",
+                    "instance_id": "67890",
+                },
+            }
+            machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+            self.assertEqual(machine_types, ["a3-megagpu-8g"])
+            self.assertEqual(
+                scheduler.node_to_instance_id,
+                {"node1": "12345", "node2": "67890"},
+            )
+
+    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    def test_detect_nodes_hardware_heterogeneous(
+        self, mock_query_info, mock_logger
+    ):
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        with mock.patch.object(
+            scheduler, "_resolve_project_id", return_value="my-project"
+        ):
+            mock_query_info.return_value = {
+                "node1": {
+                    "machine_type": "a3-megagpu-8g",
+                    "instance_id": "12345",
+                },
+                "node2": {
+                    "machine_type": "a3-ultragpu-8g",
+                    "instance_id": "67890",
+                },
+            }
+            machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+            self.assertEqual(machine_types, ["a3-megagpu-8g", "a3-ultragpu-8g"])
+
+    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    def test_detect_nodes_hardware_unknown(self, mock_query_info, mock_logger):
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        with mock.patch.object(
+            scheduler, "_resolve_project_id", return_value="my-project"
+        ):
+            mock_query_info.return_value = {
+                "node1": {
+                    "machine_type": "a3-megagpu-8g",
+                    "instance_id": "12345",
+                },
+            }
+            machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+            self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
+            self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
 
 
 if __name__ == "__main__":

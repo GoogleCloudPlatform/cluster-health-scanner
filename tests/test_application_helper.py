@@ -69,10 +69,10 @@ class _MergeConfigsTestCase:
 
 class TestApplicationHelper(unittest.TestCase):
     def test_is_tpu(self):
-        self.assertTrue(is_tpu("tpu7x"))
-        self.assertTrue(is_tpu("tpuv6e"))
-        self.assertFalse(is_tpu("a3-ultra"))
-        self.assertFalse(is_tpu("a3-high"))
+        self.assertTrue(is_tpu("tpu7x-standard-4t"))
+        self.assertTrue(is_tpu("ct6e-standard-4t"))
+        self.assertFalse(is_tpu("a3-ultragpu-8g"))
+        self.assertFalse(is_tpu("a3-megagpu-8g"))
         self.assertFalse(is_tpu(""))
         self.assertFalse(is_tpu(None))
 

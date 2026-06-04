@@ -139,7 +139,7 @@ class TestBOHGenerator(unittest.TestCase):
             "experiments": [
                 {
                     "experiment_name": "my-test",
-                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
                     "CONTEXTS": [
                         {
                             "name": "null",
@@ -167,7 +167,7 @@ class TestBOHGenerator(unittest.TestCase):
             "experiments": [
                 {
                     "experiment_name": "my-test",
-                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
                     "CONTEXTS": [
                         {
                             "name": "null",
@@ -725,7 +725,7 @@ class TestBOHGenerator(unittest.TestCase):
             "default": {
                 "my-test": {"type": "min", "thresholds": {"metric1": 80}}
             },
-            "a3-ultra": {
+            "a3-ultragpu-8g": {
                 "my-test": {"type": "scalar", "thresholds": {"metric1": 80}}
             },
         }
@@ -739,7 +739,7 @@ class TestBOHGenerator(unittest.TestCase):
             "experiments": [
                 {
                     "experiment_name": "my-test",
-                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
                     "CONTEXTS": [
                         {
                             "name": "null",

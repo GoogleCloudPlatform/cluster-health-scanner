@@ -13,3 +13,10 @@
 # limitations under the License.
 
 """Preflight checks module."""
+
+from chs.preflights.gcp_preflight import verify_gcp_credentials
+
+
+def run_platform_preflights() -> None:
+    """Runs platform-level (orchestrator-agnostic) preflight checks."""
+    verify_gcp_credentials()

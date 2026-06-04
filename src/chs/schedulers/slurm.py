@@ -72,15 +72,31 @@ class SlurmScheduler(BaseScheduler):
     def __init__(
         self,
         nodes: str | None = None,
-        nodelist: str | None = None,
-        partition: str | None = None,
+        nodelists: str | None = None,
+        partitions: str | None = None,
         app_data: "ChsAppData | None" = None,
     ):
         super().__init__(app_data)
         self.nodes_arg = nodes
-        self.nodelist_arg = nodelist
-        self.partition_arg = partition
+        self.nodelists_arg = nodelists
+        self.partitions_arg = partitions
         self._resolved_nodes: list[str] | None = None
+
+    def _resolve_project_id(self, node: str) -> str:
+        """Resolves GCP project ID from GCP application default credentials."""
+        try:
+            _, project = google.auth.default()
+        except Exception as e:
+            raise ex.ChsSchedulerException(
+                "Failed to get GCP credentials."
+            ) from e
+        if not project:
+            raise ex.ChsSchedulerException(
+                "Could not determine GCP project from credentials. Please set"
+                " it using 'gcloud auth application-default login --project"
+                " <PROJECT>' or the GOOGLE_CLOUD_PROJECT environment variable."
+            )
+        return project
 
     @property
     def name(self) -> str:
@@ -115,8 +131,8 @@ class SlurmScheduler(BaseScheduler):
     def _run_srun(self, args: list[str], timeout: int = 60) -> str:
         """Runs a command via srun and returns filtered output."""
         cmd = ["srun", "-N1", "-n1"]
-        if self.partition_arg:
-            cmd.extend(["-p", self.partition_arg])
+        if self.partitions_arg:
+            cmd.extend(["-p", self.partitions_arg])
         cmd.extend(args)
         result = subprocess.run(
             cmd,
@@ -169,12 +185,12 @@ class SlurmScheduler(BaseScheduler):
 
         if (
             bool(self.nodes_arg)
-            + bool(self.nodelist_arg)
-            + bool(self.partition_arg)
+            + bool(self.nodelists_arg)
+            + bool(self.partitions_arg)
         ) > 1:
             raise click.UsageError(
-                "Only one of --nodes, --nodelist, or "
-                "--partition can be provided."
+                "Only one of --nodes, --nodelists, or "
+                "--partitions can be provided."
             )
 
         if self.nodes_arg:
@@ -183,10 +199,10 @@ class SlurmScheduler(BaseScheduler):
             ]
             return self._resolved_nodes
 
-        if self.nodelist_arg:
+        if self.nodelists_arg:
             try:
                 output = subprocess.run(
-                    ["scontrol", "show", "hostname", self.nodelist_arg],
+                    ["scontrol", "show", "hostname", self.nodelists_arg],
                     text=True,
                     check=True,
                     capture_output=True,
@@ -196,12 +212,12 @@ class SlurmScheduler(BaseScheduler):
                 return self._resolved_nodes
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 raise ex.ChsSchedulerException(
-                    f"Failed to expand nodelist: {e}"
+                    f"Failed to expand nodelists: {e}"
                 ) from e
 
         sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
-        if self.partition_arg:
-            sinfo_cmd.extend(["-p", self.partition_arg])
+        if self.partitions_arg:
+            sinfo_cmd.extend(["-p", self.partitions_arg])
 
         try:
             output = subprocess.run(

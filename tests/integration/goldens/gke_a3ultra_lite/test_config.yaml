@@ -1,2 +1,10 @@
-description: "Tests the 'lite' suite against a gke scheduler for a3-ultra"
-command: ["run", "--suite", "lite", "--scheduler", "gke", "--machine-type", "a3-ultra", "--nodes", "node1,node2", "--dry-run"]
+command:
+- run
+- --suite
+- lite
+- --scheduler
+- gke
+- --nodes
+- node1,node2
+- --dry-run
+description: Tests the 'lite' suite against a gke scheduler for a3-ultra
