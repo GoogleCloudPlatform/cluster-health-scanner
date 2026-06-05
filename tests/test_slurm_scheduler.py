@@ -69,6 +69,26 @@ class TestSlurmScheduler(unittest.TestCase):
             env["ENROOT_CACHE_PATH"], os.path.join(home, ".enroot", "cache")
         )
 
+    @patch("os.makedirs")
+    @patch("os.path.exists")
+    def test_ensure_enroot_directories(self, mock_exists, mock_makedirs):
+        mock_exists.return_value = False
+        self.scheduler._ensure_enroot_directories()
+
+        # Should not create credentials directory
+        credentials_path = self.scheduler._enroot_paths[
+            "ENROOT_CONFIG_CREDENTIALS"
+        ]
+        runtime_path = self.scheduler._enroot_paths["ENROOT_RUNTIME_PATH"]
+        cache_path = self.scheduler._enroot_paths["ENROOT_CACHE_PATH"]
+
+        mock_makedirs.assert_any_call(runtime_path, exist_ok=True)
+        mock_makedirs.assert_any_call(cache_path, exist_ok=True)
+
+        # Assert that credentials_path was NOT called with os.makedirs
+        for call in mock_makedirs.call_args_list:
+            self.assertNotEqual(call[0][0], credentials_path)
+
     @patch("google.auth.default")
     @patch("google.cloud.compute_v1.InstancesClient")
     def test_get_topology(self, mock_instances_client, mock_auth_default):

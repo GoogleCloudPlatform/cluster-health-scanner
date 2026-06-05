@@ -416,7 +416,7 @@ a4x:
         NCCL_NET: gIB
     variables:
       jobset_template: jobset_mpi.yaml.tpl
-      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.0.6
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
       ssh_port: 222
       nccl-tests_path: /third_party/nccl-tests
       mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
@@ -482,6 +482,119 @@ a4x:
       m: 51200
       n: 51200
       k: 51200
+
+a4x-max:
+  variables:
+    pod_annotations_yaml: |
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
+      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
+      networking.gke.io/default-interface: {default_interface_name}
+      networking.gke.io/interfaces: |
+        {all_interfaces_json}
+    jobset_labels_yaml: |
+      chs-run: {job_name}
+    node_selector_yaml: "node.kubernetes.io/instance-type: a4x-maxgpu-4g-metal"
+    tolerations_yaml: |
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: present
+        effect: NoSchedule
+      - key: kubernetes.io/arch
+        operator: Equal
+        value: arm64
+        effect: NoSchedule
+    extra_volumes_yaml: |
+      - name: shared-memory
+        emptyDir:
+          medium: "Memory"
+    extra_volume_mounts_yaml: |
+      - name: shared-memory
+        mountPath: /dev/shm
+    container_resources_yaml: |
+      limits:
+        nvidia.com/gpu: {gpus_per_node}
+    container_security_context_yaml: |
+      privileged: true
+      runAsUser: 0
+    claims:
+      - name: compute-domain-channel
+    pod_resource_claims_yaml: |
+      - name: compute-domain-channel
+        resourceClaimTemplateName: {job_name}-compute-domain-channel
+    custom_resources_yaml: |
+      apiVersion: resource.nvidia.com/v1beta1
+      kind: ComputeDomain
+      metadata:
+        name: {job_name}-compute-domain
+        labels:
+          chs-run: {job_name}
+      spec:
+        numNodes: {n_nodes}
+        channel:
+          resourceClaimTemplate:
+            name: {job_name}-compute-domain-channel
+      ---
+      apiVersion: resource.k8s.io/v1beta1
+      kind: ResourceClaimTemplate
+      metadata:
+        name: {job_name}-compute-domain-channel
+      spec:
+        spec:
+          devices:
+            requests:
+            - name: gpu-channel
+              deviceClassName: compute-domain-default-channel.nvidia.com
+              selectors:
+              - cel:
+                  expression: {cel_filter_expression}
+      ---
+
+  nccl-tests:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        OMPI_ALLOW_RUN_AS_ROOT: 1
+        NCCL_NET: gIB
+        NCCL_DEBUG: INFO
+        NCCL_TESTS_SPLIT_MASK: "0x0"
+        LD_LIBRARY_PATH: "/usr/local/nvidia/lib64:/usr/local/gib/lib64"
+        NCCL_MNNVL_ENABLE: "0"
+    variables:
+      jobset_template: jobset_mpi.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+      ssh_port: 2222
+      nccl-tests_path: /third_party/nccl-tests
+      mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
+      mpi_command: |
+        mpirun -n {n_ranks} -N {processes_per_node} \
+          --hostfile /tmp/hostfile --bind-to none \
+          --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+          --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+          --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+          -x PATH="{nccl-tests_path}/build:$PATH" \
+          -x {mpi_env_vars}
+
+  nvidia-dcgm:
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    variables:
+      diag_level: [1,2]
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
+  nvidia-smi:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+      processes_per_node: 1
+      n_ranks: 1
+      n_nodes: 1
+      mpi_command: ""
+
 
 tpu7x:
   variables:

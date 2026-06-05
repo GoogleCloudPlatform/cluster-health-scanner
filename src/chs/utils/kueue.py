@@ -135,18 +135,57 @@ class KueueManager:
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
 
         try:
-            result = self._run_kubectl(
+            # Check if flavor matches the current instance_type
+            existing_flavor = self._run_kubectl(
                 [
                     "get",
-                    "clusterqueue",
-                    "chs-cluster-queue",
+                    "resourceflavor",
+                    "chs-flavor",
                     "-o",
-                    'jsonpath={.status.conditions[?(@.type=="Active")].status}',
+                    "jsonpath={.spec.nodeLabels['node.kubernetes.io/instance-type']}",
                 ]
             )
-            if result.strip() == "True":
-                logger.info("ClusterQueue chs-cluster-queue is already active")
-                return "kueue.x-k8s.io/queue-name: chs-local-queue"
+            if existing_flavor.strip() != instance_type:
+                logger.warning(
+                    "Existing Kueue resource flavor has instance type %s, "
+                    "but current run requires %s. Recreating Kueue "
+                    "resources...",
+                    existing_flavor.strip(),
+                    instance_type,
+                )
+                # Delete existing kueue resources to force recreation
+                self._run_kubectl(
+                    [
+                        "delete",
+                        "clusterqueue",
+                        "chs-cluster-queue",
+                        "--ignore-not-found",
+                    ]
+                )
+                self._run_kubectl(
+                    [
+                        "delete",
+                        "resourceflavor",
+                        "chs-flavor",
+                        "--ignore-not-found",
+                    ]
+                )
+            else:
+                result = self._run_kubectl(
+                    [
+                        "get",
+                        "clusterqueue",
+                        "chs-cluster-queue",
+                        "-o",
+                        'jsonpath={.status.conditions[?(@.type=="Active")].status}',
+                    ]
+                )
+                if result.strip() == "True":
+                    logger.info(
+                        "ClusterQueue chs-cluster-queue is already active "
+                        "and matches machine type."
+                    )
+                    return "kueue.x-k8s.io/queue-name: chs-local-queue"
         except subprocess.CalledProcessError:
             pass
 

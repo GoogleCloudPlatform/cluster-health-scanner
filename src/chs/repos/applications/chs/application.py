@@ -95,6 +95,7 @@ class Chs(ExecutableApplication):
             "a4",
             "a3-mega",
             "a4x",
+            "a4x-max",
             "tpu7x",
             "tpuv6e",
         ],
@@ -359,7 +360,7 @@ class Chs(ExecutableApplication):
                 )
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    experiment_name = f"{self.expander.experiment_name}-{application_name}-single-node-{workload}"
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
 

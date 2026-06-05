@@ -1,7 +1,7 @@
 suites:
 - name: lite
-  timeout: 600
-  deadline: 2400
+  timeout: 1200
+  deadline: 4200
   tests:
   - name: nvidia-smi
   - name: dcgm
@@ -19,8 +19,8 @@ suites:
   - name: host-device
   - name: collectives-single-node
 - name: standard
-  timeout: 900
-  deadline: 3000
+  timeout: 2400
+  deadline: 6000
   tests:
   - name: nvidia-smi
   - name: dcgm

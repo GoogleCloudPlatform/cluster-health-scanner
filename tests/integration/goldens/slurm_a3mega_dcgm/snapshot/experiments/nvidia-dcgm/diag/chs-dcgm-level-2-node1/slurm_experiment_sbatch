@@ -3,7 +3,7 @@
 #SBATCH --exclusive
 #SBATCH --gpus-per-node 8
 #SBATCH --ntasks-per-node 8
-#SBATCH --time=10
+#SBATCH --time=20
 #SBATCH -J chs-dcgm-level-2
 #SBATCH -N 1
 #SBATCH -e <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/slurm-%j.err
@@ -24,8 +24,6 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm
 
 rm -f "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/chs-dcgm-level-2-node1.out"
 touch "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/.slurm_config" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/chs-dcgm-level-2-node1.out"
-export ENROOT_RUNTIME_PATH="$HOME/.enroot/run";
-export XDG_RUNTIME_DIR="$HOME/.enroot";
 scontrol show config > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/.slurm_config
 dcgmi diag -r 2 >> "<WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/chs-dcgm-level-2-node1.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nvidia-dcgm/diag/chs-dcgm-level-2-node1/.slurm_script_end_time

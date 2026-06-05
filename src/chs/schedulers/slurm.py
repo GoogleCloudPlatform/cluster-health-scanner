@@ -248,8 +248,8 @@ class SlurmScheduler(BaseScheduler):
 
     def _ensure_enroot_directories(self) -> None:
         """Ensures that Enroot runtime and cache directories exist."""
-        for d in self._enroot_paths.values():
-            if not os.path.exists(d):
+        for k, d in self._enroot_paths.items():
+            if k != "ENROOT_CONFIG_CREDENTIALS" and not os.path.exists(d):
                 try:
                     os.makedirs(d, exist_ok=True)
                     logger.debug("Created Enroot directory: %s", d)
@@ -398,7 +398,7 @@ class SlurmScheduler(BaseScheduler):
         """Parses job IDs from the experiment execution output."""
         return re.findall(r"Submitted batch job (\d+)", output)
 
-    def cancel_jobs(self, job_ids: list[str]) -> None:
+    def _cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs using scancel."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
@@ -457,7 +457,7 @@ class SlurmScheduler(BaseScheduler):
                     len(job_ids),
                     prefix,
                 )
-                self.cancel_jobs(job_ids)
+                self._cancel_jobs(job_ids)
             else:
                 logger.debug("No matching jobs found for prefix %s.", prefix)
         except FileNotFoundError:

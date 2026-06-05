@@ -1,10 +1,6 @@
 a3-mega:
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -12,10 +8,6 @@ a3-mega:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -28,10 +20,6 @@ a3-mega:
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -52,8 +40,6 @@ a3-mega:
     env_vars:
       set:
         NCCL_FASTRAK_CTRL_DEV: enp0s12
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         NCCL_FASTRAK_IFNAME: enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0
         NCCL_SOCKET_IFNAME: enp0s12
         NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: /dev/aperture_devices
@@ -67,10 +53,6 @@ a3-mega:
       begin_message_size: "256M"
       end_message_size: "8G"
   nvidia-smi:
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -81,8 +63,6 @@ a3-ultra:
     env_vars:
       set:
         NCCL_NET: gIB
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
         NCCL_DEBUG: INFO
@@ -95,10 +75,6 @@ a3-ultra:
       end_message_size: "8G"
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -106,10 +82,6 @@ a3-ultra:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -122,10 +94,6 @@ a3-ultra:
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -142,10 +110,6 @@ a3-ultra:
       n: 20480
       k: 20480
   nvidia-smi:
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -156,8 +120,6 @@ a4:
     env_vars:
       set:
         NCCL_NET: gIB
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
         OMPI_MCA_btl: tcp,self
         NCCL_DEBUG: INFO
@@ -170,10 +132,6 @@ a4:
       end_message_size: "8G"
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -181,10 +139,6 @@ a4:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -197,10 +151,6 @@ a4:
       mem_affinity: "0:0:0:0:1:1:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -217,10 +167,6 @@ a4:
       n: 32768
       k: 32768
   nvidia-smi:
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -228,10 +174,6 @@ a4:
 a4x:
   nvidia-dcgm:
     modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -239,10 +181,6 @@ a4x:
       n_nodes: 1
   nvidia-stream:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -255,10 +193,6 @@ a4x:
       mem_affinity: "0:0:1:1"
   nvidia-gemm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: "{gpus_per_node}"
       processes_per_node: "{gpus_per_node}"
@@ -275,10 +209,6 @@ a4x:
       n: 51200
       k: 51200
   nvidia-smi:
-    env_vars:
-      set:
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -288,8 +218,6 @@ a4x:
     env_vars:
       set:
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
-        XDG_RUNTIME_DIR: "$HOME/.enroot"
-        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
         NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
         LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
         NCCL_NET: gIB
@@ -308,3 +236,62 @@ a4x:
       nccl-tests_path: "{nccl_tests_build_dir}/build/"
       begin_message_size: "256M"
       end_message_size: "8G"
+
+tpuv6e:
+  variables:
+    tpu_run_wrapper: "srun {srun_args}"
+  tpu-info:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    env_vars:
+      set:
+        PYTHONPATH: "/usr/local/lib/python3.10/dist-packages"
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      srun_args: "--cpu-bind=none --wait=60"
+  tpu-gemm:
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      benchmarks_yaml_file: "tpuv6e/gemm_16384_bf16.yaml"
+      container_name: "accelerator-microbenchmarks:latest"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+      srun_args: "--cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60"
+  tpu-hbm:
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      benchmarks_yaml_file: "tpuv6e/hbm_copy_bf16.yaml"
+      container_name: "accelerator-microbenchmarks:latest"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+      srun_args: "--cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60"
+  tpu-host-device:
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    env_vars:
+      set:
+        XDG_RUNTIME_DIR: "$HOME/.enroot"
+        ENROOT_RUNTIME_PATH: "$HOME/.enroot/run"
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
+      benchmarks_yaml_file: "tpuv6e/host_device.yaml"
+      container_name: "accelerator-microbenchmarks:latest"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+      srun_args: "--cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60"

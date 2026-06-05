@@ -1,0 +1,82 @@
+from chs.plugins.tpu_collectives.renderer import TpuCollectivesRenderer
+from chs.plugins.tpu_collectives_single_node.renderer import (
+    TpuCollectivesSingleNodeRenderer,
+)
+from chs.protos import bill_of_health_pb2 as pb
+from rich.console import Console
+import unittest
+
+
+class TestTpuCollectivesRenderer(unittest.TestCase):
+    def test_render_detail_all_gather(self):
+        """Verifies rendering of all_gather workload with 2-part context."""
+        renderer = TpuCollectivesRenderer()
+
+        # 1. Single node all_gather
+        res1 = pb.TestResult()
+        res1.test_name = "tpu-collectives"
+        res1.test_level = "all_gather"
+        res1.target_resource_ids.append("node-1")
+        m1 = res1.metrics.add()
+        m1.key = "Bandwidth (median)"
+        m1.value.number_value = 7.92
+        m1.metadata.fields["context"].string_value = "8,float32"
+
+        # 2. Multi-node all_gather
+        res2 = pb.TestResult()
+        res2.test_name = "tpu-collectives"
+        res2.test_level = "all_gather"
+        res2.target_resource_ids.extend(["node-1", "node-2"])
+        m2 = res2.metrics.add()
+        m2.key = "Bandwidth (median)"
+        m2.value.number_value = 111.01
+        m2.metadata.fields["context"].string_value = "1024,float32"
+
+        console = Console(width=200)
+        with console.capture() as capture:
+            detail = renderer.render_detail([res1, res2])
+            console.print(detail)
+
+        output = capture.get()
+        print(f"DEBUG OUTPUT (all_gather):\n{output}")
+
+        self.assertIn("TPU Collectives Performance Summary", output)
+        self.assertIn("Target Resource(s): node-1", output)
+        self.assertIn("Target Resource(s): node-1, node-2", output)
+        self.assertIn("all_gather", output)
+        self.assertIn("8", output)
+        self.assertIn("float32", output)
+        self.assertIn("7.92", output)
+        self.assertIn("1024", output)
+        self.assertIn("111.01", output)
+        self.assertNotIn("Time Taken", output)
+        self.assertNotIn("N/A", output)
+
+    def test_render_detail_single_node_renderer(self):
+        """Verifies single node renderer title."""
+        renderer = TpuCollectivesSingleNodeRenderer()
+
+        res1 = pb.TestResult()
+        res1.test_name = "tpu-collectives-single-node"
+        res1.test_level = "all_gather"
+        res1.target_resource_ids.append("node-1")
+        m1 = res1.metrics.add()
+        m1.key = "Bandwidth (median)"
+        m1.value.number_value = 7.92
+        m1.metadata.fields["context"].string_value = "8,float32"
+
+        console = Console(width=200)
+        with console.capture() as capture:
+            detail = renderer.render_detail([res1])
+            console.print(detail)
+
+        output = capture.get()
+        print(f"DEBUG OUTPUT (single-node):\n{output}")
+
+        self.assertIn("TPU Collectives Single Node Performance Summary", output)
+        self.assertIn("Target Resource(s): node-1", output)
+        self.assertIn("all_gather", output)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -18,7 +18,7 @@ spec:
         spec:
           parallelism: 1
           completions: 1
-          activeDeadlineSeconds: 2400
+          activeDeadlineSeconds: 4200
           template:
             metadata:
 
@@ -75,7 +75,8 @@ spec:
                   cd "<WORKSPACE_ROOT>/experiments/tpu-hbm/check/chs-tpu-hbm-node1"
                   rm -f "<WORKSPACE_ROOT>/experiments/tpu-hbm/check/chs-tpu-hbm-node1/chs-tpu-hbm-node1.out"
                   touch "<WORKSPACE_ROOT>/experiments/tpu-hbm/check/chs-tpu-hbm-node1/chs-tpu-hbm-node1.out"
-                  export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 && cd /app/accelerator-microbenchmarks && printf '%b' 'benchmarks:\n- benchmark_name: "single_device_hbm_copy"\n  benchmark_sweep_params:\n  - {num_elements_range: {start: 1048576, end: 2147483648, multiplier: 2}, dtype: "bfloat16", num_runs: 20}\n  trace_dir: "../microbenchmarks/hbm_bfloat16"\n  csv_path: "../microbenchmarks/hbm_bfloat16"\n  xlml_metrics_dir: "../microbenchmarks/hbm_bfloat16"\n  xla_dump_dir: "../microbenchmarks/hbm_bfloat16/hlo_graphs"\n' > Ironwood/configs/chs_tpu_hbm.yaml && python3 Ironwood/src/run_benchmark.py --config Ironwood/configs/chs_tpu_hbm.yaml 2>&1 
+                  printf '%b' 'benchmarks:\n- benchmark_name: "single_device_hbm_copy"\n  benchmark_sweep_params:\n  - {num_elements_range: {start: 1048576, end: 2147483648, multiplier: 2}, dtype: "bfloat16", num_runs: 20}\n  trace_dir: "../microbenchmarks/hbm_bfloat16"\n  csv_path: "../microbenchmarks/hbm_bfloat16"\n  xlml_metrics_dir: "../microbenchmarks/hbm_bfloat16"\n  xla_dump_dir: "../microbenchmarks/hbm_bfloat16/hlo_graphs"\n' | tee <WORKSPACE_ROOT>/experiments/tpu-hbm/check/chs-tpu-hbm-node1/chs_tpu_hbm.yaml 
+                  export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&  python3 -u /app/accelerator-microbenchmarks/Ironwood/src/run_benchmark.py --config <WORKSPACE_ROOT>/experiments/tpu-hbm/check/chs-tpu-hbm-node1/chs_tpu_hbm.yaml 2>&1 
 
               restartPolicy: Never
 

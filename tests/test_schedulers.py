@@ -95,12 +95,9 @@ class TestSlurmScheduler(unittest.TestCase):
 
         scheduler._ensure_enroot_directories()
 
-        self.assertEqual(mock_makedirs.call_count, 3)
+        self.assertEqual(mock_makedirs.call_count, 2)
         mock_makedirs.assert_any_call("/home/user/.enroot/run", exist_ok=True)
         mock_makedirs.assert_any_call("/home/user/.enroot/cache", exist_ok=True)
-        mock_makedirs.assert_any_call(
-            "/home/user/.enroot/.credentials", exist_ok=True
-        )
 
     @mock.patch("os.path.expanduser")
     def test_get_extra_env(self, mock_expanduser, mock_logger):
@@ -554,16 +551,57 @@ ramble:
         )
 
     @mock.patch("subprocess.run")
-    def test_write_ramble_config_discovery_failure(self, mock_run, mock_logger):
-        """Test write_ramble_config raises NetworkDiscoveryException."""
-        from chs.exceptions import NetworkDiscoveryException
+    def test_write_ramble_config_discovery_fallback(
+        self, mock_run, mock_logger
+    ):
+        """Test write_ramble_config network discovery fallback."""
+        mock_run.return_value.stdout = "{}"
+        scheduler = GKEScheduler(nodes="node1", app_data=self.mock_app_data)
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+        template_path = os.path.join(self.tmp_dir, "gke_template.yaml")
+        with open(template_path, "w") as f:
+            f.write("""
+ramble:
+  variables:
+    nodes: {nodes}
+    machine_type: {machine_type}
+    tests: {tests}
+    default_interface_name: {default_interface_name}
+    all_interfaces_json: |
+      {all_interfaces_json}
+""")
 
-        scheduler = GKEScheduler()
+        @contextlib.contextmanager
+        def mock_as_file_func(path):
+            yield template_path
+
         with mock.patch.object(
             GKEScheduler, "_discover_networks", return_value=([], [])
         ):
-            with self.assertRaises(NetworkDiscoveryException):
-                scheduler.write_ramble_config("/tmp", ["test1"], "a3-high")
+            with mock.patch(
+                "chs.schedulers.gke.pkg_resources.as_file",
+                side_effect=mock_as_file_func,
+            ):
+                scheduler.write_ramble_config(
+                    workspace_config_dir, ["test1"], "a3-high"
+                )
+
+        output_path = os.path.join(workspace_config_dir, "ramble.yaml")
+        import yaml
+
+        with open(output_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        variables = data["ramble"]["variables"]
+        self.assertEqual(variables["default_interface_name"], "eth0")
+
+        import json
+
+        all_interfaces = json.loads(variables["all_interfaces_json"].strip())
+        self.assertEqual(len(all_interfaces), 1)
+        self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
+        self.assertEqual(all_interfaces[0]["network"], "default")
 
     @mock.patch("subprocess.run")
     def test_get_topology(self, mock_run, mock_logger):
@@ -677,6 +715,45 @@ ramble:
 
             mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
             mock_kueue_mgr_instance.cleanup.assert_called_once_with(config_path)
+
+    @mock.patch("subprocess.run")
+    def test_cancel_jobs_deletes_secrets(self, mock_run, mock_logger):
+        """Test that _cancel_jobs deletes associated secrets."""
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+        mock_run.return_value.stdout = ""
+
+        scheduler._cancel_jobs(["job1", "job2"])
+
+        self.assertEqual(mock_run.call_count, 2)
+        args = mock_run.call_args_list[1][0][0]
+        self.assertIn("delete", args)
+        self.assertIn("secret", args)
+        self.assertIn("job1-ssh", args)
+        self.assertIn("job2-ssh", args)
+
+    @mock.patch("subprocess.run")
+    def test_cleanup_scheduler_resources_deletes_secrets(
+        self, mock_run, mock_logger
+    ):
+        """Test that cleanup_scheduler_resources deletes secrets."""
+        scheduler = GKEScheduler(app_data=self.mock_app_data)
+
+        run_entry = {
+            "job_entries": {
+                "job1": {"status": "Completed"},
+                "job2": {"status": "Completed"},
+            }
+        }
+        mock_run.return_value.stdout = ""
+
+        scheduler.cleanup_scheduler_resources(run_entry=run_entry)
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertIn("delete", args)
+        self.assertIn("secret", args)
+        self.assertIn("job1-ssh", args)
+        self.assertIn("job2-ssh", args)
 
 
 if __name__ == "__main__":

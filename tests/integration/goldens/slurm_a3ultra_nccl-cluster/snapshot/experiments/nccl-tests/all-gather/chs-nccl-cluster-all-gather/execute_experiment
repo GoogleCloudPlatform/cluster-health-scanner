@@ -26,16 +26,14 @@ cd "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gath
 
 rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/chs-nccl-cluster-all-gather.out"
 touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_config" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/chs-nccl-cluster-all-gather.out"
-export ENROOT_RUNTIME_PATH="$HOME/.enroot/run";
+scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_config
+if [ -d "/usr/local/gib/scripts" ]; then
+    NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
+fi
 export NCCL_DEBUG=INFO;
 export NCCL_NET=gIB;
 export NCCL_TESTS_SPLIT_MASK="";
 export OMPI_MCA_btl=tcp,self;
 export OMPI_MCA_btl_tcp_if_include="enp0s1,enp0s2";
-export XDG_RUNTIME_DIR="$HOME/.enroot";
-scontrol show config > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_config
-if [ -d "/usr/local/gib/scripts" ]; then
-    NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
-fi
 srun --mpi=pmix --export=ALL --container-workdir /third_party/nccl-tests/build/ --container-image <HOME_DIR>/.local/share/chs/images/nccl-plugin-gib-diagnostic:v1.1.0.sqsh --container-mounts "/var/tmp" --container-writable --wait=60 bash -c "export LD_LIBRARY_PATH=/usr/local/gib/lib64:${LD_LIBRARY_PATH}; ./all_gather_perf -b 256M -e 8G -f 2 -g 1 -w 5 --iters 100 -c 1" >> "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/chs-nccl-cluster-all-gather.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-nccl-cluster-all-gather/.slurm_script_end_time

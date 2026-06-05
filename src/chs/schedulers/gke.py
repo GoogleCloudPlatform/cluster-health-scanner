@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 from chs.schedulers.base import BaseScheduler
 from chs.utils.kueue import KueueManager
-from chs.exceptions import NetworkDiscoveryException, KueueException
+from chs.exceptions import KueueException
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.gke_preflight import GkePreflightChecker
 
@@ -130,6 +130,22 @@ class GKEScheduler(BaseScheduler):
             check=True,
         )
         return result.stdout.strip()
+
+    def _delete_job_secrets(self, job_ids: list[str]) -> None:
+        """Deletes SSH secrets associated with the given job IDs."""
+        if not job_ids:
+            return
+        secret_ids = [f"{job_id}-ssh" for job_id in job_ids]
+        args_secrets = (
+            ["delete", "secret"] + secret_ids + ["--ignore-not-found"]
+        )
+        try:
+            self._run_kubectl(args_secrets)
+            logger.debug(
+                "Successfully deleted Secrets: %s", ", ".join(secret_ids)
+            )
+        except Exception as e:
+            logger.warning("Failed to delete secrets: %s", e)
 
     def _discover_tpu_topology(self, node_name: str) -> str:
         """Queries node labels to discover TPU topology."""
@@ -312,10 +328,12 @@ class GKEScheduler(BaseScheduler):
         else:
             l3_networks, device_networks = self._discover_networks()
             if not l3_networks or not device_networks:
-                raise NetworkDiscoveryException(
-                    "Network discovery failed on GKE. "
-                    "Could not identify L3 or Device networks."
+                logger.warning(
+                    "Network discovery did not find any GKE network resources. "
+                    "Falling back to standard default network interface."
                 )
+                l3_networks = ["default"]
+                device_networks = []
         all_networks = l3_networks + device_networks
         all_interfaces = [
             {"interfaceName": f"eth{i}", "network": net_name}
@@ -631,7 +649,11 @@ class GKEScheduler(BaseScheduler):
                 kueue_config_path,
             )
 
-    def cancel_jobs(self, job_ids: list[str]) -> None:
+        # Clean up leftover secrets
+        job_ids = list(run_entry.get("job_entries", {}).keys())
+        self._delete_job_secrets(job_ids)
+
+    def _cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given JobSets using kubectl delete."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
@@ -646,6 +668,9 @@ class GKEScheduler(BaseScheduler):
         except subprocess.CalledProcessError as e:
             logger.error("Failed to delete JobSets. Error: %s", e.stderr)
             click.echo(f"Failed to delete JobSets: {e.stderr}")
+
+        # Clean up leftover secrets
+        self._delete_job_secrets(job_ids)
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all JobSets matching the specified prefix natively."""
@@ -671,7 +696,7 @@ class GKEScheduler(BaseScheduler):
                     len(job_ids),
                     prefix,
                 )
-                self.cancel_jobs(job_ids)
+                self._cancel_jobs(job_ids)
             else:
                 logger.debug("No matching JobSets found for %s.", prefix)
         except FileNotFoundError:
