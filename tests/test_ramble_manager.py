@@ -212,13 +212,25 @@ class TestRambleManager(unittest.TestCase):
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "mock_scheduler"
         mock_scheduler.get_extra_env.return_value = {}
-        mock_scheduler.parse_job_ids.return_value = ["123"]
+        mock_scheduler.extract_job_id.return_value = "123"
         manager._scheduler = mock_scheduler
 
-        with mock.patch.object(
-            manager, "_update_registry"
-        ) as mock_update_registry:
-            self.mock_run.return_value.stdout = "Submitted batch job 123\n"
+        with (
+            mock.patch("os.path.exists", return_value=True),
+            mock.patch(
+                "os.walk",
+                return_value=[
+                    (
+                        "/tmp/workspace/experiments/exp1",
+                        [],
+                        ["execute_experiment"],
+                    )
+                ],
+            ),
+            mock.patch.object(
+                manager, "_update_registry"
+            ) as mock_update_registry,
+        ):
             job_ids = manager.execute_experiments()
 
         self.mock_run.assert_called_once()
@@ -229,11 +241,13 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
         self.assertEqual(kwargs["env"]["TERM"], "dumb")
 
-        mock_scheduler.parse_job_ids.assert_called_with(
-            "Submitted batch job 123\n"
+        mock_scheduler.extract_job_id.assert_called_with(
+            "/tmp/workspace/experiments/exp1"
         )
         self.assertEqual(job_ids, ["123"])
-        mock_update_registry.assert_called_once_with(["123"])
+        mock_update_registry.assert_called_once_with(
+            {"123": "/tmp/workspace/experiments/exp1"}
+        )
 
         self.assertEqual(self.mock_app_data.update_run.call_count, 2)
         args, kwargs = self.mock_app_data.update_run.call_args
@@ -269,12 +283,16 @@ class TestRambleManager(unittest.TestCase):
 
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
 
-        manager._update_registry(["job1"])
+        manager._update_registry({"job1": "/path/to/job1"})
 
         self.mock_app_data.update_run.assert_called_once()
         updated_run = self.mock_app_data.update_run.call_args[0][1]
         self.assertTrue(updated_run.get("kueue_supported"))
         self.assertIn("job1", updated_run.get("job_entries", {}))
+        self.assertEqual(
+            updated_run.get("job_entries")["job1"]["experiment_dir"],
+            "/path/to/job1",
+        )
 
     def test_configure_workspace_runs(self):
         """Test configure_workspace runs without error."""

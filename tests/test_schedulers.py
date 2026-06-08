@@ -20,8 +20,8 @@ import subprocess
 import tempfile
 import unittest
 import json
+import yaml
 from unittest import mock
-from chs.schedulers.default import DefaultScheduler
 from chs.schedulers.kubernetes import KubernetesScheduler
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import detect_scheduler
@@ -82,10 +82,26 @@ class TestSlurmScheduler(unittest.TestCase):
         mock_run.assert_called_once()
         self.assertIn("sinfo", mock_run.call_args_list[0][0][0])
 
-    def test_parse_job_ids(self, mock_logger):
+    @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="12345")
+    def test_extract_job_id_success(self, mock_open, _mock_logger):
         scheduler = SlurmScheduler(app_data=self.mock_app_data)
-        output = "Submitted batch job 123\nSubmitted batch job 456"
-        self.assertEqual(scheduler.parse_job_ids(output), ["123", "456"])
+        job_id = scheduler.extract_job_id("/tmp/exp")
+        self.assertEqual(job_id, "12345")
+        mock_open.assert_called_once_with("/tmp/exp/.slurm_job", "r")
+
+    @mock.patch(
+        "builtins.open", new_callable=mock.mock_open, read_data="not_a_digit"
+    )
+    def test_extract_job_id_not_digit(self, mock_open, _mock_logger):
+        scheduler = SlurmScheduler(app_data=self.mock_app_data)
+        with self.assertRaises(ChsSchedulerException):
+            scheduler.extract_job_id("/tmp/exp")
+
+    @mock.patch("builtins.open", side_effect=IOError("Permission denied"))
+    def test_extract_job_id_io_error(self, mock_open, _mock_logger):
+        scheduler = SlurmScheduler(app_data=self.mock_app_data)
+        with self.assertRaises(ChsSchedulerException):
+            scheduler.extract_job_id("/tmp/exp")
 
     @mock.patch("subprocess.run")
     def test_check_jobs_running_true(self, mock_run, mock_logger):
@@ -186,26 +202,6 @@ class TestSlurmScheduler(unittest.TestCase):
             ex.ChsSchedulerException, "Failed to get GCP credentials"
         ):
             scheduler._resolve_project_id("node1")
-
-
-class TestDefaultScheduler(unittest.TestCase):
-    """Tests for DefaultScheduler."""
-
-    def test_name(self):
-        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
-        self.assertEqual(scheduler.name, "kubernetes")
-
-    def test_get_nodes_under_test(self):
-        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
-        self.assertEqual(scheduler.get_nodes_under_test(), [])
-
-    def test_check_jobs_running(self):
-        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
-        self.assertFalse(scheduler.check_jobs_running(["123"]))
-
-    def test_parse_job_ids(self):
-        scheduler = DefaultScheduler("kubernetes", app_data=mock.Mock())
-        self.assertEqual(scheduler.parse_job_ids("output"), [])
 
 
 @mock.patch("chs.schedulers.kubernetes.logger")
@@ -925,6 +921,56 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
             self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
+
+    @mock.patch(
+        "builtins.open",
+        new_callable=mock.mock_open,
+        read_data=(
+            "apiVersion: jobset.x-k8s.io/v1alpha2\n"
+            "kind: JobSet\n"
+            "metadata:\n"
+            "  name: my-jobset"
+        ),
+    )
+    def test_extract_job_id_success(self, mock_open, _mock_logger):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
+        job_id = scheduler.extract_job_id("/tmp/exp")
+        self.assertEqual(job_id, "my-jobset")
+        mock_open.assert_called_once_with("/tmp/exp/jobset.yaml", "r")
+
+    @mock.patch(
+        "builtins.open",
+        new_callable=mock.mock_open,
+        read_data=(
+            "apiVersion: v1\n"
+            "kind: Service\n"
+            "metadata:\n"
+            "  name: my-service"
+        ),
+    )
+    def test_extract_job_id_no_jobset(self, mock_open, _mock_logger):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
+        with self.assertRaises(ChsSchedulerException):
+            scheduler.extract_job_id("/tmp/exp")
+
+    @mock.patch(
+        "builtins.open",
+        new_callable=mock.mock_open,
+        read_data="invalid yaml: : :",
+    )
+    def test_extract_job_id_yaml_error(self, mock_open, _mock_logger):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
+        with mock.patch(
+            "yaml.safe_load_all", side_effect=yaml.YAMLError("parse error")
+        ):
+            with self.assertRaises(ChsSchedulerException):
+                scheduler.extract_job_id("/tmp/exp")
+
+    @mock.patch("builtins.open", side_effect=OSError("Permission denied"))
+    def test_extract_job_id_io_error(self, mock_open, _mock_logger):
+        scheduler = KubernetesScheduler(app_data=self.mock_app_data)
+        with self.assertRaises(ChsSchedulerException):
+            scheduler.extract_job_id("/tmp/exp")
 
 
 class TestSchedulerDetection(unittest.TestCase):

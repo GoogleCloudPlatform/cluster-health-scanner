@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import unittest
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import MagicMock, patch
 
 # Standard mocks for problematic imports
 MOCK_MODULES = {
@@ -41,46 +41,30 @@ class TestJobMonitoring(unittest.TestCase):
         # specific tests
         self.manager._scheduler = KubernetesScheduler()
 
-    @patch("chs.ramble_manager.get_scheduler")
-    @patch("chs.ramble_manager.RambleManager.get_job_ids")
-    @patch("os.walk")
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data=(
-            "apiVersion: v1\nkind: Service\nmetadata:\n  name: service-1\n---\n"
-            "apiVersion: jobset.x-k8s.io/v1alpha2\n"
-            "kind: JobSet\nmetadata:\n  name: job-123"
-        ),
-    )
+    @patch("os.listdir")
     @patch("os.path.exists")
     def test_map_jobs_to_log_paths(
         self,
         mock_exists,
-        mock_file,
-        mock_walk,
-        mock_get_job_ids,
-        mock_get_scheduler,
+        mock_listdir,
     ):
-        mock_get_job_ids.return_value = ["job-123"]
+        self.manager._app_data = MagicMock()
+        self.manager._app_data.get_run.return_value = {
+            "job_entries": {
+                "job-123": {
+                    "status": "PENDING",
+                    "experiment_dir": "/tmp/workspaces/exp1",
+                }
+            }
+        }
         mock_exists.return_value = True
-        mock_walk.return_value = [
-            (
-                "/tmp/test_workspaces/test_run/experiments/exp1",
-                [],
-                ["jobset.yaml", "exp1.out"],
-            )
-        ]
+        mock_listdir.return_value = ["job-123.out", "execute.log"]
 
         mapping = self.manager._map_jobs_to_log_paths()
 
         self.assertEqual(
             mapping,
-            {
-                "job-123": (
-                    "/tmp/test_workspaces/test_run/experiments/exp1/exp1.out"
-                )
-            },
+            {"job-123": ("/tmp/workspaces/exp1/job-123.out")},
         )
 
     @patch("chs.ramble_manager.get_scheduler")
@@ -142,21 +126,18 @@ class TestJobMonitoring(unittest.TestCase):
             "job-1", "/path/log"
         )
 
-    @patch("os.walk")
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data="invalid: yaml: content",
-    )
-    @patch("os.path.exists", return_value=True)
-    def test_map_jobs_to_log_paths_handles_malformed_yaml(
-        self, mock_exists, mock_file, mock_walk
-    ):
-        mock_walk.return_value = [("/root", [], ["jobset.yaml"])]
-
-        # Should not crash, just warn and return empty dict
+    @patch("os.path.exists", return_value=False)
+    def test_map_jobs_to_log_paths_handles_missing_dir(self, mock_exists):
+        self.manager._app_data = MagicMock()
+        self.manager._app_data.get_run.return_value = {
+            "job_entries": {
+                "job-123": {
+                    "status": "PENDING",
+                    "experiment_dir": "/tmp/workspaces/exp1",
+                }
+            }
+        }
         mapping = self.manager._map_jobs_to_log_paths()
-
         self.assertEqual(mapping, {})
 
     @patch("chs.ramble_manager.get_scheduler")

@@ -17,9 +17,8 @@
 import os
 import shutil
 
-from chs.exceptions import ChsSchedulerException
+from chs import exceptions as ex
 from chs.schedulers.base import BaseScheduler
-from chs.schedulers.default import DefaultScheduler
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers.kubernetes import KubernetesScheduler
 
@@ -40,7 +39,9 @@ def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
             nodepools=kwargs.get("nodepools"),
             app_data=app_data,
         )
-    return DefaultScheduler(scheduler, app_data=app_data)
+    raise ex.UnsupportedSchedulerException(
+        f"Unsupported scheduler: {scheduler}"
+    )
 
 
 def _has_kubeconfig() -> bool:
@@ -69,7 +70,7 @@ def detect_scheduler() -> str:
     if shutil.which("kubectl") and _has_kubeconfig():
         return "kubernetes"
 
-    raise ChsSchedulerException(
+    raise ex.ChsSchedulerException(
         "Auto-detection failed: No active Slurm or Kubernetes "
         "environment detected."
     )

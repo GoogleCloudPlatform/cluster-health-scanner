@@ -171,8 +171,15 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def parse_job_ids(self, output: str) -> list[str]:
-        """Parses job IDs from the experiment execution output."""
+    def extract_job_id(self, experiment_dir: str) -> str:
+        """Extracts the job ID from the experiment directory.
+
+        Args:
+            experiment_dir: The path to the experiment directory.
+
+        Returns:
+            The job ID as a string.
+        """
         pass
 
     @abc.abstractmethod

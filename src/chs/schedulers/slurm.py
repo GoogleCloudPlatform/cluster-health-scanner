@@ -474,9 +474,21 @@ class SlurmScheduler(BaseScheduler):
                 "Log file for job %s not found at %s", job_id, log_path
             )
 
-    def parse_job_ids(self, output: str) -> list[str]:
-        """Parses job IDs from the experiment execution output."""
-        return re.findall(r"Submitted batch job (\d+)", output)
+    def extract_job_id(self, experiment_dir: str) -> str:
+        """Extracts the job ID from the experiment directory."""
+        job_file = os.path.join(experiment_dir, ".slurm_job")
+        try:
+            with open(job_file, "r") as f:
+                job_id = f.read().strip()
+                if job_id.isdigit():
+                    return job_id
+            raise ex.ChsSchedulerException(
+                f"Slurm job file {job_file} does not contain a valid job ID"
+            )
+        except IOError as e:
+            raise ex.ChsSchedulerException(
+                f"Failed to read Slurm job file at {job_file}: {e}"
+            ) from e
 
     def _cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs using scancel."""

@@ -388,7 +388,9 @@ class RambleManager:
     def execute_experiments(self) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
-        This runs 'ramble on' to start the experiments and captures Job IDs.
+        This runs 'ramble on' to start the experiments and captures Job IDs
+        by scanning the workspace experiments directory within the current
+        filesystem.
 
         Returns:
           A list of submitted Job IDs.
@@ -401,17 +403,25 @@ class RambleManager:
 
         self._register_initial_run()
 
-        output = self._execute_ramble_command(
+        self._execute_ramble_command(
             subcommand="on",
             args=[],
             capture_output=True,
             env={"TQDM_DISABLE": "1", "TERM": "dumb"},
             error_context="Failed to execute experiments",
-        ).stdout
+        )
 
-        job_ids = self._scheduler.parse_job_ids(output)
-        if job_ids:
-            self._update_registry(job_ids)
+        job_to_dir = {}
+        experiments_dir = os.path.join(self.path, "experiments")
+        if os.path.exists(experiments_dir):
+            for root, dirs, files in os.walk(experiments_dir):
+                if "execute_experiment" in files:
+                    job_id = self._scheduler.extract_job_id(root)
+                    job_to_dir[job_id] = root
+                    dirs.clear()
+
+        if job_to_dir:
+            self._update_registry(job_to_dir)
 
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry["submission_complete"] = True
@@ -421,7 +431,7 @@ class RambleManager:
             "submission_complete set to True."
         )
 
-        return job_ids
+        return list(job_to_dir.keys())
 
     def cancel_experiments(self) -> None:
         """Cancels running experiments in the Ramble workspace.
@@ -453,22 +463,28 @@ class RambleManager:
         # statelessly.
         scheduler.cleanup_scheduler_resources(self._workspace_name)
 
-    def _update_registry(self, job_ids: list[str]) -> None:
+    def _update_registry(self, job_to_dir: dict[str, str]) -> None:
         """Updates the runs registry with the current run information."""
         logger.debug(
-            "Updating registry for run %s with job_ids %s",
+            "Updating registry for run %s with job mappings %s",
             self._workspace_name,
-            job_ids,
+            job_to_dir,
         )
         run_entry = self._app_data.get_run(self._workspace_name) or {}
+
+        job_entries = {
+            job_id: {
+                "status": JobStatus.PENDING.value,
+                "experiment_dir": exp_dir,
+            }
+            for job_id, exp_dir in job_to_dir.items()
+        }
+
         run_entry.update(
             {
                 "run_id": self.run_id,
                 "workspace_path": self.path,
-                "job_entries": {
-                    job_id: {"status": JobStatus.PENDING.value}
-                    for job_id in job_ids
-                },
+                "job_entries": job_entries,
                 "submission_time": (
                     datetime.datetime.now(datetime.timezone.utc).isoformat()
                 ),
@@ -505,69 +521,59 @@ class RambleManager:
     def _map_jobs_to_log_paths(self) -> dict[str, str]:
         """Maps Job IDs to their expected log paths on the filesystem.
 
-        Scans the 'experiments' directory for jobset.yaml files, extracts the
-        job name (which is the Job ID), and maps it to the '{experiment}.out'
-        file in the same directory. Matches against registry jobs.
+        Uses the experiment_dir registered in runs.json to find the log files.
         """
-        registry_job_ids = set(self.get_job_ids())
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        job_entries = run_entry.get("job_entries", {})
         mapping = {}
-        experiments_dir = os.path.join(self.path, "experiments")
+        for job_id, info in job_entries.items():
+            exp_dir = info.get("experiment_dir")
+            if not exp_dir or not os.path.exists(exp_dir):
+                logger.warning(
+                    "Experiment directory %s for job %s does not exist",
+                    exp_dir,
+                    job_id,
+                )
+                continue
 
-        if not os.path.exists(experiments_dir):
-            return mapping
+            try:
+                files = os.listdir(exp_dir)
+                out_files = [
+                    f
+                    for f in files
+                    if f.endswith(".out")
+                    and f != "execute.log"
+                    and not f.startswith("execute")
+                ]
 
-        for root, _, files in os.walk(experiments_dir):
-            if "jobset.yaml" in files:
-                try:
-                    with open(os.path.join(root, "jobset.yaml"), "r") as f:
-                        content = f.read()
-
-                        # Parse all docs (e.g. Service + JobSet) to find match.
-                        docs = list(yaml.safe_load_all(content))
-                        job_name = None
-                        for doc in docs:
-                            if not doc:
-                                continue
-                            name = doc.get("metadata", {}).get("name")
-                            if name and name in registry_job_ids:
-                                job_name = name
-                                break
-
-                        if job_name and job_name in registry_job_ids:
-                            # Find .out file (ignoring execute.log).
-                            out_files = [
-                                f
-                                for f in files
-                                if f.endswith(".out")
-                                and f != "execute.log"
-                                and not f.startswith("execute")
-                            ]
-
-                            if not out_files:
-                                logger.warning(
-                                    "No .out file found in %s for job %s",
-                                    root,
-                                    job_name,
-                                )
-                                continue
-
-                            # Priority 1: File containing job_name
-                            log_path = None
-                            for out_file in out_files:
-                                if job_name in out_file:
-                                    log_path = os.path.join(root, out_file)
-                                    break
-
-                            # Priority 2: Any other .out file (fallback)
-                            if not log_path:
-                                log_path = os.path.join(root, out_files[0])
-
-                            if log_path:
-                                mapping[job_name] = log_path
-                except Exception as e:
-                    logger.warning(
-                        "Failed to parse jobset.yaml in %s: %s", root, e
+                if not out_files:
+                    logger.debug(
+                        "No .out file found in %s for job %s",
+                        exp_dir,
+                        job_id,
                     )
+                    continue
+
+                # Priority 1: File containing job_id
+                log_path = None
+                for out_file in out_files:
+                    if job_id in out_file:
+                        log_path = os.path.join(exp_dir, out_file)
+                        break
+
+                # Priority 2: Any other .out file (fallback)
+                if not log_path:
+                    log_path = os.path.join(exp_dir, out_files[0])
+
+                if log_path:
+                    mapping[job_id] = log_path
+            except OSError as e:
+                logger.warning(
+                    "Failed to list directory %s for job %s: %s",
+                    exp_dir,
+                    job_id,
+                    e,
+                )
 
         return mapping
 

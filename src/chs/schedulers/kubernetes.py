@@ -22,7 +22,6 @@ import os
 import yaml
 
 
-import re
 import subprocess
 import click
 from typing import Any, TYPE_CHECKING
@@ -804,13 +803,24 @@ class KubernetesScheduler(BaseScheduler):
         except OSError as e:
             logger.error("Failed to write log file %s: %s", log_path, e)
 
-    def parse_job_ids(self, output: str) -> list[str]:
-        """Parses job IDs from the experiment execution output."""
-        regex = (
-            r"jobset[\.a-zA-Z0-9-]*?/"
-            r"([a-zA-Z0-9.-]+)\s+(?:created|configured|unchanged)"
-        )
-        return re.findall(regex, output)
+    def extract_job_id(self, experiment_dir: str) -> str:
+        """Extracts the job ID (JobSet name) from the experiment directory."""
+        jobset_file = os.path.join(experiment_dir, "jobset.yaml")
+        try:
+            with open(jobset_file, "r") as f:
+                docs = list(yaml.safe_load_all(f))
+                for doc in docs:
+                    if doc and doc.get("kind") == "JobSet":
+                        name = doc.get("metadata", {}).get("name")
+                        if name:
+                            return name
+            raise ChsSchedulerException(
+                f"JobSet kind not found in {jobset_file}"
+            )
+        except (OSError, yaml.YAMLError) as e:
+            raise ChsSchedulerException(
+                f"Failed to parse GKE jobset.yaml at {jobset_file}: {e}"
+            ) from e
 
     def cleanup_scheduler_resources(
         self,
