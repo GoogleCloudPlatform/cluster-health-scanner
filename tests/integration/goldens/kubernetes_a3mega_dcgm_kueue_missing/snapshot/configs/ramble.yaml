@@ -22,6 +22,7 @@ ramble:
     deadline: 4200
     jobset_labels_yaml: ''
     suspend_jobset: False
+    kubernetes_namespace: chs
   applications:
     chs:
       workloads:

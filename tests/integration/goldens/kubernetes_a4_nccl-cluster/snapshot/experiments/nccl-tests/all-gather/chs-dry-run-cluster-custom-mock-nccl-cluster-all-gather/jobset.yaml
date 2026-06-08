@@ -3,7 +3,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: chs-dry-run-cluster-custom-mock-nccl-clu-<HASH>-ssh
-  namespace: default
+  namespace: chs
 type: Opaque
 stringData:
   ssh-privatekey: |
@@ -15,7 +15,7 @@ apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
 metadata:
   name: chs-dry-run-cluster-custom-mock-nccl-clu-<HASH>
-  namespace: default
+  namespace: chs
   labels:
     kueue.x-k8s.io/queue-name: chs-local-queue
 
@@ -135,15 +135,15 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather.out"
+                    if [ -d "/usr/local/gib/scripts" ]; then
+                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
+                    fi
+                    nvidia-smi -pm 1 || true
                     export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7;
                     export NCCL_DEBUG=INFO;
                     export NCCL_NET=gIB;
                     export NCCL_TESTS_SPLIT_MASK="";
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
-                    nvidia-smi -pm 1 || true
-                    if [ -d "/usr/local/gib/scripts" ]; then
-                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
-                    fi
                     mpirun -n 16 -N 8 \
                       --hostfile /tmp/hostfile --bind-to none \
                       --mca btl self,tcp --mca btl_tcp_if_include eth0 \

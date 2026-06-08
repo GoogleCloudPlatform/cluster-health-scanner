@@ -23,6 +23,7 @@ from typing import Any
 
 from chs.exceptions import KueueException
 from chs.resources import MACHINE_TYPE_RESOURCE_MAP
+from chs.constants import CHS_NAMESPACE
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +194,7 @@ class KueueManager:
                         "ClusterQueue chs-cluster-queue is already active "
                         "and matches machine type."
                     )
+                    self._ensure_local_queue_exists(workspace_config_dir)
                     return "kueue.x-k8s.io/queue-name: chs-local-queue"
         except subprocess.CalledProcessError:
             pass
@@ -208,6 +210,7 @@ class KueueManager:
             instance_type=instance_type,
             nominal_quota=str(nominal_quota),
             resource_name=resource_name,
+            namespace=CHS_NAMESPACE,
         )
 
         kueue_config_path = os.path.join(
@@ -219,6 +222,23 @@ class KueueManager:
         self.apply_and_verify(kueue_config_path)
 
         return "kueue.x-k8s.io/queue-name: chs-local-queue"
+
+    def _ensure_local_queue_exists(self, workspace_config_dir: str):
+        """Idempotently ensures the LocalQueue exists in the namespace."""
+        kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
+            "local-queue.yaml.tpl"
+        )
+        with pkg_resources.as_file(kueue_tpl_path) as p:
+            with open(p, "r") as f:
+                kueue_tpl = f.read()
+
+        local_queue_yaml = kueue_tpl.format(namespace=CHS_NAMESPACE)
+
+        lq_path = os.path.join(workspace_config_dir, "chs-local-queue.yaml")
+        with open(lq_path, "w") as f:
+            f.write(local_queue_yaml)
+
+        self._run_kubectl(["apply", "-f", lq_path])
 
     def cleanup(self, kueue_config_path: str) -> None:
         """Deletes Kueue resources defined in the configuration file.
@@ -238,7 +258,9 @@ class KueueManager:
 
         logger.info("Cleaning up Kueue resources...")
         try:
-            self._run_kubectl(["delete", "-f", kueue_config_path])
+            self._run_kubectl(
+                ["delete", "--ignore-not-found", "-f", kueue_config_path]
+            )
             logger.info("Successfully deleted Kueue resources.")
         except subprocess.CalledProcessError as e:
             raise KueueException(

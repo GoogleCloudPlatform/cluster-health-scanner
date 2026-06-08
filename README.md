@@ -52,19 +52,25 @@ gcloud container clusters get-credentials {cluster_name} \
     --project {project_id}
 ```
 
-### Google Cloud Prerequisites (Workload Identity)
+### Google Cloud & Kubernetes Execution (GKE)
 
-To deploy CHS on GKE with Workload Identity (recommended), you must configure a Google Service Account with the required permissions and bind it to the Kubernetes Service Account. We provide an interactive setup script to automate this process:
+CHS provides a turnkey run script for executing tests natively on GKE clusters using Helm under the hood. It fully automates Workload Identity prerequisites, IAM bindings, namespace configuration, and test execution.
 
+To configure your test run, edit the values in `helm/values.yaml` (e.g., `run.suite`, `run.nodepools`).
+
+Then, simply run the script:
 ```bash
-./bin/setup_gke_prerequisites.sh
+./bin/run_chs_gke.sh [optional-run-name]
 ```
 
-This script will:
-1. Optionally configure Docker authentication for Artifact Registry.
-2. Create or bind a Google Service Account (GSA).
-3. Grant the required `roles/compute.viewer` role to the GSA so the CHS orchestrator can query cluster details.
-4. Set up the IAM binding between the KSA and the GSA.
+This idempotent script will:
+1. Fetch and configure `kubectl` credentials for your cluster.
+2. Configure Docker authentication for Artifact Registry.
+3. Automatically create and bind the required Google Service Account (GSA) to the Workload Identity KSA for the `chs-system` namespace.
+4. Ensure the `chs-system` namespace exists.
+5. Deploy and execute the test run inside the cluster using `helm upgrade --install`.
+
+Because the setup is completely idempotent, you simply run `./bin/run_chs_gke.sh` every time you want to execute a CHS test run on GKE.
 
 ## Installation
 
@@ -332,6 +338,25 @@ CHS can be run natively via Docker without needing to install any host dependenc
 
 The Docker execution model runs the internal processes as `root` and uses Docker Named Volumes (`chs-local-state`) for persistent state to avoid host permission errors while reading read-only host credentials (like `~/.kube/config`).
 
+### 0. Building and Pushing the Docker Image
+
+If you make code changes and need to build a new CHS Docker image for your cluster:
+
+```bash
+# Set your artifact registry repository path (matches helm/values.yaml)
+export REPO="us-docker.pkg.dev/gce-ai-infra/chs/chs"
+
+# Build the image locally
+docker build -t ${REPO}:latest .
+
+# Configure Docker authentication for Artifact Registry
+gcloud auth configure-docker us-docker.pkg.dev
+
+# Push the image to the registry
+docker push ${REPO}:latest
+```
+
+
 ### 1. Initial Storage Configuration (Run Once)
 Before triggering a run, configure where the archives should be saved. This configuration is permanently saved into the `chs-local-state` volume.
 
@@ -368,14 +393,15 @@ docker run -it --network host \
 ```
 *(Note: If using GCS, the `~/chs-archives:/archive` mount can be omitted).*
 
-### 3. Helm Deployment
-CHS also includes a Helm chart for native deployment inside the cluster. The orchestrator pod prefers CPU nodes and uses a specialized `--attach` mechanism to gracefully recover state if the pod is preempted while jobs are running.
+### 3. Native GKE Deployment
+CHS can be deployed inside the cluster using the bundled Helm chart. The orchestrator pod prefers CPU nodes and uses a specialized `--attach` mechanism to gracefully recover state if the pod is preempted while jobs are running.
 
-When deploying via Helm, be sure to set the `workloadIdentityServiceAccount` to the Google Service Account you configured in the prerequisites:
+It is highly recommended to use the provided turnkey execution script (which automatically drives Helm and configures security bindings) rather than running Helm manually:
 
 ```bash
-helm install chs-orchestrator ./helm \
-  --set serviceAccount.workloadIdentityServiceAccount="your-gsa@your-project.iam.gserviceaccount.com"
+# 1. Configure your run preferences in helm/values.yaml
+# 2. Run the deployment script:
+./bin/run_chs_gke.sh
 ```
 
 See the `helm/` directory for additional configuration values.

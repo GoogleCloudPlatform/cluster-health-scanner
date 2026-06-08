@@ -22,6 +22,7 @@ ramble:
     deadline: 4200
     jobset_labels_yaml: 'kueue.x-k8s.io/queue-name: chs-local-queue'
     suspend_jobset: 'true'
+    kubernetes_namespace: chs
   applications:
     chs:
       workloads:

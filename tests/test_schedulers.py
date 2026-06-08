@@ -424,9 +424,10 @@ ramble:
         self.assertEqual(variables["timeout"], 600)
         self.assertEqual(variables["deadline"], 1800)
 
+    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_setup_scheduler_resources_kueue_success(
-        self, mock_kueue_mgr_class, mock_logger
+        self, mock_kueue_mgr_class, mock_run, mock_logger
     ):
         """Test setup_scheduler_resources caches labels on success."""
         scheduler = KubernetesScheduler(
@@ -456,9 +457,10 @@ ramble:
         )
         self.assertEqual(scheduler._suspend_jobset, "true")
 
+    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_setup_scheduler_resources_kueue_fallback(
-        self, mock_kueue_mgr_class, mock_logger
+        self, mock_kueue_mgr_class, mock_run, mock_logger
     ):
         """Test setup_scheduler_resources falls back if Kueue setup fails."""
         from chs.exceptions import KueueException
@@ -736,9 +738,10 @@ ramble:
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
+    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_cleanup_scheduler_resources(
-        self, mock_kueue_mgr_class, mock_logger
+        self, mock_kueue_mgr_class, mock_run, mock_logger
     ):
         """Test cleanup_scheduler_resources invokes KueueManager."""
         scheduler = KubernetesScheduler(app_data=self.mock_app_data)
@@ -757,9 +760,10 @@ ramble:
             mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
             mock_kueue_mgr_instance.cleanup.assert_called_once_with(config_path)
 
+    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_cleanup_scheduler_resources_file_backstop(
-        self, mock_kueue_mgr_class, mock_logger
+        self, mock_kueue_mgr_class, mock_run, mock_logger
     ):
         """Test cleanup_scheduler_resources cleans up statelessly."""
         scheduler = KubernetesScheduler(app_data=self.mock_app_data)
@@ -814,8 +818,8 @@ ramble:
 
         scheduler.cleanup_scheduler_resources(run_entry=run_entry)
 
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
+        self.assertEqual(mock_run.call_count, 2)
+        args = mock_run.call_args_list[0][0][0]
         self.assertIn("delete", args)
         self.assertIn("secret", args)
         self.assertIn("job1-ssh", args)

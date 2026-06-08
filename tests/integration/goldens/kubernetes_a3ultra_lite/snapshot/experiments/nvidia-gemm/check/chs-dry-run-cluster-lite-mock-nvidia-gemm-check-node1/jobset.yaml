@@ -2,7 +2,7 @@ apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
 metadata:
   name: chs-dry-run-cluster-lite-mock-nvidia-gem-<HASH>
-  namespace: default
+  namespace: chs
   labels:
     kueue.x-k8s.io/queue-name: chs-local-queue
 

@@ -38,6 +38,7 @@ from chs.exceptions import ChsSchedulerException, KueueException
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
+from chs.constants import CHS_NAMESPACE
 
 
 def boolean_representer(dumper, data):
@@ -124,6 +125,7 @@ class KubernetesScheduler(BaseScheduler):
         workspace_name: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Sets up scheduler-specific resources like Kueue configurations."""
+        self._ensure_namespace_exists()
         self.workspace_config_dir = workspace_config_dir
         os.makedirs(workspace_config_dir, exist_ok=True)
 
@@ -224,9 +226,35 @@ class KubernetesScheduler(BaseScheduler):
             pass
         return None
 
-    def _run_kubectl(self, args: list[str], timeout: int | None = None) -> str:
+    def _ensure_namespace_exists(self) -> None:
+        """Ensures the chs namespace exists before deploying resources."""
+
+        try:
+            self._run_kubectl(["get", "namespace", CHS_NAMESPACE])
+        except subprocess.CalledProcessError:
+            self._run_kubectl(["create", "namespace", CHS_NAMESPACE])
+
+    def _delete_namespace(self) -> None:
+        """Deletes the chs namespace during cleanup."""
+        try:
+            self._run_kubectl(
+                ["delete", "namespace", CHS_NAMESPACE, "--ignore-not-found"]
+            )
+        except Exception as e:
+            logger.warning("Failed to delete namespace: %s", e)
+
+    def _run_kubectl(
+        self,
+        args: list[str],
+        timeout: int | None = None,
+        namespaced: bool = False,
+    ) -> str:
         """Runs a kubectl command and returns filtered output."""
-        cmd = ["kubectl"] + args
+
+        cmd = ["kubectl"]
+        if namespaced:
+            cmd.extend(["-n", CHS_NAMESPACE])
+        cmd.extend(args)
         result = subprocess.run(
             cmd,
             text=True,
@@ -245,7 +273,7 @@ class KubernetesScheduler(BaseScheduler):
             ["delete", "secret"] + secret_ids + ["--ignore-not-found"]
         )
         try:
-            self._run_kubectl(args_secrets)
+            self._run_kubectl(args_secrets, namespaced=True)
             logger.debug(
                 "Successfully deleted Secrets: %s", ", ".join(secret_ids)
             )
@@ -476,6 +504,8 @@ class KubernetesScheduler(BaseScheduler):
 
         variables["chs_run_id"] = run_id
 
+        variables["kubernetes_namespace"] = CHS_NAMESPACE
+
         if resources.is_tpu(machine_type) and nodes:
             topology = self._discover_tpu_topology(nodes[0])
             if topology:
@@ -509,7 +539,7 @@ class KubernetesScheduler(BaseScheduler):
                 + job_ids
                 + ["-o", "json", "--ignore-not-found"]
             )
-            output = self._run_kubectl(args)
+            output = self._run_kubectl(args, namespaced=True)
 
             # If stdout is empty, no jobs were found (all completed and deleted)
             if not output:
@@ -573,7 +603,7 @@ class KubernetesScheduler(BaseScheduler):
                 "-o",
                 "json",
             ]
-            jobs_output = self._run_kubectl(args)
+            jobs_output = self._run_kubectl(args, namespaced=True)
             if not jobs_output:
                 return
 
@@ -640,7 +670,7 @@ class KubernetesScheduler(BaseScheduler):
                 + job_ids
                 + ["-o", "json", "--ignore-not-found"]
             )
-            output = self._run_kubectl(args)
+            output = self._run_kubectl(args, namespaced=True)
             if not output:
                 return statuses
             data = json.loads(output)
@@ -697,7 +727,7 @@ class KubernetesScheduler(BaseScheduler):
                 "jsonpath={.items[*].metadata.name}",
             ]
         try:
-            output = self._run_kubectl(args)
+            output = self._run_kubectl(args, namespaced=True)
             return [p for p in output.split() if p]
         except subprocess.CalledProcessError as e:
             logger.warning("Failed to query pods for JobSet %s: %s", job_id, e)
@@ -723,7 +753,7 @@ class KubernetesScheduler(BaseScheduler):
             with open(log_path, "w") as f:
                 for pod_name in pod_names:
                     subprocess.run(
-                        ["kubectl", "logs", pod_name],
+                        ["kubectl", "logs", pod_name, "-n", CHS_NAMESPACE],
                         stdout=f,
                         check=True,
                         text=True,
@@ -774,9 +804,10 @@ class KubernetesScheduler(BaseScheduler):
                 kueue_config_path,
             )
 
-        # Clean up leftover secrets
         job_ids = list(run_entry.get("job_entries", {}).keys())
         self._delete_job_secrets(job_ids)
+
+        self._delete_namespace()
 
     def _cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given JobSets using kubectl delete."""
@@ -786,7 +817,7 @@ class KubernetesScheduler(BaseScheduler):
 
         try:
             args = ["delete", "jobset"] + job_ids + ["--ignore-not-found"]
-            self._run_kubectl(args)
+            self._run_kubectl(args, namespaced=True)
             logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
         except FileNotFoundError:
             logger.warning("kubectl command not found. Cannot cancel jobs.")
@@ -794,7 +825,6 @@ class KubernetesScheduler(BaseScheduler):
             logger.error("Failed to delete JobSets. Error: %s", e.stderr)
             click.echo(f"Failed to delete JobSets: {e.stderr}")
 
-        # Clean up leftover secrets
         self._delete_job_secrets(job_ids)
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
@@ -805,8 +835,11 @@ class KubernetesScheduler(BaseScheduler):
 
         try:
             # List all JobSets
-            output = self._run_kubectl(["get", "jobset", "-o", "name"])
+            output = self._run_kubectl(
+                ["get", "jobset", "-o", "name"], namespaced=True
+            )
             if not output:
+                self._delete_namespace()
                 return
 
             job_ids = []
@@ -824,6 +857,8 @@ class KubernetesScheduler(BaseScheduler):
                 self._cancel_jobs(job_ids)
             else:
                 logger.debug("No matching JobSets found for %s.", prefix)
+
+            self._delete_namespace()
         except FileNotFoundError:
             logger.warning(
                 "kubectl command not found. Cannot perform native cancel."
