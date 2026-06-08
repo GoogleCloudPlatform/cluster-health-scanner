@@ -17,6 +17,7 @@ import datetime
 import logging
 import os
 import textwrap
+from chs.utils import sanitize_dns_1123
 from ramble.context import Context, create_context_from_dict
 
 logger = logging.getLogger(__name__)
@@ -271,6 +272,58 @@ podAntiAffinity:
         )
 
     @staticmethod
+    def _prepare_slice_context_dicts(
+        variables: dict,
+        experiment_name: str,
+        configs: dict,
+        ramble_app_name: str,
+        extra_context: dict | None = None,
+        extra_sbatch_headers: dict | None = None,
+        default_config_file: str | None = None,
+    ) -> list[tuple[str, dict]]:
+        scheduler = variables.get("scheduler", "kubernetes")
+        tpu_slices = variables.get("tpu_slices", {})
+
+        if scheduler == "kubernetes":
+            if not tpu_slices:
+                tpu_slices = {"default-slice": variables.get("nodes", [])}
+
+            contexts = []
+            for slice_id, slice_nodes in tpu_slices.items():
+                slice_vars = copy.deepcopy(variables)
+                slice_vars["nodes"] = slice_nodes
+
+                if len(tpu_slices) == 1:
+                    slice_exp_name = experiment_name
+                else:
+                    clean_slice_id = sanitize_dns_1123(str(slice_id))
+                    slice_exp_name = f"{experiment_name}-{clean_slice_id}"
+
+                context_dict = TestHelper._prepare_cluster_context(
+                    slice_vars,
+                    configs,
+                    ramble_app_name,
+                    extra_context=extra_context,
+                    default_config_file=default_config_file,
+                )
+                contexts.append((slice_exp_name, context_dict))
+            return contexts
+        elif scheduler == "slurm":
+            context_dict = TestHelper._prepare_node_context(
+                variables,
+                configs,
+                ramble_app_name,
+                extra_context=extra_context,
+                extra_sbatch_headers=extra_sbatch_headers,
+            )
+            if default_config_file:
+                TestHelper._load_and_escape_benchmark_config(
+                    context_dict["variables"], default_config_file
+                )
+            exp_name = f"{experiment_name}-{{node}}"
+            return [(exp_name, context_dict)]
+
+    @staticmethod
     def _create_node_test_context(
         variables: dict,
         experiment_name: str,
@@ -503,8 +556,8 @@ podAntiAffinity:
     @staticmethod
     def tpu_gemm_test(
         variables: dict, experiment_name: str, configs: dict
-    ) -> Context:
-        return TestHelper._create_node_test_context(
+    ) -> list[Context]:
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
             variables,
             experiment_name,
             configs,
@@ -512,12 +565,15 @@ podAntiAffinity:
             extra_context={"modifiers": []},
             default_config_file="gemm_16384_bf16.yaml",
         )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
 
     @staticmethod
     def tpu_hbm_test(
         variables: dict, experiment_name: str, configs: dict
-    ) -> Context:
-        return TestHelper._create_node_test_context(
+    ) -> list[Context]:
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
             variables,
             experiment_name,
             configs,
@@ -525,12 +581,15 @@ podAntiAffinity:
             extra_context={"modifiers": []},
             default_config_file="hbm_copy_bf16.yaml",
         )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
 
     @staticmethod
     def tpu_host_device_test(
         variables: dict, experiment_name: str, configs: dict
-    ) -> Context:
-        return TestHelper._create_node_test_context(
+    ) -> list[Context]:
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
             variables,
             experiment_name,
             configs,
@@ -538,6 +597,9 @@ podAntiAffinity:
             extra_context={"modifiers": []},
             default_config_file="host_device.yaml",
         )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
 
     @staticmethod
     def _inject_tpu_collectives_params(ctx_vars: dict) -> None:
@@ -578,34 +640,39 @@ podAntiAffinity:
         variables: dict,
         experiment_name: str,
         configs: dict,
-    ) -> Context:
-        context_dict = TestHelper._prepare_cluster_context(
+    ) -> list[Context]:
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
             variables,
+            experiment_name,
             configs,
             ramble_app_name="tpu-collectives",
             extra_context={"modifiers": []},
             default_config_file="collectives_all_gather.yaml",
         )
-        TestHelper._inject_tpu_collectives_params(context_dict["variables"])
-        return create_context_from_dict(experiment_name, context_dict)
+        contexts = []
+        for name, dct in slice_contexts:
+            TestHelper._inject_tpu_collectives_params(dct["variables"])
+            contexts.append(create_context_from_dict(name, dct))
+        return contexts
 
     @staticmethod
     def tpu_collectives_single_node_test(
         variables: dict,
         experiment_name: str,
         configs: dict,
-    ) -> Context:
+    ) -> list[Context]:
         ctx_vars = copy.deepcopy(variables)
         ctx_vars["execution_topology"] = "2x2x1"
-        context_dict = TestHelper._prepare_node_context(
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
             ctx_vars,
+            experiment_name,
             configs,
             ramble_app_name="tpu-collectives-single-node",
             extra_context={"modifiers": []},
+            default_config_file="collectives_all_gather.yaml",
         )
-        TestHelper._load_and_escape_benchmark_config(
-            context_dict["variables"], "collectives_all_gather.yaml"
-        )
-        TestHelper._inject_tpu_collectives_params(context_dict["variables"])
-        exp_name = f"{experiment_name}-{{node}}"
-        return create_context_from_dict(exp_name, context_dict)
+        contexts = []
+        for name, dct in slice_contexts:
+            TestHelper._inject_tpu_collectives_params(dct["variables"])
+            contexts.append(create_context_from_dict(name, dct))
+        return contexts

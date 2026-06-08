@@ -67,7 +67,7 @@ class TpuHbm(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            "{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1",
+            '{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )
@@ -75,8 +75,8 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit_context(
         "node_params",
-        regex=r"Running .* with params:.*'num_elements': (?P<num_elements>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
-        output_format="{num_elements}-{dtype}",
+        regex=r"HOST (?P<node>\S+): Running .* with params:.*'num_elements': (?P<num_elements>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
+        output_format="{node},{num_elements},{dtype}",
     )
 
     figure_of_merit(
@@ -98,7 +98,7 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit(
         "Tensor Size",
-        fom_regex=r"Tensor size:\s*(?P<tensor_size>\d+\.\d+)\s*MB",
+        fom_regex=r".*Tensor size:\s*(?P<tensor_size>\d+(?:\.\d+)?)\s*MB",
         group_name="tensor_size",
         units="MB",
         fom_type=FomType.INFO,

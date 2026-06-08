@@ -297,16 +297,20 @@ class Chs(ExecutableApplication):
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
                     if is_tpu_machine:
-                        context = TestHelper.tpu_gemm_test(
+                        contexts = TestHelper.tpu_gemm_test(
                             local_vars, experiment_name, deepcopy(configs)
                         )
+                        for context in contexts:
+                            self.experiment_set.render_chained_experiments(
+                                application_name, workload, context
+                            )
                     else:
                         context = TestHelper.gemm_test(
                             local_vars, experiment_name, deepcopy(configs)
                         )
-                    self.experiment_set.render_chained_experiments(
-                        application_name, workload, context
-                    )
+                        self.experiment_set.render_chained_experiments(
+                            application_name, workload, context
+                        )
             elif test.name == "hbm":
                 application_name = "tpu-hbm"
                 experiment_name = f"{base_prefix}-{application_name}"
@@ -314,12 +318,13 @@ class Chs(ExecutableApplication):
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
 
-                context = TestHelper.tpu_hbm_test(
+                contexts = TestHelper.tpu_hbm_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "check", context
-                )
+                for context in contexts:
+                    self.experiment_set.render_chained_experiments(
+                        application_name, "check", context
+                    )
             elif test.name == "host-device":
                 application_name = "tpu-host-device"
                 experiment_name = f"{base_prefix}-{application_name}"
@@ -327,12 +332,13 @@ class Chs(ExecutableApplication):
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
 
-                context = TestHelper.tpu_host_device_test(
+                contexts = TestHelper.tpu_host_device_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "check", context
-                )
+                for context in contexts:
+                    self.experiment_set.render_chained_experiments(
+                        application_name, "check", context
+                    )
             elif test.name == "collectives":
                 application_name = "tpu-collectives"
                 workloads = (
@@ -351,12 +357,13 @@ class Chs(ExecutableApplication):
                     config_file = f"collectives_{workload}.yaml"
                     local_vars["benchmarks_yaml_file"] = config_file
 
-                    context = TestHelper.tpu_collectives_test(
+                    contexts = TestHelper.tpu_collectives_test(
                         local_vars, experiment_name, deepcopy(configs)
                     )
-                    self.experiment_set.render_chained_experiments(
-                        application_name, workload, context
-                    )
+                    for context in contexts:
+                        self.experiment_set.render_chained_experiments(
+                            application_name, workload, context
+                        )
             elif test.name == "collectives-single-node":
                 application_name = "tpu-collectives"
                 workloads = (
@@ -373,12 +380,13 @@ class Chs(ExecutableApplication):
                     config_file = f"collectives_{workload}.yaml"
                     local_vars["benchmarks_yaml_file"] = config_file
 
-                    context = TestHelper.tpu_collectives_single_node_test(
+                    contexts = TestHelper.tpu_collectives_single_node_test(
                         local_vars, experiment_name, deepcopy(configs)
                     )
-                    self.experiment_set.render_chained_experiments(
-                        application_name, workload, context
-                    )
+                    for context in contexts:
+                        self.experiment_set.render_chained_experiments(
+                            application_name, workload, context
+                        )
 
             elif test.name == "tpu-info":
                 application_name = "tpu-info"

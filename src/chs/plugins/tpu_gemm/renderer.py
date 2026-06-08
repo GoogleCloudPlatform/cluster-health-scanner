@@ -43,7 +43,7 @@ class TpuGemmRenderer(DefaultRenderer):
             return Text("No detailed metrics available.", style="yellow")
 
         table = create_styled_table(expand=False)
-        table.add_column("Parameters (MxNxK-Dtype)", style="cyan")
+        table.add_column("Parameters (MxNxK,Dtype)", style="cyan")
         table.add_column("Nodes", style="bold white")
         table.add_column(
             "Throughput\n(TFLOP/s/dev)", justify="right", style="green"
@@ -67,25 +67,29 @@ class TpuGemmRenderer(DefaultRenderer):
                 if ctx == "unknown" or ctx == "null":
                     continue
 
-                node = (
-                    res.target_resource_ids[0]
-                    if res.target_resource_ids
-                    else "Unknown Node"
-                )
-                if ctx not in parsed_map:
-                    parsed_map[ctx] = []
+                parts = ctx.split(",")
+                resolved_node = "N/A"
+                sweep_param = ctx
+                if len(parts) == 3:
+                    resolved_node = parts[0]
+                    sweep_param = f"{parts[1]},{parts[2]}"
+
+                if sweep_param not in parsed_map:
+                    parsed_map[sweep_param] = []
 
                 parsed = None
-                for p in parsed_map[ctx]:
-                    if p.nodes == node:
+                for p in parsed_map[sweep_param]:
+                    if p.nodes == resolved_node:
                         parsed = p
                         break
 
                 if parsed is None:
                     parsed = TpuGemmParsedResult(
-                        test_level=test_level, nodes=node, sweep_param=ctx
+                        test_level=test_level,
+                        nodes=resolved_node,
+                        sweep_param=sweep_param,
                     )
-                    parsed_map[ctx].append(parsed)
+                    parsed_map[sweep_param].append(parsed)
 
                 val = (
                     m.value.number_value

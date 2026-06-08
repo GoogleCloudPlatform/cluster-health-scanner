@@ -67,7 +67,7 @@ class TpuHostDevice(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            "{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1",
+            '{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )
@@ -75,8 +75,8 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"Running .* with params:.*'data_size_mib': (?P<size>\d+)",
-        output_format="{size}MiB",
+        regex=r"HOST (?P<node>\S+): Running .* with params:.*'data_size_mib': (?P<size>\d+)",
+        output_format="{node},{size}MiB",
     )
 
     figure_of_merit(

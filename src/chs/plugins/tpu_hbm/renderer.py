@@ -53,12 +53,14 @@ class TpuHbmRenderer(DefaultRenderer):
 
         return Group(*elements)
 
-    def _parse_context(self, ctx_name: str) -> tuple[int, str] | None:
-        """Parses num_elements, and dtype from context name."""
-        parts = ctx_name.split("-")
-        if len(parts) == 2:
+    def _parse_context(
+        self, ctx_name: str
+    ) -> tuple[str | None, int, str] | None:
+        """Parses node, num_elements, and dtype from context name."""
+        parts = ctx_name.split(",")
+        if len(parts) == 3:
             try:
-                return int(parts[0]), parts[1]
+                return parts[0], int(parts[1]), parts[2]
             except ValueError:
                 pass
         return None
@@ -70,7 +72,7 @@ class TpuHbmRenderer(DefaultRenderer):
         aggregated: dict[tuple[str, int, str], HbmResult] = {}
 
         for res in test_results:
-            node = (
+            default_node = (
                 res.target_resource_ids[0]
                 if res.target_resource_ids
                 else "unknown"
@@ -86,7 +88,10 @@ class TpuHbmRenderer(DefaultRenderer):
                 if not parsed_ctx:
                     continue
 
-                num_elements, dtype = parsed_ctx
+                node, num_elements, dtype = parsed_ctx
+                if not node:
+                    node = default_node
+
                 key = (node, num_elements, dtype)
 
                 if key not in aggregated:

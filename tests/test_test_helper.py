@@ -249,9 +249,11 @@ class TestTestHelper(unittest.TestCase):
         ):
             mock_create.side_effect = lambda name, ctx: ctx
 
-            ctx = TestHelper.tpu_collectives_single_node_test(
+            contexts = TestHelper.tpu_collectives_single_node_test(
                 variables, "test-collectives", configs
             )
+            self.assertEqual(len(contexts), 1)
+            ctx = contexts[0]
 
             escaped_config = ctx["variables"]["benchmarks_yaml_escaped"]
             unescaped = escaped_config.replace("\\n", "\n").replace(

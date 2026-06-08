@@ -643,7 +643,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -654,7 +653,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -665,7 +663,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -685,7 +682,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -720,7 +716,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -731,7 +726,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -742,7 +736,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -762,7 +755,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1

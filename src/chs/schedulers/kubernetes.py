@@ -300,6 +300,44 @@ class KubernetesScheduler(BaseScheduler):
             )
             return ""
 
+    def _group_nodes_by_slice(
+        self, node_names: list[str]
+    ) -> dict[str, list[str]]:
+        """Groups TPU nodes into slices using placement policy or node pool."""
+        if not node_names:
+            return {}
+
+        slices = defaultdict(list)
+        try:
+            args = ["get", "nodes"] + node_names + ["-o", "json"]
+            output = self._run_kubectl(args)
+            if output:
+                data = json.loads(output)
+                items = data.get("items", [])
+                for item in items:
+                    node_name = item.get("metadata", {}).get("name")
+                    if not node_name:
+                        continue
+                    labels = item.get("metadata", {}).get("labels", {})
+
+                    slice_id = labels.get("cloud.google.com/gke-nodepool")
+                    if not slice_id:
+                        slice_id = "default-slice"
+
+                    slices[slice_id].append(node_name)
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                "Failed to run kubectl for nodes %s: %s", node_names, e
+            )
+            slices["failed-nodes"].extend(node_names)
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "Failed to parse json for nodes %s: %s", node_names, e
+            )
+            slices["failed-nodes"].extend(node_names)
+
+        return dict(slices)
+
     def _discover_networks(self) -> tuple[list[str], list[str]]:
         """Discovers all network names using kubectl and groups them by type.
 
@@ -510,6 +548,7 @@ class KubernetesScheduler(BaseScheduler):
             topology = self._discover_tpu_topology(nodes[0])
             if topology:
                 variables["tpu_topology"] = topology
+            variables["tpu_slices"] = self._group_nodes_by_slice(nodes)
 
         if self._jobset_labels_yaml:
             variables["jobset_labels_yaml"] = self._jobset_labels_yaml

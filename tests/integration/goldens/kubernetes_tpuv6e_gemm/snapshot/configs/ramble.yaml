@@ -23,6 +23,7 @@ ramble:
     suspend_jobset: 'true'
     kubernetes_namespace: chs
     tpu_topology: 2x2x1
+    tpu_slices: {}
   applications:
     chs:
       workloads:

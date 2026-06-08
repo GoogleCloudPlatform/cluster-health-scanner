@@ -53,11 +53,18 @@ class TpuHostDeviceRenderer(DefaultRenderer):
 
         return Group(*elements)
 
-    def _parse_context(self, ctx_name: str) -> int | None:
-        """Parses size from context name (e.g. '1024MiB')."""
-        if ctx_name.endswith("MiB"):
+    def _parse_context(self, ctx_name: str) -> tuple[str | None, int] | None:
+        """Parses node and size from context name."""
+        parts = ctx_name.split(",")
+        if len(parts) == 2:
+            node = parts[0]
+            size_part = parts[1]
+        else:
+            return None
+
+        if size_part.endswith("MiB"):
             try:
-                return int(ctx_name[:-3])
+                return node, int(size_part[:-3])
             except ValueError:
                 pass
         return None
@@ -69,7 +76,7 @@ class TpuHostDeviceRenderer(DefaultRenderer):
         aggregated: dict[tuple[str, int], HostDeviceResult] = {}
 
         for res in test_results:
-            node = (
+            default_node = (
                 res.target_resource_ids[0]
                 if res.target_resource_ids
                 else "unknown"
@@ -85,7 +92,10 @@ class TpuHostDeviceRenderer(DefaultRenderer):
                 if parsed_ctx is None:
                     continue
 
-                size = parsed_ctx
+                node, size = parsed_ctx
+                if not node:
+                    node = default_node
+
                 key = (node, size)
 
                 if key not in aggregated:

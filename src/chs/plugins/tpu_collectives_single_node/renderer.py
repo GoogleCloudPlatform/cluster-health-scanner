@@ -22,3 +22,6 @@ class TpuCollectivesSingleNodeRenderer(TpuCollectivesRenderer):
             "\nTPU Collectives Single Node Performance Summary",
             style="bold underline cyan",
         )
+
+    def _should_only_show_first_host(self) -> bool:
+        return False
