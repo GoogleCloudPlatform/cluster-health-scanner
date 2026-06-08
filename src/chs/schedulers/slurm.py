@@ -14,6 +14,7 @@
 
 """Slurm scheduler implementation for Cluster Health Scanner."""
 
+import concurrent.futures
 import importlib.resources as pkg_resources
 import logging
 import os
@@ -27,6 +28,7 @@ from google.api_core.exceptions import GoogleAPICallError
 
 from typing import Any, TYPE_CHECKING
 
+
 if TYPE_CHECKING:
     from chs.utils.app_data import ChsAppData
 
@@ -36,6 +38,8 @@ from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
+
+_MAX_CONCURRENT_API_REQUESTS = 10
 
 
 def boolean_representer(dumper, data):
@@ -261,38 +265,55 @@ class SlurmScheduler(BaseScheduler):
                 return {}
 
             client = compute_v1.InstancesClient()
-            # TODO: Batch GCE API requests to avoid URL length
-            # limits if nodes list is large.
-            filter_str = " OR ".join([f'name = "{node}"' for node in nodes])
-            request = compute_v1.AggregatedListInstancesRequest(
-                project=project,
-                filter=filter_str,
-            )
-            page_result = client.aggregated_list(request=request)
-
             topology: dict[str, dict[str, list[str]]] = {}
-            for zone, instances_in_zone in page_result:
-                if instances_in_zone.instances:
-                    for item in instances_in_zone.instances:
-                        name = item.name
-                        if not name:
-                            continue
+            batch_size = 100
 
-                        resource_status = getattr(item, "resource_status", None)
-                        if not resource_status:
-                            continue
-                        topo_info = getattr(
-                            resource_status, "physical_host_topology", None
-                        )
-                        if not topo_info:
-                            continue
+            def fetch_batch(batch_nodes):
+                filter_str = " OR ".join([f'name = "{n}"' for n in batch_nodes])
+                request = compute_v1.AggregatedListInstancesRequest(
+                    project=project,
+                    filter=filter_str,
+                )
+                return client.aggregated_list(request=request)
 
-                        block = topo_info.block or "default-block"
-                        subblock = topo_info.subblock or "default-subblock"
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=_MAX_CONCURRENT_API_REQUESTS
+            ) as executor:
+                futures = [
+                    executor.submit(fetch_batch, nodes[i : i + batch_size])
+                    for i in range(0, len(nodes), batch_size)
+                ]
 
-                        topology.setdefault(block, {}).setdefault(
-                            subblock, []
-                        ).append(name)
+                for future in concurrent.futures.as_completed(futures):
+                    page_result = future.result()
+                    for zone, instances_in_zone in page_result:
+                        if instances_in_zone.instances:
+                            for item in instances_in_zone.instances:
+                                name = item.name
+                                if not name:
+                                    continue
+
+                                resource_status = getattr(
+                                    item, "resource_status", None
+                                )
+                                if not resource_status:
+                                    continue
+                                topo_info = getattr(
+                                    resource_status,
+                                    "physical_host_topology",
+                                    None,
+                                )
+                                if not topo_info:
+                                    continue
+
+                                block = topo_info.block or "default-block"
+                                subblock = (
+                                    topo_info.subblock or "default-subblock"
+                                )
+
+                                topology.setdefault(block, {}).setdefault(
+                                    subblock, []
+                                ).append(name)
 
             return topology
 
