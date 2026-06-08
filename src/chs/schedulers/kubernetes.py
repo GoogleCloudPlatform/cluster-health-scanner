@@ -14,6 +14,7 @@
 
 """Kubernetes scheduler implementation for Cluster Health Scanner."""
 
+import urllib.request
 import importlib.resources as pkg_resources
 import json
 import logging
@@ -111,7 +112,7 @@ class KubernetesScheduler(BaseScheduler):
             if self._app_data:
                 run_entry = self._app_data.get_run(workspace_name) or {}
                 if run_id:
-                    run_entry.update({"run_id": run_id})
+                    run_entry.update({"run_id": run_id, "scheduler": self.name})
                 self._app_data.update_run(workspace_name, run_entry)
         return filtered_tests
 
@@ -158,7 +159,19 @@ class KubernetesScheduler(BaseScheduler):
 
     def get_cluster_name(self) -> str | None:
         """Retrieves cluster name from GKE configmap or kubectl."""
-        # 1. Try ConfigMap (in-cluster GKE)
+        # 1. Try GCP Metadata Server (in-cluster GKE)
+        try:
+            req = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/attributes/cluster-name",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            val = urllib.request.urlopen(req, timeout=2).read().decode("utf-8")
+            if val:
+                return val
+        except Exception:
+            pass
+
+        # 2. Try ConfigMap (in-cluster GKE)
         try:
             val = self._run_kubectl(
                 [
@@ -177,7 +190,7 @@ class KubernetesScheduler(BaseScheduler):
         except Exception:
             pass
 
-        # 2. Try node labels
+        # 3. Try node labels
         try:
             val = self._run_kubectl(
                 [
@@ -198,7 +211,7 @@ class KubernetesScheduler(BaseScheduler):
         except Exception:
             pass
 
-        # 3. Try current-context (local execution)
+        # 4. Try current-context (local execution)
         try:
             val = self._run_kubectl(["config", "current-context"], timeout=5)
             if val:

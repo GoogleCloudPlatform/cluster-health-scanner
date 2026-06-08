@@ -52,6 +52,20 @@ gcloud container clusters get-credentials {cluster_name} \
     --project {project_id}
 ```
 
+### Google Cloud Prerequisites (Workload Identity)
+
+To deploy CHS on GKE with Workload Identity (recommended), you must configure a Google Service Account with the required permissions and bind it to the Kubernetes Service Account. We provide an interactive setup script to automate this process:
+
+```bash
+./bin/setup_gke_prerequisites.sh
+```
+
+This script will:
+1. Optionally configure Docker authentication for Artifact Registry.
+2. Create or bind a Google Service Account (GSA).
+3. Grant the required `roles/compute.viewer` role to the GSA so the CHS orchestrator can query cluster details.
+4. Set up the IAM binding between the KSA and the GSA.
+
 ## Installation
 
 To install CHS, it is recommended to use a virtual environment:
@@ -311,6 +325,60 @@ Workspace                     Details
 2026-05-04_19.05.29.792632    chs run --machine-type a3-ultra
 ```
 
+
+## Docker Execution (Kubernetes Only)
+
+CHS can be run natively via Docker without needing to install any host dependencies (other than Docker and valid GCP/Kubernetes credentials). This containerized execution strictly targets Kubernetes environments.
+
+The Docker execution model runs the internal processes as `root` and uses Docker Named Volumes (`chs-local-state`) for persistent state to avoid host permission errors while reading read-only host credentials (like `~/.kube/config`).
+
+### 1. Initial Storage Configuration (Run Once)
+Before triggering a run, configure where the archives should be saved. This configuration is permanently saved into the `chs-local-state` volume.
+
+**Option A: Archiving to GCS**
+```bash
+docker run -it --network host \
+  -v ~/.kube:/workspace/.kube:ro \
+  -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+  -v chs-local-state:/workspace/.local/share \
+  chs:latest configure storage gcs --bucket-name my-bucket
+```
+
+**Option B: Archiving to a Local Host Directory**
+If you want to extract the archive tarballs directly to your machine, bind-mount a host directory to the container (e.g., `-v ~/chs-archives:/archive`):
+```bash
+docker run -it --network host \
+  -v ~/.kube:/workspace/.kube:ro \
+  -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+  -v chs-local-state:/workspace/.local/share \
+  -v ~/chs-archives:/archive \
+  chs:latest configure storage path --path /archive
+```
+
+### 2. Running Diagnostics
+Because configuration is saved in the `chs-local-state` volume, subsequent runs will automatically respect the chosen storage backend.
+
+```bash
+docker run -it --network host \
+  -v ~/.kube:/workspace/.kube:ro \
+  -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+  -v chs-local-state:/workspace/.local/share \
+  -v ~/chs-archives:/archive \
+  chs:latest run --suite lite
+```
+*(Note: If using GCS, the `~/chs-archives:/archive` mount can be omitted).*
+
+### 3. Helm Deployment
+CHS also includes a Helm chart for native deployment inside the cluster. The orchestrator pod prefers CPU nodes and uses a specialized `--attach` mechanism to gracefully recover state if the pod is preempted while jobs are running.
+
+When deploying via Helm, be sure to set the `workloadIdentityServiceAccount` to the Google Service Account you configured in the prerequisites:
+
+```bash
+helm install chs-orchestrator ./helm \
+  --set serviceAccount.workloadIdentityServiceAccount="your-gsa@your-project.iam.gserviceaccount.com"
+```
+
+See the `helm/` directory for additional configuration values.
 
 ## Configuration
 

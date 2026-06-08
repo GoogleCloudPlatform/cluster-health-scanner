@@ -235,6 +235,11 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(job_ids, ["123"])
         mock_update_registry.assert_called_once_with(["123"])
 
+        self.assertEqual(self.mock_app_data.update_run.call_count, 2)
+        args, kwargs = self.mock_app_data.update_run.call_args
+        self.assertEqual(args[0], "ws1")
+        self.assertTrue(args[1].get("submission_complete"))
+
     def test_register_initial_run_preserves_custom_fields(self):
         """Test _register_initial_run preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)

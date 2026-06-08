@@ -413,6 +413,14 @@ class RambleManager:
         if job_ids:
             self._update_registry(job_ids)
 
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry["submission_complete"] = True
+        self._app_data.update_run(self._workspace_name, run_entry)
+        logger.info(
+            "All JobSets submitted successfully. "
+            "submission_complete set to True."
+        )
+
         return job_ids
 
     def cancel_experiments(self) -> None:

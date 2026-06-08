@@ -728,6 +728,14 @@ def list_command(
     help="Custom run ID for this execution.",
     callback=validators.validate_run_id,
 )
+@click.option(
+    "--attach",
+    is_flag=True,
+    help=(
+        "Attach to an in-flight run. If the previous run was interrupted "
+        "mid-submission, it is canceled and restarted."
+    ),
+)
 @click.pass_obj
 def run(
     obj,
@@ -742,6 +750,7 @@ def run(
     validation: str | None = None,
     skip_validation: bool = False,
     run_id: str | None = None,
+    attach: bool = False,
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
@@ -759,6 +768,36 @@ def run(
       A RunExecutionResult object containing details of the run.
     """
     app_data = obj["app_data"]
+
+    if attach:
+        try:
+            latest_run_id = app_data.get_latest_run_id()
+            run_entry = app_data.get_run(app_data.resolve_run_id(latest_run_id))
+            if run_entry and run_entry.get("submission_complete", False):
+                logger.info(
+                    "Previous submission complete. Attaching to monitor "
+                    "jobs..."
+                )
+                analyze_action(
+                    app_data, latest_run_id, validation, skip_validation
+                )
+                return RunExecutionResult(
+                    suite=suite or "lite",
+                    scheduler_name="kubernetes",
+                    tests=None,
+                    workspace_name=app_data.resolve_run_id(latest_run_id),
+                    workspaces_base_dir=app_data.get_workspaces_dir(),
+                    job_ids=None,
+                )
+            else:
+                logger.warning(
+                    "Previous run died mid-submission. Canceling orphaned "
+                    "jobs and restarting..."
+                )
+                cancel_action(app_data, latest_run_id)
+        except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
+            pass
+
     if is_latest_chs_run_active(app_data):
         raise ex.ChsRunInProgressException(
             "The latest CHS run is still in progress. Please wait for it to"

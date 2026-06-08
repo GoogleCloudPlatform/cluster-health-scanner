@@ -740,6 +740,101 @@ class TestCli(unittest.TestCase):
         mock_analyze_action.assert_not_called()
         self.mock_get_cluster_name.assert_not_called()
 
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_attach_success(self, mock_analyze_action):
+        """Test 'run' command with --attach flag when complete."""
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_run.return_value = {"submission_complete": True}
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["-v", "run", "--suite", "suite1", "--attach"],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        mock_analyze_action.assert_called_once_with(
+            self.mock_app_data,
+            "latest_run",
+            None,
+            False,
+        )
+        self.assertEqual(result.return_value.workspace_name, "latest_run")
+        self.assertEqual(result.return_value.suite, "suite1")
+
+    @mock.patch("chs.cli.get_scheduler")
+    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._validate_run_args")
+    @mock.patch("chs.utils.tests.get_tests_by_machine_type_and_scheduler")
+    @mock.patch("chs.cli.load_suite")
+    @mock.patch("chs.cli.run_action")
+    def test_run_command_attach_no_runs(
+        self,
+        mock_run_action,
+        mock_load_suite,
+        mock_get_supported_tests,
+        mock_validate_run_args,
+        mock_analyze_action,
+        mock_get_scheduler,
+    ):
+        """Test 'run' command with --attach flag when there are no previous
+        runs."""
+        self.mock_app_data.get_latest_run_id.side_effect = (
+            exceptions.NoPreviousRunsFoundException()
+        )
+
+        # We need to mock scheduler interactions because it will proceed
+        # to run normally
+        mock_scheduler = mock.Mock()
+        mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.detect.return_value = True
+        mock_scheduler.validate_environment.return_value = None
+        mock_scheduler.detect_nodes_hardware.return_value = ["a3-ultragpu-8g"]
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_load_suite.return_value = {"tests": ["test1"]}
+        mock_validate_run_args.return_value = ["test1"]
+        mock_get_supported_tests.return_value = ["test1"]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["-v", "run", "--suite", "suite1", "--attach"],
+            standalone_mode=False,
+        )
+        if result.exit_code != 0:
+            import traceback
+
+            traceback.print_exception(*result.exc_info)
+        self.assertEqual(result.exit_code, 0, msg=str(result.exception))
+
+        # Should have called run_action and analyze_action since it
+        # fell back to normal run
+        mock_run_action.assert_called_once()
+        mock_analyze_action.assert_called_once()
+
+    @mock.patch("chs.cli.cancel_action")
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_attach_died_mid_submission(
+        self, mock_analyze_action, mock_cancel_action
+    ):
+        """Test 'run' command with --attach flag when incomplete."""
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_run.return_value = {"submission_complete": False}
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["-v", "run", "--suite", "suite1", "--attach"],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        mock_cancel_action.assert_called_once_with(
+            self.mock_app_data, "latest_run"
+        )
+        self.mock_rm_instance.execute_experiments.assert_called_once()
+
     def test_analyze_action_exception_handling(self):
         """Test that analyze_action wraps exceptions in ClickException."""
         ws_dir = tempfile.mkdtemp()
