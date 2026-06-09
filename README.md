@@ -537,9 +537,7 @@ a3-ultra:
 
 -   **GCS Storage Configuration**: For the `chs configure storage gcs` command, the specified GCS bucket must already exist; CHS does not create it automatically.
 
-## Support and Feedback
 
-To report bugs or request new features, please [create a new issue in Buganizer](https://github.com/GoogleCloudPlatform/cluster-health-scanner/issues).
 
 ## Development & TODOs
 
