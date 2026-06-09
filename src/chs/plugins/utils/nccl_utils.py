@@ -152,13 +152,28 @@ def render_nccl_detail(
             row.append(topo_context)
         row.extend([f"{max_bw:.2f}", max_size])
 
-        validation_status = "N/A"
-        if res.result_status == pb.RESULT_STATUS_SUCCESS:
-            validation_status = "[green]PASS[/]"
-        elif res.result_status == pb.RESULT_STATUS_FAILED:
-            validation_status = "[red]FAIL[/]"
-
         if has_thresholds:
+            validation_status = "N/A"
+            bw_metric = next(
+                (
+                    m
+                    for m in res.metrics
+                    if m.HasField("validation_criteria")
+                    and "bandwidth" in m.validation_criteria.name.lower()
+                ),
+                None,
+            )
+            if bw_metric:
+                if (
+                    bw_metric.validation_criteria.result_status
+                    == pb.RESULT_STATUS_SUCCESS
+                ):
+                    validation_status = "[green]PASS[/]"
+                elif (
+                    bw_metric.validation_criteria.result_status
+                    == pb.RESULT_STATUS_FAILED
+                ):
+                    validation_status = "[red]FAIL[/]"
             row.append(validation_status)
 
         table.add_row(*row)

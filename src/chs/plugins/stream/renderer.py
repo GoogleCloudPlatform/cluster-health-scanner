@@ -35,6 +35,8 @@ class StreamParsedResult:
 class StreamRenderer(DefaultRenderer):
     """Renders details for stream tests."""
 
+    validation_render_mode = "all"
+
     def _parse_metrics(
         self, test_results: list[pb.TestResult]
     ) -> tuple[dict[tuple[str, int], StreamParsedResult], dict[str, float]]:
