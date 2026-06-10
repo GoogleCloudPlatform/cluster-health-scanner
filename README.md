@@ -103,8 +103,7 @@ chs [OPTIONS] COMMAND [ARGS]...
 ### Commands
 
 #### 1. `list`
-Lists available resources (suites, tests, schedulers).
-*Note: Currently, this command logs information but does not yet output a dynamic list.*
+Lists available resources (suites, tests, schedulers)
 
 **Options:**
 -   `--suites`: List available test suites.
@@ -117,8 +116,8 @@ Lists available resources (suites, tests, schedulers).
 ```bash
 chs list --suites
 chs list --tests --from-suite lite
-chs list --tests --machine-type a3-ultra
-chs list --tests --machine-type a3-ultra --from-suite lite
+chs list --tests --machine-type a3-ultragpu-8g
+chs list --tests --machine-type a3-ultragpu-8g --from-suite lite
 ```
 
 #### 2. `configure`
@@ -150,21 +149,21 @@ Executes a test suite on a specified cluster.
 CHS automatically detects the scheduler (`slurm` or `kubernetes`) of the active environment. Slurm detection is attempted first (by checking if `sinfo` and `squeue` are available and reachable). If Slurm is not detected, it falls back to Kubernetes (by checking for in-cluster credentials or `kubectl` connectivity).
 
 **Arguments:**
--   `--machine-type` **(Required)**: The machine type of the cluster nodes.
-    *   *Supported values:* `a3-ultra`, `a3-mega`, `a4`.
 -   `--suite` / `-s`: Name of the test suite to run.
     *   *Default:* `lite`.
     *   *Supported values:* `lite`, `standard`, `burn-in`.
 -   `--tests` / `-t`: Comma-separated list of specific tests to run.
     *   *Default (if not provided):* Loads tests from the selected suite.
-    *   *Supported values:* `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`.
+    *   *Supported values:* `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`, `tpu-info`, `hbm`, `host-device`, `collectives`, `collectives-single-node`.
 -   `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
--   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
--   `--nodepool`: Kubernetes node pool to run on.
--   `--partition`: Slurm partition to run on.
+-   `--nodelists`: Slurm node list pattern/lists to run on (e.g., `node-[1-3]`).
+-   `--nodepools`: Kubernetes node pools to run on.
+-   `--partitions`: Slurm partitions to run on.
 -   `--dry-run` `[slurm|kubernetes]`: Set up the workspace for the specified scheduler but do not execute (developer dry-run).
 -   `--validation`: Path to a user-defined thresholds YAML file (optional).
 -   `--skip-validation`: Skip threshold evaluation entirely.
+-   `--run-id`: Custom run ID for this execution.
+-   `--attach`: Attach to an in-flight run. If the previous run was interrupted mid-submission, it is canceled and restarted.
 
 ### Supported Suites and Tests
 
@@ -172,6 +171,7 @@ Below are the details of the supported test suites and the tests included in eac
 
 #### Test Descriptions
 
+##### GPU Tests
 -   **`nvidia-smi`**: Basic GPU health check (presence, visibility, and status).
 -   **`dcgm`**: Diagnostics using NVIDIA Data Center GPU Manager.
 -   **`gemm`**: Matrix multiplication performance test.
@@ -180,47 +180,56 @@ Below are the details of the supported test suites and the tests included in eac
 -   **`nccl-cluster`**: NCCL performance tests across all nodes in the cluster.
 -   **`nccl-pairwise`**: NCCL performance tests between pairs of nodes.
 
+##### TPU Tests
+-   **`tpu-info`**: Collects TPU system information and topology.
+-   **`hbm`**: High Bandwidth Memory performance tests.
+-   **`host-device`**: Host-to-device and device-to-host bandwidth tests.
+-   **`collectives`**: TPU collectives performance benchmarks across nodes.
+-   **`collectives-single-node`**: TPU collectives benchmarks on a single node.
+
 #### Suite Composition
 
 -   **`lite`**: Designed for quick verification.
-    -   Included tests: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`
+    -   Included GPU tests: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`
+    -   Included TPU tests: `tpu-info`, `hbm`, `host-device`, `collectives-single-node`
 -   **`standard`**: Comprehensive health check.
-    -   Included tests: `nvidia-smi`, `dcgm`, `stream`, `nccl-cluster`, `nccl-pairwise`
+    -   Included GPU tests: `nvidia-smi`, `dcgm`, `stream`, `nccl-cluster`, `nccl-pairwise`
+    -   Included TPU tests: `tpu-info`, `collectives`
 -   **`burn-in`**: Focused on stress testing.
-    -   Included tests: `dcgm` (with higher diagnostic levels)
+    -   Included GPU tests: `dcgm` (with higher diagnostic levels)
 
 **Examples:**
 
 #### Kubernetes Examples
 
 ```bash
-# Run the lite suite (default) on a3-ultra machine
-chs run --machine-type a3-ultra
+# Run the lite suite (default) on discovered nodes
+chs run
 
 # Run the lite suite on a specific node pool
-chs run --machine-type a3-ultra --nodepool my-node-pool
+chs run --nodepools my-node-pool
 
 # Run the lite suite on specific nodes
-chs run --machine-type a3-ultra --nodes node-01,node-02
+chs run --nodes node-01,node-02
 
 # Run specific tests on specific nodes
-chs run --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+chs run --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 #### Slurm Examples
 
 ```bash
-# Run the lite suite (default) on a3-ultra machine
-chs run --machine-type a3-ultra
+# Run the lite suite (default) on discovered nodes
+chs run
 
 # Run the lite suite on a specific partition
-chs run --machine-type a3-ultra --partition my-partition
+chs run --partitions my-partition
 
 # Run the lite suite on specific nodes
-chs run --machine-type a3-ultra --nodes node-01,node-02
+chs run --nodes node-01,node-02
 
 # Run specific tests on specific nodes
-chs run --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+chs run --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 **Output:**
@@ -277,19 +286,12 @@ The `bill_of_health.json` contains a `log_file` field for every test, pointing t
 **Example Log File Path in BoH:**
 `log_file: "experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
 #### 5. `cancel`
-Cancels running jobs for a specific test run.
-
-**Arguments:**
--   `RUN_ID` (Optional): The ID (Workspace Name) of the run to cancel.
-    *   *Default:* The most recent run.
+Cancels running jobs for the latest active test run.
 
 **Example:**
 ```bash
 # Cancel the latest run
 chs cancel
-
-# Cancel a specific run
-chs cancel 2026-03-30_10.30.00.123456
 ```
 
 #### 6. `results`
@@ -327,8 +329,8 @@ Displays a table with Workspace and Details.
 ```
 Workspace                     Details
 ------------------------------------------------------------------------------------------
-2026-05-05_16.23.13.228716    chs run --machine-type a3-ultra --dry-run kubernetes
-2026-05-04_19.05.29.792632    chs run --machine-type a3-ultra
+2026-05-05_16.23.13.228716    chs run --dry-run kubernetes
+2026-05-04_19.05.29.792632    chs run
 ```
 
 
@@ -426,12 +428,12 @@ You can configure these thresholds by providing a YAML file containing baseline 
 
 * **Specify custom thresholds:** Use the `--validation <PATH>` flag during `chs run` or `chs analyze` to specify a custom thresholds YAML file:
   ```bash
-  chs run --machine-type a3-ultra --validation /path/to/custom_thresholds.yaml
+  chs run --validation /path/to/custom_thresholds.yaml
   chs analyze --validation /path/to/custom_thresholds.yaml
   ```
 * **Skip validation:** If you want to run tests or analyze results without applying any threshold checks, use the `--skip-validation` flag.
   ```bash
-  chs run --machine-type a3-ultra --skip-validation
+  chs run --skip-validation
   ```
 
 ### Configuration Schema & Hierarchy
