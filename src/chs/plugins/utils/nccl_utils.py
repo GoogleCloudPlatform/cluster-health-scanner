@@ -14,6 +14,7 @@
 
 from dataclasses import dataclass
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import extract_node_names
 from chs.utils import theme
 from . import validation_renderer
 
@@ -116,7 +117,7 @@ def render_nccl_detail(
     include_topology = False
     if node_to_location:
         for res in test_results:
-            if res.target_resource_ids and len(res.target_resource_ids) >= 2:
+            if res.target_resources and len(res.target_resources) >= 2:
                 include_topology = True
                 break
 
@@ -136,12 +137,13 @@ def render_nccl_detail(
         topo_context = "Unknown"
         if (
             node_to_location
-            and res.target_resource_ids
-            and len(res.target_resource_ids) >= 2
+            and res.target_resources
+            and len(res.target_resources) >= 2
         ):
+            names = extract_node_names(res.target_resources)
             topo_context = get_topological_context(
-                res.target_resource_ids[0],
-                res.target_resource_ids[1],
+                names[0],
+                names[1],
                 node_to_location,
             )
 

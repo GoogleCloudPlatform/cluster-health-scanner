@@ -56,7 +56,7 @@ class DefaultRenderer:
 
                 table.add_row(f"{prefix}{metric.key}", str(val), metric.unit)
 
-            nodes_str = rendering.format_nodes(test_result.target_resource_ids)
+            nodes_str = rendering.format_nodes(test_result.target_resources)
             panels.append(
                 Panel(
                     table

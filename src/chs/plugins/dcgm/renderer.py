@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import extract_node_names
 from rich.text import Text
 from rich.console import Group, RenderableType
-from collections import defaultdict
 from chs.core.default_plugin.renderer import DefaultRenderer
 from chs.utils import theme
 
@@ -89,7 +90,7 @@ class DcgmRenderer(DefaultRenderer):
 
         node_results = defaultdict(list)
         for result in test_results:
-            for rid in result.target_resource_ids:
+            for rid in extract_node_names(result.target_resources):
                 node_results[rid].append(result)
 
         table = theme.create_styled_table(

@@ -33,7 +33,7 @@ class TestTpuCollectivesRenderer(unittest.TestCase):
         res1 = pb.TestResult()
         res1.test_name = "tpu-collectives"
         res1.test_level = "all_gather"
-        res1.target_resource_ids.append("node-1")
+        res1.target_resources.add(node_name="node-1")
         m1 = res1.metrics.add()
         m1.key = "Bandwidth (median)"
         m1.value.number_value = 7.92
@@ -43,7 +43,8 @@ class TestTpuCollectivesRenderer(unittest.TestCase):
         res2 = pb.TestResult()
         res2.test_name = "tpu-collectives"
         res2.test_level = "all_gather"
-        res2.target_resource_ids.extend(["node-1", "node-2"])
+        res2.target_resources.add(node_name="node-1")
+        res2.target_resources.add(node_name="node-2")
         m2 = res2.metrics.add()
         m2.key = "Bandwidth (median)"
         m2.value.number_value = 111.01
@@ -79,7 +80,8 @@ class TestTpuCollectivesRenderer(unittest.TestCase):
         res1 = pb.TestResult()
         res1.test_name = "tpu-collectives-single-node"
         res1.test_level = "all_gather"
-        res1.target_resource_ids.extend(["node-1", "node-2"])
+        res1.target_resources.add(node_name="node-1")
+        res1.target_resources.add(node_name="node-2")
         m1 = res1.metrics.add()
         m1.key = "Bandwidth (median)"
         m1.value.number_value = 7.92

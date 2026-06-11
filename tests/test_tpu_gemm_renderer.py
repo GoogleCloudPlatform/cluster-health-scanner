@@ -28,7 +28,7 @@ class TestTpuGemmRenderer(unittest.TestCase):
         res = pb.TestResult()
         res.test_name = "tpu-gemm"
         res.test_level = "gemm"
-        res.target_resource_ids.append("node-1")
+        res.target_resources.add(node_name="node-1")
 
         m1 = res.metrics.add()
         m1.key = "Throughput"

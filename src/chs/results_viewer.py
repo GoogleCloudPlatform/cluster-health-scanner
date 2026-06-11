@@ -95,9 +95,13 @@ class ResultsViewer:
             if tests:
                 match_tests = any(t == result.test_name for t in tests)
             if resources:
-                match_resources = any(
-                    r in result.target_resource_ids for r in resources
-                )
+                match_resources = False
+                for target in result.target_resources:
+                    if target.node_name in resources or any(
+                        res in target.node_name for res in resources
+                    ):
+                        match_resources = True
+                        break
 
             if match_tests and match_resources:
                 filtered_results.append(result)

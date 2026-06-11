@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from chs.core.default_plugin.renderer import DefaultRenderer
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import format_nodes
 from chs.utils import create_styled_table
 from rich.console import Group
 from rich.text import Text
@@ -60,9 +61,9 @@ class StreamRenderer(DefaultRenderer):
 
         for res in test_results:
             node = (
-                ", ".join(res.target_resource_ids)
-                if res.target_resource_ids
-                else "Unknown Node"
+                format_nodes(res.target_resources)
+                if res.target_resources
+                else "Unknown"
             )
 
             for m in res.metrics:

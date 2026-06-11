@@ -83,7 +83,7 @@ def render_validation_results(
         is_success = test_result.result_status == pb.RESULT_STATUS_SUCCESS
         border_color = "green" if is_success else "red"
 
-        nodes_str = rendering.format_nodes(test_result.target_resource_ids)
+        nodes_str = rendering.format_nodes(test_result.target_resources)
         title_text = Text(
             f"\nValidation Results: {test_result.test_name}"
             f" ({test_result.test_level}) - [{nodes_str}]",

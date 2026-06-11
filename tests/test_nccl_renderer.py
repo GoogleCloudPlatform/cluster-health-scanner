@@ -53,7 +53,8 @@ def test_nccl_pairwise_renderer():
     res = pb.TestResult()
     res.test_name = "nccl-pairwise"
     res.test_level = "L1"
-    res.target_resource_ids.extend(["node-1", "node-2"])
+    res.target_resources.add(node_name="node-1")
+    res.target_resources.add(node_name="node-2")
 
     # Add peak metric
     m1 = res.metrics.add()

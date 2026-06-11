@@ -14,11 +14,11 @@
 
 from rich.console import Group
 from rich.text import Text
+from dataclasses import dataclass
 
 from chs.utils import create_styled_table
-
-from dataclasses import dataclass
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import format_nodes
 from chs.core.default_plugin.renderer import DefaultRenderer
 
 
@@ -71,8 +71,8 @@ class GemmRenderer(DefaultRenderer):
                         median_val = m.value.number_value
 
             nodes = (
-                ", ".join(res.target_resource_ids)
-                if res.target_resource_ids
+                format_nodes(res.target_resources)
+                if res.target_resources
                 else "Unknown Node"
             )
             test_level = res.test_level if res.test_level else "Unknown"

@@ -19,6 +19,7 @@ from rich.console import Group
 from rich.text import Text
 
 from chs.core.default_plugin.renderer import DefaultRenderer
+from chs.plugins.utils.rendering import extract_node_names
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import create_styled_table
 
@@ -107,8 +108,10 @@ class TpuCollectivesRenderer(DefaultRenderer):
 
         all_target_resources = set()
         for res in test_results:
-            if res.target_resource_ids:
-                all_target_resources.update(res.target_resource_ids)
+            if res.target_resources:
+                all_target_resources.update(
+                    extract_node_names(res.target_resources)
+                )
         all_resources_str = (
             ", ".join(sorted(all_target_resources))
             if all_target_resources

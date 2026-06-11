@@ -961,6 +961,7 @@ def run(
                 "scheduler": scheduler,
                 "command_statement": command_statement,
                 "storage": app_data.get_storage_config(),
+                "node_to_instance_id": scheduler_obj.node_to_instance_id,
             },
         )
 

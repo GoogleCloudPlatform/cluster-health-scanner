@@ -278,12 +278,15 @@ class TestBOHGenerator(unittest.TestCase):
         generator = BOHGenerator(self.test_json_path)
         report = generator.generate()
 
-        self.assertEqual(
-            list(report.test_results[0].target_resource_ids), ["node1"]
-        )
-        self.assertEqual(
-            list(report.test_results[1].target_resource_ids), ["node1", "node2"]
-        )
+        tr1 = report.test_results[0].target_resources[0]
+        self.assertEqual(tr1.node_name, "node1")
+        self.assertEqual(tr1.instance_id, "")
+
+        trs2 = report.test_results[1].target_resources
+        self.assertEqual(trs2[0].node_name, "node1")
+        self.assertEqual(trs2[0].instance_id, "")
+        self.assertEqual(trs2[1].node_name, "node2")
+        self.assertEqual(trs2[1].instance_id, "")
 
     def test_generate_file_error(self):
         """Test error handling for missing input file."""

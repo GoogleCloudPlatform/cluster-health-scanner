@@ -42,13 +42,13 @@ class TestResultsViewer(unittest.TestCase):
                 {
                     "test_name": "test1",
                     "result_status": "RESULT_STATUS_SUCCESS",
-                    "target_resource_ids": ["node1"],
+                    "target_resources": [{"node_name": "node1"}],
                     "metrics": [{"key": "m1", "value": 1.0, "unit": "GB/s"}],
                 },
                 {
                     "test_name": "test2",
                     "result_status": "RESULT_STATUS_FAILED",
-                    "target_resource_ids": ["node2"],
+                    "target_resources": [{"node_name": "node2"}],
                     "metrics": [{"key": "m2", "value": "some_error"}],
                 },
             ],

@@ -68,12 +68,18 @@ message ResourceEntity {
   google.protobuf.Struct metadata = 4;
 }
 
+// Message representing a target resource with node name and instance id.
+message TargetResource {
+  string node_name = 1;
+  string instance_id = 2;
+}
+
 // Message representing the result of a specific test.
 message TestResult {
   string test_name = 1;
   string test_level = 2;
   ResultStatus result_status = 3;
-  repeated string target_resource_ids = 4;
+  repeated TargetResource target_resources = 4;
   repeated Metric metrics = 5;
   google.protobuf.Struct metadata = 6;
   repeated ValidationCriteria validation_criteria = 7;

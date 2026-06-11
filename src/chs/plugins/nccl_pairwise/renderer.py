@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import format_nodes
 from rich.console import RenderableType
 from chs.core.default_plugin.renderer import DefaultRenderer
 from chs.plugins.utils.nccl_utils import render_nccl_detail
@@ -33,8 +34,8 @@ class NcclPairwiseRenderer(DefaultRenderer):
             "Pairwise Detail (Aggregated)",
             "Pair (Node 1 <-> Node 2)",
             test_results,
-            lambda res: " <-> ".join(res.target_resource_ids)
-            if res.target_resource_ids
+            lambda res: format_nodes(res.target_resources, join_str=" <-> ")
+            if res.target_resources
             else "Unknown Pair",
             self.topology,
         )

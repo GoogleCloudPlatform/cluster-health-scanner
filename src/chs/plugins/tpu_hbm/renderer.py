@@ -17,6 +17,7 @@ from rich.console import Group
 from rich.text import Text
 from chs.utils import create_styled_table
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import format_nodes
 from chs.core.default_plugin.renderer import DefaultRenderer
 
 
@@ -73,8 +74,8 @@ class TpuHbmRenderer(DefaultRenderer):
 
         for res in test_results:
             default_node = (
-                res.target_resource_ids[0]
-                if res.target_resource_ids
+                format_nodes(res.target_resources)
+                if res.target_resources
                 else "unknown"
             )
             for m in res.metrics:

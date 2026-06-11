@@ -389,12 +389,23 @@ class BOHGenerator:
                     "gcs_log_file"
                 ].string_value = gcs_path
 
+            run_data = self.app_data.get_run(self.report.report_id) or {}
+            node_mapping = run_data.get("node_to_instance_id", {})
+
             node = ramble_vars.get("node")
             if node:
-                test_result.target_resource_ids.append(node)
+                inst_id = node_mapping.get(node, "")
+                test_result.target_resources.add(
+                    node_name=node, instance_id=inst_id
+                )
+
             else:
                 nodes = ramble_raw_vars.get("nodes", [])
-                test_result.target_resource_ids.extend(nodes)
+                for n in nodes:
+                    inst_id = node_mapping.get(n, "")
+                    test_result.target_resources.add(
+                        node_name=n, instance_id=inst_id
+                    )
 
             contexts = exp.get("CONTEXTS", [])
             if contexts:

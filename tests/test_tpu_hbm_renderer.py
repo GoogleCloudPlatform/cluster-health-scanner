@@ -28,7 +28,7 @@ class TestTpuHbmRenderer(unittest.TestCase):
         res = pb.TestResult()
         res.test_name = "tpu-hbm"
         res.test_level = "hbm"
-        res.target_resource_ids.append("node-1")
+        res.target_resources.add(node_name="node-1")
 
         m1 = res.metrics.add()
         m1.key = "Bandwidth (median)"
