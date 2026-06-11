@@ -842,6 +842,62 @@ class TestBOHGenerator(unittest.TestCase):
         with self.assertRaises(ValueError):
             BOHGenerator(self.test_json_path, thresholds_path=thresh_file)
 
+    @mock.patch("chs.boh_generator.ChsAppData")
+    def test_generate_time_exceeded(self, mock_app_data_cls):
+        """Test handling of TIMEOUT and DEADLINE job statuses."""
+        mock_app_data = mock_app_data_cls.return_value
+        mock_app_data.get_run.return_value = {
+            "job_entries": {
+                "job1": {
+                    "experiment_dir": "/path/to/exp_timeout",
+                    "status": "TIMEOUT",
+                },
+                "job2": {
+                    "experiment_dir": "/path/to/exp_deadline",
+                    "status": "DEADLINE",
+                },
+            }
+        }
+
+        data = {
+            "workspace_name": "test_workspace",
+            "experiments": [
+                {
+                    "experiment_name": "exp_timeout",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "metric", "value": 1}],
+                        }
+                    ],
+                },
+                {
+                    "experiment_name": "exp_deadline",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "metric", "value": 1}],
+                        }
+                    ],
+                },
+            ],
+        }
+        self._write_json(data)
+        generator = BOHGenerator(self.test_json_path)
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 2)
+
+        self.assertEqual(report.test_results[0].test_name, "exp_timeout")
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_TIMEOUT
+        )
+
+        self.assertEqual(report.test_results[1].test_name, "exp_deadline")
+        self.assertEqual(
+            report.test_results[1].result_status, pb.RESULT_STATUS_DEADLINE
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ import yaml
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
 from chs.utils.app_data import ChsAppData
+from chs.utils import lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -429,11 +430,27 @@ class BOHGenerator:
             for metric in test_result.metrics:
                 metrics_map[metric.key] = metric
 
+            job_entries = run_data.get("job_entries", {})
+            matching_entry = next(
+                (
+                    entry
+                    for entry in job_entries.values()
+                    if os.path.basename(entry.get("experiment_dir", ""))
+                    == exp_name
+                ),
+                {},
+            )
+            job_status = matching_entry.get("status", "UNKNOWN").upper()
             machine_type = ramble_vars.get("machine_type", "default")
-            if not self.skip_validation:
-                self._evaluate_thresholds(machine_type, test_result)
-            else:
+
+            if job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES:
+                test_result.result_status = lifecycle.TIME_EXCEEDED_PB_STATUSES[
+                    job_status
+                ]
+            elif self.skip_validation:
                 test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            else:
+                self._evaluate_thresholds(machine_type, test_result)
 
             self.report.test_results.append(test_result)
 

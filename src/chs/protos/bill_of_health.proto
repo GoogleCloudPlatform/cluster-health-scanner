@@ -26,6 +26,7 @@ enum ResultStatus {
   RESULT_STATUS_FAILED = 2;
   RESULT_STATUS_CANCELLED = 3;
   RESULT_STATUS_TIMEOUT = 4;
+  RESULT_STATUS_DEADLINE = 5;
 }
 
 // The operator used to compare Metric.value and the expected value.

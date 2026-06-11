@@ -26,6 +26,8 @@ from chs.utils.theme import create_error_table as create_theme_error_table
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
+from chs.plugins.utils import rendering
+from chs.utils import lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -170,14 +172,34 @@ class ResultsViewer:
             plugin = self.plugin_manager.get_plugin(canonical_name)
             if hasattr(plugin, "set_topology"):
                 plugin.set_topology(self.topology)
-            detail = plugin.render_detail(results)
+            valid_results = []
+            for res in results:
+                if (
+                    res.result_status
+                    in lifecycle.TIME_EXCEEDED_PB_STATUSES.values()
+                ):
+                    nodes_str = rendering.format_nodes(res.target_resources)
+                    status_name = pb.ResultStatus.Name(res.result_status)
+                    status_clean = status_name.replace("RESULT_STATUS_", "")
+                    self.console.print(
+                        f"[bold red]{status_clean}[/bold red] • "
+                        f"{res.test_name} ({res.test_level}) on {nodes_str}"
+                    )
+                else:
+                    valid_results.append(res)
+
+            if not valid_results:
+                self.console.print()
+                continue
+
+            detail = plugin.render_detail(valid_results)
 
             has_errors = any(
                 (
                     m.key.endswith("Error Detected")
                     or m.key.endswith("Failure Detected")
                 )
-                for res in results
+                for res in valid_results
                 for m in res.metrics
             )
 
@@ -185,5 +207,5 @@ class ResultsViewer:
                 if detail is not None:
                     self.console.print(detail)
 
-                self._append_errors(results)
+                self._append_errors(valid_results)
                 self.console.print()

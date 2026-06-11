@@ -15,6 +15,7 @@
 """Lifecycle Manager for CHS Jobs."""
 
 from enum import Enum
+from chs.protos import bill_of_health_pb2 as pb
 
 
 class JobStatus(str, Enum):
@@ -55,3 +56,9 @@ class JobStatus(str, Enum):
             cls.DEADLINE.value,
             cls.UNKNOWN.value,
         ]
+
+
+TIME_EXCEEDED_PB_STATUSES = {
+    JobStatus.TIMEOUT.value: pb.RESULT_STATUS_TIMEOUT,
+    JobStatus.DEADLINE.value: pb.RESULT_STATUS_DEADLINE,
+}
