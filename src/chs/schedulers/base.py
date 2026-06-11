@@ -17,26 +17,18 @@
 import abc
 import json
 import os
-from typing import Any, TYPE_CHECKING
+from typing import Any
 import logging
 from chs.utils.gcp import query_gce_instances_info
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from chs.utils.app_data import ChsAppData
-
 
 class BaseScheduler(abc.ABC):
     """Base class for cluster schedulers."""
 
-    def __init__(self, app_data: "ChsAppData | None" = None):
-        """Initializes the scheduler.
-
-        Args:
-          app_data: ChsAppData instance or None.
-        """
-        self._app_data = app_data
+    def __init__(self):
+        """Initializes the scheduler."""
         self.node_to_instance_id: dict[
             str, str
         ] = {}  # Store node -> GCE instance_id
@@ -101,9 +93,7 @@ class BaseScheduler(abc.ABC):
         """
         return tests
 
-    def cleanup_scheduler_resources(
-        self, workspace_name: str | None = None
-    ) -> None:
+    def cleanup_scheduler_resources(self) -> None:
         """Cleans up scheduler-specific resources. Optional to implement."""
         pass
 
@@ -147,6 +137,7 @@ class BaseScheduler(abc.ABC):
         timeout: int | None = None,
         deadline: int | None = None,
         run_id: str | None = None,
+        images_dir: str | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -161,13 +152,22 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def cancel_jobs(self, job_ids: list[str]) -> None:
+        """Cancels specific jobs by their IDs."""
+        pass
+
+    @abc.abstractmethod
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all jobs matching the specified prefix."""
         pass
 
     @abc.abstractmethod
-    def check_jobs_running(self, job_ids: list[str]) -> bool:
-        """Checks if the given jobs are still running."""
+    def has_no_failed_jobs(self) -> bool:
+        """Checks if there are any failed CHS jobs.
+
+        Returns:
+            True if all are healthy (active/completed).
+        """
         pass
 
     @abc.abstractmethod

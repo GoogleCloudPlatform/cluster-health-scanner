@@ -25,19 +25,16 @@ from chs.schedulers.kubernetes import KubernetesScheduler
 
 def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
     """Factory to get the right scheduler instance."""
-    app_data = kwargs.get("app_data")
     if scheduler == "slurm":
         return SlurmScheduler(
             nodes=kwargs.get("nodes"),
             nodelists=kwargs.get("nodelists"),
             partitions=kwargs.get("partitions"),
-            app_data=app_data,
         )
     if scheduler == "kubernetes":
         return KubernetesScheduler(
             nodes=kwargs.get("nodes"),
             nodepools=kwargs.get("nodepools"),
-            app_data=app_data,
         )
     raise ex.UnsupportedSchedulerException(
         f"Unsupported scheduler: {scheduler}"

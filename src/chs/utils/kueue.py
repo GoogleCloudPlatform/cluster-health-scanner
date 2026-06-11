@@ -144,59 +144,8 @@ class KueueManager:
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
 
         try:
-            # Check if flavor matches the current instance_type
-            existing_flavor = self._run_kubectl(
-                [
-                    "get",
-                    "resourceflavor",
-                    "chs-flavor",
-                    "-o",
-                    "jsonpath={.spec.nodeLabels['node.kubernetes.io/instance-type']}",
-                ]
-            )
-            if existing_flavor.strip() != instance_type:
-                logger.warning(
-                    "Existing Kueue resource flavor has instance type %s, "
-                    "but current run requires %s. Recreating Kueue "
-                    "resources...",
-                    existing_flavor.strip(),
-                    instance_type,
-                )
-                # Delete existing kueue resources to force recreation
-                self._run_kubectl(
-                    [
-                        "delete",
-                        "clusterqueue",
-                        "chs-cluster-queue",
-                        "--ignore-not-found",
-                    ]
-                )
-                self._run_kubectl(
-                    [
-                        "delete",
-                        "resourceflavor",
-                        "chs-flavor",
-                        "--ignore-not-found",
-                    ]
-                )
-            else:
-                result = self._run_kubectl(
-                    [
-                        "get",
-                        "clusterqueue",
-                        "chs-cluster-queue",
-                        "-o",
-                        'jsonpath={.status.conditions[?(@.type=="Active")].status}',
-                    ]
-                )
-                if result.strip() == "True":
-                    logger.info(
-                        "ClusterQueue chs-cluster-queue is already active "
-                        "and matches machine type."
-                    )
-                    self._ensure_local_queue_exists(workspace_config_dir)
-                    return "kueue.x-k8s.io/queue-name: chs-local-queue"
-        except subprocess.CalledProcessError:
+            self.cleanup()
+        except KueueException:
             pass
 
         kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
@@ -240,26 +189,39 @@ class KueueManager:
 
         self._run_kubectl(["apply", "-f", lq_path])
 
-    def cleanup(self, kueue_config_path: str) -> None:
-        """Deletes Kueue resources defined in the configuration file.
-
-        Args:
-            kueue_config_path: Path to the Kueue YAML configuration file.
+    def cleanup(self) -> None:
+        """Deletes Kueue resources by name.
 
         Raises:
             KueueException: If deletion fails.
         """
-        if not os.path.exists(kueue_config_path):
-            logger.debug(
-                "Kueue configuration file not found at %s; skipping deletion.",
-                kueue_config_path,
-            )
-            return
-
         logger.info("Cleaning up Kueue resources...")
         try:
             self._run_kubectl(
-                ["delete", "--ignore-not-found", "-f", kueue_config_path]
+                [
+                    "delete",
+                    "localqueue",
+                    "chs-local-queue",
+                    "-n",
+                    CHS_NAMESPACE,
+                    "--ignore-not-found",
+                ]
+            )
+            self._run_kubectl(
+                [
+                    "delete",
+                    "clusterqueue",
+                    "chs-cluster-queue",
+                    "--ignore-not-found",
+                ]
+            )
+            self._run_kubectl(
+                [
+                    "delete",
+                    "resourceflavor",
+                    "chs-flavor",
+                    "--ignore-not-found",
+                ]
             )
             logger.info("Successfully deleted Kueue resources.")
         except subprocess.CalledProcessError as e:

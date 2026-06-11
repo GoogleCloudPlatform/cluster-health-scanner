@@ -47,19 +47,23 @@ class TestKueueManager(unittest.TestCase):
     def test_setup_already_active_returns_label(self):
         """Test setup returns queue label if ClusterQueue is already active."""
         self.mock_scheduler._run_kubectl.side_effect = [
-            "a3-megagpu-8g",
-            "True",
-            "",
+            "",  # cleanup localqueue
+            "",  # cleanup clusterqueue
+            "",  # cleanup resourceflavor
+            "",  # apply
+            "",  # wait
         ]
         label = self.kueue_mgr.setup(self.tmp_dir, "a3-megagpu-8g", ["node1"])
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 5)
 
     def test_setup_success_renders_and_verifies(self):
         """Test setup renders template, applies it, and verifies readiness."""
 
         self.mock_scheduler._run_kubectl.side_effect = [
-            subprocess.CalledProcessError(1, "kubectl"),
+            "",
+            "",
+            "",
             "",
             "",
         ]
@@ -80,7 +84,9 @@ class TestKueueManager(unittest.TestCase):
     def test_setup_tpu_success_renders_and_verifies(self):
         """Test setup for TPU renders correct resource flavor and name."""
         self.mock_scheduler._run_kubectl.side_effect = [
-            subprocess.CalledProcessError(1, "kubectl"),
+            "",
+            "",
+            "",
             "",
             "",
         ]
@@ -127,29 +133,35 @@ class TestKueueManager(unittest.TestCase):
         ):
             self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
 
-    def test_cleanup_nonexistent_file_skips(self):
-        """Test cleanup skips if configuration file doesn't exist."""
-        self.kueue_mgr.cleanup("/tmp/nonexistent_file_12345.yaml")
-        self.mock_scheduler._run_kubectl.assert_not_called()
-
     def test_cleanup_success(self):
         """Test cleanup deletes resources via kubectl."""
-        config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
-        with open(config_path, "w") as f:
-            f.write("dummy")
-
         self.mock_scheduler._run_kubectl.return_value = ""
-        self.kueue_mgr.cleanup(config_path)
-        self.mock_scheduler._run_kubectl.assert_called_once_with(
-            ["delete", "--ignore-not-found", "-f", config_path]
+        self.kueue_mgr.cleanup()
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "delete",
+                "localqueue",
+                "chs-local-queue",
+                "-n",
+                "chs",
+                "--ignore-not-found",
+            ]
+        )
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "delete",
+                "clusterqueue",
+                "chs-cluster-queue",
+                "--ignore-not-found",
+            ]
+        )
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            ["delete", "resourceflavor", "chs-flavor", "--ignore-not-found"]
         )
 
     def test_cleanup_failure_raises(self):
         """Test cleanup error raises KueueException."""
-        config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
-        with open(config_path, "w") as f:
-            f.write("dummy")
-
         self.mock_scheduler._run_kubectl.side_effect = (
             subprocess.CalledProcessError(
                 1, "kubectl delete", stderr="conflict"
@@ -158,7 +170,7 @@ class TestKueueManager(unittest.TestCase):
         with self.assertRaisesRegex(
             KueueException, "Failed to delete Kueue resources"
         ):
-            self.kueue_mgr.cleanup(config_path)
+            self.kueue_mgr.cleanup()
 
 
 if __name__ == "__main__":

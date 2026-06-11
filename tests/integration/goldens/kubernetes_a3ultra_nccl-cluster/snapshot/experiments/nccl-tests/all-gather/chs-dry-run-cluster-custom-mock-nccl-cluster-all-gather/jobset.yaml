@@ -31,7 +31,7 @@ spec:
         spec:
           parallelism: 2
           completions: 2
-          activeDeadlineSeconds: 4200
+          activeDeadlineSeconds: 1200
           template:
             metadata:
 

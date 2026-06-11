@@ -22,6 +22,7 @@ from chs.utils.cluster import (
     sanitize_dns_1123,
     get_sanitized_cluster_name,
     generate_random_suffix,
+    is_in_cluster,
 )
 from chs.utils.theme import (
     create_styled_table,
@@ -48,4 +49,5 @@ __all__ = [
     "sanitize_dns_1123",
     "get_sanitized_cluster_name",
     "generate_random_suffix",
+    "is_in_cluster",
 ]

@@ -253,30 +253,10 @@ class TestRambleManager(unittest.TestCase):
             {"123": "/tmp/workspace/experiments/exp1"}
         )
 
-        self.assertEqual(self.mock_app_data.update_run.call_count, 2)
+        self.assertEqual(self.mock_app_data.update_run.call_count, 1)
         args, kwargs = self.mock_app_data.update_run.call_args
         self.assertEqual(args[0], "ws1")
         self.assertTrue(args[1].get("submission_complete"))
-
-    def test_register_initial_run_preserves_custom_fields(self):
-        """Test _register_initial_run preserves custom flags."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        mock_scheduler = mock.Mock()
-        mock_scheduler.name = "kubernetes"
-        manager._scheduler = mock_scheduler
-
-        self.mock_app_data.get_run.return_value = {
-            "kueue_supported": True,
-            "custom_flag": "yes",
-        }
-
-        manager._register_initial_run()
-
-        self.mock_app_data.update_run.assert_called_once()
-        updated_run = self.mock_app_data.update_run.call_args[0][1]
-        self.assertTrue(updated_run.get("kueue_supported"))
-        self.assertEqual(updated_run.get("custom_flag"), "yes")
-        self.assertEqual(updated_run.get("scheduler"), "kubernetes")
 
     def test_update_registry_preserves_custom_fields(self):
         """Test _update_registry preserves custom flags."""
@@ -321,65 +301,8 @@ class TestRambleManager(unittest.TestCase):
             timeout=None,
             deadline=None,
             run_id=None,
+            images_dir="/tmp/images",
         )
-
-    def test_check_jobs_running_true(self):
-        """Test check_jobs_running returns True when jobs are running."""
-        self.mock_app_data.get_run.return_value = {
-            "job_entries": {"123": {"status": "PENDING"}},
-            "scheduler": "mock_scheduler",
-        }
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        mock_scheduler = mock.Mock()
-        mock_scheduler.check_jobs_running.return_value = True
-
-        with mock.patch(
-            "chs.ramble_manager.get_scheduler"
-        ) as mock_get_scheduler:
-            mock_get_scheduler.return_value = mock_scheduler
-
-            result = manager.check_jobs_running()
-
-            self.assertTrue(result)
-            self.assertEqual(self.mock_app_data.get_run.call_count, 2)
-            mock_get_scheduler.assert_called_once_with(
-                "mock_scheduler", app_data=self.mock_app_data
-            )
-            mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
-
-    def test_check_jobs_running_false(self):
-        """Test check_jobs_running returns False when jobs are not running."""
-        self.mock_app_data.get_run.return_value = {
-            "job_entries": {"123": {"status": "PENDING"}},
-            "scheduler": "mock_scheduler",
-        }
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        mock_scheduler = mock.Mock()
-        mock_scheduler.check_jobs_running.return_value = False
-
-        with mock.patch(
-            "chs.ramble_manager.get_scheduler"
-        ) as mock_get_scheduler:
-            mock_get_scheduler.return_value = mock_scheduler
-
-            result = manager.check_jobs_running()
-
-            self.assertFalse(result)
-            self.assertEqual(self.mock_app_data.get_run.call_count, 2)
-            mock_get_scheduler.assert_called_once_with(
-                "mock_scheduler", app_data=self.mock_app_data
-            )
-            mock_scheduler.check_jobs_running.assert_called_once_with(["123"])
-
-    def test_check_jobs_running_no_entry(self):
-        """Test check_jobs_running returns False for no registry entry."""
-        self.mock_app_data.get_run.return_value = None
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-
-        result = manager.check_jobs_running()
-
-        self.assertFalse(result)
-        self.mock_app_data.get_run.assert_called_once_with("ws1")
 
     def test_repr(self):
         """Test __repr__ format."""

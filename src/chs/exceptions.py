@@ -103,3 +103,9 @@ class KueueException(ChsException):
     """Raised for Kueue-related errors."""
 
     pass
+
+
+class NoActiveJobsException(ChsException):
+    """Raised when there are no CHS jobs found on the cluster."""
+
+    pass

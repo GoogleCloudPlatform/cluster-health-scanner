@@ -23,17 +23,16 @@ import yaml
 
 
 import subprocess
-import click
-from typing import Any, TYPE_CHECKING
+from typing import Any
 from collections import defaultdict
-
-if TYPE_CHECKING:
-    from chs.utils.app_data import ChsAppData
-
 
 from chs.schedulers.base import BaseScheduler
 from chs.utils.kueue import KueueManager
-from chs.exceptions import ChsSchedulerException, KueueException
+from chs.exceptions import (
+    ChsSchedulerException,
+    KueueException,
+    NoActiveJobsException,
+)
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
@@ -56,16 +55,14 @@ class KubernetesScheduler(BaseScheduler):
         self,
         nodes: str | None = None,
         nodelists: str | None = None,
-        nodepools: str | None = None,
         partitions: str | None = None,
-        app_data: "ChsAppData | None" = None,
+        nodepools: str | None = None,
     ):
-        super().__init__(app_data)
+        super().__init__()
         self.nodes_arg = nodes
         self.nodepools_arg = nodepools
         self._resolved_nodes: list[str] | None = None
         self.workspace_config_dir: str | None = None
-        self.workspace_name: str | None = None
         self.kueue_supported: bool = False
         self._jobset_labels_yaml: str = ""
         self._suspend_jobset: str = "false"
@@ -107,13 +104,6 @@ class KubernetesScheduler(BaseScheduler):
         preflight_checker = KubernetesPreflightChecker(self)
         filtered_tests, kueue_supported = preflight_checker.check(tests)
         self.kueue_supported = kueue_supported
-        if workspace_name:
-            self.workspace_name = workspace_name
-            if self._app_data:
-                run_entry = self._app_data.get_run(workspace_name) or {}
-                if run_id:
-                    run_entry.update({"run_id": run_id, "scheduler": self.name})
-                self._app_data.update_run(workspace_name, run_entry)
         return filtered_tests
 
     def setup_scheduler_resources(
@@ -263,19 +253,33 @@ class KubernetesScheduler(BaseScheduler):
         )
         return result.stdout.strip()
 
-    def _delete_job_secrets(self, job_ids: list[str]) -> None:
-        """Deletes SSH secrets associated with the given job IDs."""
-        if not job_ids:
-            return
-        secret_ids = [f"{job_id}-ssh" for job_id in job_ids]
-        args_secrets = (
-            ["delete", "secret"] + secret_ids + ["--ignore-not-found"]
-        )
+    def _delete_job_secrets(self) -> None:
+        """Deletes SSH secrets associated with CHS jobs statelessly."""
         try:
-            self._run_kubectl(args_secrets, namespaced=True)
-            logger.debug(
-                "Successfully deleted Secrets: %s", ", ".join(secret_ids)
+            output = self._run_kubectl(
+                ["get", "secrets", "-o", "jsonpath={.items[*].metadata.name}"],
+                namespaced=True,
             )
+            secret_names = output.strip().split()
+            secrets_to_delete = [
+                s
+                for s in secret_names
+                if s.startswith("chs-") and s.endswith("-ssh")
+            ]
+
+            if secrets_to_delete:
+                self._run_kubectl(
+                    ["delete", "secrets"]
+                    + secrets_to_delete
+                    + ["--ignore-not-found"],
+                    namespaced=True,
+                )
+                logger.debug(
+                    "Successfully deleted secrets: %s",
+                    ", ".join(secrets_to_delete),
+                )
+            else:
+                logger.debug("No CHS SSH secrets found to delete.")
         except Exception as e:
             logger.warning("Failed to delete secrets: %s", e)
 
@@ -498,6 +502,7 @@ class KubernetesScheduler(BaseScheduler):
         timeout: int | None = None,
         deadline: int | None = None,
         run_id: str | None = None,
+        images_dir: str | None = None,
     ) -> None:
         self.workspace_config_dir = workspace_config_dir
         nodes = self.get_nodes_under_test()
@@ -536,7 +541,7 @@ class KubernetesScheduler(BaseScheduler):
         variables["tests"] = tests or []
         variables["default_interface_name"] = default_interface_name
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
-        variables["timeout"] = timeout
+        variables["timeout"] = timeout if self.kueue_supported else deadline
         variables["deadline"] = deadline
 
         variables["chs_run_id"] = run_id
@@ -561,27 +566,20 @@ class KubernetesScheduler(BaseScheduler):
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-    def check_jobs_running(self, job_ids: list[str]) -> bool:
-        """Checks if the given jobs are still running."""
-        if not job_ids:
-            logger.warning(
-                "No job IDs provided to check. Did chs run submit jobs?"
-            )
-            return False
+    def has_no_failed_jobs(self) -> bool:
+        """Checks if there are any failed CHS jobs.
 
-        still_running = False
+        Returns:
+            True if all are healthy (active/completed).
+        """
+        all_healthy = False
         try:
-            # Pass all job IDs at once and ignore ones that were already deleted
-            args = (
-                ["get", "jobset"]
-                + job_ids
-                + ["-o", "json", "--ignore-not-found"]
-            )
+            args = ["get", "jobset", "-o", "json", "--ignore-not-found"]
             output = self._run_kubectl(args, namespaced=True)
 
             # If stdout is empty, no jobs were found (all completed and deleted)
             if not output:
-                return False
+                raise NoActiveJobsException("No jobs found on the cluster.")
 
             data = json.loads(output)
 
@@ -594,26 +592,24 @@ class KubernetesScheduler(BaseScheduler):
 
             for job_data in items:
                 conditions = job_data.get("status", {}).get("conditions", [])
-
-                completed = False
                 failed = False
-
                 for cond in conditions:
-                    if (
-                        cond.get("type") == "Completed"
-                        and cond.get("status") == "True"
-                    ):
-                        completed = True
                     if (
                         cond.get("type") == "Failed"
                         and cond.get("status") == "True"
                     ):
                         failed = True
 
-                if not completed and not failed:
-                    still_running = True
+                if failed:
+                    logger.warning(
+                        "JobSet %s is failed. Will trigger cleanup.",
+                        job_data.get("metadata", {}).get("name", "Unknown"),
+                    )
+                    return False
+                else:
+                    all_healthy = True
                     logger.debug(
-                        "JobSet %s is still running.",
+                        "JobSet %s is healthy.",
                         job_data.get("metadata", {}).get("name", "Unknown"),
                     )
 
@@ -622,7 +618,7 @@ class KubernetesScheduler(BaseScheduler):
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
             logger.warning("Failed to parse status for JobSets: %s", e)
 
-        return still_running
+        return all_healthy
 
     def _check_and_update_deadlines(
         self, failed_jobset_ids: list[str], statuses: dict[str, str]
@@ -664,7 +660,7 @@ class KubernetesScheduler(BaseScheduler):
                         and condition.get("reason") == "DeadlineExceeded"
                     ):
                         deadlined_jobsets.add(jobset_name)
-                        statuses[jobset_name] = JobStatus.DEADLINE.value
+                        statuses[jobset_name] = JobStatus.TIMEOUT.value
                         break
         except (
             subprocess.CalledProcessError,
@@ -822,43 +818,21 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to parse GKE jobset.yaml at {jobset_file}: {e}"
             ) from e
 
-    def cleanup_scheduler_resources(
-        self,
-        workspace_name: str | None = None,
-        run_entry: dict[str, Any] | None = None,
-    ) -> None:
-        """Cleans up scheduler-specific resources like Kueue configurations."""
-        if not run_entry and workspace_name and self._app_data:
-            run_entry = self._app_data.get_run(workspace_name) or {}
-        else:
-            run_entry = run_entry or {}
+    def cleanup_scheduler_resources(self) -> None:
+        """Cleans up scheduler-specific resources like Kueue
+        configurations statelessly."""
 
-        workspace_path = run_entry.get("workspace_path")
-        config_dir = self.workspace_config_dir
-        if not config_dir and workspace_path:
-            config_dir = os.path.join(workspace_path, "configs")
+        kueue_mgr = KueueManager(self)
+        try:
+            kueue_mgr.cleanup()
+        except KueueException as e:
+            logger.warning("Failed to clean up Kueue resources: %s", e)
 
-        kueue_config_path = ""
-        if config_dir:
-            kueue_config_path = os.path.join(config_dir, "kueue-configs.yaml")
-
-        file_exists = kueue_config_path and os.path.exists(kueue_config_path)
-
-        if file_exists:
-            kueue_mgr = KueueManager(self)
-            kueue_mgr.cleanup(kueue_config_path)
-        else:
-            logger.debug(
-                "Kueue configuration file not found at %s; skipping deletion.",
-                kueue_config_path,
-            )
-
-        job_ids = list(run_entry.get("job_entries", {}).keys())
-        self._delete_job_secrets(job_ids)
+        self._delete_job_secrets()
 
         self._delete_namespace()
 
-    def _cancel_jobs(self, job_ids: list[str]) -> None:
+    def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given JobSets using kubectl delete."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
@@ -872,9 +846,8 @@ class KubernetesScheduler(BaseScheduler):
             logger.warning("kubectl command not found. Cannot cancel jobs.")
         except subprocess.CalledProcessError as e:
             logger.error("Failed to delete JobSets. Error: %s", e.stderr)
-            click.echo(f"Failed to delete JobSets: {e.stderr}")
 
-        self._delete_job_secrets(job_ids)
+        self._delete_job_secrets()
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all JobSets matching the specified prefix natively."""
@@ -903,7 +876,7 @@ class KubernetesScheduler(BaseScheduler):
                     len(job_ids),
                     prefix,
                 )
-                self._cancel_jobs(job_ids)
+                self.cancel_jobs(job_ids)
             else:
                 logger.debug("No matching JobSets found for %s.", prefix)
 

@@ -99,7 +99,6 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.workspace_name = MOCK_WORKSPACE_NAME
         self.mock_rm_instance.path = f"/mocked/workspaces/{MOCK_WORKSPACE_NAME}"
         self.mock_rm_instance.execute_experiments.return_value = []
-        self.mock_rm_instance.check_jobs_running.return_value = False
 
         self.mock_dt = self.enterContext(
             mock.patch("chs.cli.datetime.datetime", autospec=True)
@@ -116,6 +115,7 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        self.mock_scheduler.has_no_failed_jobs.return_value = False
         self.mock_scheduler.detect_nodes_hardware.return_value = [
             "a3-megagpu-8g"
         ]
@@ -436,6 +436,7 @@ class TestCli(unittest.TestCase):
             s = mock.Mock()
             s.name = name
             s.get_nodes_under_test.return_value = ["node1"]
+            s.has_no_failed_jobs.return_value = False
             s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
             s.run_preflight_checks.side_effect = (
                 lambda tests=None, *args, **kwargs: tests
@@ -741,14 +742,16 @@ class TestCli(unittest.TestCase):
         self.mock_get_cluster_name.assert_not_called()
 
     @mock.patch("chs.cli.analyze_action")
-    def test_run_command_attach_success(self, mock_analyze_action):
-        """Test 'run' command with --attach flag when complete."""
+    def test_run_command_auto_attach_success(self, mock_analyze_action):
+        """Test 'run' command automatically attaches to an active run."""
+        self.mock_app_data.get_latest_run_id.side_effect = None
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = {"submission_complete": True}
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
 
         result = self.runner.invoke(
             cli.cli,
-            ["-v", "run", "--suite", "suite1", "--attach"],
+            ["-v", "run", "--suite", "suite1"],
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
@@ -762,61 +765,13 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.return_value.workspace_name, "latest_run")
         self.assertEqual(result.return_value.suite, "suite1")
 
-    @mock.patch("chs.cli.get_scheduler")
-    @mock.patch("chs.cli.analyze_action")
-    @mock.patch("chs.cli._validate_run_args")
-    @mock.patch("chs.utils.tests.get_tests_by_machine_type_and_scheduler")
-    @mock.patch("chs.cli.load_suite")
-    @mock.patch("chs.cli.run_action")
-    def test_run_command_attach_no_runs(
-        self,
-        mock_run_action,
-        mock_load_suite,
-        mock_get_supported_tests,
-        mock_validate_run_args,
-        mock_analyze_action,
-        mock_get_scheduler,
-    ):
-        """Test 'run' command with --attach flag when there are no previous
-        runs."""
-        self.mock_app_data.get_latest_run_id.side_effect = (
-            exceptions.NoPreviousRunsFoundException()
-        )
-
-        # We need to mock scheduler interactions because it will proceed
-        # to run normally
-        mock_scheduler = mock.Mock()
-        mock_scheduler.get_nodes_under_test.return_value = ["node1"]
-        mock_scheduler.detect.return_value = True
-        mock_scheduler.validate_environment.return_value = None
-        mock_scheduler.detect_nodes_hardware.return_value = ["a3-ultragpu-8g"]
-        mock_get_scheduler.return_value = mock_scheduler
-        mock_load_suite.return_value = {"tests": ["test1"]}
-        mock_validate_run_args.return_value = ["test1"]
-        mock_get_supported_tests.return_value = ["test1"]
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["-v", "run", "--suite", "suite1", "--attach"],
-            standalone_mode=False,
-        )
-        if result.exit_code != 0:
-            import traceback
-
-            traceback.print_exception(*result.exc_info)
-        self.assertEqual(result.exit_code, 0, msg=str(result.exception))
-
-        # Should have called run_action and analyze_action since it
-        # fell back to normal run
-        mock_run_action.assert_called_once()
-        mock_analyze_action.assert_called_once()
-
     @mock.patch("chs.cli.cancel_action")
     @mock.patch("chs.cli.analyze_action")
-    def test_run_command_attach_died_mid_submission(
+    def test_run_command_auto_attach_died_mid_submission(
         self, mock_analyze_action, mock_cancel_action
     ):
-        """Test 'run' command with --attach flag when incomplete."""
+        """Test 'run' command auto-cancels and restarts if incomplete."""
+        self.mock_app_data.get_latest_run_id.side_effect = None
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = {"submission_complete": False}
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
@@ -825,14 +780,12 @@ class TestCli(unittest.TestCase):
 
         result = self.runner.invoke(
             cli.cli,
-            ["-v", "run", "--suite", "suite1", "--attach"],
+            ["-v", "run", "--suite", "suite1"],
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
 
-        mock_cancel_action.assert_called_once_with(
-            self.mock_app_data, "latest_run"
-        )
+        mock_cancel_action.assert_called_once_with("slurm")
         self.mock_rm_instance.execute_experiments.assert_called_once()
 
     def test_analyze_action_exception_handling(self):
@@ -856,14 +809,13 @@ class TestCli(unittest.TestCase):
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
         self.mock_app_data.get_latest_run_id.return_value = "some_run_id"
-        self.mock_rm_instance.check_jobs_running.return_value = True
-        self.mock_rm_instance.cancel_experiments.side_effect = (
-            exceptions.ChsCancellationException("Cancellation failed")
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
+        self.mock_scheduler.cancel_jobs_by_prefix.side_effect = (
+            exceptions.ChsSchedulerException("Cancellation failed")
         )
         result = self.runner.invoke(cli.cli, ["cancel"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
-        self.mock_rm_instance.archive.assert_called_once()
 
     @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
     def test_results_command_no_boh_no_storage(self, mock_get_active_provider):
@@ -930,6 +882,9 @@ class TestCli(unittest.TestCase):
 
     def test_run_action_chs_exception(self):
         """Test that run_action handles ChsException and archives."""
+        self.mock_app_data.get_latest_run_id.side_effect = (
+            exceptions.NoPreviousRunsFoundException()
+        )
         self.mock_scheduler.name = "slurm"
         self.mock_rm_instance.setup_workspace.side_effect = (
             exceptions.ChsException("Mock failure")
@@ -944,6 +899,9 @@ class TestCli(unittest.TestCase):
 
     def test_run_action_exception_handling(self):
         """Test that run_action wraps exceptions in ClickException."""
+        self.mock_app_data.get_latest_run_id.side_effect = (
+            exceptions.NoPreviousRunsFoundException()
+        )
         self.mock_app_data.get_workspaces_dir.return_value = (
             "/mocked/workspaces"
         )
@@ -973,9 +931,11 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.get_workspaces_dir.return_value = (
             "/mocked/workspaces"
         )
+        self.mock_app_data.get_latest_run_id.return_value = None
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.has_no_failed_jobs.return_value = False
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
         mock_get_scheduler.return_value = mock_scheduler
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
@@ -993,25 +953,9 @@ class TestCli(unittest.TestCase):
             0,
             f"Command failed: {result.output}\nException: {result.exception}",
         )
-        mock_get_scheduler.assert_called_once()
-        _, kwargs = mock_get_scheduler.call_args
+        self.assertEqual(mock_get_scheduler.call_count, 2)
+        _, kwargs = mock_get_scheduler.call_args_list[-1]
         self.assertEqual(kwargs.get("nodepools"), "pool1")
-
-    def test_run_command_latest_run_active(self):
-        """Test `run` command when the latest run is active."""
-        ws_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, ws_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
-
-        latest_run_id = "latest_run"
-        self.mock_app_data.get_latest_run_id.return_value = latest_run_id
-
-        os.makedirs(os.path.join(ws_dir, "latest_run"), exist_ok=True)
-
-        self.mock_rm_instance.check_jobs_running.return_value = True
-        result = self.runner.invoke(cli.cli, ["run"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("The latest CHS run is still in progress", result.output)
 
     def test_run_command_heterogeneous_cluster_raises(self):
         """Test `run` command when a heterogeneous cluster is detected."""

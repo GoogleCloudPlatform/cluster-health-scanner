@@ -25,12 +25,9 @@ from google.cloud import compute_v1
 import google.auth
 from google.api_core.exceptions import GoogleAPICallError
 
+from chs.exceptions import NoActiveJobsException
 
-from typing import Any, TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    from chs.utils.app_data import ChsAppData
+from typing import Any
 
 
 from chs.schedulers.base import BaseScheduler
@@ -78,9 +75,8 @@ class SlurmScheduler(BaseScheduler):
         nodes: str | None = None,
         nodelists: str | None = None,
         partitions: str | None = None,
-        app_data: "ChsAppData | None" = None,
     ):
-        super().__init__(app_data)
+        super().__init__()
         self.nodes_arg = nodes
         self.nodelists_arg = nodelists
         self.partitions_arg = partitions
@@ -347,6 +343,7 @@ class SlurmScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
+        images_dir: str | None = None,
         run_id: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
@@ -368,9 +365,7 @@ class SlurmScheduler(BaseScheduler):
 
         tcp_interfaces_str = ",".join(tcp_interfaces)
 
-        images_dir_value = (
-            self._app_data and self._app_data.get_images_dir()
-        ) or "{workload_input_dir}"
+        images_dir_value = images_dir or "{workload_input_dir}"
 
         variables = config["ramble"]["variables"]
         variables["nodes"] = nodes or []
@@ -390,35 +385,56 @@ class SlurmScheduler(BaseScheduler):
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-    def check_jobs_running(self, job_ids: list[str]) -> bool:
-        """Checks if the given jobs are still running."""
-        if not job_ids:
-            logger.warning(
-                "No job IDs provided to check. Proceeding with analyzing logs. "
-                "Did chs run submit jobs?"
-            )
-            return False
+    # TODO: Test and make slurm workflow consistent with GKE
+    def has_no_failed_jobs(self) -> bool:
+        """Checks if there are any failed CHS jobs.
 
+        Returns:
+            True if all are healthy (active/completed).
+        """
         cmd = [
-            "squeue",
-            "--jobs",
-            ",".join(job_ids),
-            "--noheader",
+            "sacct",
+            "-P",
+            "-X",
+            "-n",
+            "--format=JobName,State",
         ]
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=False
             )
-            if result.stdout.strip():
-                logger.debug(
-                    "Jobs are still running. Output: %s", result.stdout
-                )
-                return True
-            logger.debug("No running jobs found in squeue.")
-            return False
+            if not result.stdout.strip():
+                raise NoActiveJobsException("No jobs found on the cluster.")
+
+            has_chs_jobs = False
+            for line in result.stdout.splitlines():
+                parts = line.strip().split("|")
+                if len(parts) >= 2:
+                    job_name = parts[0]
+                    state = parts[1].upper()
+                    if job_name.startswith("chs-"):
+                        has_chs_jobs = True
+                        if state in (
+                            "FAILED",
+                            "NODE_FAIL",
+                            "OUT_OF_MEMORY",
+                            "BOOT_FAIL",
+                        ):
+                            logger.warning(
+                                "Job %s is failed (State: %s). Will trigger"
+                                " cleanup.",
+                                job_name,
+                                state,
+                            )
+                            return False
+
+            if not has_chs_jobs:
+                raise NoActiveJobsException("No CHS jobs found on the cluster.")
+
+            return True
         except FileNotFoundError:
-            logger.warning("squeue command not found. Cannot check job status.")
-            return False
+            logger.warning("sacct command not found. Cannot check job status.")
+        return False
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs using sacct."""
@@ -490,7 +506,7 @@ class SlurmScheduler(BaseScheduler):
                 f"Failed to read Slurm job file at {job_file}: {e}"
             ) from e
 
-    def _cancel_jobs(self, job_ids: list[str]) -> None:
+    def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs using scancel."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
@@ -549,7 +565,7 @@ class SlurmScheduler(BaseScheduler):
                     len(job_ids),
                     prefix,
                 )
-                self._cancel_jobs(job_ids)
+                self.cancel_jobs(job_ids)
             else:
                 logger.debug("No matching jobs found for prefix %s.", prefix)
         except FileNotFoundError:

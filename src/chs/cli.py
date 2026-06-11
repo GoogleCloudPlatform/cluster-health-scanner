@@ -21,7 +21,6 @@ logic for handling subcommands such as listing resources.
 import dataclasses
 import datetime
 import functools
-import json
 import logging
 import os
 import pathlib
@@ -234,36 +233,18 @@ def list_action(
     return show_all
 
 
-def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
-    """Checks if the latest chs run is active by inspecting the runs registry.
+def cluster_has_no_failed_jobs(scheduler) -> bool:
+    """Checks if the cluster has no failed jobs.
 
     Args:
-      app_data: ChsAppData instance.
+      scheduler: The Scheduler instance to check.
 
     Returns:
-      True if the latest run is active, False otherwise.
+      True if the cluster has NO failed CHS jobs, False otherwise.
     """
-    try:
-        latest_run_id = app_data.get_latest_run_id()
-        if not latest_run_id:
-            return False
-
-        workspace_name = app_data.resolve_run_id(latest_run_id)
-        workspaces_dir = app_data.get_workspaces_dir()
-        ramble_manager = RambleManager(
-            base_dir=workspaces_dir,
-            workspace_name=workspace_name,
-            run_id=latest_run_id,
-        )
-        if ramble_manager.check_jobs_running():
-            logger.warning(
-                "The latest CHS run ('%s') is still active.", latest_run_id
-            )
-            return True
-    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-        return False
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Could not check for active CHS runs: %s", e)
+    if scheduler.has_no_failed_jobs():
+        logger.warning("The cluster still has healthy CHS jobs.")
+        return True
 
     return False
 
@@ -567,38 +548,26 @@ def _show_results(
     viewer.show_details(tests=parsed_tests, resources=parsed_resources)
 
 
-def cancel_action(app_data: ChsAppData, run_id: str) -> str:
-    """Cancels jobs for a specific test run.
-
-    Args:
-      app_data: ChsAppData instance.
-      run_id: The ID of the test run to cancel.
-
-    Returns:
-      The run_id of the cancelled test run.
+def cancel_action(scheduler_name: str | None = None) -> None:
+    """Cancels all active jobs on the cluster and cleans up stale resources.
 
     Raises:
       click.ClickException: If an error occurs during CHS job cancellation.
     """
-    logger.debug("Canceling run_id=%r", run_id)
-    workspaces_base_dir = app_data.get_workspaces_dir()
-    logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
-    workspace_name = app_data.resolve_run_id(run_id)
-    ramble_manager = RambleManager(
-        workspaces_base_dir, workspace_name, run_id=run_id
-    )
-
-    with archive_workspace(ramble_manager, on_success=True):
-        try:
-            ramble_manager.cancel_experiments()
-            logger.debug("Cancellation complete for run_id=%r", run_id)
-            logger.info("Jobs for run %s have been canceled.", run_id)
-        except (OSError, subprocess.CalledProcessError) as e:
-            raise ex.ChsCancellationException(
-                f"CHS cancellation failed for run_id={run_id}: {e!r}"
-            ) from e
-        else:
-            return run_id
+    logger.info("Cleaning all stale resources.")
+    scheduler_name = scheduler_name or detect_scheduler()
+    scheduler = get_scheduler(scheduler_name)
+    try:
+        scheduler.cancel_jobs_by_prefix("chs-")
+        scheduler.cleanup_scheduler_resources()
+    except (
+        subprocess.CalledProcessError,
+        ex.ChsSchedulerException,
+        ex.KueueException,
+    ) as e:
+        raise ex.ChsCancellationException(
+            f"CHS cancellation failed: {e!r}"
+        ) from e
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -671,6 +640,81 @@ def list_command(
     )
 
 
+def _handle_previous_run(
+    app_data: ChsAppData,
+    scheduler: str,
+    suite: str | None,
+    validation: bool,
+    skip_validation: bool,
+) -> RunExecutionResult | None:
+    """Checks for a previous run, optionally attaches to it, or cleans up."""
+    try:
+        latest_run_id = app_data.get_latest_run_id()
+        if latest_run_id:
+            workspace_name = app_data.resolve_run_id(latest_run_id)
+            run_entry = app_data.get_run(workspace_name)
+
+            if run_entry:
+                submission_complete = run_entry.get(
+                    "submission_complete", False
+                )
+                scheduler_name = run_entry.get("scheduler", scheduler)
+                scheduler_instance = get_scheduler(scheduler_name)
+                try:
+                    has_no_failed_jobs = cluster_has_no_failed_jobs(
+                        scheduler_instance
+                    )
+
+                    if submission_complete and has_no_failed_jobs:
+                        cleanup_cmd = (
+                            "./bin/delete_chs_gke.sh"
+                            if utils.is_in_cluster()
+                            else "chs cancel"
+                        )
+                        logger.warning(
+                            "Parallel runs are not supported. "
+                            "Attaching to ongoing/completed run. "
+                            f"Run `{cleanup_cmd}` to destroy it."
+                        )
+                        analyze_action(
+                            app_data, latest_run_id, validation, skip_validation
+                        )
+                        return RunExecutionResult(
+                            suite=suite or "lite",
+                            scheduler_name=scheduler_name,
+                            tests=None,
+                            workspace_name=workspace_name,
+                            workspaces_base_dir=app_data.get_workspaces_dir(),
+                            job_ids=None,
+                        )
+                    else:
+                        if not submission_complete:
+                            logger.warning(
+                                "Previous run died mid-submission. "
+                                "Cleaning all stale resources"
+                            )
+                        else:
+                            logger.warning(
+                                "Previous run found but some jobs have failed. "
+                                "Cleaning all stale resources"
+                            )
+                        cancel_action(scheduler_name)
+                except ex.NoActiveJobsException:
+                    logger.warning(
+                        "Previous run found but jobs no longer exist on the "
+                        "cluster. Cleaning all stale resources."
+                    )
+                    cancel_action(scheduler_name)
+            else:
+                cancel_action(scheduler)
+        else:
+            cancel_action(scheduler)
+    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
+        cancel_action(scheduler)
+
+    return None
+
+
 @cli.command()
 @handle_chs_exceptions
 @click.option(
@@ -728,14 +772,6 @@ def list_command(
     help="Custom run ID for this execution.",
     callback=validators.validate_run_id,
 )
-@click.option(
-    "--attach",
-    is_flag=True,
-    help=(
-        "Attach to an in-flight run. If the previous run was interrupted "
-        "mid-submission, it is canceled and restarted."
-    ),
-)
 @click.pass_obj
 def run(
     obj,
@@ -750,7 +786,6 @@ def run(
     validation: str | None = None,
     skip_validation: bool = False,
     run_id: str | None = None,
-    attach: bool = False,
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
@@ -769,46 +804,21 @@ def run(
     """
     app_data = obj["app_data"]
 
-    if attach:
-        try:
-            latest_run_id = app_data.get_latest_run_id()
-            run_entry = app_data.get_run(app_data.resolve_run_id(latest_run_id))
-            if run_entry and run_entry.get("submission_complete", False):
-                logger.info(
-                    "Previous submission complete. Attaching to monitor "
-                    "jobs..."
-                )
-                analyze_action(
-                    app_data, latest_run_id, validation, skip_validation
-                )
-                return RunExecutionResult(
-                    suite=suite or "lite",
-                    scheduler_name="kubernetes",
-                    tests=None,
-                    workspace_name=app_data.resolve_run_id(latest_run_id),
-                    workspaces_base_dir=app_data.get_workspaces_dir(),
-                    job_ids=None,
-                )
-            else:
-                logger.warning(
-                    "Previous run died mid-submission. Canceling orphaned "
-                    "jobs and restarting..."
-                )
-                cancel_action(app_data, latest_run_id)
-        except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-            pass
-
-    if is_latest_chs_run_active(app_data):
-        raise ex.ChsRunInProgressException(
-            "The latest CHS run is still in progress. Please wait for it to"
-            " complete or cancel it before submitting a new run."
-        )
-
     is_dry_run = dry_run is not None
     if is_dry_run:
         scheduler = dry_run
     else:
         scheduler = detect_scheduler()
+
+    attach_result = _handle_previous_run(
+        app_data=app_data,
+        scheduler=scheduler,
+        suite=suite,
+        validation=validation,
+        skip_validation=skip_validation,
+    )
+    if attach_result:
+        return attach_result
 
     preflights.run_platform_preflights()
 
@@ -818,7 +828,6 @@ def run(
         nodelists=nodelists,
         nodepools=nodepools,
         partitions=partitions,
-        app_data=app_data,
     )
 
     nodes_under_test = scheduler_obj.get_nodes_under_test()
@@ -917,6 +926,29 @@ def run(
     logger.info("Run ID: %s", run_id)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
+    # TODO: Revisit command statement normalization when
+    # distributing as a Docker image.
+    # Normalize command statement to start with "chs"
+    command_statement = " ".join(["chs"] + sys.argv[1:])
+
+    app_data.update_run(
+        workspace_name,
+        {
+            "run_id": run_id,
+            "workspace_name": workspace_name,
+            "workspace_path": os.path.join(workspaces_base_dir, workspace_name),
+            "submission_time": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat(),
+            "scheduler": scheduler_obj.name,
+            "command_statement": command_statement,
+            "storage": app_data.get_storage_config(),
+            "node_to_instance_id": scheduler_obj.node_to_instance_id,
+            "deadline": deadline,
+            "tests": parsed_tests,
+        },
+    )
+
     with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not is_dry_run):
         job_ids = run_action(
             suite=suite,
@@ -940,29 +972,6 @@ def run(
             workspace_name=workspace_name,
             workspaces_base_dir=workspaces_base_dir,
             job_ids=job_ids,
-        )
-
-        # TODO: Revisit command statement normalization when
-        # distributing as a Docker image.
-        # Normalize command statement to start with "chs"
-        command_statement = " ".join(["chs"] + sys.argv[1:])
-
-        app_data.update_run(
-            workspace_name,
-            {
-                "run_id": run_id,
-                "workspace_name": workspace_name,
-                "workspace_path": os.path.join(
-                    workspaces_base_dir, workspace_name
-                ),
-                "submission_time": datetime.datetime.now(
-                    datetime.timezone.utc
-                ).isoformat(),
-                "scheduler": scheduler,
-                "command_statement": command_statement,
-                "storage": app_data.get_storage_config(),
-                "node_to_instance_id": scheduler_obj.node_to_instance_id,
-            },
         )
 
         if is_dry_run:
@@ -1046,11 +1055,25 @@ def analyze(
 @cli.command()
 @handle_chs_exceptions
 @click.pass_obj
-def cancel(obj) -> str:
-    """Cancel all running CHS jobs (using scheduler from latest run)."""
+def cancel(obj) -> None:
+    """Cancel all running CHS jobs and remove stale resources."""
     app_data = obj["app_data"]
-    run_id = app_data.get_latest_run_id()
-    return cancel_action(app_data, run_id)
+    try:
+        latest_run_id = app_data.get_latest_run_id()
+        if latest_run_id:
+            workspace_name = app_data.resolve_run_id(latest_run_id)
+            workspaces_base_dir = app_data.get_workspaces_dir()
+            ramble_manager = RambleManager(
+                workspaces_base_dir, workspace_name, run_id=latest_run_id
+            )
+            logger.info("Archiving the latest workspace before cancellation...")
+            ramble_manager.archive()
+    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
+        pass
+    except Exception as e:
+        logger.warning("Failed to archive workspace before cancellation: %s", e)
+
+    cancel_action()
 
 
 @cli.command()

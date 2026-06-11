@@ -41,6 +41,7 @@ from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
+from chs import resources
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
 import yaml
@@ -357,6 +358,7 @@ class RambleManager:
             timeout=timeout,
             deadline=deadline,
             run_id=self.run_id,
+            images_dir=self._app_data.get_images_dir(),
         )
 
     def setup_workspace(self) -> None:
@@ -375,22 +377,6 @@ class RambleManager:
             error_context="Failed to setup workspace",
         )
 
-    def _register_initial_run(self) -> None:
-        """Registers an initial empty run in the app data."""
-        run_entry = self._app_data.get_run(self._workspace_name) or {}
-        run_entry.update(
-            {
-                "run_id": self.run_id,
-                "workspace_path": self.path,
-                "job_entries": {},
-                "submission_time": (
-                    datetime.datetime.now(datetime.timezone.utc).isoformat()
-                ),
-                "scheduler": self._scheduler.name,
-            }
-        )
-        self._app_data.update_run(self._workspace_name, run_entry)
-
     def execute_experiments(self) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
@@ -406,8 +392,6 @@ class RambleManager:
         """
 
         logger.debug("Executing experiments in %s...", self.path)
-
-        self._register_initial_run()
 
         logger.info("Running experiments via all_experiments script...")
         script_path = os.path.join(self.path, "all_experiments")
@@ -456,7 +440,7 @@ class RambleManager:
             else "slurm"
         )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
+        scheduler = get_scheduler(scheduler_name)
 
         prefix = "chs-"
         logger.debug(
@@ -467,7 +451,7 @@ class RambleManager:
         scheduler.cancel_jobs_by_prefix(prefix)
         # Clean up associated infrastructure configurations like Kueue
         # statelessly.
-        scheduler.cleanup_scheduler_resources(self._workspace_name)
+        scheduler.cleanup_scheduler_resources()
 
     def _update_registry(self, job_to_dir: dict[str, str]) -> None:
         """Updates the runs registry with the current run information."""
@@ -505,24 +489,6 @@ class RambleManager:
         if entry:
             return list(entry.get("job_entries", {}).keys())
         return []
-
-    def check_jobs_running(self) -> bool:
-        """Checks if any jobs for this workspace are still running."""
-        registry_entry = self._app_data.get_run(self._workspace_name)
-        if not registry_entry:
-            logger.debug("No registry entry found for checking.")
-            return False
-
-        job_ids = self.get_job_ids()
-        if not job_ids:
-            logger.debug("No job IDs found for checking.")
-            return False
-
-        scheduler_name = registry_entry.get("scheduler", "slurm")
-        logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
-
-        return scheduler.check_jobs_running(job_ids)
 
     def _map_jobs_to_log_paths(self) -> dict[str, str]:
         """Maps Job IDs to their expected log paths on the filesystem.
@@ -604,7 +570,7 @@ class RambleManager:
         """
         job_log_map = self._map_jobs_to_log_paths()
         pending_log_fetches = set(job_log_map.keys())
-        scheduler = get_scheduler(self.get_scheduler_type(), app_data=app_data)
+        scheduler = get_scheduler(self.get_scheduler_type())
 
         registry_jobs = set(self.get_job_ids())
         if not registry_jobs:
@@ -613,6 +579,11 @@ class RambleManager:
 
         # We poll ALL registry jobs for status
         active_jobs = registry_jobs.copy()
+        run_entry = app_data.get_run(self._workspace_name) or {}
+        QUEUE_TIMEOUT_SECONDS = run_entry.get(
+            "deadline", resources.DEFAULT_DEADLINE
+        )
+        pending_start_times = {}
 
         max_workers = 32
 
@@ -625,10 +596,12 @@ class RambleManager:
             while active_jobs:
                 statuses = scheduler.get_job_statuses(list(active_jobs))
 
+                jobs_to_cancel = []
                 still_running = False
                 for job_id, status in statuses.items():
                     if JobStatus.is_terminal(status):
                         # Job finished
+                        pending_start_times.pop(job_id, None)
                         if job_id in pending_log_fetches:
                             log_path = job_log_map.get(job_id)
                             if log_path:
@@ -646,8 +619,34 @@ class RambleManager:
                             pending_log_fetches.remove(job_id)
 
                         active_jobs.remove(job_id)
+                    elif status == JobStatus.PENDING:
+                        if job_id not in pending_start_times:
+                            pending_start_times[job_id] = time.time()
+
+                        if (
+                            time.time() - pending_start_times[job_id]
+                            > QUEUE_TIMEOUT_SECONDS
+                        ):
+                            logger.error(
+                                "Job %s has been queued for more than "
+                                "%d seconds. Marking for cancellation...",
+                                job_id,
+                                QUEUE_TIMEOUT_SECONDS,
+                            )
+                            jobs_to_cancel.append(job_id)
+                        else:
+                            still_running = True
                     else:
+                        pending_start_times.pop(job_id, None)
                         still_running = True
+
+                if jobs_to_cancel:
+                    scheduler.cancel_jobs(jobs_to_cancel)
+                    for canceled_job in jobs_to_cancel:
+                        statuses[canceled_job] = JobStatus.DEADLINE
+                        if canceled_job in active_jobs:
+                            active_jobs.remove(canceled_job)
+                        pending_start_times.pop(canceled_job, None)
 
                 try:
                     app_data.update_run_status(self._workspace_name, statuses)

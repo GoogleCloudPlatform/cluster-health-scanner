@@ -30,7 +30,7 @@ spec:
         spec:
           parallelism: {n_nodes}
           completions: {n_nodes}
-          activeDeadlineSeconds: {deadline}
+          activeDeadlineSeconds: {timeout}
           template:
             metadata:
 {pod_labels_section}
