@@ -30,6 +30,7 @@ import re
 import shutil
 
 import subprocess
+import sys
 import sysconfig
 import time
 from typing import Any
@@ -76,6 +77,7 @@ class RambleManager:
         self._base_dir = base_dir
         self._workspace_name = workspace_name
         self._run_id = run_id
+        self._run_command = run_command
         self._app_data = ChsAppData()
         self._path = os.path.join(self._base_dir, self._workspace_name)
 
@@ -126,7 +128,10 @@ class RambleManager:
 
     def _prepare_ramble_command(self, cmd: list[str]) -> list[str]:
         """Prepares a Ramble command by sourcing setup script."""
-        command_str = f'source {self._ramble_setup_script} && exec "$@"'
+        command_str = (
+            f'export RAMBLE_PYTHON="{sys.executable}" && '
+            f'source {self._ramble_setup_script} && exec "$@"'
+        )
         logger.debug(
             "Sourcing %s before running command.",
             self._ramble_setup_script,
@@ -156,10 +161,10 @@ class RambleManager:
             message if the command fails.
 
         Returns:
-          The CompletedProcess object from subprocess.run.
+          The CompletedProcess object from the execution command.
 
         Raises:
-          click.ClickException: If the command fails when check=True.
+          ex.ChsException: If the command fails when check=True.
         """
         logger.debug("Running command: %s", cmd)
         if env:
@@ -178,7 +183,7 @@ class RambleManager:
                 )
                 log_file.flush()
 
-                completed_process = subprocess.run(
+                completed_process = self._run_command(
                     cmd,
                     cwd=cwd,
                     env=run_env,
@@ -239,10 +244,10 @@ class RambleManager:
             non-zero exit code.
 
         Returns:
-          The CompletedProcess object from subprocess.run.
+          The CompletedProcess object from the execution command.
 
         Raises:
-          click.ClickException: If the Ramble command fails.
+          ex.ChsException: If the Ramble command fails.
         """
         cmd = ["ramble", "-d", "-w", self.path, subcommand] + args
         exec_cmd = self._prepare_ramble_command(cmd)
@@ -389,27 +394,27 @@ class RambleManager:
     def execute_experiments(self) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
-        This runs 'ramble on' to start the experiments and captures Job IDs
-        by scanning the workspace experiments directory within the current
-        filesystem.
+        This runs the 'all_experiments' script to start the experiments and
+        captures Job IDs by scanning the workspace experiments directory within
+        the current filesystem.
 
         Returns:
           A list of submitted Job IDs.
 
         Raises:
-          click.ClickException: If the experiment execution command fails.
+          ex.ChsException: If the experiment execution command fails.
         """
 
         logger.debug("Executing experiments in %s...", self.path)
 
         self._register_initial_run()
 
-        self._execute_ramble_command(
-            subcommand="on",
-            args=[],
+        logger.info("Running experiments via all_experiments script...")
+        script_path = os.path.join(self.path, "all_experiments")
+        self._execute_shell_command(
+            cmd=["bash", script_path],
             capture_output=True,
-            env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-            error_context="Failed to execute experiments",
+            error_context="Failed to execute all_experiments script",
         )
 
         job_to_dir = {}

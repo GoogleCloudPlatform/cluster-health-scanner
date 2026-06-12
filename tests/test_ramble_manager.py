@@ -17,6 +17,7 @@
 import logging
 import os
 import subprocess
+import sys
 import sysconfig
 import tempfile
 import unittest
@@ -139,6 +140,7 @@ class TestRambleManager(unittest.TestCase):
         expected_cmd = [
             "bash",
             "-c",
+            f'export RAMBLE_PYTHON="{sys.executable}" && '
             f'source {expected_script_path} && exec "$@"',
             "bash",
             "ramble",
@@ -206,7 +208,9 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(kwargs["env"].get("EXTRA_VAR"), "value")
 
     def test_execute_experiments(self):
-        """Test execute_experiments executes correct ramble on command."""
+        """Test execute_experiments executes correct all_experiments script by
+        default.
+        """
 
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
@@ -236,10 +240,10 @@ class TestRambleManager(unittest.TestCase):
         self.mock_run.assert_called_once()
         args, kwargs = self.mock_run.call_args
         cmd = args[0]
-        self.assertIn("ramble", cmd)
-        self.assertIn("on", cmd)
-        self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
-        self.assertEqual(kwargs["env"]["TERM"], "dumb")
+        self.assertEqual(
+            cmd, ["bash", os.path.join(manager.path, "all_experiments")]
+        )
+        self.assertIsNone(kwargs.get("env"))
 
         mock_scheduler.extract_job_id.assert_called_with(
             "/tmp/workspace/experiments/exp1"
