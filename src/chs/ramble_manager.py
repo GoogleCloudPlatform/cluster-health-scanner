@@ -22,6 +22,7 @@ from collections.abc import Callable
 import datetime
 import importlib.resources as pkg_resources
 import json
+from concurrent.futures import ThreadPoolExecutor, wait
 import logging
 import os
 import pathlib
@@ -593,7 +594,8 @@ class RambleManager:
         """Generic wait logic to monitor job progress and fetch logs.
 
         Polls job statuses for all jobs in the registry. When a job completes,
-        attempts to fetch its log (if a path is mapped). Logs progress.
+        attempts to fetch its log (if a path is mapped) in parallel.
+        Logs progress.
         """
         job_log_map = self._map_jobs_to_log_paths()
         pending_log_fetches = set(job_log_map.keys())
@@ -607,45 +609,83 @@ class RambleManager:
         # We poll ALL registry jobs for status
         active_jobs = registry_jobs.copy()
 
-        while active_jobs:
-            statuses = scheduler.get_job_statuses(list(active_jobs))
+        max_workers = 32
 
-            still_running = False
-            for job_id, status in statuses.items():
-                if JobStatus.is_terminal(status):
-                    # Job finished
-                    if job_id in pending_log_fetches:
-                        log_path = job_log_map.get(job_id)
-                        if log_path:
-                            try:
-                                scheduler.fetch_job_log(job_id, log_path)
-                            except Exception as e:
-                                logger.error(
-                                    "Error fetching log for %s: %s", job_id, e
+        logger.debug(
+            "Starting log fetching executor with %d workers", max_workers
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            while active_jobs:
+                statuses = scheduler.get_job_statuses(list(active_jobs))
+
+                still_running = False
+                for job_id, status in statuses.items():
+                    if JobStatus.is_terminal(status):
+                        # Job finished
+                        if job_id in pending_log_fetches:
+                            log_path = job_log_map.get(job_id)
+                            if log_path:
+                                logger.info(
+                                    "Fetching log for completed job: %s",
+                                    job_id,
                                 )
-                        pending_log_fetches.remove(job_id)
+                                future = executor.submit(
+                                    self._safe_fetch_log,
+                                    scheduler,
+                                    job_id,
+                                    log_path,
+                                )
+                                futures.append(future)
+                            pending_log_fetches.remove(job_id)
 
-                    active_jobs.remove(job_id)
-                else:
-                    still_running = True
+                        active_jobs.remove(job_id)
+                    else:
+                        still_running = True
 
-            try:
-                app_data.update_run_status(self._workspace_name, statuses)
-            except Exception as e:
-                logger.warning("Failed to update run status in registry: %s", e)
+                try:
+                    app_data.update_run_status(self._workspace_name, statuses)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to update run status in registry: %s", e
+                    )
 
-            if still_running:
+                if still_running:
+                    logger.info(
+                        "Jobs remaining: %d. Waiting %s seconds...",
+                        len(active_jobs),
+                        poll_interval,
+                    )
+                    time.sleep(poll_interval)
+
+            if futures:
                 logger.info(
-                    "Jobs remaining: %d. Waiting %s seconds...",
-                    len(active_jobs),
-                    poll_interval,
+                    "Waiting for %d pending log fetches to complete...",
+                    len(futures),
                 )
-                time.sleep(poll_interval)
+                wait(futures)
+                for f in futures:
+                    try:
+                        f.result()
+                    except Exception as e:
+                        logger.error("Log fetch task failed: %s", e)
 
         logger.info(
             "All jobs completed and logs fetched for run %s.",
             self._run_id,
         )
+
+    def _safe_fetch_log(
+        self, scheduler: BaseScheduler, job_id: str, log_path: str
+    ) -> None:
+        """Helper to run fetch_job_log safely in a thread."""
+        try:
+            scheduler.fetch_job_log(job_id, log_path)
+            logger.info("Successfully fetched log for %s", job_id)
+        except Exception as e:
+            logger.error("Error fetching log for %s: %s", job_id, e)
+            raise
 
     def get_scheduler_type(self) -> str:
         """Retrieves scheduler type for this workspace from the registry."""
