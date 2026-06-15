@@ -37,6 +37,11 @@ from typing import Any
 import click
 from google.protobuf.json_format import MessageToJson
 
+from rich.live import Live
+from rich.spinner import Spinner
+from rich.text import Text
+from rich.console import Group
+
 from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
@@ -591,89 +596,149 @@ class RambleManager:
             "Starting log fetching executor with %d workers", max_workers
         )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            while active_jobs:
-                statuses = scheduler.get_job_statuses(list(active_jobs))
+        start_time = time.time()
 
-                jobs_to_cancel = []
-                still_running = False
-                for job_id, status in statuses.items():
-                    if JobStatus.is_terminal(status):
-                        # Job finished
-                        pending_start_times.pop(job_id, None)
-                        if job_id in pending_log_fetches:
-                            log_path = job_log_map.get(job_id)
-                            if log_path:
-                                logger.info(
-                                    "Fetching log for completed job: %s",
-                                    job_id,
-                                )
-                                future = executor.submit(
-                                    self._safe_fetch_log,
-                                    scheduler,
-                                    job_id,
-                                    log_path,
-                                )
-                                futures.append(future)
-                            pending_log_fetches.remove(job_id)
+        is_fetching_logs = False
 
-                        active_jobs.remove(job_id)
-                    elif status == JobStatus.PENDING:
-                        if job_id not in pending_start_times:
-                            pending_start_times[job_id] = time.time()
+        def generate_status_renderable() -> Group | Text:
+            if is_fetching_logs:
+                return Text(
+                    f"Waiting for {len(futures)} pending log "
+                    "fetches to complete..."
+                )
+            elapsed = int(time.time() - start_time)
+            elapsed_td = datetime.timedelta(seconds=elapsed)
+            spinner = Spinner(
+                "dots", text="Waiting for test execution to complete..."
+            )
+            details = Text(
+                f"    • Jobs Remaining: {len(active_jobs)}\n"
+                f"    • Elapsed Time:   {elapsed_td}\n\n"
+                f"(Press Ctrl+C to detach from this view)"
+            )
+            return Group(spinner, details)
 
-                        if (
-                            time.time() - pending_start_times[job_id]
-                            > QUEUE_TIMEOUT_SECONDS
-                        ):
-                            logger.error(
-                                "Job %s has been queued for more than "
-                                "%d seconds. Marking for cancellation...",
-                                job_id,
-                                QUEUE_TIMEOUT_SECONDS,
-                            )
-                            jobs_to_cancel.append(job_id)
-                        else:
-                            still_running = True
-                    else:
-                        pending_start_times.pop(job_id, None)
-                        still_running = True
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
 
-                if jobs_to_cancel:
-                    scheduler.cancel_jobs(jobs_to_cancel)
-                    for canceled_job in jobs_to_cancel:
-                        statuses[canceled_job] = JobStatus.DEADLINE
-                        if canceled_job in active_jobs:
-                            active_jobs.remove(canceled_job)
-                        pending_start_times.pop(canceled_job, None)
+                live_context = None
+                if sys.stdout.isatty():
+                    live_context = Live(
+                        get_renderable=generate_status_renderable,
+                        refresh_per_second=1,
+                    )
+                    live_context.start()
 
                 try:
-                    app_data.update_run_status(self._workspace_name, statuses)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to update run status in registry: %s", e
-                    )
+                    while active_jobs:
+                        statuses = scheduler.get_job_statuses(list(active_jobs))
 
-                if still_running:
-                    logger.info(
-                        "Jobs remaining: %d. Waiting %s seconds...",
-                        len(active_jobs),
-                        poll_interval,
-                    )
-                    time.sleep(poll_interval)
+                        jobs_to_cancel = []
+                        still_running = False
+                        for job_id, status in statuses.items():
+                            if JobStatus.is_terminal(status):
+                                # Job finished
+                                pending_start_times.pop(job_id, None)
+                                if job_id in pending_log_fetches:
+                                    log_path = job_log_map.get(job_id)
+                                    if log_path:
+                                        logger.debug(
+                                            "Fetching log for "
+                                            "completed job: %s",
+                                            job_id,
+                                        )
+                                        future = executor.submit(
+                                            self._safe_fetch_log,
+                                            scheduler,
+                                            job_id,
+                                            log_path,
+                                        )
+                                        futures.append(future)
+                                    pending_log_fetches.remove(job_id)
 
-            if futures:
-                logger.info(
-                    "Waiting for %d pending log fetches to complete...",
-                    len(futures),
-                )
-                wait(futures)
-                for f in futures:
-                    try:
-                        f.result()
-                    except Exception as e:
-                        logger.error("Log fetch task failed: %s", e)
+                                active_jobs.remove(job_id)
+                            elif status == JobStatus.PENDING:
+                                if job_id not in pending_start_times:
+                                    pending_start_times[job_id] = time.time()
+
+                                if (
+                                    time.time() - pending_start_times[job_id]
+                                    > QUEUE_TIMEOUT_SECONDS
+                                ):
+                                    logger.error(
+                                        "Job %s has been queued for more than "
+                                        "%d seconds. Marking for "
+                                        "cancellation...",
+                                        job_id,
+                                        QUEUE_TIMEOUT_SECONDS,
+                                    )
+                                    jobs_to_cancel.append(job_id)
+                                else:
+                                    still_running = True
+                            else:
+                                pending_start_times.pop(job_id, None)
+                                still_running = True
+
+                        if jobs_to_cancel:
+                            scheduler.cancel_jobs(jobs_to_cancel)
+                            for canceled_job in jobs_to_cancel:
+                                statuses[canceled_job] = JobStatus.DEADLINE
+                                if canceled_job in active_jobs:
+                                    active_jobs.remove(canceled_job)
+                                pending_start_times.pop(canceled_job, None)
+
+                        try:
+                            app_data.update_run_status(
+                                self._workspace_name, statuses
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to update run status in registry: %s", e
+                            )
+
+                        if still_running:
+                            if not live_context:
+                                elapsed = int(time.time() - start_time)
+                                elapsed_td = datetime.timedelta(seconds=elapsed)
+                                logger.info(
+                                    "Jobs remaining: %d | Elapsed time: %s",
+                                    len(active_jobs),
+                                    elapsed_td,
+                                )
+                            time.sleep(poll_interval)
+
+                    if futures:
+                        is_fetching_logs = True
+                        if not live_context:
+                            logger.debug(
+                                "Waiting for %d pending log "
+                                "fetches to complete...",
+                                len(futures),
+                            )
+                        wait(futures)
+                        for f in futures:
+                            try:
+                                f.result()
+                            except Exception as e:
+                                logger.debug("Log fetch task failed: %s", e)
+                finally:
+                    if live_context:
+                        live_context.stop()
+
+        except KeyboardInterrupt:
+            logger.info(
+                "Detached from active run. "
+                "Jobs will continue executing on the cluster."
+            )
+            logger.info(
+                "To compile logs and generate results run: "
+                f"chs analyze {self._run_id}"
+            )
+            logger.info(
+                f"When completed, view results with: chs results {self._run_id}"
+            )
+            raise ex.ChsDetachedException()
 
         logger.info(
             "All jobs completed and logs fetched for run %s.",
@@ -686,7 +751,7 @@ class RambleManager:
         """Helper to run fetch_job_log safely in a thread."""
         try:
             scheduler.fetch_job_log(job_id, log_path)
-            logger.info("Successfully fetched log for %s", job_id)
+            logger.debug("Successfully fetched log for %s", job_id)
         except Exception as e:
             logger.error("Error fetching log for %s: %s", job_id, e)
             raise

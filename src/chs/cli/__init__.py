@@ -72,6 +72,8 @@ def handle_chs_exceptions(f):
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
+        except ex.ChsDetachedException:
+            sys.exit(0)
         except ex.ChsException as e:
             raise click.ClickException(str(e)) from e
 

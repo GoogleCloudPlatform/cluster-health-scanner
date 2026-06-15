@@ -105,6 +105,12 @@ class KueueException(ChsException):
     pass
 
 
+class ChsDetachedException(ChsException):
+    """Raised when the user intentionally detaches from a CHS run."""
+
+    pass
+
+
 class NoActiveJobsException(ChsException):
     """Raised when there are no CHS jobs found on the cluster."""
 

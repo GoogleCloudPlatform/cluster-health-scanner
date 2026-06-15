@@ -763,7 +763,7 @@ class KubernetesScheduler(BaseScheduler):
             output = self._run_kubectl(args, namespaced=True)
             return [p for p in output.split() if p]
         except subprocess.CalledProcessError as e:
-            logger.warning("Failed to query pods for JobSet %s: %s", job_id, e)
+            logger.debug("Failed to query pods for JobSet %s: %s", job_id, e)
             return []
 
     def fetch_job_log(self, job_id: str, log_path: str) -> None:
@@ -774,7 +774,7 @@ class KubernetesScheduler(BaseScheduler):
             pod_names = self._get_pod_names(job_id, head_pod_only=not is_tpu)
 
             if not pod_names:
-                logger.warning(
+                logger.debug(
                     "No pods found to fetch logs for JobSet %s.", job_id
                 )
                 return
