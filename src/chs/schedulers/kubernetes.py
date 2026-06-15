@@ -114,7 +114,6 @@ class KubernetesScheduler(BaseScheduler):
         workspace_name: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Sets up scheduler-specific resources like Kueue configurations."""
-        self._ensure_namespace_exists()
         self.workspace_config_dir = workspace_config_dir
         os.makedirs(workspace_config_dir, exist_ok=True)
 
@@ -122,7 +121,7 @@ class KubernetesScheduler(BaseScheduler):
             try:
                 nodes = self.get_nodes_under_test()
                 kueue_mgr = KueueManager(self)
-                self._jobset_labels_yaml = kueue_mgr.setup(
+                self._jobset_labels_yaml = kueue_mgr.generate_configs(
                     workspace_config_dir, machine_type, nodes or []
                 )
                 self._suspend_jobset = "true"
@@ -817,6 +816,13 @@ class KubernetesScheduler(BaseScheduler):
             raise ChsSchedulerException(
                 f"Failed to parse GKE jobset.yaml at {jobset_file}: {e}"
             ) from e
+
+    def apply_scheduler_resources(self) -> None:
+        """Applies generated scheduler resources to the cluster."""
+        self._ensure_namespace_exists()
+        if self.kueue_supported:
+            kueue_mgr = KueueManager(self)
+            kueue_mgr.apply_configs(self.workspace_config_dir)
 
     def cleanup_scheduler_resources(self) -> None:
         """Cleans up scheduler-specific resources like Kueue

@@ -393,6 +393,9 @@ def run_action(
                 logger.info("Setup complete. Skipping experiment execution.")
                 return None
 
+            if scheduler_obj:
+                scheduler_obj.apply_scheduler_resources()
+
             job_ids = ramble_manager.execute_experiments()
             if not job_ids:
                 raise ex.JobSubmissionFailureException(
@@ -752,8 +755,14 @@ def _handle_previous_run(
 )
 @click.option(
     "--dry-run",
-    type=click.Choice(["slurm", "kubernetes"]),
-    help="Set up the workspace for the specified scheduler but do not execute.",
+    is_flag=True,
+    help="Set up the workspace for the detected scheduler but do not execute.",
+)
+@click.option(
+    "--auto-approve",
+    "-y",
+    is_flag=True,
+    help="Automatically confirm execution preview without prompting.",
 )
 @click.option(
     "--validation",
@@ -783,7 +792,8 @@ def run(
     nodelists: str | None,
     nodepools: str | None,
     partitions: str | None,
-    dry_run: str | None,
+    dry_run: bool = False,
+    auto_approve: bool = False,
     validation: str | None = None,
     skip_validation: bool = False,
     run_id: str | None = None,
@@ -805,21 +815,18 @@ def run(
     """
     app_data = obj["app_data"]
 
-    is_dry_run = dry_run is not None
-    if is_dry_run:
-        scheduler = dry_run
-    else:
-        scheduler = detect_scheduler()
+    scheduler = detect_scheduler()
 
-    attach_result = _handle_previous_run(
-        app_data=app_data,
-        scheduler=scheduler,
-        suite=suite,
-        validation=validation,
-        skip_validation=skip_validation,
-    )
-    if attach_result:
-        return attach_result
+    if not dry_run:
+        attach_result = _handle_previous_run(
+            app_data=app_data,
+            scheduler=scheduler,
+            suite=suite,
+            validation=validation,
+            skip_validation=skip_validation,
+        )
+        if attach_result:
+            return attach_result
 
     preflights.run_platform_preflights()
 
@@ -907,12 +914,43 @@ def run(
         if not suite:
             suite = "custom"
 
+    cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
+
+    test_names = ", ".join(
+        t.get("name") if isinstance(t, dict) else str(t) for t in parsed_tests
+    )
+    preview_title = (
+        "CHS Dry Run Preview (No jobs will be submitted):"
+        if dry_run
+        else "CHS Execution Preview:"
+    )
+    logger.info(preview_title)
+    logger.info(f"  Target Cluster: {cluster_name}")
+    logger.info(f"  Machine Type: {machine_type}")
+    logger.info(f"  Scheduler: {scheduler}")
+    logger.info(f"  Scope: {len(nodes_under_test)} nodes under test")
+    logger.info(f"  Tests Scheduled: {test_names}")
+
+    if not auto_approve:
+        prompt_msg = (
+            "Proceed with dry run workspace generation?"
+            if dry_run
+            else "Proceed with execution?"
+        )
+        if not sys.stdin.isatty():
+            logger.info(prompt_msg)
+            raise click.ClickException(
+                "Running in non-interactive mode.\n"
+                "Please pass --auto-approve to proceed."
+            )
+        if not click.confirm(prompt_msg, default=True):
+            logger.info("Run aborted by user.")
+            return None
+    else:
+        logger.info("--auto-approve flag detected. Bypassing confirmation.")
+
     short_hash = utils.generate_random_suffix()
     if not run_id:
-        if dry_run:
-            cluster_name = "dry-run-cluster"
-        else:
-            cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
         run_id = f"{cluster_name}-{suite}"
     run_id = f"{run_id}-{short_hash}"
 
@@ -950,7 +988,7 @@ def run(
         },
     )
 
-    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not is_dry_run):
+    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
         job_ids = run_action(
             suite=suite,
             scheduler_obj=scheduler_obj,
@@ -958,7 +996,7 @@ def run(
             workspace_name=workspace_name,
             workspaces_base_dir=workspaces_base_dir,
             machine_type=machine_type,
-            dry_run=is_dry_run,
+            dry_run=dry_run,
             timeout=timeout,
             deadline=deadline,
             validation=validation,
@@ -975,7 +1013,7 @@ def run(
             job_ids=job_ids,
         )
 
-        if is_dry_run:
+        if dry_run:
             logger.info("Dry run completed. Workspace setup is ready.")
             return result
 

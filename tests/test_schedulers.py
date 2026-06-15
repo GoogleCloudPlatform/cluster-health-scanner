@@ -437,7 +437,7 @@ ramble:
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
 
         mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
-        mock_kueue_mgr_instance.setup.return_value = (
+        mock_kueue_mgr_instance.generate_configs.return_value = (
             "kueue.x-k8s.io/queue-name: chs-local-queue"
         )
 
@@ -472,7 +472,7 @@ ramble:
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
 
         mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
-        mock_kueue_mgr_instance.setup.side_effect = KueueException(
+        mock_kueue_mgr_instance.generate_configs.side_effect = KueueException(
             "setup failed"
         )
 

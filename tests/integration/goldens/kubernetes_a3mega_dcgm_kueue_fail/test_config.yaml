@@ -1,7 +1,7 @@
 description: Tests the 'dcgm' test against a kubernetes scheduler for a3-mega when
   Kueue resources fail to apply
 env:
-  MOCK_KUEUE_APPLY_FAIL: '1'
+  MOCK_KUEUE_MISSING: '1'
 command:
 - run
 - --tests
@@ -9,4 +9,4 @@ command:
 - --nodes
 - node1,node2
 - --dry-run
-- kubernetes
+- --auto-approve

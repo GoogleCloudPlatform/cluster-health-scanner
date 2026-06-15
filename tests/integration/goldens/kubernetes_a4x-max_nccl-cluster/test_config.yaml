@@ -6,6 +6,6 @@ command:
 - --nodes
 - node1,node2
 - --dry-run
-- kubernetes
+- --auto-approve
 env:
   MOCK_KUEUE_MISSING: '0'

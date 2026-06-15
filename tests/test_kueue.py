@@ -37,38 +37,19 @@ class TestKueueManager(unittest.TestCase):
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
 
-    def test_setup_unsupported_machine_type_raises(self):
-        """Test setup with unsupported machine type raises KueueException."""
+    def test_generate_configs_unsupported_machine_type_raises(self):
+        """Test generate_configs with unsupported machine type raises
+        KueueException."""
         with self.assertRaisesRegex(
             KueueException, "not recognized in MACHINE_TYPE_RESOURCE_MAP"
         ):
-            self.kueue_mgr.setup(self.tmp_dir, "unsupported-mt", ["node1"])
+            self.kueue_mgr.generate_configs(
+                self.tmp_dir, "unsupported-mt", ["node1"]
+            )
 
-    def test_setup_already_active_returns_label(self):
-        """Test setup returns queue label if ClusterQueue is already active."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            "",  # cleanup localqueue
-            "",  # cleanup clusterqueue
-            "",  # cleanup resourceflavor
-            "",  # apply
-            "",  # wait
-        ]
-        label = self.kueue_mgr.setup(self.tmp_dir, "a3-megagpu-8g", ["node1"])
-        self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 5)
-
-    def test_setup_success_renders_and_verifies(self):
-        """Test setup renders template, applies it, and verifies readiness."""
-
-        self.mock_scheduler._run_kubectl.side_effect = [
-            "",
-            "",
-            "",
-            "",
-            "",
-        ]
-
-        label = self.kueue_mgr.setup(
+    def test_generate_configs_success_renders(self):
+        """Test generate_configs renders template and returns correct label."""
+        label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
@@ -81,17 +62,10 @@ class TestKueueManager(unittest.TestCase):
             self.assertIn("nvidia.com/gpu", content)
             self.assertIn('nominalQuota: "16"', content)
 
-    def test_setup_tpu_success_renders_and_verifies(self):
-        """Test setup for TPU renders correct resource flavor and name."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            "",
-            "",
-            "",
-            "",
-            "",
-        ]
-
-        label = self.kueue_mgr.setup(
+    def test_generate_configs_tpu_success_renders(self):
+        """Test generate_configs for TPU renders correct flavor and
+        resource name."""
+        label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "tpu7x-standard-4t", ["node1", "node2"]
         )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
@@ -103,6 +77,18 @@ class TestKueueManager(unittest.TestCase):
             self.assertIn("tpu7x-standard-4t", content)
             self.assertIn("google.com/tpu", content)
             self.assertIn('nominalQuota: "8"', content)
+
+    def test_apply_configs_success(self):
+        """Test apply_configs cleans up and applies configurations."""
+        self.mock_scheduler._run_kubectl.side_effect = [
+            "",  # cleanup localqueue
+            "",  # cleanup clusterqueue
+            "",  # cleanup resourceflavor
+            "",  # apply
+            "",  # wait
+        ]
+        self.kueue_mgr.apply_configs(self.tmp_dir)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 5)
 
     def test_apply_and_verify_permission_error_raises(self):
         """Test applying config with kubectl error raises KueueException."""

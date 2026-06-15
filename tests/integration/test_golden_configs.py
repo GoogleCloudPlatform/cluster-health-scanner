@@ -59,7 +59,7 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "    ;;\n"
         "  scontrol)\n"
         '    if [[ "$*" == *"show config"* ]]; then\n'
-        '      echo "ClusterName = test-cluster"\n'
+        '      echo "ClusterName = dry-run-cluster"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"
@@ -97,7 +97,7 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "      fi\n"
         '      echo "True"\n'
         '    elif [[ "$*" == *"config current-context"* ]]; then\n'
-        '      echo "test-cluster"\n'
+        '      echo "dry-run-cluster"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"
@@ -201,6 +201,11 @@ def test_golden_config(
     mocker.patch(
         "chs.schedulers.base.query_gce_instances_info",
         side_effect=mock_query_info,
+    )
+
+    mocker.patch(
+        "chs.cli.detect_scheduler",
+        return_value="slurm" if "slurm" in test_case else "kubernetes",
     )
 
     result = runner.invoke(cli, command)

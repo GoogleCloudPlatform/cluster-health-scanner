@@ -113,10 +113,10 @@ class KueueManager:
                 "to become active."
             )
 
-    def setup(
+    def generate_configs(
         self, workspace_config_dir: str, machine_type: str, nodes: list[str]
     ) -> str:
-        """Renders Kueue config, applies it, and verifies readiness.
+        """Renders Kueue config to disk without applying.
 
         Args:
             workspace_config_dir: Directory where Kueue configs will be written.
@@ -143,11 +143,6 @@ class KueueManager:
         nominal_quota = len(nodes) * accelerators_per_node
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
 
-        try:
-            self.cleanup()
-        except KueueException:
-            pass
-
         kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
             "kueue-configs.yaml.tpl"
         )
@@ -168,9 +163,19 @@ class KueueManager:
         with open(kueue_config_path, "w") as f:
             f.write(rendered_kueue)
 
-        self.apply_and_verify(kueue_config_path)
-
         return "kueue.x-k8s.io/queue-name: chs-local-queue"
+
+    def apply_configs(self, workspace_config_dir: str) -> None:
+        """Applies rendered Kueue configurations to the cluster."""
+        try:
+            self.cleanup()
+        except KueueException:
+            pass
+
+        kueue_config_path = os.path.join(
+            workspace_config_dir, "kueue-configs.yaml"
+        )
+        self.apply_and_verify(kueue_config_path)
 
     def _ensure_local_queue_exists(self, workspace_config_dir: str):
         """Idempotently ensures the LocalQueue exists in the namespace."""

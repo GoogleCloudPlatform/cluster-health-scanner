@@ -639,7 +639,7 @@ class TestCli(unittest.TestCase):
 
                 result = self.runner.invoke(
                     cli.cli,
-                    case.args_list,
+                    case.args_list + ["--auto-approve"],
                     standalone_mode=False,
                 )
                 self.assertEqual(
@@ -692,6 +692,7 @@ class TestCli(unittest.TestCase):
                 "suite1",
                 "--run-id",
                 "customrun",
+                "--auto-approve",
             ],
             standalone_mode=False,
         )
@@ -726,20 +727,20 @@ class TestCli(unittest.TestCase):
                 "--suite",
                 "suite1",
                 "--dry-run",
-                "slurm",
+                "--auto-approve",
             ],
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
 
-        expected_run_id = "dry-run-cluster-suite1-mockhash"
+        expected_run_id = "mockcluster-suite1-mockhash"
         expected_workspace_name = f"20230101-120000_{expected_run_id}"
 
         self.mock_rm_cls.assert_any_call(
             mock_default_dir, expected_workspace_name, run_id=expected_run_id
         )
         mock_analyze_action.assert_not_called()
-        self.mock_get_cluster_name.assert_not_called()
+        self.mock_get_cluster_name.assert_called_once()
 
     @mock.patch("chs.cli.analyze_action")
     def test_run_command_auto_attach_success(self, mock_analyze_action):
@@ -780,7 +781,7 @@ class TestCli(unittest.TestCase):
 
         result = self.runner.invoke(
             cli.cli,
-            ["-v", "run", "--suite", "suite1"],
+            ["-v", "run", "--suite", "suite1", "--auto-approve"],
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
@@ -891,7 +892,7 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run"],
+            ["run", "--auto-approve"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Mock failure", result.output)
@@ -913,7 +914,7 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run", "-s", "s1"],
+            ["run", "-s", "s1", "--auto-approve"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("CHS execution failed", result.output)
@@ -945,6 +946,7 @@ class TestCli(unittest.TestCase):
                 "run",
                 "--nodepools",
                 "pool1",
+                "--auto-approve",
             ],
         )
 
@@ -986,20 +988,6 @@ class TestCli(unittest.TestCase):
                     "",
                 ],
                 expected_output="cannot be an empty string",
-            ),
-            _CommandErrorTestCase(
-                name="invalid_dry_run_scheduler",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "suite1",
-                    "--dry-run",
-                    "unknown",
-                ],
-                expected_output=(
-                    "Invalid value for '--dry-run': 'unknown' "
-                    "is not one of 'slurm', 'kubernetes'"
-                ),
             ),
             _CommandErrorTestCase(
                 name="empty_suite",

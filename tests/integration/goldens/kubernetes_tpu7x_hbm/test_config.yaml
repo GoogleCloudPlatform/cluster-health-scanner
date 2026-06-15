@@ -6,4 +6,4 @@ command:
 - --nodes
 - node1
 - --dry-run
-- kubernetes
+- --auto-approve

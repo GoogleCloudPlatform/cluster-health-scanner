@@ -9,4 +9,4 @@ command:
 - --nodes
 - node1,node2
 - --dry-run
-- kubernetes
+- --auto-approve

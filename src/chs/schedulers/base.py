@@ -93,6 +93,13 @@ class BaseScheduler(abc.ABC):
         """
         return tests
 
+    def apply_scheduler_resources(self) -> None:
+        """Applies generated scheduler resources to the cluster.
+
+        Optional to implement.
+        """
+        pass
+
     def cleanup_scheduler_resources(self) -> None:
         """Cleans up scheduler-specific resources. Optional to implement."""
         pass
