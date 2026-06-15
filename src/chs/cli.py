@@ -31,6 +31,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import click
+from rich.console import Console
 
 from chs import (
     BaseScheduler,
@@ -1119,17 +1120,40 @@ def history(obj) -> None:
         click.echo("No runs found.")
         return
 
-    click.echo(f"{'Workspace':<30} {'Details'}")
-    click.echo("-" * 90)
+    console = Console()
+    table = utils.create_styled_table()
+    table.add_column("Run ID", overflow="fold")
+    table.add_column("Submitted", no_wrap=True)
+    table.add_column("Storage", overflow="fold")
+    table.add_column("Age", no_wrap=True)
+    table.add_column("Command", overflow="fold")
+
     for run in runs.values():
         run_id = run.get("run_id", "N/A")
 
         command_statement = run.get("command_statement", "")
         if not command_statement:
-            # Reconstruct for old runs or runs without stored statement
             command_statement = "chs run"
 
-        click.echo(f"{run_id:<30} {command_statement}")
+        submission_complete = run.get("submission_complete", False)
+        sub_text = "[green]Y[/green]" if submission_complete else "[red]N[/red]"
+
+        storage_str = utils.formatting.format_storage_path(
+            run.get("storage", {})
+        )
+        age_text = utils.formatting.format_relative_time(
+            run.get("submission_time", "")
+        )
+
+        table.add_row(
+            run_id,
+            sub_text,
+            storage_str,
+            age_text,
+            command_statement,
+        )
+
+    console.print(table)
 
 
 def _validate_and_save_storage(app_data: ChsAppData, config: dict) -> None:

@@ -18,6 +18,7 @@ from chs.utils.app_data import ChsAppData
 from chs.utils.suites import load_suite
 from chs.utils import suites
 from chs.utils import tests
+from chs.utils import formatting
 from chs.utils.cluster import (
     sanitize_dns_1123,
     get_sanitized_cluster_name,
@@ -46,6 +47,7 @@ __all__ = [
     "CHS_NEUTRAL_STYLE",
     "suites",
     "tests",
+    "formatting",
     "sanitize_dns_1123",
     "get_sanitized_cluster_name",
     "generate_random_suffix",
