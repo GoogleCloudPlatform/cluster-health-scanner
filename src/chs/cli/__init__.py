@@ -48,6 +48,7 @@ from chs import (
     validators,
 )
 from chs.storage import StorageProviderFactory
+from chs.cli import list_formatting
 
 logger = logging.getLogger(__name__)
 
@@ -112,76 +113,12 @@ def cancel_jobs_on_failure(
         raise
 
 
-def _get_suites_list() -> list[str]:
-    """Returns lines for available suites."""
-    suites_list = utils.suites.get_all_suites()
-    if suites_list:
-        lines = ["Available Suites:"]
-        lines.extend(f"  - {s}" for s in suites_list)
-        return lines
-    return ["No suites found."]
-
-
-def _get_tests_list(
-    from_suite: str | None, tests_flag: bool, machine_type: str | None = None
-) -> list[str]:
-    """Returns lines for available tests."""
-    if from_suite:
-        suite_cfg = load_suite(from_suite)
-        tests = [
-            t.get("name") if isinstance(t, dict) else t
-            for t in suite_cfg.get("tests", [])
-        ]
-        if machine_type:
-            supported_tests = utils.tests.get_tests_by_machine_type(
-                machine_type
-            )
-            tests = [t for t in tests if t in supported_tests]
-    elif machine_type:
-        tests = utils.tests.get_tests_by_machine_type(machine_type)
-    else:
-        tests = utils.tests.get_all_supported_tests()
-
-    if tests:
-        lines = []
-        if from_suite:
-            lines.append(f"Available Tests for suite '{from_suite}':")
-        else:
-            lines.append("Available Tests:")
-
-        if tests_flag:
-            hints = []
-            if not from_suite:
-                hints.append("--from-suite <suite_name>")
-            if not machine_type:
-                hints.append("--machine-type <machine_type>")
-            if hints:
-                lines.append(
-                    f"  (Hint: Use {' or '.join(hints)} to filter tests)"
-                )
-
-        if machine_type:
-            lines.insert(1, f"  (Filtered by machine type: {machine_type})")
-        lines.extend(f"  - {t}" for t in tests)
-        return lines
-    return ["No tests found."]
-
-
-def _get_schedulers_list() -> list[str]:
-    """Returns lines for available schedulers."""
-    schedulers_list = utils.tests.get_all_supported_schedulers()
-    if schedulers_list:
-        lines = ["Supported Schedulers:"]
-        lines.extend(f"  - {s}" for s in schedulers_list)
-        return lines
-    return ["No schedulers found."]
-
-
 def list_action(
     *,
     suites: bool,
     tests: bool,
     schedulers: bool,
+    machine_types: bool,
     from_suite: str | None,
     machine_type: str | None = None,
 ) -> bool:
@@ -202,34 +139,36 @@ def list_action(
       True if all resource types were listed, False otherwise.
     """
     logger.debug(
-        "list_action called with: suites=%r, tests=%r, schedulers=%r,"
-        " from_suite=%r, machine_type=%r",
+        "list_action called with: suites=%r, tests=%r, schedulers=%r, "
+        "machine_types=%r, from_suite=%r, machine_type=%r",
         suites,
         tests,
         schedulers,
+        machine_types,
         from_suite,
         machine_type,
     )
-    show_all = not (suites or tests or schedulers)
-    all_lines = []
+    show_all = not (suites or tests or schedulers or machine_types)
+    console = Console()
 
     if suites or show_all:
-        all_lines.extend(_get_suites_list())
-        all_lines.append("")
+        console.print(list_formatting.get_suites_renderable())
+        console.print()
 
     if tests or show_all:
-        all_lines.extend(_get_tests_list(from_suite, tests, machine_type))
-        all_lines.append("")
+        for r in list_formatting.get_tests_renderables(
+            from_suite, tests, machine_type
+        ):
+            console.print(r)
+        console.print()
 
     if schedulers or show_all:
-        all_lines.extend(_get_schedulers_list())
-        all_lines.append("")
+        console.print(list_formatting.get_schedulers_renderable())
+        console.print()
 
-    if all_lines and not all_lines[-1]:
-        all_lines.pop()
-
-    if all_lines:
-        logger.info("\n".join(all_lines))
+    if machine_types or show_all:
+        console.print(list_formatting.get_machine_types_renderable())
+        console.print()
 
     return show_all
 
@@ -591,6 +530,9 @@ def cli(ctx: click.Context, verbose: bool) -> None:
 @click.option("--tests", is_flag=True, help="List available tests")
 @click.option("--schedulers", is_flag=True, help="List available schedulers")
 @click.option(
+    "--machine-types", is_flag=True, help="List available machine types"
+)
+@click.option(
     "--from-suite",
     metavar="SUITE_NAME",
     help="Specify the suite to list tests from (only used with --tests)",
@@ -606,6 +548,7 @@ def list_command(
     suites: bool,
     tests: bool,
     schedulers: bool,
+    machine_types: bool,
     from_suite: str | None,
     machine_type: str | None,
 ) -> bool:
@@ -616,6 +559,7 @@ def list_command(
       suites: Whether to list available test suites.
       tests: Whether to list available tests.
       schedulers: Whether to list available schedulers.
+      machine_types: Whether to list available machine types.
       from_suite: Optional suite name to filter tests.
       machine_type: Optional machine type to filter tests.
     """
@@ -639,6 +583,7 @@ def list_command(
         suites=suites,
         tests=tests,
         schedulers=schedulers,
+        machine_types=machine_types,
         from_suite=from_suite,
         machine_type=machine_type,
     )
@@ -1274,7 +1219,7 @@ def configure_path(ctx: click.Context, path: str | None) -> None:
 def main() -> None:
     """Main entry point for the CHS CLI."""
 
-    logger.info("CHS CLI starting...")
+    logger.info("CHS CLI starting...\n")
     try:
         cli(obj={})
     finally:

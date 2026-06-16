@@ -32,6 +32,12 @@ def get_all_supported_tests() -> list[str]:
     return [test.get("name") for test in data.get("tests", [])]
 
 
+def get_all_supported_tests_details() -> list[dict[str, Any]]:
+    """Derives list of all supported test details from tests.yaml."""
+    data = _load_tests()
+    return data.get("tests", [])
+
+
 def get_all_supported_machine_types() -> list[str]:
     """Derives list of all supported machine types from tests.yaml."""
     tests_map = get_tests_map()

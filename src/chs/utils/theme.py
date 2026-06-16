@@ -42,7 +42,7 @@ def create_styled_table(
         expand=expand,
     )
     for col in columns:
-        table.add_column(col)
+        table.add_column(col, overflow="fold")
     return table
 
 

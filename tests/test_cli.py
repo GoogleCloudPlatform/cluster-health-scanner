@@ -25,6 +25,7 @@ from unittest import mock
 from typing import Any
 
 from chs import cli
+from chs.cli import list_formatting
 from chs import exceptions
 from chs.utils.tests import TestsMap
 from click import testing
@@ -43,6 +44,7 @@ class _ListActionKwargs:
     suites: bool = False
     tests: bool = False
     schedulers: bool = False
+    machine_types: bool = False
     from_suite: str | None = None
     machine_type: str | None = None
 
@@ -76,6 +78,7 @@ class _ListActionTestCase:
     expected_suites_calls: int
     expected_tests_call_args: tuple[str | None, bool] | None
     expected_schedulers_calls: int
+    expected_machine_types_calls: int = 0
 
 
 @dataclasses.dataclass
@@ -230,37 +233,59 @@ class TestCli(unittest.TestCase):
 
     def test_list_tests_implementation_both_hints(self):
         """Test _get_tests_list returns both hints."""
-        lines = cli._get_tests_list(from_suite=None, tests_flag=True)
+
+        renderables = list_formatting.get_tests_renderables(
+            from_suite=None, tests_flag=True
+        )
         hint = (
             "  (Hint: Use --from-suite <suite_name> or "
             "--machine-type <machine_type> to filter tests)"
         )
-        self.assertIn(hint, lines)
+        self.assertTrue(
+            any(hint in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
-    def test_list_tests_implementation_machine_type_hint(self):
+    @mock.patch("chs.cli.list_formatting.load_suite")
+    def test_list_tests_implementation_machine_type_hint(self, mock_load_suite):
         """Test _get_tests_list returns machine-type hint."""
-        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
+
+        mock_load_suite.return_value = {"tests": ["test1", "test2"]}
+        renderables = list_formatting.get_tests_renderables(
+            from_suite="suite1", tests_flag=True
+        )
         hint = "  (Hint: Use --machine-type <machine_type> to filter tests)"
-        self.assertIn(hint, lines)
+        self.assertTrue(
+            any(hint in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
     @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
     def test_list_tests_implementation_suite_hint(self, mock_get_tests):
         """Test _get_tests_list returns suite hint."""
         mock_get_tests.return_value = ["test1", "test2"]
-        lines = cli._get_tests_list(
+
+        renderables = list_formatting.get_tests_renderables(
             from_suite=None, tests_flag=True, machine_type="a3-ultra"
         )
         hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        self.assertIn(hint, lines)
+        self.assertTrue(
+            any(hint in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
     @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
-    def test_list_tests_implementation_no_hint(self, mock_get_tests):
+    @mock.patch("chs.cli.list_formatting.load_suite")
+    def test_list_tests_implementation_no_hint(
+        self, mock_load_suite, mock_get_tests
+    ):
         """Test _get_tests_list returns no hint."""
         mock_get_tests.return_value = ["test1", "test2"]
-        lines = cli._get_tests_list(
+        mock_load_suite.return_value = {"tests": ["test1", "test2"]}
+
+        renderables = list_formatting.get_tests_renderables(
             from_suite="suite1", tests_flag=True, machine_type="a3-ultra"
         )
-        self.assertFalse(any("Hint:" in line for line in lines))
+        self.assertFalse(
+            any("Hint:" in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
     @mock.patch.object(cli, "list_action", autospec=True)
     def test_list_command(self, mock_list_action):
@@ -1238,14 +1263,20 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.mock_app_data_cls.assert_called_once()
 
-    @mock.patch.object(cli, "_get_schedulers_list", autospec=True)
-    @mock.patch.object(cli, "_get_tests_list", autospec=True)
-    @mock.patch.object(cli, "_get_suites_list", autospec=True)
+    @mock.patch(
+        "chs.cli.list_formatting.get_machine_types_renderable", autospec=True
+    )
+    @mock.patch(
+        "chs.cli.list_formatting.get_schedulers_renderable", autospec=True
+    )
+    @mock.patch("chs.cli.list_formatting.get_tests_renderables", autospec=True)
+    @mock.patch("chs.cli.list_formatting.get_suites_renderable", autospec=True)
     def test_list_action(
         self,
         mock_suites,
         mock_tests,
         mock_schedulers,
+        mock_machine_types,
     ):
         """Test list_action with various flags."""
         test_cases = [
@@ -1256,6 +1287,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=1,
                 expected_tests_call_args=(None, False, None),
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
             _ListActionTestCase(
                 name="suites_only",
@@ -1264,6 +1296,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=1,
                 expected_tests_call_args=None,
                 expected_schedulers_calls=0,
+                expected_machine_types_calls=0,
             ),
             _ListActionTestCase(
                 name="tests_only",
@@ -1275,6 +1308,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=0,
                 expected_tests_call_args=("s1", True, None),
                 expected_schedulers_calls=0,
+                expected_machine_types_calls=0,
             ),
             _ListActionTestCase(
                 name="schedulers_only",
@@ -1283,6 +1317,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=0,
                 expected_tests_call_args=None,
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
             _ListActionTestCase(
                 name="suites_and_tests",
@@ -1294,6 +1329,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=1,
                 expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=0,
+                expected_machine_types_calls=0,
             ),
             _ListActionTestCase(
                 name="tests_and_schedulers",
@@ -1305,6 +1341,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=0,
                 expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
             _ListActionTestCase(
                 name="all_flags",
@@ -1317,6 +1354,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=1,
                 expected_tests_call_args=(None, True, None),
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
         ]
         mock_suites.return_value = ["suite1"]

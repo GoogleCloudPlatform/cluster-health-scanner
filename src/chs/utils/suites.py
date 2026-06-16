@@ -58,3 +58,9 @@ def get_all_suites() -> list[str]:
     """Derives list of all suite names from suites.yaml."""
     data = _load_suites()
     return [suite.get("name") for suite in data.get("suites", [])]
+
+
+def get_all_suites_details() -> list[dict[str, Any]]:
+    """Derives list of all suite details from suites.yaml."""
+    data = _load_suites()
+    return data.get("suites", [])

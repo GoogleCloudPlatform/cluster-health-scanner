@@ -14,6 +14,8 @@
 
 suites:
 - name: lite
+  est_time: "~5 mins"
+  description: "Quick health check (eg. nvidia-smi, dcgm, gemm)."
   timeout: 1200
   deadline: 4200
   tests:
@@ -33,6 +35,8 @@ suites:
   - name: host-device
   - name: collectives-single-node
 - name: standard
+  est_time: "~30 mins"
+  description: "Thorough network & collective testing (eg. nccl, collectives)."
   timeout: 2400
   deadline: 6000
   tests:
@@ -54,6 +58,8 @@ suites:
   - name: tpu-info
   - name: collectives
 - name: burn-in
+  est_time: ">2 hours"
+  description: "Heavy stress testing."
   tests:
   - name: dcgm
     variables:

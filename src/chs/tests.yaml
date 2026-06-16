@@ -14,6 +14,8 @@
 
 tests:
   - name: nvidia-smi
+    category: "GPU Diagnostics"
+    description: "Basic GPU health and driver check"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -35,6 +37,8 @@ tests:
         machine_type: a4x-maxgpu-4g-metal
 
   - name: dcgm
+    category: "GPU Diagnostics"
+    description: "Deep hardware diagnostics"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -56,6 +60,8 @@ tests:
         machine_type: a4x-maxgpu-4g-metal
 
   - name: gemm
+    category: "Compute"
+    description: "General Matrix Multiply benchmark"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -81,6 +87,8 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: nccl-single-node
+    category: "Network & Collectives"
+    description: "Single node network testing"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -102,6 +110,8 @@ tests:
         machine_type: a4x-maxgpu-4g-metal
 
   - name: nccl-cluster
+    category: "Network & Collectives"
+    description: "Full cluster ring bandwidth"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -123,6 +133,8 @@ tests:
         machine_type: a4x-maxgpu-4g-metal
 
   - name: nccl-pairwise
+    category: "Network & Collectives"
+    description: "Node-to-node latency check"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -144,6 +156,8 @@ tests:
         machine_type: a4x-maxgpu-4g-metal
 
   - name: stream
+    category: "Memory"
+    description: "Memory bandwidth benchmark"
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -163,6 +177,8 @@ tests:
         machine_type: a4x-highgpu-4g
 
   - name: tpu-info
+    category: "TPU Diagnostics"
+    description: "Basic TPU health and information"
     platforms:
       - scheduler: kubernetes
         machine_type: tpu7x-standard-4t
@@ -172,6 +188,8 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: hbm
+    category: "Memory"
+    description: "High Bandwidth Memory test"
     platforms:
       - scheduler: kubernetes
         machine_type: tpu7x-standard-4t
@@ -181,6 +199,8 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: host-device
+    category: "Memory"
+    description: "Host to device bandwidth check"
     platforms:
       - scheduler: kubernetes
         machine_type: tpu7x-standard-4t
@@ -190,6 +210,8 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: collectives
+    category: "Network & Collectives"
+    description: "Cluster collectives testing"
     platforms:
       - scheduler: kubernetes
         machine_type: tpu7x-standard-4t
@@ -197,6 +219,8 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: collectives-single-node
+    category: "Network & Collectives"
+    description: "Single node collectives testing"
     platforms:
       - scheduler: kubernetes
         machine_type: tpu7x-standard-4t
