@@ -117,11 +117,11 @@ def cancel_jobs_on_failure(
 
 def list_action(
     *,
-    suites: bool,
-    tests: bool,
-    schedulers: bool,
-    machine_types: bool,
-    from_suite: str | None,
+    suites: bool = False,
+    tests: bool = False,
+    schedulers: bool = False,
+    machine_types: bool = False,
+    suite: str | None = None,
     machine_type: str | None = None,
 ) -> bool:
     """Orchestrates listing of available CHS resources.
@@ -133,7 +133,8 @@ def list_action(
       suites: If True, includes test suites in the list.
       tests: If True, includes tests in the list.
       schedulers: If True, includes schedulers in the list.
-      from_suite: If provided, filters tests listed to those belonging to the
+      machine_types: If True, includes machine types in the list.
+      suite: If provided, filters tests listed to those belonging to the
         specified suite.
       machine_type: If provided, filters tests by machine type.
 
@@ -142,12 +143,12 @@ def list_action(
     """
     logger.debug(
         "list_action called with: suites=%r, tests=%r, schedulers=%r, "
-        "machine_types=%r, from_suite=%r, machine_type=%r",
+        "machine_types=%r, suite=%r, machine_type=%r",
         suites,
         tests,
         schedulers,
         machine_types,
-        from_suite,
+        suite,
         machine_type,
     )
     show_all = not (suites or tests or schedulers or machine_types)
@@ -159,7 +160,7 @@ def list_action(
 
     if tests or show_all:
         for r in list_formatting.get_tests_renderables(
-            from_suite, tests, machine_type
+            suite, tests, machine_type
         ):
             console.print(r)
         console.print()
@@ -527,52 +528,34 @@ def cli(ctx: click.Context, verbose: bool) -> None:
         logger.debug("Debug mode enabled.")
 
 
-@cli.command(name="list")
-@click.option("--suites", is_flag=True, help="List available test suites")
-@click.option("--tests", is_flag=True, help="List available tests")
-@click.option("--schedulers", is_flag=True, help="List available schedulers")
+@cli.group(name="list", invoke_without_command=True)
+@click.pass_context
+def list_command(ctx: click.Context) -> bool | None:
+    """Lists available resources."""
+    if ctx.invoked_subcommand is None:
+        return list_action()
+
+
+@list_command.command(name="suites")
+def list_suites() -> bool:
+    """List available test suites."""
+    return list_action(suites=True)
+
+
+@list_command.command(name="tests")
 @click.option(
-    "--machine-types", is_flag=True, help="List available machine types"
-)
-@click.option(
-    "--from-suite",
+    "--suite",
     metavar="SUITE_NAME",
-    help="Specify the suite to list tests from (only used with --tests)",
+    help="Specify the suite to list tests from",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--machine-type",
-    help="Filter tests by machine type (only used with --tests)",
+    help="Filter tests by machine type",
     callback=validators.validate_non_empty_string,
 )
-def list_command(
-    *,
-    suites: bool,
-    tests: bool,
-    schedulers: bool,
-    machine_types: bool,
-    from_suite: str | None,
-    machine_type: str | None,
-) -> bool:
-    """Lists available resources.
-
-    \b
-    Args:
-      suites: Whether to list available test suites.
-      tests: Whether to list available tests.
-      schedulers: Whether to list available schedulers.
-      machine_types: Whether to list available machine types.
-      from_suite: Optional suite name to filter tests.
-      machine_type: Optional machine type to filter tests.
-    """
-    if from_suite and not tests:
-        raise click.UsageError(
-            "Option '--from-suite' requires option '--tests'."
-        )
-    if machine_type and not tests:
-        raise click.UsageError(
-            "Option '--machine-type' requires option '--tests'."
-        )
+def list_tests(suite: str | None, machine_type: str | None) -> bool:
+    """List available tests."""
     if machine_type:
         supported_mts = utils.tests.get_all_supported_machine_types()
         if machine_type not in supported_mts:
@@ -581,14 +564,19 @@ def list_command(
                 f"Supported types are: {', '.join(supported_mts)}"
             )
 
-    return list_action(
-        suites=suites,
-        tests=tests,
-        schedulers=schedulers,
-        machine_types=machine_types,
-        from_suite=from_suite,
-        machine_type=machine_type,
-    )
+    return list_action(tests=True, suite=suite, machine_type=machine_type)
+
+
+@list_command.command(name="schedulers")
+def list_schedulers() -> bool:
+    """List available schedulers."""
+    return list_action(schedulers=True)
+
+
+@list_command.command(name="machine-types")
+def list_machine_types() -> bool:
+    """List available machine types."""
+    return list_action(machine_types=True)
 
 
 def _handle_previous_run(

@@ -45,7 +45,7 @@ class _ListActionKwargs:
     tests: bool = False
     schedulers: bool = False
     machine_types: bool = False
-    from_suite: str | None = None
+    suite: str | None = None
     machine_type: str | None = None
 
 
@@ -53,7 +53,7 @@ class _ListActionKwargs:
 class _ListCommandTestCase:
     name: str
     args_list: list[str]
-    expected_kwargs: _ListActionKwargs
+    expected_kwargs: dict[str, Any]
 
 
 @dataclasses.dataclass
@@ -235,10 +235,10 @@ class TestCli(unittest.TestCase):
         """Test _get_tests_list returns both hints."""
 
         renderables = list_formatting.get_tests_renderables(
-            from_suite=None, tests_flag=True
+            suite=None, tests_flag=True
         )
         hint = (
-            "  (Hint: Use --from-suite <suite_name> or "
+            "  (Hint: Use --suite <suite_name> or "
             "--machine-type <machine_type> to filter tests)"
         )
         self.assertTrue(
@@ -251,7 +251,7 @@ class TestCli(unittest.TestCase):
 
         mock_load_suite.return_value = {"tests": ["test1", "test2"]}
         renderables = list_formatting.get_tests_renderables(
-            from_suite="suite1", tests_flag=True
+            suite="suite1", tests_flag=True
         )
         hint = "  (Hint: Use --machine-type <machine_type> to filter tests)"
         self.assertTrue(
@@ -264,9 +264,9 @@ class TestCli(unittest.TestCase):
         mock_get_tests.return_value = ["test1", "test2"]
 
         renderables = list_formatting.get_tests_renderables(
-            from_suite=None, tests_flag=True, machine_type="a3-ultra"
+            suite=None, tests_flag=True, machine_type="a3-ultra"
         )
-        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
+        hint = "  (Hint: Use --suite <suite_name> to filter tests)"
         self.assertTrue(
             any(hint in r.plain for r in renderables if hasattr(r, "plain"))
         )
@@ -281,7 +281,7 @@ class TestCli(unittest.TestCase):
         mock_load_suite.return_value = {"tests": ["test1", "test2"]}
 
         renderables = list_formatting.get_tests_renderables(
-            from_suite="suite1", tests_flag=True, machine_type="a3-ultra"
+            suite="suite1", tests_flag=True, machine_type="a3-ultra"
         )
         self.assertFalse(
             any("Hint:" in r.plain for r in renderables if hasattr(r, "plain"))
@@ -293,114 +293,96 @@ class TestCli(unittest.TestCase):
         test_cases = [
             _ListCommandTestCase(
                 name="suites",
-                args_list=["list", "--suites"],
-                expected_kwargs=_ListActionKwargs(suites=True),
+                args_list=["list", "suites"],
+                expected_kwargs={"suites": True},
             ),
             _ListCommandTestCase(
                 name="tests",
-                args_list=["list", "--tests"],
-                expected_kwargs=_ListActionKwargs(tests=True),
+                args_list=["list", "tests"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": None,
+                    "machine_type": None,
+                },
             ),
             _ListCommandTestCase(
                 name="schedulers",
-                args_list=["list", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(schedulers=True),
+                args_list=["list", "schedulers"],
+                expected_kwargs={"schedulers": True},
+            ),
+            _ListCommandTestCase(
+                name="machine_types",
+                args_list=["list", "machine-types"],
+                expected_kwargs={"machine_types": True},
             ),
             _ListCommandTestCase(
                 name="all",
                 args_list=["list"],
-                expected_kwargs=_ListActionKwargs(),
+                expected_kwargs={},
             ),
             _ListCommandTestCase(
-                name="from_suite",
-                args_list=["list", "--tests", "--from-suite", "suite1"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1",
-                ),
+                name="suite",
+                args_list=["list", "tests", "--suite", "suite1"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1",
+                    "machine_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="suites_and_tests",
-                args_list=["list", "--suites", "--tests"],
-                expected_kwargs=_ListActionKwargs(
-                    suites=True,
-                    tests=True,
-                ),
+                name="suite_trailing_comma",
+                args_list=["list", "tests", "--suite", "suite1,"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1,",
+                    "machine_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="suites_and_schedulers",
-                args_list=["list", "--suites", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(
-                    suites=True,
-                    schedulers=True,
-                ),
+                name="suite_leading_comma",
+                args_list=["list", "tests", "--suite", ",suite1"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": ",suite1",
+                    "machine_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="tests_and_schedulers",
-                args_list=["list", "--tests", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    schedulers=True,
-                ),
+                name="suite_double_comma",
+                args_list=["list", "tests", "--suite", "suite1,,suite2"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1,,suite2",
+                    "machine_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="all_boolean_flags",
-                args_list=["list", "--suites", "--tests", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(
-                    suites=True,
-                    tests=True,
-                    schedulers=True,
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_trailing_comma",
-                args_list=["list", "--tests", "--from-suite", "suite1,"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1,",
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_leading_comma",
-                args_list=["list", "--tests", "--from-suite", ",suite1"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite=",suite1",
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_double_comma",
-                args_list=["list", "--tests", "--from-suite", "suite1,,suite2"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1,,suite2",
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_whitespace_and_comma",
+                name="suite_whitespace_and_comma",
                 args_list=[
                     "list",
-                    "--tests",
-                    "--from-suite",
+                    "tests",
+                    "--suite",
                     "suite1, suite2 ,suite3 ",
                 ],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1, suite2 ,suite3",
-                ),
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1, suite2 ,suite3",
+                    "machine_type": None,
+                },
             ),
             _ListCommandTestCase(
                 name="machine_type",
                 args_list=[
                     "list",
-                    "--tests",
+                    "tests",
                     "--machine-type",
                     "a3-ultragpu-8g",
                 ],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    machine_type="a3-ultragpu-8g",
-                ),
+                expected_kwargs={
+                    "tests": True,
+                    "suite": None,
+                    "machine_type": "a3-ultragpu-8g",
+                },
             ),
         ]
         for case in test_cases:
@@ -408,36 +390,30 @@ class TestCli(unittest.TestCase):
                 mock_list_action.reset_mock()
                 result = self.runner.invoke(cli.cli, case.args_list)
                 self.assertEqual(result.exit_code, 0)
-                mock_list_action.assert_called_once_with(
-                    **dataclasses.asdict(case.expected_kwargs)
-                )
+                mock_list_action.assert_called_once_with(**case.expected_kwargs)
 
     def test_list_command_errors(self):
         """Test 'list' command with invalid flags."""
         test_cases = [
             _CommandErrorTestCase(
-                name="from_suite_empty",
-                args_list=["list", "--tests", "--from-suite", ""],
+                name="suite_empty",
+                args_list=["list", "tests", "--suite", ""],
                 expected_output="cannot be an empty string",
             ),
             _CommandErrorTestCase(
-                name="from_suite_whitespace",
-                args_list=["list", "--tests", "--from-suite", " "],
+                name="suite_whitespace",
+                args_list=["list", "tests", "--suite", " "],
                 expected_output="cannot be an empty string",
             ),
             _CommandErrorTestCase(
-                name="from_suite_without_tests",
-                args_list=["list", "--from-suite", "suite1"],
-                expected_output=(
-                    "Error: Option '--from-suite' requires option '--tests'."
-                ),
+                name="suite_without_tests",
+                args_list=["list", "--suite", "suite1"],
+                expected_output="No such option",
             ),
             _CommandErrorTestCase(
-                name="from_suite_with_suites",
-                args_list=["list", "--suites", "--from-suite", "suite1"],
-                expected_output=(
-                    "Error: Option '--from-suite' requires option '--tests'."
-                ),
+                name="suite_with_suites",
+                args_list=["list", "suites", "--suite", "suite1"],
+                expected_output="No such option",
             ),
         ]
         for case in test_cases:
@@ -1302,7 +1278,7 @@ class TestCli(unittest.TestCase):
                 name="tests_only",
                 kwargs=_ListActionKwargs(
                     tests=True,
-                    from_suite="s1",
+                    suite="s1",
                 ),
                 expected_result=False,
                 expected_suites_calls=0,

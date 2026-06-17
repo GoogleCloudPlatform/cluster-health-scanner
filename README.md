@@ -163,16 +163,16 @@ Lists available resources (suites, tests, schedulers)
 
 ```bash
 # View all available test bundles
-chs list --suites
+chs list suites
 
 # See which specific tests belong to the 'lite' suite
-chs list --tests --from-suite lite
+chs list tests --suite lite
 
 # Find all tests that are compatible with A3-Ultra hardware
-chs list --tests --machine-type a3-ultragpu-8g
+chs list tests --machine-type a3-ultragpu-8g
 
 # Combine filters: Find A3-Ultra tests within the 'lite' suite
-chs list --tests --machine-type a3-ultragpu-8g --from-suite lite
+chs list tests --machine-type a3-ultragpu-8g --suite lite
 ```
 
 ### 3. run

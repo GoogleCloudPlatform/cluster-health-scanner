@@ -41,13 +41,13 @@ def get_suites_renderable() -> Any:
 
 
 def get_tests_renderables(
-    from_suite: str | None, tests_flag: bool, machine_type: str | None = None
+    suite: str | None, tests_flag: bool, machine_type: str | None = None
 ) -> list[Any]:
     """Returns renderables for available tests."""
     tests_details = utils.tests.get_all_supported_tests_details()
 
-    if from_suite:
-        suite_cfg = load_suite(from_suite)
+    if suite:
+        suite_cfg = load_suite(suite)
         test_names = [
             t.get("name") if isinstance(t, dict) else t
             for t in suite_cfg.get("tests", [])
@@ -64,10 +64,10 @@ def get_tests_renderables(
 
     if test_names:
         renderables = []
-        if from_suite:
+        if suite:
             renderables.append(
                 Text(
-                    f"Available Tests for suite '{from_suite}':",
+                    f"Available Tests for suite '{suite}':",
                     style="bold cyan",
                 )
             )
@@ -76,8 +76,8 @@ def get_tests_renderables(
 
         if tests_flag:
             hints = []
-            if not from_suite:
-                hints.append("--from-suite <suite_name>")
+            if not suite:
+                hints.append("--suite <suite_name>")
             if not machine_type:
                 hints.append("--machine-type <machine_type>")
             if hints:
