@@ -44,7 +44,7 @@ class GemmRenderer(DefaultRenderer):
 
         table = create_styled_table(expand=False)
         table.add_column("Workload")
-        table.add_column("Node")
+        table.add_column("Node", overflow="fold")
         table.add_column("Min (TFLOPS)", justify="right")
         table.add_column("Median (TFLOPS)", justify="right")
         table.add_column("Max (TFLOPS)", justify="right")

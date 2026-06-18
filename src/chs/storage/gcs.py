@@ -132,3 +132,7 @@ class GcsStorageProvider(StorageProvider):
             logger.debug(
                 "Unexpected error during GCS validation delete test: %s", e
             )
+
+    def get_uri(self, remote_path: str) -> str:
+        """Returns the gs:// URI for the remote path."""
+        return f"gs://{self.bucket_name}/{remote_path}"

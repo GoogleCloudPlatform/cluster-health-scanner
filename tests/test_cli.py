@@ -102,6 +102,10 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.workspace_name = MOCK_WORKSPACE_NAME
         self.mock_rm_instance.path = f"/mocked/workspaces/{MOCK_WORKSPACE_NAME}"
         self.mock_rm_instance.execute_experiments.return_value = []
+        self.mock_rm_instance.archive.return_value = (
+            "mock_ws_path",
+            "mock_boh_path",
+        )
 
         self.mock_dt = self.enterContext(
             mock.patch("chs.cli.datetime.datetime", autospec=True)
@@ -861,6 +865,10 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_success(self):
         """Test archive_workspace calling archival on success."""
         mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+        )
         with cli.archive_workspace(mock_rm):
             pass
         mock_rm.archive.assert_called_once()
@@ -868,6 +876,10 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_failure(self):
         """Test archive_workspace calling archival on failure."""
         mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+        )
         with self.assertRaises(ValueError):
             with cli.archive_workspace(mock_rm):
                 raise ValueError("test error")
@@ -876,6 +888,10 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_archive_failure(self):
         """Test archive_workspace raising ChsArchiveException when BOH fails."""
         mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+        )
         mock_rm.archive.side_effect = exceptions.ChsArchiveException("boh fail")
         with self.assertRaises(exceptions.ChsArchiveException):
             with cli.archive_workspace(mock_rm):
@@ -1190,8 +1206,8 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         mock_results_viewer.assert_called_once()
-        mock_results_viewer.return_value.show_details.assert_called_once_with(
-            tests=None, resources=None
+        mock_results_viewer.return_value.show_summary_and_details.assert_called_once_with(
+            tests=None, resources=None, show_details=False
         )
 
         # Test with tests flag
@@ -1201,8 +1217,8 @@ class TestCli(unittest.TestCase):
             ["results", "my_run_id", "--tests", "t1,t2"],
         )
         self.assertEqual(result.exit_code, 0)
-        mock_results_viewer.return_value.show_details.assert_called_once_with(
-            tests=["t1", "t2"], resources=None
+        mock_results_viewer.return_value.show_summary_and_details.assert_called_once_with(
+            tests=["t1", "t2"], resources=None, show_details=False
         )
 
         # Test with resources flag
@@ -1212,8 +1228,8 @@ class TestCli(unittest.TestCase):
             ["results", "my_run_id", "--resources", "r1"],
         )
         self.assertEqual(result.exit_code, 0)
-        mock_results_viewer.return_value.show_details.assert_called_once_with(
-            tests=None, resources=["r1"]
+        mock_results_viewer.return_value.show_summary_and_details.assert_called_once_with(
+            tests=None, resources=["r1"], show_details=False
         )
 
     def test_results_command_no_run_id(self):

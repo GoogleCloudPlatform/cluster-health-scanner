@@ -345,6 +345,8 @@ class BOHGenerator:
         self.report.created_at.CopyFrom(self._get_timestamp())
 
         self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"
+        if self.skip_validation:
+            self.report.metadata.fields["skip_validation"].bool_value = True
 
         self._add_system_info_from_app_data()
 

@@ -16,7 +16,11 @@
 
 import logging
 import os
+import datetime
+import re
 import json
+from collections import defaultdict
+from dataclasses import dataclass
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
@@ -28,8 +32,42 @@ from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
 from chs.plugins.utils import rendering
 from chs.utils import lifecycle
+from chs.utils.app_data import ChsAppData
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class HardErrorEvent:
+    type: str
+    category: str
+    message: str
+    node: str
+
+
+@dataclass
+class TestGroupSummary:
+    canonical_name: str
+    test_level: str
+    met_threshold: int
+    below_threshold: int
+    failed_to_execute: int
+    denominator: int
+    entity_noun: str
+    group_has_no_thresholds: bool
+    explicit_skip_validation: bool
+    below_threshold_resources: list[str]
+    display_name: str
+
+
+@dataclass
+class RunSummaryData:
+    run_id: str
+    submission_time: str
+    total_nodes: int
+    test_summaries: list[TestGroupSummary]
+    errors_and_warnings: list[HardErrorEvent]
+    has_tests_or_resources_filter: bool
 
 
 class ResultsViewer:
@@ -135,6 +173,365 @@ class ResultsViewer:
 
             table = create_theme_error_table(error_data)
             self.console.print(table)
+
+    def _aggregate_summary_data(
+        self,
+        tests: list[str] | None = None,
+        resources: list[str] | None = None,
+    ) -> RunSummaryData | None:
+        """Extracts and normalizes data into a structured format."""
+        if not self.boh.report_id:
+            return None
+
+        filtered_results = self._filter_results(tests, resources)
+
+        if not filtered_results:
+            return RunSummaryData(
+                run_id="",
+                submission_time="",
+                total_nodes=0,
+                test_summaries=[],
+                errors_and_warnings=[],
+                has_tests_or_resources_filter=bool(tests or resources),
+            )
+
+        explicit_skip_validation = False
+        if "skip_validation" in self.boh.metadata.fields:
+            explicit_skip_validation = self.boh.metadata.fields[
+                "skip_validation"
+            ].bool_value
+
+        report_id = self.boh.report_id
+        run_id = os.path.basename(
+            os.path.dirname(os.path.abspath(self.boh_path))
+        )
+
+        submission_time = None
+        app_data = ChsAppData()
+        run_entry = app_data.get_run(report_id)
+        if run_entry:
+            run_id = run_entry.get("run_id", run_id)
+            submission_time = run_entry.get("submission_time", submission_time)
+
+        time_str = ""
+        if submission_time:
+            try:
+                dt = datetime.datetime.fromisoformat(submission_time)
+                time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                time_str = str(submission_time)
+        elif self.boh.created_at:
+            time_str = self.boh.created_at.ToDatetime().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+        all_nodes = set()
+        for r in self.boh.test_results:
+            for t in r.target_resources:
+                all_nodes.add(t.node_name)
+        total_nodes = len(all_nodes)
+
+        grouped_results = {}
+        for result in filtered_results:
+            canonical_name = self.plugin_manager.resolve_test_name(
+                result.test_name
+            )
+            key = (canonical_name, result.test_level)
+            if key not in grouped_results:
+                grouped_results[key] = []
+            grouped_results[key].append(result)
+
+        errors_and_warnings = []
+        test_summaries = []
+
+        for (canonical_name, test_level), results in grouped_results.items():
+            met_threshold = 0
+            below_threshold = 0
+
+            group_all_unknown = all(
+                r.result_status == pb.RESULT_STATUS_UNKNOWN for r in results
+            )
+            group_has_no_thresholds = group_all_unknown and len(results) > 0
+
+            display_name = (
+                f"{canonical_name} ({test_level})"
+                if test_level
+                else str(canonical_name)
+            )
+
+            test_nodes = set()
+            for res in results:
+                for t in res.target_resources:
+                    test_nodes.add(t.node_name)
+
+                for m in res.metrics:
+                    if (
+                        m.key.endswith("Error Detected")
+                        or m.key.endswith("Failure Detected")
+                        or "Warning" in m.key
+                    ):
+                        val = ""
+                        if m.value.HasField("string_value"):
+                            val = m.value.string_value
+                        elif m.value.HasField("bool_value"):
+                            val = str(m.value.bool_value)
+
+                        is_warn = "Warning" in m.key
+                        err_type = "WARNING" if is_warn else "FAIL"
+
+                        category = re.sub(
+                            r"(?i)\s*(error|failure|warning)\s*detected",
+                            "",
+                            m.key,
+                        ).strip()
+
+                        for t in res.target_resources:
+                            errors_and_warnings.append(
+                                HardErrorEvent(
+                                    type=err_type,
+                                    category=category,
+                                    message=val,
+                                    node=t.node_name,
+                                )
+                            )
+
+            test_nodes_count = len(test_nodes)
+            is_pairwise = "pairwise" in canonical_name.lower()
+            below_threshold_resources = []
+            failed_to_execute = 0
+            for res in results:
+                has_real_metrics = any(
+                    not (
+                        m.key.endswith("Error Detected")
+                        or m.key.endswith("Failure Detected")
+                        or "Warning" in m.key
+                    )
+                    for m in res.metrics
+                )
+
+                if res.result_status == pb.RESULT_STATUS_SUCCESS:
+                    met_threshold += (
+                        1 if is_pairwise else len(res.target_resources)
+                    )
+                elif res.result_status in (
+                    pb.RESULT_STATUS_TIMEOUT,
+                    pb.RESULT_STATUS_CANCELLED,
+                ):
+                    pass
+                else:
+                    below_threshold += (
+                        1 if is_pairwise else len(res.target_resources)
+                    )
+                    if is_pairwise and len(res.target_resources) == 2:
+                        below_threshold_resources.append(
+                            f"{res.target_resources[0].node_name} <-> "
+                            f"{res.target_resources[1].node_name}"
+                        )
+                    else:
+                        for t in res.target_resources:
+                            below_threshold_resources.append(t.node_name)
+
+                if (
+                    not has_real_metrics
+                    and res.result_status
+                    in lifecycle.TIME_EXCEEDED_PB_STATUSES.values()
+                ):
+                    status_name = pb.ResultStatus.Name(res.result_status)
+                    status_clean = status_name.replace("RESULT_STATUS_", "")
+                    for t in res.target_resources:
+                        errors_and_warnings.append(
+                            HardErrorEvent(
+                                type="FAIL",
+                                category=f"Status: {status_clean}",
+                                message=(
+                                    "Test exceeded time limits or was "
+                                    "cancelled."
+                                ),
+                                node=t.node_name,
+                            )
+                        )
+
+            entity_noun = "pairs" if is_pairwise else "nodes"
+            denominator = len(results) if is_pairwise else test_nodes_count
+            failed_to_execute = denominator - met_threshold - below_threshold
+
+            test_summaries.append(
+                TestGroupSummary(
+                    canonical_name=canonical_name,
+                    test_level=test_level,
+                    met_threshold=met_threshold,
+                    below_threshold=below_threshold,
+                    failed_to_execute=failed_to_execute,
+                    denominator=denominator,
+                    entity_noun=entity_noun,
+                    group_has_no_thresholds=group_has_no_thresholds,
+                    explicit_skip_validation=explicit_skip_validation,
+                    below_threshold_resources=below_threshold_resources,
+                    display_name=display_name,
+                )
+            )
+
+        return RunSummaryData(
+            run_id=run_id,
+            submission_time=time_str,
+            total_nodes=total_nodes,
+            test_summaries=test_summaries,
+            errors_and_warnings=errors_and_warnings,
+            has_tests_or_resources_filter=bool(tests or resources),
+        )
+
+    def show_summary_and_details(
+        self,
+        tests: list[str] | None = None,
+        resources: list[str] | None = None,
+        show_details: bool = False,
+    ) -> None:
+        summary_data = self._aggregate_summary_data(tests, resources)
+        if not summary_data:
+            return
+
+        if summary_data.run_id == "" and not summary_data.test_summaries:
+            self.console.print(
+                Panel(
+                    "[yellow]No matching results found.[/yellow]",
+                    title="Info",
+                    border_style="yellow",
+                )
+            )
+            return
+
+        self.console.print(f"Run ID: {summary_data.run_id}")
+        self.console.print(f"Submission Time: {summary_data.submission_time}")
+        self.console.print(f"Scope: {summary_data.total_nodes} nodes")
+        self.console.print("\nTest Suite Breakdown:")
+
+        for summary in summary_data.test_summaries:
+            if summary.explicit_skip_validation:
+                self.console.print(
+                    f"  • {summary.display_name:<30} : Executed on "
+                    f"{summary.denominator} {summary.entity_noun} "
+                    "(Validation skipped)"
+                )
+            elif summary.group_has_no_thresholds:
+                self.console.print(
+                    f"  • {summary.display_name:<30} : Executed on "
+                    f"{summary.denominator} {summary.entity_noun} "
+                    "(No thresholds set)"
+                )
+            else:
+                if summary.failed_to_execute > 0:
+                    self.console.print(
+                        f"  • {summary.display_name:<30} : "
+                        f"{summary.met_threshold} / "
+                        f"{summary.denominator} {summary.entity_noun} "
+                        "met the threshold "
+                        f"({summary.failed_to_execute} failed to complete)"
+                    )
+                else:
+                    self.console.print(
+                        f"  • {summary.display_name:<30} : "
+                        f"{summary.met_threshold} / "
+                        f"{summary.denominator} {summary.entity_noun} "
+                        "met the threshold"
+                    )
+
+                if (
+                    summary.below_threshold > 0
+                    and summary.below_threshold_resources
+                ):
+                    below_threshold_unique = sorted(
+                        list(set(summary.below_threshold_resources))
+                    )
+                    if len(below_threshold_unique) > 5:
+                        self.console.print(
+                            f"    - {summary.entity_noun.title()} That "
+                            "Didn't Meet Threshold (First 5):"
+                        )
+                        for node in below_threshold_unique[:5]:
+                            self.console.print(f"      * {node}")
+                        self.console.print(
+                            f"      ... and "
+                            f"{len(below_threshold_unique) - 5} more."
+                        )
+                    else:
+                        self.console.print(
+                            f"    - {summary.entity_noun.title()} That "
+                            "Didn't Meet Threshold:"
+                        )
+                        for node in below_threshold_unique:
+                            self.console.print(f"      * {node}")
+
+        if summary_data.errors_and_warnings:
+            self.console.print("\nPOTENTIAL ERRORS / WARNINGS:")
+            self.console.print(
+                "───────────────────────────────────────────────────────"
+            )
+
+            grouped_errors = defaultdict(list)
+            for err in summary_data.errors_and_warnings:
+                grouped_errors[err.category].append(err)
+
+            sorted_errors = sorted(
+                grouped_errors.items(), key=lambda x: len(x[1]), reverse=True
+            )
+
+            total_categories = len(sorted_errors)
+            shown_categories = sorted_errors[:5]
+
+            for category, errs in shown_categories:
+                err_type = errs[0].type
+                msg = errs[0].message
+                nodes = sorted(list(set(e.node for e in errs)))
+                node_count = len(nodes)
+
+                self.console.print(
+                    f"{err_type} Category: {category} ({node_count} nodes)"
+                )
+                if msg:
+                    self.console.print(f"  • Message: {msg}")
+
+                if node_count > 5:
+                    self.console.print("  • Affected Nodes (First 5 shown):")
+                    self.console.print(f"    - {', '.join(nodes[:5])}")
+                    self.console.print(
+                        f"    ... and {node_count - 5} other nodes."
+                    )
+                else:
+                    self.console.print("  • Affected Nodes:")
+                    for n in nodes:
+                        self.console.print(f"    - {n}")
+                self.console.print()
+
+            if total_categories > 5:
+                hidden = total_categories - 5
+                hidden_nodes = sum(
+                    len(set(e.node for e in errs))
+                    for _, errs in sorted_errors[5:]
+                )
+                self.console.print(
+                    f"[!] ... and {hidden} other failure/warning categories "
+                    f"affecting {hidden_nodes} nodes."
+                )
+
+            self.console.print(
+                "───────────────────────────────────────────────────────"
+            )
+        else:
+            if summary_data.has_tests_or_resources_filter:
+                self.console.print(
+                    "\nNo warnings or errors for the selected resources."
+                )
+
+        abs_path = os.path.abspath(self.boh_path)
+        self.console.print(
+            "For full raw metrics and detailed results for all nodes, "
+            "please use [bold cyan]chs results --details[/bold cyan] "
+            "or check the Bill of Health in:\n"
+            f"{abs_path}\n"
+        )
+
+        if show_details:
+            self.show_details(tests, resources)
 
     def show_details(
         self, tests: list[str] | None = None, resources: list[str] | None = None

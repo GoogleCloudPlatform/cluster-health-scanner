@@ -1032,7 +1032,7 @@ class RambleManager:
         """Uploads Bill of Health using the provider."""
         boh_path = os.path.join(self.path, "bill_of_health.json")
         if not os.path.exists(boh_path):
-            logger.warning(
+            logger.debug(
                 "Bill of Health file %s does not exist. Skipping BOH archival.",
                 boh_path,
             )
@@ -1040,23 +1040,23 @@ class RambleManager:
 
         logger.debug("Uploading Bill of Health...")
         try:
-            provider.upload_file(
-                boh_path, f"bills_of_health/{self._workspace_name}.json"
-            )
+            dest = f"bills_of_health/{self._workspace_name}.json"
+            provider.upload_file(boh_path, dest)
             logger.debug("Bill of Health uploaded successfully.")
+            return dest
         except Exception as e:
             raise ex.ChsArchiveException(
                 f"Failed to archive Bill of Health: {e}"
             ) from e
 
-    def _upload_workspace(self, provider) -> None:
+    def _upload_workspace(self, provider) -> str | None:
         """Archives workspace locally and uploads using the provider."""
         if not os.path.exists(self.path):
             logger.warning(
                 "Workspace path %s does not exist. Skipping archival.",
                 self.path,
             )
-            return
+            return None
 
         logger.debug("Archiving workspace locally...")
         try:
@@ -1090,9 +1090,8 @@ class RambleManager:
             archive_file = archives[0]
             logger.debug("Uploading workspace archive %s...", archive_file.name)
 
-            provider.upload_file(
-                str(archive_file), f"workspaces/{self._workspace_name}.tar.gz"
-            )
+            dest = f"workspaces/{self._workspace_name}.tar.gz"
+            provider.upload_file(str(archive_file), dest)
             logger.debug("Workspace archive uploaded successfully.")
 
             # Clean up local archive
@@ -1112,9 +1111,19 @@ class RambleManager:
                 "the workspace: %s",
                 e,
             )
+            return None
+        return dest
 
-    def archive(self) -> None:
-        """Orchestrates archival of BoH and workspace using active provider."""
+    def archive(self) -> tuple[str | None, str | None]:
+        """Orchestrates archival of BoH and workspace using active provider.
+
+        Returns:
+            A tuple of (workspace_uri, boh_uri). Returns local paths if no
+            storage provider is configured.
+        """
+        local_ws_path = f"{self.path}.tar.gz"
+        local_boh_path = os.path.join(self.path, "bill_of_health.json")
+
         if not os.path.exists(self.path) or not os.path.exists(
             os.path.join(self.path, ".ramble-workspace")
         ):
@@ -1123,7 +1132,7 @@ class RambleManager:
                 "Skipping archival.",
                 self.path,
             )
-            return
+            return None, None
 
         try:
             from chs.storage import StorageProviderFactory
@@ -1135,12 +1144,28 @@ class RambleManager:
                 "Skipping archival: %s",
                 e,
             )
-            return
+            return local_ws_path, local_boh_path
+
+        boh_dest = None
+        ws_dest = None
+        try:
+            boh_dest = self._upload_boh(provider)
+        except ex.ChsArchiveException as e:
+            # If BoH upload fails, we still want to proceed with archiving
+            # the workspace and returning the local paths.
+            logger.debug("Failed to upload Bill of Health: %s", e)
 
         try:
-            self._upload_boh(provider)
-        finally:
-            self._upload_workspace(provider)
+            ws_dest = self._upload_workspace(provider)
+        except ex.ChsArchiveException as e:
+            # If workspace upload fails, we don't crash and can still
+            # return the local workspace paths.
+            logger.debug("Failed to upload workspace: %s", e)
+
+        return (
+            provider.get_uri(ws_dest) if ws_dest else local_ws_path,
+            provider.get_uri(boh_dest) if boh_dest else local_boh_path,
+        )
 
     def _cleanup_inputs_dir(self) -> None:
         """Deletes the inputs directory in the workspace."""

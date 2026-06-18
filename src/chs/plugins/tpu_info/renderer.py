@@ -79,7 +79,7 @@ class TpuInfoRenderer(DefaultRenderer):
 
     def _build_summary_table(self, node_data: dict):
         table = create_styled_table(expand=False)
-        table.add_column("Node")
+        table.add_column("Node", overflow="fold")
         table.add_column("Libtpu Version")
         table.add_column("Accelerator Type")
         table.add_column("JAX Devices", justify="right")

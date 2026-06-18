@@ -44,7 +44,7 @@ class TpuGemmRenderer(DefaultRenderer):
 
         table = create_styled_table(expand=False)
         table.add_column("Parameters (MxNxK,Dtype)", style="cyan")
-        table.add_column("Nodes", style="bold white")
+        table.add_column("Nodes", overflow="fold", style="bold white")
         table.add_column(
             "Throughput\n(TFLOP/s/dev)", justify="right", style="green"
         )

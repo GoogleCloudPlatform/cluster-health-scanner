@@ -81,6 +81,23 @@ def handle_chs_exceptions(f):
     return wrapper
 
 
+def _archive_and_log(ramble_manager: RambleManager, spinner_label: str) -> None:
+    """Archives the workspace and logs the results with a progress spinner."""
+    console = Console()
+    with theme.get_progress_spinner(spinner_label):
+        ws_path, boh_path = ramble_manager.archive()
+    if ws_path:
+        console.print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived to: {ws_path}"
+            f"[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+    if boh_path:
+        console.print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
+            f"{boh_path}[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+
+
 @contextmanager
 def archive_workspace(
     ramble_manager: RambleManager, *, on_success: bool = True
@@ -89,11 +106,19 @@ def archive_workspace(
     try:
         yield
     except Exception:
-        ramble_manager.archive()
+        _archive_and_log(
+            ramble_manager,
+            "[bold blue]Archiving workspace and saving "
+            "Bill of Health...[/bold blue]",
+        )
         raise
     else:
         if on_success:
-            ramble_manager.archive()
+            _archive_and_log(
+                ramble_manager,
+                "[bold blue]Archiving workspace and saving "
+                "Bill of Health...[/bold blue]",
+            )
 
 
 @contextmanager
@@ -103,16 +128,38 @@ def cancel_jobs_on_failure(
     """Context manager to ensure jobs are cancelled on failure."""
     try:
         yield
-    except BaseException:
+    except BaseException as e:
         if active:
-            logger.debug(
-                "Run failed or interrupted. Cleaning up spawned jobs..."
+            is_interrupt = isinstance(e, KeyboardInterrupt)
+            spinner_label = (
+                "[bold red]Interrupt received. Cleaning up CHS resources..."
+                "[/bold red]"
+                if is_interrupt
+                else "[bold red]Run failed. Cleaning up CHS resources..."
+                "[/bold red]"
             )
-            try:
-                scheduler_obj.cancel_jobs_by_prefix(prefix)
-                scheduler_obj.cleanup_scheduler_resources()
-            except Exception as e:
-                logger.error(f"Failed to cancel jobs during cleanup: {e}")
+
+            with theme.get_progress_spinner(spinner_label):
+                try:
+                    scheduler_obj.cancel_jobs_by_prefix(prefix)
+                    scheduler_obj.cleanup_scheduler_resources()
+                except Exception as e:
+                    # We catch broad Exception here as a fallback to ensure we
+                    # don't hide the original exception that triggered cleanup.
+                    logger.error(f"Failed to clean up CHS resources: {e}")
+                    Console().print(
+                        "\n[bold red]WARNING: Automatic cleanup failed. "
+                        "You may have lingering jobs on the cluster. "
+                        "Please run `chs cancel` to manually clean up."
+                        "[/bold red]"
+                    )
+
+            if is_interrupt:
+                Console().print(
+                    f"[{theme.CHS_SUCCESS_STYLE}]Successfully cleaned up CHS "
+                    "resources."
+                    f"[/{theme.CHS_SUCCESS_STYLE}]"
+                )
         raise
 
 
@@ -474,6 +521,7 @@ def _show_results(
     run_id: str | None,
     tests: str | None = None,
     resources: str | None = None,
+    details: bool = False,
 ) -> None:
     """Show Bill of Health results for a run."""
     workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
@@ -517,14 +565,13 @@ def _show_results(
                 f"and failed to resolve storage provider: {e}"
             ) from e
 
-        with tempfile.NamedTemporaryFile(
-            delete=True, suffix=".json"
-        ) as tmp_file:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_file_path = os.path.join(tmp_dir, "boh.json")
             try:
                 provider.download_file(
-                    f"bills_of_health/{workspace_name}.json", tmp_file.name
+                    f"bills_of_health/{workspace_name}.json", tmp_file_path
                 )
-                viewer = ResultsViewer(tmp_file.name)
+                viewer = ResultsViewer(tmp_file_path)
             except Exception as e:
                 raise ex.BillOfHealthNotFoundException(
                     f"Failed to retrieve Bill of Health for run {run_id} "
@@ -536,7 +583,9 @@ def _show_results(
     parsed_tests = _parse_str_to_list(tests)
     parsed_resources = _parse_str_to_list(resources)
 
-    viewer.show_details(tests=parsed_tests, resources=parsed_resources)
+    viewer.show_summary_and_details(
+        tests=parsed_tests, resources=parsed_resources, show_details=details
+    )
 
 
 def cancel_action(scheduler_name: str | None = None) -> None:
@@ -1094,8 +1143,8 @@ def run(
         else f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
         f"and submitting jobs...[/{theme.CHS_SUCCESS_STYLE}]"
     )
-    with theme.get_progress_spinner(status_msg):
-        with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+        with theme.get_progress_spinner(status_msg):
             job_ids = run_action(
                 suite=suite,
                 scheduler_obj=scheduler_obj,
@@ -1111,27 +1160,27 @@ def run(
                 run_id=run_id,
             )
 
-        result = RunExecutionResult(
-            suite=suite,
-            scheduler_name=scheduler_obj.name,
-            tests=parsed_tests,
-            workspace_name=workspace_name,
-            workspaces_base_dir=workspaces_base_dir,
-            job_ids=job_ids,
-        )
-
-        if dry_run:
-            logger.debug("Dry run completed. Workspace setup is ready.")
-            return result
-
-        if not job_ids:
+        if not job_ids and not dry_run:
             raise ex.JobSubmissionFailureException(
                 f"Job submission failed for workspace: {workspace_name}. "
                 "Please check internal.log for details."
             )
 
-        logger.debug("Run submitted successfully.")
-        logger.debug("Job IDs: %s", ", ".join(job_ids))
+    result = RunExecutionResult(
+        suite=suite,
+        scheduler_name=scheduler_obj.name,
+        tests=parsed_tests,
+        workspace_name=workspace_name,
+        workspaces_base_dir=workspaces_base_dir,
+        job_ids=job_ids,
+    )
+
+    if dry_run:
+        logger.debug("Dry run completed. Workspace setup is ready.")
+        return result
+
+    logger.debug("Run submitted successfully.")
+    logger.debug("Job IDs: %s", ", ".join(job_ids))
 
     console.print(
         f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted jobs."
@@ -1224,18 +1273,14 @@ def cancel(obj, auto_approve: bool = False) -> None:
             ramble_manager = RambleManager(
                 workspaces_base_dir, workspace_name, run_id=latest_run_id
             )
-            console = Console()
             if os.path.exists(ramble_manager.path):
-                with theme.get_progress_spinner(
-                    "[bold blue]Archiving the latest workspace...[/bold blue]"
-                ):
-                    logger.debug(
-                        "Archiving the latest workspace after cancellation..."
-                    )
-                    ramble_manager.archive()
-                console.print(
-                    f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived."
-                    f"[/{theme.CHS_SUCCESS_STYLE}]"
+                logger.debug(
+                    "Archiving the latest workspace after cancellation..."
+                )
+                _archive_and_log(
+                    ramble_manager,
+                    "[bold blue]Archiving the latest workspace and saving "
+                    "Bill of Health...[/bold blue]",
                 )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         pass
@@ -1260,19 +1305,25 @@ def cancel(obj, auto_approve: bool = False) -> None:
     help="Comma-separated list of resource names to show details for.",
     callback=validators.validate_non_empty_string,
 )
+@click.option(
+    "--details",
+    is_flag=True,
+    help="Print raw metric tables.",
+)
 @click.pass_obj
 def results(
     obj,
     run_id: str | None,
     tests: str | None,
     resources: str | None,
+    details: bool,
 ) -> None:
     """Show Bill of Health results for a run.
 
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
     """
-    _show_results(obj["app_data"], run_id, tests, resources)
+    _show_results(obj["app_data"], run_id, tests, resources, details=details)
 
 
 @cli.command()

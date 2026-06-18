@@ -136,3 +136,7 @@ class PathStorageProvider(StorageProvider):
                     logger.debug("Cleaned up empty validation directory: %s", d)
             except OSError as e:
                 logger.debug("Failed to clean up directory %s: %s", d, e)
+
+    def get_uri(self, remote_path: str) -> str:
+        """Returns the full local absolute path."""
+        return str(self._get_full_path(remote_path))
