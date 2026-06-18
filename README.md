@@ -266,13 +266,16 @@ chs run --tests nccl-cluster,gemm --nodes node-01,node-02
 - **Job IDs:** The Slurm job IDs for the submitted tests.
 
 ### 4. cancel
-Safely terminates all running CHS jobs and removes stale resources on the active cluster.
+Safely terminates ALL running CHS jobs and removes stale resources on the active cluster. Because this action acts as a global abort and deletes all CHS resources, it requires an explicit `[y/N]` confirmation.
 
 **Example:**
 
 ```bash
 # Cancel all active runs
 chs cancel
+
+# Cancel without prompting (useful for scripts)
+chs cancel --auto-approve
 ```
 
 ### 5. history

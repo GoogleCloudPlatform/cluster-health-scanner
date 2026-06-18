@@ -815,7 +815,7 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.cancel_jobs_by_prefix.side_effect = (
             exceptions.ChsSchedulerException("Cancellation failed")
         )
-        result = self.runner.invoke(cli.cli, ["cancel"])
+        result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
 
@@ -967,7 +967,7 @@ class TestCli(unittest.TestCase):
             "a3-megagpu-8g",
             "a3-ultragpu-8g",
         ]
-        result = self.runner.invoke(cli.cli, ["run"])
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
         self.assertIn("--partitions", result.output)

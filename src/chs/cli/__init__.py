@@ -516,6 +516,37 @@ def cancel_action(scheduler_name: str | None = None) -> None:
         ) from e
 
 
+def safe_cancel_action(
+    scheduler_name: str | None = None,
+    auto_approve: bool = False,
+    message: str | None = None,
+) -> None:
+    """Safely cancels jobs by prompting the user for confirmation first."""
+    if message:
+        logger.warning(message)
+    if not auto_approve:
+        prompt_msg = (
+            "This will cancel ALL running CHS jobs and delete ALL "
+            "CHS resources on the cluster.\n"
+            "Are you sure you want to proceed?"
+        )
+        if not sys.stdin.isatty():
+            logger.warning(prompt_msg)
+            raise click.ClickException(
+                "Running in non-interactive mode.\n"
+                "Please pass --auto-approve to proceed."
+            )
+        if not click.confirm(prompt_msg, default=False):
+            logger.info("Cancellation aborted by user. Exiting.")
+            sys.exit(0)
+    else:
+        logger.info("Auto-approve is enabled. Proceeding with cancellation...")
+
+    logger.info("Initiating global cleanup...")
+    cancel_action(scheduler_name)
+    logger.info("Successfully canceled all active CHS resources.")
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
@@ -585,6 +616,7 @@ def _handle_previous_run(
     suite: str | None,
     validation: bool,
     skip_validation: bool,
+    auto_approve: bool,
 ) -> RunExecutionResult | None:
     """Checks for a previous run, optionally attaches to it, or cleans up."""
     try:
@@ -628,28 +660,36 @@ def _handle_previous_run(
                         )
                     else:
                         if not submission_complete:
-                            logger.warning(
+                            msg = (
                                 "Previous run died mid-submission. "
                                 "Cleaning all stale resources"
                             )
                         else:
-                            logger.warning(
-                                "Previous run found but some jobs have failed. "
-                                "Cleaning all stale resources"
+                            msg = (
+                                "Previous run found but some jobs "
+                                "have failed. Cleaning all stale resources"
                             )
-                        cancel_action(scheduler_name)
+                        safe_cancel_action(
+                            scheduler_name,
+                            auto_approve=auto_approve,
+                            message=msg,
+                        )
                 except ex.NoActiveJobsException:
-                    logger.warning(
-                        "Previous run found but jobs no longer exist on the "
-                        "cluster. Cleaning all stale resources."
+                    safe_cancel_action(
+                        scheduler_name,
+                        auto_approve=auto_approve,
+                        message=(
+                            "Previous run found but jobs no longer "
+                            "exist on the cluster. Cleaning all "
+                            "stale resources."
+                        ),
                     )
-                    cancel_action(scheduler_name)
             else:
-                cancel_action(scheduler)
+                safe_cancel_action(scheduler, auto_approve=auto_approve)
         else:
-            cancel_action(scheduler)
+            safe_cancel_action(scheduler, auto_approve=auto_approve)
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-        cancel_action(scheduler)
+        safe_cancel_action(scheduler, auto_approve=auto_approve)
 
     return None
 
@@ -759,6 +799,7 @@ def run(
             suite=suite,
             validation=validation,
             skip_validation=skip_validation,
+            auto_approve=auto_approve,
         )
         if attach_result:
             return attach_result
@@ -882,7 +923,7 @@ def run(
             logger.info("Run aborted by user.")
             return None
     else:
-        logger.info("--auto-approve flag detected. Bypassing confirmation.")
+        logger.info("Auto-approve is enabled. Proceeding...")
 
     short_hash = utils.generate_random_suffix()
     if not run_id:
@@ -1028,10 +1069,17 @@ def analyze(
 
 @cli.command()
 @handle_chs_exceptions
+@click.option(
+    "--auto-approve",
+    "-y",
+    is_flag=True,
+    help="Automatically confirm cancellation without prompting.",
+)
 @click.pass_obj
-def cancel(obj) -> None:
+def cancel(obj, auto_approve: bool = False) -> None:
     """Cancel all running CHS jobs and remove stale resources."""
     app_data = obj["app_data"]
+    safe_cancel_action(auto_approve=auto_approve)
     try:
         latest_run_id = app_data.get_latest_run_id()
         if latest_run_id:
@@ -1040,14 +1088,12 @@ def cancel(obj) -> None:
             ramble_manager = RambleManager(
                 workspaces_base_dir, workspace_name, run_id=latest_run_id
             )
-            logger.info("Archiving the latest workspace before cancellation...")
+            logger.info("Archiving the latest workspace after cancellation...")
             ramble_manager.archive()
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         pass
-    except Exception as e:
-        logger.warning("Failed to archive workspace before cancellation: %s", e)
-
-    cancel_action()
+    except (OSError, ex.ChsException) as e:
+        logger.warning("Failed to archive workspace after cancellation: %s", e)
 
 
 @cli.command()
