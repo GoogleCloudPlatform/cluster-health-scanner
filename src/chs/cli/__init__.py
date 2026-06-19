@@ -31,6 +31,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import click
+import questionary
 from rich.console import Console
 
 from chs import (
@@ -74,7 +75,7 @@ def handle_chs_exceptions(f):
         try:
             return f(*args, **kwargs)
         except ex.ChsDetachedException:
-            sys.exit(0)
+            raise click.exceptions.Exit(0)
         except ex.ChsException as e:
             raise click.ClickException(str(e)) from e
 
@@ -622,6 +623,10 @@ def safe_cancel_action(
 
     is_setup = action_type == "setup"
 
+    if utils.is_in_cluster():
+        logger.debug("Running in-cluster. Assuming auto-approve.")
+        auto_approve = True
+
     if not auto_approve:
         if is_setup:
             prompt_msg = (
@@ -647,7 +652,7 @@ def safe_cancel_action(
                 f"{'Setup' if is_setup else 'Cancellation'} aborted by user. "
                 "Exiting."
             )
-            sys.exit(0)
+            raise click.Abort()
     else:
         action_name = "setup" if is_setup else "cancellation"
         logger.debug(
@@ -680,11 +685,23 @@ def safe_cancel_action(
     console.print(success_text)
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(
+    context_settings={"help_option_names": ["-h", "--help"]},
+    epilog=(
+        "Tip: You can append --help to any specific subcommand to see its "
+        "exact arguments and examples (e.g., chs run --help or "
+        "chs list --help)."
+    ),
+)
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
-    """Cluster Health Scanner (CHS) Tool."""
+    """Cluster Health Scanner (CHS) Tool.
+
+    **TL;DR:** To run a standard health check on your cluster immediately,
+    simply type:
+        chs run
+    """
     ctx.ensure_object(dict)
     ctx.obj["app_data"] = ChsAppData()
     if verbose:
@@ -709,7 +726,11 @@ def list_command(ctx: click.Context) -> bool | None:
 
 @list_command.command(name="suites")
 def list_suites() -> bool:
-    """List available test suites."""
+    """List available test suites.
+
+    Test suites are pre-configured bundles of tests designed for specific
+    use-cases, like 'lite' or 'burn-in'.
+    """
     return list_action(suites=True)
 
 
@@ -726,7 +747,10 @@ def list_suites() -> bool:
     callback=validators.validate_non_empty_string,
 )
 def list_tests(suite: str | None, machine_type: str | None) -> bool:
-    """List available tests."""
+    """List individual hardware and network benchmarks.
+
+    For example: 'nccl-cluster', 'gemm'.
+    """
     if machine_type:
         supported_mts = utils.tests.get_all_supported_machine_types()
         if machine_type not in supported_mts:
@@ -847,13 +871,19 @@ def _handle_previous_run(
 @click.option(
     "--suite",
     "-s",
-    help="Name of the test suite to run",
+    help=(
+        "Name of the test suite to run (pre-configured bundles of tests "
+        "designed for specific use-cases, like 'lite' or 'burn-in')"
+    ),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--tests",
     "-t",
-    help="Comma-separated list of specific tests to run (optional)",
+    help=(
+        "Comma-separated list of individual hardware and network "
+        "benchmarks (e.g., 'nccl-cluster', 'gemm')"
+    ),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
@@ -1076,6 +1106,10 @@ def run(
         f"[/{theme.CHS_HEADER_STYLE}]"
     )
 
+    if utils.is_in_cluster():
+        logger.debug("Running in-cluster. Assuming auto-approve.")
+        auto_approve = True
+
     if not auto_approve:
         prompt_msg = (
             "Proceed with dry run workspace generation?"
@@ -1198,6 +1232,60 @@ def run(
     return result
 
 
+def _get_run_id_or_prompt(
+    app_data: ChsAppData,
+    provided_run_id: str | None,
+    prompt_msg: str = "Which run would you like to view results for?",
+) -> str:
+    """Gets the run ID either from user input or an interactive prompt."""
+    if provided_run_id:
+        return provided_run_id
+
+    if not sys.stdin.isatty() or utils.is_in_cluster():
+        run_id = app_data.get_latest_run_id()
+        logger.debug(
+            "No run_id provided in non-interactive mode. Using latest run: %s",
+            run_id,
+        )
+        return run_id
+
+    runs = app_data.get_latest_runs(5)
+    if not runs:
+        raise ex.NoPreviousRunsFoundException(
+            "No previous runs found in workspaces directory."
+        )
+
+    choices = []
+    for ws_name, details in runs.items():
+        run_id = details.get("run_id", ws_name)
+        started_str = utils.formatting.format_relative_time(
+            details.get("submission_time", "")
+        )
+        label = f"{run_id:<30} (Started {started_str})"
+        choices.append(questionary.Choice(title=label, value=run_id))
+
+    choices.append(questionary.Choice(title="Exit", value=None))
+
+    custom_style = questionary.Style(
+        [
+            ("question", "fg:cyan bold"),
+            ("pointer", "fg:cyan bold"),
+            ("highlighted", "fg:cyan bold"),
+        ]
+    )
+
+    selected = questionary.select(
+        f"{prompt_msg} (Use arrow keys)",
+        choices=choices,
+        style=custom_style,
+    ).ask()
+
+    if not selected:
+        raise click.Abort()
+
+    return selected
+
+
 @cli.command()
 @handle_chs_exceptions
 @click.argument(
@@ -1222,8 +1310,7 @@ def analyze(
 ) -> str:
     """Analyze results from a test run.
 
-    If no run_id is provided, the most recent run from the workspaces directory
-    will be used.
+    If no run_id is provided, you will be prompted to select one.
 
     \b
     Args:
@@ -1235,10 +1322,10 @@ def analyze(
       The run_id of the analyzed test run.
     """
     app_data = obj["app_data"]
-    if not run_id:
-        run_id = app_data.get_latest_run_id()
-        logger.debug("No run_id provided. Using latest run: %s", run_id)
-        logger.debug("Analyzing latest run: %s", run_id)
+    run_id = _get_run_id_or_prompt(
+        app_data, run_id, prompt_msg="Which run would you like to analyze?"
+    )
+    logger.debug("Analyzing run: %s", run_id)
 
     if validation:
         errors = validators.ThresholdsValidator().validate(
@@ -1320,10 +1407,11 @@ def results(
 ) -> None:
     """Show Bill of Health results for a run.
 
-    If no run_id is provided, the most recent run from the workspaces directory
-    will be used.
+    If no run_id is provided, you will be prompted to select one.
     """
-    _show_results(obj["app_data"], run_id, tests, resources, details=details)
+    app_data = obj["app_data"]
+    run_id = _get_run_id_or_prompt(app_data, run_id)
+    _show_results(app_data, run_id, tests, resources, details=details)
 
 
 @cli.command()

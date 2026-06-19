@@ -119,8 +119,7 @@ chs [OPTIONS] COMMAND [ARGS]...
 ### Global Options
 - `-v`, `--verbose`: Enable verbose logging (useful for debugging).
 - `-h`, `--help`: Show the help message and exit.
-
-**Tip:** You can append `--help` to any specific subcommand to see its exact arguments and examples (e.g., `chs run --help` or `chs list --help`).
+  > **Tip:** You can append `--help` to *any* specific subcommand to see its exact arguments and examples (e.g., `chs run --help` or `chs list --help`).
 
 ## Commands
 
@@ -182,10 +181,10 @@ Executes a test suite on a specified cluster.
 
 **Arguments:**
 
-- `--suite` / `-s`: Name of the test suite to run.
+- `--suite` / `-s`: Name of the test suite to run (pre-configured bundles of tests designed for specific use-cases, like 'lite' or 'burn-in').
   - Default: `lite`.
   - Supported values: `lite`, `standard`, `burn-in`.
-- `--tests` / `-t`: Comma-separated list of specific tests to run.
+- `--tests` / `-t`: Comma-separated list of individual hardware and network benchmarks (e.g., `nccl-cluster`, `gemm`).
   - Default (if not provided): Loads tests from the selected suite.
   - Supported values: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`, `tpu-info`, `hbm`, `host-device`, `collectives`, `collectives-single-node`.
 - `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
@@ -299,7 +298,7 @@ Workspace                     Details
 ```
 
 ### 6. analyze
-Analyzes results from a test run. If no `RUN_ID` is provided, the most recent run from the workspaces directory will be used.
+Analyzes results from a test run. If no `RUN_ID` is provided, you will be prompted to select one.
 
 **Arguments:**
 
@@ -324,7 +323,7 @@ chs analyze --skip-validation
 ```
 
 ### 7. results
-Shows the generated "Bill of Health" results and metric details for a run. If validation is enabled, this will display two separate tables in the terminal: one for all raw metrics and one strictly for validated metrics. If no `RUN_ID` is provided, the most recent run from the workspaces directory will be used.
+Shows the generated "Bill of Health" results and metric details for a run. If validation is enabled, this will display two separate tables in the terminal: one for all raw metrics and one strictly for validated metrics. If no `RUN_ID` is provided, you will be prompted to select one.
 
 **Arguments:**
 

@@ -14,6 +14,7 @@ dependencies = [
     "platformdirs",
     "protobuf",
     "rich",
+    "questionary",
     "pre_commit",
     "google-cloud-storage",
     "google-cloud-compute",
