@@ -27,7 +27,7 @@ default:
     thresholds:
       bandwidth: 50
 
-a3-ultra:
+a3-ultragpu-8g:
   nccl-cluster:
     type: min
     thresholds:
@@ -53,7 +53,7 @@ a3-ultra:
     thresholds:
       gpus: 8
 
-a3-mega:
+a3-megagpu-8g:
   nccl-cluster:
     type: min
     thresholds:
@@ -67,7 +67,7 @@ a3-mega:
     thresholds:
       bandwidth: 80
 
-a4:
+a4-highgpu-8g:
   nccl-cluster:
     type: min
     thresholds:
@@ -81,7 +81,21 @@ a4:
     thresholds:
       bandwidth: 80
 
-a4x:
+a4x-highgpu-4g:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth: 80
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth: 80
+
+a4x-maxgpu-4g-metal:
   nccl-cluster:
     type: min
     thresholds:

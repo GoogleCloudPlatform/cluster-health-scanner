@@ -264,7 +264,7 @@ class TestCli(unittest.TestCase):
         mock_get_tests.return_value = ["test1", "test2"]
 
         renderables = list_formatting.get_tests_renderables(
-            suite=None, tests_flag=True, machine_type="a3-ultra"
+            suite=None, tests_flag=True, machine_type="a3-ultragpu-8g"
         )
         hint = "  (Hint: Use --suite <suite_name> to filter tests)"
         self.assertTrue(
@@ -281,7 +281,7 @@ class TestCli(unittest.TestCase):
         mock_load_suite.return_value = {"tests": ["test1", "test2"]}
 
         renderables = list_formatting.get_tests_renderables(
-            suite="suite1", tests_flag=True, machine_type="a3-ultra"
+            suite="suite1", tests_flag=True, machine_type="a3-ultragpu-8g"
         )
         self.assertFalse(
             any("Hint:" in r.plain for r in renderables if hasattr(r, "plain"))
