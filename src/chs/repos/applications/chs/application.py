@@ -395,11 +395,12 @@ class Chs(ExecutableApplication):
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
 
-                context = TestHelper.tpu_info_test(
+                contexts = TestHelper.tpu_info_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "local", context
-                )
+                for context in contexts:
+                    self.experiment_set.render_chained_experiments(
+                        application_name, "local", context
+                    )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

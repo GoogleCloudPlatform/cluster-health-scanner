@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections import defaultdict
+import re
 from rich.console import Group
 from rich.text import Text
 
@@ -44,17 +44,11 @@ class TpuInfoRenderer(DefaultRenderer):
         """Extracts metrics from test results into structured dicts by node."""
         node_data = {}
         for res in test_results:
-            nodes = (
+            default_nodes = (
                 format_nodes(res.target_resources)
                 if res.target_resources
                 else "Unknown Node"
             )
-
-            if nodes not in node_data:
-                node_data[nodes] = {
-                    "summary": {},
-                    "chips": defaultdict(dict),
-                }
 
             for m in res.metrics:
                 if m.value.HasField("string_value"):
@@ -71,12 +65,15 @@ class TpuInfoRenderer(DefaultRenderer):
                 context = m.metadata.fields["context"].string_value or ""
                 key = m.key
 
-                if not context or context == "null":
-                    node_data[nodes]["summary"][key] = val
-                elif context.startswith("Chip"):
-                    node_data[nodes]["chips"][context.removeprefix("Chip ")][
-                        key
-                    ] = val
+                node_match = re.search(r"Node ([a-zA-Z0-9-]+)", context)
+                nodes = node_match.group(1) if node_match else default_nodes
+
+                if nodes not in node_data:
+                    node_data[nodes] = {
+                        "summary": {},
+                    }
+
+                node_data[nodes]["summary"][key] = val
 
         return node_data
 
@@ -85,36 +82,22 @@ class TpuInfoRenderer(DefaultRenderer):
         table.add_column("Node")
         table.add_column("Libtpu Version")
         table.add_column("Accelerator Type")
-        table.add_column("TPU Chip Count", justify="right")
+        table.add_column("JAX Devices", justify="right")
 
         for node, data in node_data.items():
             summary = data["summary"]
+            if not any(
+                k in summary
+                for k in ["Libtpu version", "Accelerator type", "JAX Devices"]
+            ):
+                continue
             table.add_row(
                 node,
                 summary.get("Libtpu version", "N/A"),
                 summary.get("Accelerator type", "N/A"),
-                summary.get("TPU Chip Count", "N/A"),
+                summary.get("JAX Devices", "N/A"),
             )
         return table
 
     def _build_detailed_tables(self, node_data: dict) -> list:
-        elements = []
-        for node, data in node_data.items():
-            if chips := data["chips"]:
-                elements.append(
-                    Text(f"\nTPU Chip Details for {node}", style="bold")
-                )
-                table = create_styled_table(expand=False)
-                table.add_column("Chip")
-                table.add_column("Type")
-                table.add_column("Devices", justify="right")
-
-                for chip_path, info in sorted(chips.items()):
-                    table.add_row(
-                        chip_path,
-                        info.get("Chip Type", "N/A"),
-                        info.get("Chip Devices", "N/A"),
-                    )
-                elements.append(table)
-
-        return elements
+        return []

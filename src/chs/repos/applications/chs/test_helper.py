@@ -507,13 +507,16 @@ podAntiAffinity:
 
     @staticmethod
     def tpu_info_test(variables, experiment_name, configs):
-        return TestHelper._create_node_test_context(
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
             variables,
             experiment_name,
             configs,
             ramble_app_name="tpu-info",
             extra_context={"modifiers": []},
         )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
 
     @staticmethod
     def _load_benchmark_config(filename):

@@ -1,0 +1,83 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: chs-dry-run-cluster-custom-mock-tpu-info-<HASH>
+  namespace: chs
+  labels:
+    kueue.x-k8s.io/queue-name: chs-local-queue
+
+spec:
+  suspend: true
+  ttlSecondsAfterFinished: 86400
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+  replicatedJobs:
+    - name: w
+      template:
+        spec:
+          parallelism: 2
+          completions: 2
+          activeDeadlineSeconds: 1200
+          template:
+            metadata:
+
+
+            spec:
+              restartPolicy: Never
+              nodeSelector:
+                node.kubernetes.io/instance-type: ct6e-standard-4t
+                cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+                cloud.google.com/gke-tpu-topology: 2x2x1
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                            - node1
+                            - node2
+                podAntiAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchExpressions:
+                      - key: jobset.sigs.k8s.io/jobset-name
+                        operator: Exists
+                    topologyKey: "kubernetes.io/hostname"
+              tolerations:
+                - key: "google.com/tpu"
+                  operator: "Exists"
+                  effect: "NoSchedule"
+
+              containers:
+              - name: standard-container
+                stdin: true
+                tty: true
+                image: "us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+                securityContext:
+                  privileged: true
+                resources:
+                  limits:
+                    google.com/tpu: 4
+                env:
+                - name: MY_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                command:
+                - bash
+                - -c
+                - |
+                  export NODE_RANK=$JOB_COMPLETION_INDEX
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-dry-run-cluster-custom-mock-tpu-info"
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-dry-run-cluster-custom-mock-tpu-info"
+                  cd "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-dry-run-cluster-custom-mock-tpu-info"
+                  rm -f "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-dry-run-cluster-custom-mock-tpu-info/chs-dry-run-cluster-custom-mock-tpu-info.out"
+                  touch "<WORKSPACE_ROOT>/experiments/tpu-info/local/chs-dry-run-cluster-custom-mock-tpu-info/chs-dry-run-cluster-custom-mock-tpu-info.out"
+                  echo 'IyBDb3B5cmlnaHQgMjAyNiBHb29nbGUgTExDCiMKIyBMaWNlbnNlZCB1bmRlciB0aGUgQXBhY2hlIExpY2Vuc2UsIFZlcnNpb24gMi4wICh0aGUgIkxpY2Vuc2UiKTsKIyB5b3UgbWF5IG5vdCB1c2UgdGhpcyBmaWxlIGV4Y2VwdCBpbiBjb21wbGlhbmNlIHdpdGggdGhlIExpY2Vuc2UuCiMgWW91IG1heSBvYnRhaW4gYSBjb3B5IG9mIHRoZSBMaWNlbnNlIGF0CiMKIyAgICAgaHR0cDovL3d3dy5hcGFjaGUub3JnL2xpY2Vuc2VzL0xJQ0VOU0UtMi4wCiMKIyBVbmxlc3MgcmVxdWlyZWQgYnkgYXBwbGljYWJsZSBsYXcgb3IgYWdyZWVkIHRvIGluIHdyaXRpbmcsIHNvZnR3YXJlCiMgZGlzdHJpYnV0ZWQgdW5kZXIgdGhlIExpY2Vuc2UgaXMgZGlzdHJpYnV0ZWQgb24gYW4gIkFTIElTIiBCQVNJUywKIyBXSVRIT1VUIFdBUlJBTlRJRVMgT1IgQ09ORElUSU9OUyBPRiBBTlkgS0lORCwgZWl0aGVyIGV4cHJlc3Mgb3IgaW1wbGllZC4KIyBTZWUgdGhlIExpY2Vuc2UgZm9yIHRoZSBzcGVjaWZpYyBsYW5ndWFnZSBnb3Zlcm5pbmcgcGVybWlzc2lvbnMgYW5kCiMgbGltaXRhdGlvbnMgdW5kZXIgdGhlIExpY2Vuc2UuCgppbXBvcnQgaW1wb3J0bGliLm1ldGFkYXRhIGFzIG1ldGEKaW1wb3J0IG9zCmltcG9ydCBzb2NrZXQKaW1wb3J0IHdhcm5pbmdzCgpmb3IgayBpbiBsaXN0KG9zLmVudmlyb24ua2V5cygpKToKICAgIGlmICJNUEkiIGluIGsgb3IgIlJBTksiIGluIGsgb3IgIldPUkxEIiBpbiBrIG9yICJKQVhfQ09PUkRJTkFUT1IiIGluIGs6CiAgICAgICAgb3MuZW52aXJvbi5wb3AoaykKCndhcm5pbmdzLmZpbHRlcndhcm5pbmdzKCJpZ25vcmUiKQppbXBvcnQgamF4Cgpub2RlX25hbWUgPSBvcy5lbnZpcm9uLmdldCgiTVlfTk9ERV9OQU1FIiwgc29ja2V0LmdldGhvc3RuYW1lKCkpCmxvY2FsX2RldnMgPSBqYXgubG9jYWxfZGV2aWNlcygpCgpwcmludCgiSE9TVCAlczogSkFYIERldmljZXM6ICVkIiAlIChub2RlX25hbWUsIGxlbihsb2NhbF9kZXZzKSkpCnByaW50KAogICAgIkhPU1QgJXM6IEhvc3QgSW5mbzogJXMgJXMiCiAgICAlIChub2RlX25hbWUsIG9zLnVuYW1lKCkuc3lzbmFtZSwgb3MudW5hbWUoKS5yZWxlYXNlKQopCgpkaXN0cyA9IHNldChbZC5tZXRhZGF0YS5nZXQoIk5hbWUiLCAiIikgZm9yIGQgaW4gbWV0YS5kaXN0cmlidXRpb25zKCldKQpsaWJ0cHVfdmVyID0gKAogICAgbWV0YS52ZXJzaW9uKCJsaWJ0cHUtbmlnaHRseSIpCiAgICBpZiAibGlidHB1LW5pZ2h0bHkiIGluIGRpc3RzCiAgICBlbHNlICgKICAgICAgICBtZXRhLnZlcnNpb24oImxpYnRwdSIpCiAgICAgICAgaWYgImxpYnRwdSIgaW4gZGlzdHMKICAgICAgICBlbHNlIGdldGF0dHIoCiAgICAgICAgICAgIGpheC5saWIueGxhX2JyaWRnZS5nZXRfYmFja2VuZCgpLCAicGxhdGZvcm1fdmVyc2lvbiIsICJOL0EiCiAgICAgICAgKQogICAgKQopCgpwcmludCgiSE9TVCAlczogTGlidHB1IHZlcnNpb246ICVzIiAlIChub2RlX25hbWUsIGxpYnRwdV92ZXIpKQppZiBsb2NhbF9kZXZzOgogICAgcHJpbnQoCiAgICAgICAgIkhPU1QgJXM6IEFjY2VsZXJhdG9yIHR5cGU6ICVzIiAlIChub2RlX25hbWUsIGxvY2FsX2RldnNbMF0uZGV2aWNlX2tpbmQpCiAgICAp' | base64 -d > tpu_inventory.py 
+                  python3 tpu_inventory.py 
+
+              restartPolicy: Never
+
