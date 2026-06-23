@@ -222,6 +222,9 @@ class TestRambleManager(unittest.TestCase):
         with (
             mock.patch("os.path.exists", return_value=True),
             mock.patch(
+                "chs.ramble_manager.get_scheduler", return_value=mock_scheduler
+            ),
+            mock.patch(
                 "os.walk",
                 return_value=[
                     (
@@ -250,7 +253,7 @@ class TestRambleManager(unittest.TestCase):
         )
         self.assertEqual(job_ids, ["123"])
         mock_update_registry.assert_called_once_with(
-            {"123": "/tmp/workspace/experiments/exp1"}
+            {"123": "/tmp/workspace/experiments/exp1"}, tier=1
         )
 
         self.assertEqual(self.mock_app_data.update_run.call_count, 1)
@@ -343,9 +346,7 @@ class TestRambleManager(unittest.TestCase):
         }
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            with mock.patch.object(
-                manager, "cancel_experiments"
-            ) as mock_cancel:
+            with mock.patch.object(manager, "cancel_experiments"):
                 with mock.patch("os.getcwd", return_value="/home/user"):
                     self.mock_os_path_exists.side_effect = lambda p: True
 
@@ -363,15 +364,16 @@ class TestRambleManager(unittest.TestCase):
                             skip_validation=False,
                         )
                     mock_boh_gen.return_value.generate.assert_called_once()
-                    mock_cancel.assert_called_once()
 
     def test_wait_for_jobs(self):
         """Test wait_for_jobs calls _monitor_jobs."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
 
         with mock.patch.object(manager, "_monitor_jobs") as mock_monitor:
-            manager.wait_for_jobs(self.mock_app_data, poll_interval=1)
-            mock_monitor.assert_called_once_with(self.mock_app_data, 1)
+            manager.wait_for_jobs(
+                self.mock_app_data, poll_interval=1, tier=None
+            )
+            mock_monitor.assert_called_once_with(self.mock_app_data, 1, None)
 
     def test_get_application_names(self):
         """Test extraction of unique application names from results."""

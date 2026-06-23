@@ -48,6 +48,8 @@ from chs import (
     utils,
     validators,
 )
+from chs.boh_generator import parse_tier_results_from_boh
+from chs.tier_manager import TierManager
 from chs.utils import theme
 from chs.storage import StorageProviderFactory
 from chs.cli import list_formatting
@@ -164,6 +166,43 @@ def cancel_jobs_on_failure(
         raise
 
 
+def _submit_next_tier(
+    app_data: ChsAppData,
+    ramble_manager: RambleManager,
+    run_entry: dict[str, Any],
+    workspace_name: str,
+    next_tier: int,
+    next_tests: list[str],
+) -> None:
+    """Submits the next tier of diagnostic tests."""
+    Console().print(
+        f"[{theme.CHS_WARNING_STYLE}]Degraded performance detected. "
+        f"Triggering follow-up diagnostics: {', '.join(next_tests)}"
+        f"[/{theme.CHS_WARNING_STYLE}]"
+    )
+    run_entry.update(
+        {
+            "active_tier": next_tier,
+            "active_tier_tests": next_tests,
+            "submission_complete": False,
+        }
+    )
+    app_data.update_run(workspace_name, run_entry)
+
+    scheduler = get_scheduler(run_entry.get("scheduler", "kubernetes"))
+    with cancel_jobs_on_failure(scheduler, "chs-", active=True):
+        with theme.get_progress_spinner("Submitting follow-up diagnostics..."):
+            ramble_manager.execute_experiments(
+                tier=next_tier, active_tests=next_tests
+            )
+
+    Console().print(
+        f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted "
+        "follow-up diagnostics."
+        f"[/{theme.CHS_SUCCESS_STYLE}]"
+    )
+
+
 def list_action(
     *,
     suites: bool = False,
@@ -241,6 +280,11 @@ def cluster_has_no_failed_jobs(scheduler) -> bool:
     return False
 
 
+def _is_suite_tiered(suite_cfg: dict) -> bool:
+    """Checks if a suite defines any tests with dependencies."""
+    return any("trigger_condition" in t for t in suite_cfg.get("tests", []))
+
+
 def _parse_str_to_list(value: str | None) -> list[str] | None:
     """Parses a comma-separated string.
 
@@ -315,6 +359,7 @@ def run_action(
     validation: str | None = None,
     skip_validation: bool = False,
     run_id: str | None = None,
+    active_tests: list[str] | None = None,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -387,7 +432,9 @@ def run_action(
             if scheduler_obj:
                 scheduler_obj.apply_scheduler_resources()
 
-            job_ids = ramble_manager.execute_experiments()
+            job_ids = ramble_manager.execute_experiments(
+                tier=1, active_tests=active_tests
+            )
             if not job_ids:
                 raise ex.JobSubmissionFailureException(
                     f"Job submission failed for workspace: {workspace_name}. "
@@ -413,6 +460,7 @@ def analyze_action(
       app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
       validation: Path to user-defined thresholds YAML file.
+      skip_validation: Whether to skip generating validation criteria.
 
     Returns:
       The run_id of the analyzed test run.
@@ -420,7 +468,6 @@ def analyze_action(
     Raises:
       click.ClickException: If an error occurs during CHS analysis.
     """
-
     logger.debug("Analyzing run_id=%r", run_id)
     workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
@@ -438,75 +485,140 @@ def analyze_action(
             boh_path = workspace_path / "bill_of_health.json"
             results_json_path = workspace_path / "results.latest.json"
 
+            run_entry = app_data.get_run(workspace_name) or {}
+            is_tiered = run_entry.get("is_tiered", False)
+            is_boh_final = run_entry.get("is_boh_final", not is_tiered)
+
             # 1. Check if Bill of Health already exists
-            if boh_path.exists() and not validation:
+            if boh_path.exists() and not validation and is_boh_final:
                 logger.debug(
                     "Bill of Health already exists. Showing results directly."
                 )
                 Console().print(
-                    f"[{theme.CHS_SUCCESS_STYLE}]Found existing Bill of "
-                    f"Health for {run_id}.[/{theme.CHS_SUCCESS_STYLE}]"
+                    f"[{theme.CHS_SUCCESS_STYLE}]Found existing "
+                    f"Bill of Health for {run_id}."
+                    f"[/{theme.CHS_SUCCESS_STYLE}]"
                 )
                 _show_results(app_data, run_id)
                 return run_id
 
             # 2. If results.latest.json exists (but no BoH), generate BoH
-            if results_json_path.exists():
+            if results_json_path.exists() and is_boh_final:
                 logger.debug(
                     "Found results from this run. Generating Bill of Health..."
                 )
                 with theme.get_progress_spinner(
-                    "Generating Bill of Health and cleaning up CHS resources..."
+                    "Generating Bill of Health and cleaning up..."
                 ):
                     ramble_manager.generate_boh(
                         str(results_json_path),
                         thresholds_path=validation,
                         skip_validation=skip_validation,
                     )
+                    try:
+                        ramble_manager.cancel_experiments()
+                        logger.debug("Cleaned up jobs for run %s", run_id)
+                    except (
+                        ex.ChsException,
+                        subprocess.CalledProcessError,
+                    ) as e:
+                        logger.warning(
+                            "Failed to cleanup jobs after analysis: %s", e
+                        )
                 Console().print(
                     f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
-                    f"and CHS resources cleaned up.[/{theme.CHS_SUCCESS_STYLE}]"
+                    "and CHS resources cleaned up."
+                    f"[/{theme.CHS_SUCCESS_STYLE}]"
                 )
-
                 _show_results(app_data, run_id)
                 return run_id
 
             # 3. If neither exists, wait for jobs and then analyze
-            logger.debug(f"Waiting for jobs for {run_id}...")
-            ramble_manager.wait_for_jobs(app_data=app_data)
-            Console().print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Test execution completed."
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            suite_name = run_entry.get("suite")
+            suite_cfg = load_suite(suite_name) if is_tiered else {}
+            tier_manager = (
+                TierManager(suite_cfg.get("tests", [])) if is_tiered else None
             )
 
-            label1 = (
-                f"[{theme.CHS_HEADER_STYLE}]Analyzing logs "
-                "and cleaning up CHS resources..."
-                f"[/{theme.CHS_HEADER_STYLE}]"
-            )
-            with theme.get_progress_spinner(label1):
-                results_json_path = ramble_manager.analyze_experiments()
-            Console().print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Analysis "
-                "and CHS resource cleanup complete."
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
-            )
-
-            label2 = (
-                f"[{theme.CHS_HEADER_STYLE}]Generating Bill of Health..."
-                f"[/{theme.CHS_HEADER_STYLE}]"
-            )
-            with theme.get_progress_spinner(label2):
-                ramble_manager.generate_boh(
-                    results_json_path,
-                    thresholds_path=validation,
-                    skip_validation=skip_validation,
+            while not run_entry.get("is_boh_final", False):
+                active_tier = run_entry.get("active_tier", 1)
+                active_tier_tests = set(
+                    run_entry.get("active_tier_tests") or []
                 )
-            Console().print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated."
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
-            )
-            logger.debug("Analysis complete for run_id=%r", run_id)
+
+                if tier_manager:
+                    tier_manager.fast_forward_to_tier(active_tier)
+
+                logger.debug("Waiting for tier %s jobs...", active_tier)
+                ramble_manager.wait_for_jobs(
+                    app_data=app_data, tier=active_tier if is_tiered else None
+                )
+
+                if is_tiered and active_tier == 1:
+                    spinner_msg = "Analyzing initial health checks..."
+                elif is_tiered:
+                    spinner_msg = "Analyzing follow-up diagnostics..."
+                else:
+                    spinner_msg = "Analyzing logs..."
+
+                with theme.get_progress_spinner(spinner_msg):
+                    results_path = ramble_manager.analyze_experiments()
+                    boh_dir = ramble_manager.generate_boh(
+                        results_path,
+                        thresholds_path=validation,
+                        skip_validation=skip_validation,
+                    )
+
+                next_tests = None
+                if tier_manager:
+                    boh_file = os.path.join(boh_dir, "bill_of_health.json")
+                    tier_results, hard_failures_present = (
+                        parse_tier_results_from_boh(boh_file, active_tier_tests)
+                    )
+                    if hard_failures_present:
+                        Console().print(
+                            f"[{theme.CHS_WARNING_STYLE}]Hard failure "
+                            "detected. Halting follow-up diagnostic tiers."
+                            f"[/{theme.CHS_WARNING_STYLE}]"
+                        )
+                        next_tests = None
+                    else:
+                        next_tests = tier_manager.get_next_tier_tests(
+                            tier_results
+                        )
+
+                if not next_tests:
+                    with theme.get_progress_spinner(
+                        "Cleaning up CHS resources..."
+                    ):
+                        try:
+                            ramble_manager.cancel_experiments()
+                            logger.debug("Cleaned up jobs for run %s", run_id)
+                        except (
+                            ex.ChsException,
+                            subprocess.CalledProcessError,
+                        ) as e:
+                            logger.warning(
+                                "Failed to cleanup jobs after analysis: %s", e
+                            )
+
+                    run_entry["is_boh_final"] = True
+                    app_data.update_run(workspace_name, run_entry)
+                    Console().print(
+                        f"[{theme.CHS_SUCCESS_STYLE}]All checks completed. "
+                        "Bill of Health generated."
+                        f"[/{theme.CHS_SUCCESS_STYLE}]"
+                    )
+                    break
+
+                _submit_next_tier(
+                    app_data,
+                    ramble_manager,
+                    run_entry,
+                    workspace_name,
+                    active_tier + 1,
+                    list(next_tests),
+                )
 
             _show_results(app_data, run_id)
         except (OSError, subprocess.CalledProcessError) as e:
@@ -1013,13 +1125,36 @@ def run(
 
     timeout = resources.DEFAULT_TIMEOUT
     deadline = resources.DEFAULT_DEADLINE
+    is_tiered = False
+    active_tier_tests = None
 
     if not tests:
         if not suite:
             suite = "lite"
 
         suite_cfg = load_suite(suite)
-        resolved_tests = suite_cfg.get("tests", [])
+        is_tiered = _is_suite_tiered(suite_cfg)
+
+        if is_tiered:
+            tier_manager = TierManager(suite_cfg.get("tests", []))
+            all_tests = tier_manager.get_all_tests()
+            if not all_tests:
+                raise ex.ChsValidationError(f"Suite '{suite}' has no tests.")
+
+            initial_tests = tier_manager.get_next_tier_tests({})
+            if not initial_tests:
+                raise ex.ChsValidationError(
+                    f"Suite '{suite}' has no initial tier tests."
+                )
+
+            resolved_tests = [{"name": t} for t in all_tests]
+            active_tier_tests = initial_tests
+        else:
+            resolved_tests = suite_cfg.get("tests", [])
+            active_tier_tests = [
+                t.get("name") if isinstance(t, dict) else str(t)
+                for t in resolved_tests
+            ]
 
         supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
             machine_type, scheduler
@@ -1152,6 +1287,7 @@ def run(
     # Normalize command statement to start with "chs"
     command_statement = " ".join(["chs"] + sys.argv[1:])
 
+    is_tiered = _is_suite_tiered(load_suite(suite) if not tests else {})
     app_data.update_run(
         workspace_name,
         {
@@ -1167,16 +1303,32 @@ def run(
             "node_to_instance_id": scheduler_obj.node_to_instance_id,
             "deadline": deadline,
             "tests": parsed_tests,
+            "suite": suite,
+            "is_tiered": is_tiered,
+            "active_tier": 1,
+            "active_tier_tests": active_tier_tests,
+            "submission_complete": False,
         },
     )
 
-    status_msg = (
-        f"[{theme.CHS_HEADER_STYLE}]Setting up cluster execution "
-        f"environment...[/{theme.CHS_HEADER_STYLE}]"
-        if dry_run
-        else f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
-        f"and submitting jobs...[/{theme.CHS_SUCCESS_STYLE}]"
-    )
+    if dry_run:
+        status_msg = (
+            f"[{theme.CHS_HEADER_STYLE}]Setting up cluster execution "
+            f"environment...[/{theme.CHS_HEADER_STYLE}]"
+        )
+    else:
+        if is_tiered:
+            tests_str = ", ".join(active_tier_tests)
+            status_msg = (
+                f"[{theme.CHS_SUCCESS_STYLE}]Preparing environment and "
+                f"triggering initial health checks: {tests_str}..."
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+        else:
+            status_msg = (
+                f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
+                f"and submitting jobs...[/{theme.CHS_SUCCESS_STYLE}]"
+            )
     with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
         with theme.get_progress_spinner(status_msg):
             job_ids = run_action(
@@ -1192,6 +1344,7 @@ def run(
                 validation=validation,
                 skip_validation=skip_validation,
                 run_id=run_id,
+                active_tests=active_tier_tests if is_tiered else None,
             )
 
         if not job_ids and not dry_run:
@@ -1216,10 +1369,16 @@ def run(
     logger.debug("Run submitted successfully.")
     logger.debug("Job IDs: %s", ", ".join(job_ids))
 
-    console.print(
-        f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted jobs."
-        f"[/{theme.CHS_SUCCESS_STYLE}]"
-    )
+    if is_tiered:
+        console.print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted "
+            f"initial health check tests.[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+    else:
+        console.print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted jobs."
+            f"[/{theme.CHS_SUCCESS_STYLE}]"
+        )
 
     # Automatically trigger analysis
     analyze_action(

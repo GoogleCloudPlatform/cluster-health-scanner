@@ -30,6 +30,7 @@ import subprocess
 import sys
 import sysconfig
 import time
+import chs
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
@@ -285,8 +286,6 @@ class RambleManager:
 
     def copy_thresholds(self, thresholds_path: str | None = None) -> None:
         """Copies the thresholds configuration file into the workspace."""
-        import shutil
-
         dest_thresholds = os.path.join(self.path, "thresholds.yaml")
         if thresholds_path:
             shutil.copyfile(thresholds_path, dest_thresholds)
@@ -314,8 +313,6 @@ class RambleManager:
         Raises:
           click.ClickException: If the repository addition command fails.
         """
-        import chs
-
         logger.debug("Adding custom CHS repository to workspace...")
         repo_path = pkg_resources.files(chs).joinpath("repos")
         with pkg_resources.as_file(repo_path) as p:
@@ -379,7 +376,9 @@ class RambleManager:
             error_context="Failed to setup workspace",
         )
 
-    def execute_experiments(self) -> list[str]:
+    def execute_experiments(
+        self, tier: int = 1, active_tests: list[str] | None = None
+    ) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
         This runs the 'all_experiments' script to start the experiments and
@@ -395,25 +394,49 @@ class RambleManager:
 
         logger.debug("Executing experiments in %s...", self.path)
 
-        logger.debug("Running experiments via all_experiments script...")
-        script_path = os.path.join(self.path, "all_experiments")
-        self._execute_shell_command(
-            cmd=["bash", script_path],
-            capture_output=True,
-            error_context="Failed to execute all_experiments script",
-        )
+        cmd_script = os.path.join(self.path, "all_experiments")
 
+        if not active_tests:
+            logger.debug("Running experiments via all_experiments script...")
+            self._execute_shell_command(
+                cmd=["bash", cmd_script],
+                capture_output=True,
+                error_context="Failed to execute all_experiments script",
+            )
+        else:
+            logger.debug(
+                "Running selected experiments for active tests: %s",
+                active_tests,
+            )
+            test_pattern = "|".join(active_tests)
+            self._execute_shell_command(
+                cmd=[
+                    "bash",
+                    "-c",
+                    f"grep -E '{test_pattern}' {cmd_script} | bash",
+                ],
+                capture_output=True,
+                error_context="Failed to execute selected experiments",
+            )
         job_to_dir = {}
         experiments_dir = os.path.join(self.path, "experiments")
         if os.path.exists(experiments_dir):
             for root, dirs, files in os.walk(experiments_dir):
                 if "execute_experiment" in files:
-                    job_id = self._scheduler.extract_job_id(root)
+                    exp_name = os.path.basename(root)
+                    if active_tests and not any(
+                        t in exp_name for t in active_tests
+                    ):
+                        dirs.clear()
+                        continue
+
+                    scheduler = get_scheduler(self.get_scheduler_type())
+                    job_id = scheduler.extract_job_id(root)
                     job_to_dir[job_id] = root
                     dirs.clear()
 
         if job_to_dir:
-            self._update_registry(job_to_dir)
+            self._update_registry(job_to_dir, tier=tier)
 
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry["submission_complete"] = True
@@ -455,22 +478,25 @@ class RambleManager:
         # statelessly.
         scheduler.cleanup_scheduler_resources()
 
-    def _update_registry(self, job_to_dir: dict[str, str]) -> None:
+    def _update_registry(
+        self, job_to_dir: dict[str, str], tier: int = 1
+    ) -> None:
         """Updates the runs registry with the current run information."""
         logger.debug(
-            "Updating registry for run %s with job mappings %s",
+            "Updating registry for run %s with job mappings %s (tier %d)",
             self._workspace_name,
             job_to_dir,
+            tier,
         )
         run_entry = self._app_data.get_run(self._workspace_name) or {}
 
-        job_entries = {
-            job_id: {
+        job_entries = run_entry.get("job_entries", {})
+        for job_id, exp_dir in job_to_dir.items():
+            job_entries[job_id] = {
                 "status": JobStatus.PENDING.value,
                 "experiment_dir": exp_dir,
+                "tier": tier,
             }
-            for job_id, exp_dir in job_to_dir.items()
-        }
 
         run_entry.update(
             {
@@ -480,7 +506,7 @@ class RambleManager:
                 "submission_time": (
                     datetime.datetime.now(datetime.timezone.utc).isoformat()
                 ),
-                "scheduler": self._scheduler.name,
+                "scheduler": self.get_scheduler_type(),
             }
         )
         self._app_data.update_run(self._workspace_name, run_entry)
@@ -552,18 +578,24 @@ class RambleManager:
         return mapping
 
     def wait_for_jobs(
-        self, app_data: ChsAppData, poll_interval: int = 30
+        self,
+        app_data: ChsAppData,
+        poll_interval: int = 30,
+        tier: int | None = None,
     ) -> None:
         """Waits for all jobs in the workspace to complete and fetches logs.
 
         Args:
             app_data: ChsAppData to update run status.
             poll_interval: Seconds to wait between checks.
+            tier: Optional tier to filter which jobs to wait for.
         """
         logger.debug("Waiting for jobs to complete for run %s...", self._run_id)
-        self._monitor_jobs(app_data, poll_interval)
+        self._monitor_jobs(app_data, poll_interval, tier)
 
-    def _monitor_jobs(self, app_data: ChsAppData, poll_interval: int) -> None:
+    def _monitor_jobs(
+        self, app_data: ChsAppData, poll_interval: int, tier: int | None
+    ) -> None:
         """Generic wait logic to monitor job progress and fetch logs.
 
         Polls job statuses for all jobs in the registry. When a job completes,
@@ -579,9 +611,19 @@ class RambleManager:
             logger.debug("No jobs found in registry.")
             return
 
-        # We poll ALL registry jobs for status
-        active_jobs = registry_jobs.copy()
+        # We poll ALL registry jobs for status, but filter active_jobs to just
+        # this tier
         run_entry = app_data.get_run(self._workspace_name) or {}
+        job_entries = run_entry.get("job_entries", {})
+
+        active_jobs = registry_jobs.copy()
+        if tier is not None:
+            active_jobs = {
+                job_id
+                for job_id in active_jobs
+                if job_entries.get(job_id, {}).get("tier", 1) == tier
+            }
+
         QUEUE_TIMEOUT_SECONDS = run_entry.get(
             "deadline", resources.DEFAULT_DEADLINE
         )
@@ -938,6 +980,22 @@ class RambleManager:
 
         return mapping_result
 
+    def _reset_experiment_statuses(self) -> None:
+        """Resets Ramble experiment statuses to force re-analysis."""
+        logger.debug("Resetting experiment statuses to 'SETUP' for analysis...")
+        experiments_dir = os.path.join(self.path, "experiments")
+        if os.path.exists(experiments_dir):
+            for root, _, files in os.walk(experiments_dir):
+                if "ramble_status.json" in files:
+                    status_path = os.path.join(root, "ramble_status.json")
+                    try:
+                        with open(status_path, "w") as f:
+                            json.dump({"experiment_status": "SETUP"}, f)
+                    except OSError as e:
+                        logger.warning(
+                            "Failed to reset status for %s: %s", status_path, e
+                        )
+
     def analyze_experiments(self) -> str:
         """Analyzes the results of the Ramble experiments.
 
@@ -947,6 +1005,7 @@ class RambleManager:
         Raises:
           click.ClickException: If the experiment analyze command fails.
         """
+        self._reset_experiment_statuses()
 
         logger.debug("Analyzing experiments in %s...", self.path)
         self._execute_ramble_command(
@@ -1018,13 +1077,6 @@ class RambleManager:
         boh_path = workspace_dir / "bill_of_health.json"
         with open(boh_path, "w") as f:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
-
-        # Cleanup jobs after successful analysis
-        try:
-            self.cancel_experiments()
-            logger.debug("Cleaned up jobs for run %s", self._run_id)
-        except Exception as e:
-            logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
         return str(workspace_dir)
 

@@ -803,6 +803,7 @@ class TestCli(unittest.TestCase):
         run_dir = os.path.join(ws_dir, "some_run_id")
         os.makedirs(run_dir)
         self.mock_rm_instance.path = run_dir
+        self.mock_app_data.get_run.return_value = {}
 
         self.mock_rm_instance.wait_for_jobs.side_effect = (
             exceptions.ChsAnalysisException("Analysis failed")
@@ -1138,6 +1139,7 @@ class TestCli(unittest.TestCase):
 
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = workspace_dir
+        self.mock_app_data.get_run.return_value = {}
 
         def mock_analyze_experiments(**kwargs):
             boh_file = os.path.join(workspace_dir, "bill_of_health.json")

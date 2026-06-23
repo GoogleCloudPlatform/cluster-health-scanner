@@ -43,7 +43,9 @@ class TestRambleManagerStatus(unittest.TestCase):
                 "scheduler": "slurm",
             }
 
-            manager._monitor_jobs(poll_interval=1, app_data=mock_app_data)
+            manager._monitor_jobs(
+                poll_interval=1, app_data=mock_app_data, tier=None
+            )
 
             mock_app_data.update_run_status.assert_called_once_with(
                 "run1", {"job1": "COMPLETED"}
@@ -71,7 +73,9 @@ class TestRambleManagerStatus(unittest.TestCase):
                 "scheduler": "slurm",
             }
 
-            manager._monitor_jobs(poll_interval=1, app_data=mock_app_data)
+            manager._monitor_jobs(
+                poll_interval=1, app_data=mock_app_data, tier=None
+            )
 
             mock_app_data.update_run_status.assert_called_once_with(
                 "run1", {"job1": "UNKNOWN"}

@@ -23,7 +23,9 @@ from typing import Any
 import uuid
 import yaml
 from chs.protos import bill_of_health_pb2 as pb
+from chs.tier_manager import TestStatus
 from google.protobuf.timestamp_pb2 import Timestamp
+from google.protobuf import json_format
 from chs.utils.app_data import ChsAppData
 from chs.utils import lifecycle
 
@@ -350,11 +352,28 @@ class BOHGenerator:
 
         self._add_system_info_from_app_data()
 
+        run_data = self.app_data.get_run(self.report.report_id) or {}
+        job_entries = run_data.get("job_entries", {})
+        executed_exp_dirs = {
+            job.get("experiment_dir")
+            for job in job_entries.values()
+            if job.get("experiment_dir")
+        }
+
         for exp in data.get("experiments", []):
             exp_name = exp.get("experiment_name", "")
             # Experiment chs is used to inject other experiments;
             # hardcoding the skip for now.
             if exp_name == "chs":
+                continue
+
+            # Skip experiments that were never submitted for execution
+            exp_dir = exp.get("RAMBLE_VARIABLES", {}).get("experiment_run_dir")
+            if (
+                executed_exp_dirs
+                and exp_dir
+                and exp_dir not in executed_exp_dirs
+            ):
                 continue
 
             test_result = pb.TestResult()
@@ -457,3 +476,40 @@ class BOHGenerator:
             self.report.test_results.append(test_result)
 
         return self.report
+
+
+def parse_tier_results_from_boh(
+    boh: pb.BillOfHealth | str, expected_tests: set[str]
+) -> tuple[dict[str, TestStatus], bool]:
+    """
+    Parses the protobuf into a dictionary of explicit TestStatus enums.
+    Missing data defaults to ERROR.
+    """
+    if isinstance(boh, str):
+        with open(boh, "r") as f:
+            boh_json = f.read()
+        boh_pb = pb.BillOfHealth()
+        json_format.Parse(boh_json, boh_pb)
+        boh = boh_pb
+
+    tier_results = {test: TestStatus.ERROR for test in expected_tests}
+    has_hard_failure = False
+
+    for result in boh.test_results:
+        test = result.test_name
+        if test in expected_tests:
+            if result.result_status == pb.ResultStatus.RESULT_STATUS_FAILED:
+                tier_results[test] = TestStatus.DEGRADED
+            elif result.result_status == pb.ResultStatus.RESULT_STATUS_SUCCESS:
+                if tier_results[test] != TestStatus.DEGRADED:
+                    tier_results[test] = TestStatus.HEALTHY
+
+        for m in result.metrics:
+            if (
+                m.key.endswith("Error Detected")
+                or m.key.endswith("Failure Detected")
+                or "Warning" in m.key
+            ):
+                has_hard_failure = True
+
+    return tier_results, has_hard_failure
