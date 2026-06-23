@@ -111,7 +111,7 @@ class KubernetesPreflightChecker:
 
     def _get_kueue_version(self) -> str | None:
         """Retrieves the Kueue version string from the deployment."""
-        logger.info("Checking version compatibility")
+        logger.debug("Checking version compatibility")
         try:
             image_output = self._run_kubectl(
                 [
@@ -129,7 +129,7 @@ class KubernetesPreflightChecker:
             )
             if match:
                 version = match.group(1)
-                logger.info("Found Kueue version: v%s", version)
+                logger.debug("Found Kueue version: v%s", version)
                 return version
             else:
                 logger.warning(

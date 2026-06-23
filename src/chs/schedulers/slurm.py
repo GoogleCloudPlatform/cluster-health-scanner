@@ -171,7 +171,7 @@ class SlurmScheduler(BaseScheduler):
                 ]
             )
 
-            logger.info("Detected network interfaces: %r", interfaces)
+            logger.debug("Detected network interfaces: %r", interfaces)
             return interfaces
 
         except Exception as e:
@@ -560,7 +560,7 @@ class SlurmScheduler(BaseScheduler):
                     job_ids.append(parts[0])
 
             if job_ids:
-                logger.info(
+                logger.debug(
                     "Found %d jobs to cancel for prefix %s.",
                     len(job_ids),
                     prefix,

@@ -47,6 +47,7 @@ from chs import (
     utils,
     validators,
 )
+from chs.utils import theme
 from chs.storage import StorageProviderFactory
 from chs.cli import list_formatting
 
@@ -104,7 +105,7 @@ def cancel_jobs_on_failure(
         yield
     except BaseException:
         if active:
-            logger.info(
+            logger.debug(
                 "Run failed or interrupted. Cleaning up spawned jobs..."
             )
             try:
@@ -301,7 +302,7 @@ def run_action(
 
     with archive_workspace(ramble_manager, on_success=False):
         try:
-            logger.info("Running preflight checks")
+            logger.debug("Running preflight checks")
             if scheduler_obj:
                 tests = scheduler_obj.run_preflight_checks(
                     tests, workspace_name=workspace_name, run_id=run_id
@@ -332,7 +333,7 @@ def run_action(
             )
             ramble_manager.setup_workspace()
             if dry_run:
-                logger.info("Setup complete. Skipping experiment execution.")
+                logger.debug("Setup complete. Skipping experiment execution.")
                 return None
 
             if scheduler_obj:
@@ -391,30 +392,74 @@ def analyze_action(
 
             # 1. Check if Bill of Health already exists
             if boh_path.exists() and not validation:
+                logger.debug(
+                    "Bill of Health already exists. Showing results directly."
+                )
+                Console().print(
+                    f"[{theme.CHS_SUCCESS_STYLE}]Found existing Bill of "
+                    f"Health for {run_id}.[/{theme.CHS_SUCCESS_STYLE}]"
+                )
                 _show_results(app_data, run_id)
                 return run_id
 
             # 2. If results.latest.json exists (but no BoH), generate BoH
             if results_json_path.exists():
-                logger.info(
+                logger.debug(
                     "Found results from this run. Generating Bill of Health..."
                 )
-                ramble_manager.generate_boh(
-                    str(results_json_path),
-                    thresholds_path=validation,
-                    skip_validation=skip_validation,
+                with theme.get_progress_spinner(
+                    "Generating Bill of Health and cleaning up CHS resources..."
+                ):
+                    ramble_manager.generate_boh(
+                        str(results_json_path),
+                        thresholds_path=validation,
+                        skip_validation=skip_validation,
+                    )
+                Console().print(
+                    f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
+                    f"and CHS resources cleaned up.[/{theme.CHS_SUCCESS_STYLE}]"
                 )
+
                 _show_results(app_data, run_id)
                 return run_id
 
             # 3. If neither exists, wait for jobs and then analyze
             logger.debug(f"Waiting for jobs for {run_id}...")
             ramble_manager.wait_for_jobs(app_data=app_data)
+            Console().print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Test execution completed."
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
 
-            ramble_manager.analyze_results(
-                thresholds_path=validation, skip_validation=skip_validation
+            label1 = (
+                f"[{theme.CHS_HEADER_STYLE}]Analyzing logs "
+                "and cleaning up CHS resources..."
+                f"[/{theme.CHS_HEADER_STYLE}]"
+            )
+            with theme.get_progress_spinner(label1):
+                results_json_path = ramble_manager.analyze_experiments()
+            Console().print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Analysis "
+                "and CHS resource cleanup complete."
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+
+            label2 = (
+                f"[{theme.CHS_HEADER_STYLE}]Generating Bill of Health..."
+                f"[/{theme.CHS_HEADER_STYLE}]"
+            )
+            with theme.get_progress_spinner(label2):
+                ramble_manager.generate_boh(
+                    results_json_path,
+                    thresholds_path=validation,
+                    skip_validation=skip_validation,
+                )
+            Console().print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated."
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
             )
             logger.debug("Analysis complete for run_id=%r", run_id)
+
             _show_results(app_data, run_id)
         except (OSError, subprocess.CalledProcessError) as e:
             raise ex.ChsAnalysisException(
@@ -435,8 +480,8 @@ def _show_results(
 
     if not run_id:
         run_id = app_data.get_latest_run_id()
-        logger.info("No run_id provided. Using latest run: %s", run_id)
-        logger.info("Showing results for latest run: %s", run_id)
+        logger.debug("No run_id provided. Using latest run: %s", run_id)
+        logger.debug("Showing results for latest run: %s", run_id)
 
     # Try to resolve run_id to workspace_name
     try:
@@ -448,7 +493,7 @@ def _show_results(
     boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
 
     if not boh_path.exists():
-        logger.info(
+        logger.debug(
             "Local Bill of Health not found. "
             "Attempting to download from storage..."
         )
@@ -461,7 +506,7 @@ def _show_results(
             if storage_config:
                 provider = StorageProviderFactory.get_provider(storage_config)
             else:
-                logger.info(
+                logger.debug(
                     "Run-specific storage config not found. "
                     "Falling back to active storage provider."
                 )
@@ -500,7 +545,7 @@ def cancel_action(scheduler_name: str | None = None) -> None:
     Raises:
       click.ClickException: If an error occurs during CHS job cancellation.
     """
-    logger.info("Cleaning all stale resources.")
+    logger.debug("Cleaning all stale resources.")
     scheduler_name = scheduler_name or detect_scheduler()
     scheduler = get_scheduler(scheduler_name)
     try:
@@ -520,16 +565,28 @@ def safe_cancel_action(
     scheduler_name: str | None = None,
     auto_approve: bool = False,
     message: str | None = None,
+    action_type: str = "cancel",
 ) -> None:
     """Safely cancels jobs by prompting the user for confirmation first."""
     if message:
-        logger.warning(message)
+        logger.debug(message)
+
+    is_setup = action_type == "setup"
+
     if not auto_approve:
-        prompt_msg = (
-            "This will cancel ALL running CHS jobs and delete ALL "
-            "CHS resources on the cluster.\n"
-            "Are you sure you want to proceed?"
-        )
+        if is_setup:
+            prompt_msg = (
+                "This will set up the cluster for a new run, which involves "
+                "removing any existing CHS resources.\n"
+                "Are you sure you want to proceed?"
+            )
+        else:
+            prompt_msg = (
+                "This will cancel ALL running CHS jobs and delete ALL "
+                "CHS resources on the cluster.\n"
+                "Are you sure you want to proceed?"
+            )
+
         if not sys.stdin.isatty():
             logger.warning(prompt_msg)
             raise click.ClickException(
@@ -537,14 +594,41 @@ def safe_cancel_action(
                 "Please pass --auto-approve to proceed."
             )
         if not click.confirm(prompt_msg, default=False):
-            logger.info("Cancellation aborted by user. Exiting.")
+            logger.debug(
+                f"{'Setup' if is_setup else 'Cancellation'} aborted by user. "
+                "Exiting."
+            )
             sys.exit(0)
     else:
-        logger.info("Auto-approve is enabled. Proceeding with cancellation...")
+        action_name = "setup" if is_setup else "cancellation"
+        logger.debug(
+            f"Auto-approve is enabled. Proceeding with {action_name}..."
+        )
 
-    logger.info("Initiating global cleanup...")
-    cancel_action(scheduler_name)
-    logger.info("Successfully canceled all active CHS resources.")
+    console = Console()
+
+    spinner_text = (
+        "[bold blue]Setting up cluster environment...[/bold blue]"
+        if is_setup
+        else (
+            "[bold red]Canceling all active CHS jobs and "
+            "cleaning up resources...[/bold red]"
+        )
+    )
+
+    success_text = (
+        f"[{theme.CHS_SUCCESS_STYLE}]Successfully prepared the cluster."
+        f"[/{theme.CHS_SUCCESS_STYLE}]"
+        if is_setup
+        else f"[{theme.CHS_SUCCESS_STYLE}]Successfully canceled all "
+        f"active CHS resources.[/{theme.CHS_SUCCESS_STYLE}]"
+    )
+
+    with theme.get_progress_spinner(spinner_text):
+        logger.debug("Initiating global cleanup...")
+        cancel_action(scheduler_name)
+        logger.debug("Successfully canceled all active CHS resources.")
+    console.print(success_text)
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -556,6 +640,13 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     ctx.obj["app_data"] = ChsAppData()
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+        for handler in logging.getLogger().handlers:
+            handler.setFormatter(
+                logging.Formatter(
+                    fmt="%(asctime)s %(levelname)-8s: %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                )
+            )
         logger.debug("Debug mode enabled.")
 
 
@@ -673,6 +764,7 @@ def _handle_previous_run(
                             scheduler_name,
                             auto_approve=auto_approve,
                             message=msg,
+                            action_type="setup",
                         )
                 except ex.NoActiveJobsException:
                     safe_cancel_action(
@@ -683,13 +775,20 @@ def _handle_previous_run(
                             "exist on the cluster. Cleaning all "
                             "stale resources."
                         ),
+                        action_type="setup",
                     )
             else:
-                safe_cancel_action(scheduler, auto_approve=auto_approve)
+                safe_cancel_action(
+                    scheduler, auto_approve=auto_approve, action_type="setup"
+                )
         else:
-            safe_cancel_action(scheduler, auto_approve=auto_approve)
+            safe_cancel_action(
+                scheduler, auto_approve=auto_approve, action_type="setup"
+            )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-        safe_cancel_action(scheduler, auto_approve=auto_approve)
+        safe_cancel_action(
+            scheduler, auto_approve=auto_approve, action_type="setup"
+        )
 
     return None
 
@@ -874,7 +973,7 @@ def run(
             t.get("name", str(t)) if isinstance(t, dict) else str(t)
             for t in resolved_tests
         ]
-        logger.info(
+        logger.debug(
             f"Loaded {len(resolved_tests)} tests ({', '.join(test_names)}) "
             f"for suite '{suite}' from suites.yaml."
         )
@@ -900,12 +999,33 @@ def run(
         if dry_run
         else "CHS Execution Preview:"
     )
-    logger.info(preview_title)
-    logger.info(f"  Target Cluster: {cluster_name}")
-    logger.info(f"  Machine Type: {machine_type}")
-    logger.info(f"  Scheduler: {scheduler}")
-    logger.info(f"  Scope: {len(nodes_under_test)} nodes under test")
-    logger.info(f"  Tests Scheduled: {test_names}")
+    console = Console()
+    console.print(f"[bold]{preview_title}[/bold]")
+    console.print(
+        f"  Target Cluster: [{theme.CHS_HEADER_STYLE}]{cluster_name}"
+        f"[/{theme.CHS_HEADER_STYLE}]"
+    )
+    console.print(
+        f"  Machine Type:   [{theme.CHS_HEADER_STYLE}]{machine_type}"
+        f"[/{theme.CHS_HEADER_STYLE}]"
+    )
+    console.print(
+        f"  Scheduler:      [{theme.CHS_HEADER_STYLE}]{scheduler}"
+        f"[/{theme.CHS_HEADER_STYLE}]"
+    )
+    if nodes_under_test:
+        scope = (
+            f"[{theme.CHS_HEADER_STYLE}]{len(nodes_under_test)}"
+            f"[/{theme.CHS_HEADER_STYLE}] "
+            f"nodes under test"
+        )
+    else:
+        scope = "all available nodes"
+    console.print(f"  Scope:          {scope}")
+    console.print(
+        f"  Tests Scheduled: [{theme.CHS_HEADER_STYLE}]{test_names}"
+        f"[/{theme.CHS_HEADER_STYLE}]"
+    )
 
     if not auto_approve:
         prompt_msg = (
@@ -914,16 +1034,16 @@ def run(
             else "Proceed with execution?"
         )
         if not sys.stdin.isatty():
-            logger.info(prompt_msg)
+            logger.debug(prompt_msg)
             raise click.ClickException(
                 "Running in non-interactive mode.\n"
                 "Please pass --auto-approve to proceed."
             )
         if not click.confirm(prompt_msg, default=True):
-            logger.info("Run aborted by user.")
+            logger.debug("Run aborted by user.")
             return None
     else:
-        logger.info("Auto-approve is enabled. Proceeding...")
+        logger.debug("--auto-approve flag detected. Bypassing confirmation.")
 
     short_hash = utils.generate_random_suffix()
     if not run_id:
@@ -938,7 +1058,10 @@ def run(
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
-    logger.info("Run ID: %s", run_id)
+    console.print(
+        f"  Run ID:         [{theme.CHS_WARNING_STYLE}]{run_id}"
+        f"[/{theme.CHS_WARNING_STYLE}]"
+    )
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
     # TODO: Revisit command statement normalization when
@@ -964,21 +1087,29 @@ def run(
         },
     )
 
-    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
-        job_ids = run_action(
-            suite=suite,
-            scheduler_obj=scheduler_obj,
-            tests=parsed_tests,
-            workspace_name=workspace_name,
-            workspaces_base_dir=workspaces_base_dir,
-            machine_type=machine_type,
-            dry_run=dry_run,
-            timeout=timeout,
-            deadline=deadline,
-            validation=validation,
-            skip_validation=skip_validation,
-            run_id=run_id,
-        )
+    status_msg = (
+        f"[{theme.CHS_HEADER_STYLE}]Setting up cluster execution "
+        f"environment...[/{theme.CHS_HEADER_STYLE}]"
+        if dry_run
+        else f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
+        f"and submitting jobs...[/{theme.CHS_SUCCESS_STYLE}]"
+    )
+    with theme.get_progress_spinner(status_msg):
+        with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+            job_ids = run_action(
+                suite=suite,
+                scheduler_obj=scheduler_obj,
+                tests=parsed_tests,
+                workspace_name=workspace_name,
+                workspaces_base_dir=workspaces_base_dir,
+                machine_type=machine_type,
+                dry_run=dry_run,
+                timeout=timeout,
+                deadline=deadline,
+                validation=validation,
+                skip_validation=skip_validation,
+                run_id=run_id,
+            )
 
         result = RunExecutionResult(
             suite=suite,
@@ -990,7 +1121,7 @@ def run(
         )
 
         if dry_run:
-            logger.info("Dry run completed. Workspace setup is ready.")
+            logger.debug("Dry run completed. Workspace setup is ready.")
             return result
 
         if not job_ids:
@@ -999,8 +1130,13 @@ def run(
                 "Please check internal.log for details."
             )
 
-        logger.info("Run submitted successfully.")
-        logger.info("Job IDs: %s", ", ".join(job_ids))
+        logger.debug("Run submitted successfully.")
+        logger.debug("Job IDs: %s", ", ".join(job_ids))
+
+    console.print(
+        f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted jobs."
+        f"[/{theme.CHS_SUCCESS_STYLE}]"
+    )
 
     # Automatically trigger analysis
     analyze_action(
@@ -1052,8 +1188,8 @@ def analyze(
     app_data = obj["app_data"]
     if not run_id:
         run_id = app_data.get_latest_run_id()
-        logger.info("No run_id provided. Using latest run: %s", run_id)
-        logger.info("Analyzing latest run: %s", run_id)
+        logger.debug("No run_id provided. Using latest run: %s", run_id)
+        logger.debug("Analyzing latest run: %s", run_id)
 
     if validation:
         errors = validators.ThresholdsValidator().validate(
@@ -1088,8 +1224,19 @@ def cancel(obj, auto_approve: bool = False) -> None:
             ramble_manager = RambleManager(
                 workspaces_base_dir, workspace_name, run_id=latest_run_id
             )
-            logger.info("Archiving the latest workspace after cancellation...")
-            ramble_manager.archive()
+            console = Console()
+            if os.path.exists(ramble_manager.path):
+                with theme.get_progress_spinner(
+                    "[bold blue]Archiving the latest workspace...[/bold blue]"
+                ):
+                    logger.debug(
+                        "Archiving the latest workspace after cancellation..."
+                    )
+                    ramble_manager.archive()
+                console.print(
+                    f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived."
+                    f"[/{theme.CHS_SUCCESS_STYLE}]"
+                )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         pass
     except (OSError, ex.ChsException) as e:
@@ -1155,7 +1302,11 @@ def history(obj) -> None:
             command_statement = "chs run"
 
         submission_complete = run.get("submission_complete", False)
-        sub_text = "[green]Y[/green]" if submission_complete else "[red]N[/red]"
+        sub_text = (
+            f"[{theme.CHS_SUCCESS_STYLE}]Y[/{theme.CHS_SUCCESS_STYLE}]"
+            if submission_complete
+            else f"[{theme.CHS_FAILURE_STYLE}]N[/{theme.CHS_FAILURE_STYLE}]"
+        )
 
         storage_str = utils.formatting.format_storage_path(
             run.get("storage", {})
@@ -1255,8 +1406,8 @@ def configure_path(ctx: click.Context, path: str | None) -> None:
 def main() -> None:
     """Main entry point for the CHS CLI."""
 
-    logger.info("CHS CLI starting...\n")
+    logger.debug("CHS CLI starting...")
     try:
         cli(obj={})
     finally:
-        logger.info("CHS CLI finished.")
+        logger.debug("CHS CLI finished.")

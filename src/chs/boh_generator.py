@@ -69,7 +69,7 @@ class BOHGenerator:
             if os.path.exists(path):
                 try:
                     with open(path, "r") as f:
-                        logger.info("Loading thresholds from %s", path)
+                        logger.debug("Loading thresholds from %s", path)
                         data = yaml.safe_load(f) or {}
                         return data
                 except (yaml.YAMLError, OSError) as e:
@@ -94,7 +94,7 @@ class BOHGenerator:
         if os.path.exists(internal_path):
             try:
                 with open(internal_path, "r") as f:
-                    logger.info(
+                    logger.debug(
                         "Loading default internal thresholds from %s",
                         internal_path,
                     )

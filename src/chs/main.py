@@ -28,8 +28,7 @@ def main():
     logging.basicConfig(
         level=logging.INFO,
         stream=sys.stderr,
-        format="%(asctime)s %(levelname)-8s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        format="%(message)s",
     )
     cli.main()
 

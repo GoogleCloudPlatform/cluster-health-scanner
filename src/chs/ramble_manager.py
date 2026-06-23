@@ -18,38 +18,35 @@ This module provides the RambleManager class, which encapsulates
 the creation, setup, and execution of Ramble workspaces for CHS test runs.
 """
 
-from collections.abc import Callable
 import datetime
 import importlib.resources as pkg_resources
 import json
-from concurrent.futures import ThreadPoolExecutor, wait
 import logging
 import os
 import pathlib
 import re
 import shutil
-
 import subprocess
 import sys
 import sysconfig
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
-import click
-from google.protobuf.json_format import MessageToJson
 
-from rich.live import Live
-from rich.spinner import Spinner
-from rich.text import Text
-from rich.console import Group
+import click
+import yaml
+from google.protobuf.json_format import MessageToJson
+from rich.console import Console
 
 from chs import exceptions as ex
+from chs import resources
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
-from chs import resources
+from chs.utils import theme
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +290,7 @@ class RambleManager:
         dest_thresholds = os.path.join(self.path, "thresholds.yaml")
         if thresholds_path:
             shutil.copyfile(thresholds_path, dest_thresholds)
-            logger.info(
+            logger.debug(
                 "Copied user thresholds from %s to %s",
                 thresholds_path,
                 dest_thresholds,
@@ -304,7 +301,7 @@ class RambleManager:
             )
             if os.path.exists(internal_thresholds):
                 shutil.copyfile(internal_thresholds, dest_thresholds)
-                logger.info("Copied default thresholds to %s", dest_thresholds)
+                logger.debug("Copied default thresholds to %s", dest_thresholds)
             else:
                 logger.warning(
                     "Default thresholds file not found at %s",
@@ -398,7 +395,7 @@ class RambleManager:
 
         logger.debug("Executing experiments in %s...", self.path)
 
-        logger.info("Running experiments via all_experiments script...")
+        logger.debug("Running experiments via all_experiments script...")
         script_path = os.path.join(self.path, "all_experiments")
         self._execute_shell_command(
             cmd=["bash", script_path],
@@ -421,7 +418,7 @@ class RambleManager:
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry["submission_complete"] = True
         self._app_data.update_run(self._workspace_name, run_entry)
-        logger.info(
+        logger.debug(
             "All JobSets submitted successfully. "
             "submission_complete set to True."
         )
@@ -563,7 +560,7 @@ class RambleManager:
             app_data: ChsAppData to update run status.
             poll_interval: Seconds to wait between checks.
         """
-        logger.info("Waiting for jobs to complete for run %s...", self._run_id)
+        logger.debug("Waiting for jobs to complete for run %s...", self._run_id)
         self._monitor_jobs(app_data, poll_interval)
 
     def _monitor_jobs(self, app_data: ChsAppData, poll_interval: int) -> None:
@@ -579,7 +576,7 @@ class RambleManager:
 
         registry_jobs = set(self.get_job_ids())
         if not registry_jobs:
-            logger.info("No jobs found in registry.")
+            logger.debug("No jobs found in registry.")
             return
 
         # We poll ALL registry jobs for status
@@ -597,41 +594,47 @@ class RambleManager:
         )
 
         start_time = time.time()
-
-        is_fetching_logs = False
-
-        def generate_status_renderable() -> Group | Text:
-            if is_fetching_logs:
-                return Text(
-                    f"Waiting for {len(futures)} pending log "
-                    "fetches to complete..."
+        submission_time_str = run_entry.get("submission_time")
+        if isinstance(submission_time_str, str):
+            try:
+                submission_dt = datetime.datetime.fromisoformat(
+                    submission_time_str
                 )
-            elapsed = int(time.time() - start_time)
-            elapsed_td = datetime.timedelta(seconds=elapsed)
-            spinner = Spinner(
-                "dots", text="Waiting for test execution to complete..."
+                start_time = submission_dt.timestamp()
+            except ValueError:
+                pass
+
+        def get_jobs_desc() -> str:
+            elapsed = max(0, time.time() - start_time)
+            elapsed_delta = datetime.timedelta(seconds=int(elapsed))
+            elapsed_str = str(elapsed_delta).split(".")[0]
+            header_style = theme.CHS_HEADER_STYLE
+            title_style = theme.CHS_TITLE_STYLE
+            jobs = (
+                f"[{header_style}]Jobs Remaining:[/{header_style}] "
+                f"[{title_style}]{len(active_jobs)}[/{title_style}]"
             )
-            details = Text(
-                f"    • Jobs Remaining: {len(active_jobs)}\n"
-                f"    • Elapsed Time:   {elapsed_td}\n\n"
-                f"(Press Ctrl+C to detach from this view)"
+            time_str = (
+                f"[{header_style}]Time Elapsed:[/{header_style}] "
+                f"[{title_style}]{elapsed_str}[/{title_style}]"
             )
-            return Group(spinner, details)
+            return f"{jobs} | {time_str}"
 
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = []
 
-                live_context = None
-                if sys.stdout.isatty():
-                    live_context = Live(
-                        get_renderable=generate_status_renderable,
-                        refresh_per_second=1,
-                    )
-                    live_context.start()
-
-                try:
+                with theme.get_progress_spinner(
+                    "Waiting for test execution to complete...", show_time=False
+                ) as (
+                    live_context,
+                    task_id,
+                ):
                     while active_jobs:
+                        if live_context and task_id is not None:
+                            live_context.update(
+                                task_id, description=get_jobs_desc()
+                            )
                         statuses = scheduler.get_job_statuses(list(active_jobs))
 
                         jobs_to_cancel = []
@@ -701,46 +704,92 @@ class RambleManager:
                             if not live_context:
                                 elapsed = int(time.time() - start_time)
                                 elapsed_td = datetime.timedelta(seconds=elapsed)
-                                logger.info(
-                                    "Jobs remaining: %d | Elapsed time: %s",
+                                logger.debug(
+                                    "Jobs remaining: %d | Elapsed time: %s. "
+                                    "Waiting %s seconds...",
                                     len(active_jobs),
                                     elapsed_td,
+                                    poll_interval,
                                 )
-                            time.sleep(poll_interval)
+                                time.sleep(poll_interval)
+                            else:
+                                for _ in range(poll_interval):
+                                    if task_id is not None:
+                                        live_context.update(
+                                            task_id, description=get_jobs_desc()
+                                        )
+                                    time.sleep(1)
+
+                    if live_context and task_id is not None:
+                        live_context.update(
+                            task_id,
+                            description=get_jobs_desc(),
+                            force_print=True,
+                        )
 
                     if futures:
-                        is_fetching_logs = True
-                        if not live_context:
-                            logger.debug(
-                                "Waiting for %d pending log "
-                                "fetches to complete...",
-                                len(futures),
+                        if live_context and task_id is not None:
+                            live_context.update(
+                                task_id,
+                                description=(
+                                    f"[{theme.CHS_HEADER_STYLE}]Fetching test "
+                                    "logs..."
+                                    f"[/{theme.CHS_HEADER_STYLE}]"
+                                ),
+                                force_print=True,
                             )
-                        wait(futures)
+
+                        while True:
+                            pending_count = sum(
+                                1 for f in futures if not f.done()
+                            )
+                            if pending_count == 0:
+                                if live_context and task_id is not None:
+                                    live_context.update(
+                                        task_id,
+                                        description=(
+                                            f"[{theme.CHS_HEADER_STYLE}]All "
+                                            "test logs fetched successfully."
+                                            f"[/{theme.CHS_HEADER_STYLE}]"
+                                        ),
+                                    )
+                                break
+                            if live_context and task_id is not None:
+                                live_context.update(
+                                    task_id,
+                                    description=(
+                                        f"[{theme.CHS_HEADER_STYLE}]Fetching "
+                                        "test logs..."
+                                        f"[/{theme.CHS_HEADER_STYLE}]"
+                                    ),
+                                )
+                            wait(futures, timeout=1)
                         for f in futures:
                             try:
                                 f.result()
                             except Exception as e:
                                 logger.debug("Log fetch task failed: %s", e)
-                finally:
-                    if live_context:
-                        live_context.stop()
-
         except KeyboardInterrupt:
-            logger.info(
-                "Detached from active run. "
-                "Jobs will continue executing on the cluster."
+            console = Console()
+            console.print(
+                "\n[yellow]Detached from active run. "
+                "Jobs will continue executing on the cluster.[/yellow]"
             )
-            logger.info(
+            console.print(
                 "To compile logs and generate results run: "
-                f"chs analyze {self._run_id}"
+                f"[cyan]chs analyze {self._run_id}[/cyan]"
             )
-            logger.info(
-                f"When completed, view results with: chs results {self._run_id}"
+            console.print(
+                "When completed, view results with: "
+                f"[cyan]chs results {self._run_id}[/cyan]"
+            )
+            console.print(
+                "To cancel execution and cleanup run: "
+                f"[cyan]chs cancel {self._run_id}[/cyan]"
             )
             raise ex.ChsDetachedException()
 
-        logger.info(
+        logger.debug(
             "All jobs completed and logs fetched for run %s.",
             self._run_id,
         )
@@ -889,17 +938,11 @@ class RambleManager:
 
         return mapping_result
 
-    def analyze_results(
-        self, thresholds_path: str | None = None, skip_validation: bool = False
-    ) -> str:
-        """Analyzes and stores the results of the Ramble experiments.
-
-        Analyzes the results and stores BoH in GCS/ BigQuery for later
-        retrieval.
+    def analyze_experiments(self) -> str:
+        """Analyzes the results of the Ramble experiments.
 
         Returns:
-          The path to the directory containing the analysis results and Bill of
-          Health.
+          The path to the results.latest.json file.
 
         Raises:
           click.ClickException: If the experiment analyze command fails.
@@ -930,11 +973,7 @@ class RambleManager:
                 "rerunning the command."
             )
         self._cleanup_inputs_dir()
-        return self.generate_boh(
-            results_json_path,
-            thresholds_path=thresholds_path,
-            skip_validation=skip_validation,
-        )
+        return results_json_path
 
     def generate_boh(
         self,
@@ -999,12 +1038,12 @@ class RambleManager:
             )
             return
 
-        logger.info("Uploading Bill of Health...")
+        logger.debug("Uploading Bill of Health...")
         try:
             provider.upload_file(
                 boh_path, f"bills_of_health/{self._workspace_name}.json"
             )
-            logger.info("Bill of Health uploaded successfully.")
+            logger.debug("Bill of Health uploaded successfully.")
         except Exception as e:
             raise ex.ChsArchiveException(
                 f"Failed to archive Bill of Health: {e}"
@@ -1019,7 +1058,7 @@ class RambleManager:
             )
             return
 
-        logger.info("Archiving workspace locally...")
+        logger.debug("Archiving workspace locally...")
         try:
             # Archive locally (without --upload-url)
             self._execute_ramble_command(
@@ -1049,12 +1088,12 @@ class RambleManager:
 
             # Use the first match (should be only one if clean)
             archive_file = archives[0]
-            logger.info("Uploading workspace archive %s...", archive_file.name)
+            logger.debug("Uploading workspace archive %s...", archive_file.name)
 
             provider.upload_file(
                 str(archive_file), f"workspaces/{self._workspace_name}.tar.gz"
             )
-            logger.info("Workspace archive uploaded successfully.")
+            logger.debug("Workspace archive uploaded successfully.")
 
             # Clean up local archive
             try:

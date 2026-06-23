@@ -309,127 +309,27 @@ class TestRambleManager(unittest.TestCase):
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         self.assertIn(f"{self.tmp_dir}/ws1", repr(manager))
 
-    def test_analyze_results_no_scheduler_attr(self):
-        """Test analyze_results works when _scheduler is not set."""
+    def test_analyze_experiments(self):
+        """Test analyze_experiments runs the analyze command correctly."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        # Ensure _scheduler is NOT set
-        if hasattr(manager, "_scheduler"):
-            del manager._scheduler
-
         self.mock_run.return_value.stdout = "analysis complete"
 
-        with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            self.mock_app_data.get_run.return_value = {
-                "scheduler": "kubernetes"
-            }
-            with mock.patch("chs.ramble_manager.get_scheduler"):
-                with (
-                    mock.patch.object(
-                        manager, "cancel_experiments"
-                    ) as mock_cancel,
-                    mock.patch.object(
-                        manager, "_cleanup_inputs_dir"
-                    ) as mock_cleanup,
-                ):
-                    with mock.patch("builtins.open", mock.mock_open()):
-                        with mock.patch("os.getcwd", return_value="/home/user"):
-                            with mock.patch("pathlib.Path.mkdir"):
-                                self.mock_os_path_exists.side_effect = (
-                                    lambda p: True
-                                )
+        with mock.patch("os.path.exists", return_value=True):
+            output_path = manager.analyze_experiments()
 
-                                manager.analyze_results()
+            for call_args in self.mock_run.call_args_list:
+                args, kwargs = call_args
+                cmd_list = args[0]
+                if "analyze" in cmd_list:
+                    self.assertIn("--fom-origin-types", cmd_list)
+                    self.assertIn("modifier", cmd_list)
+                    self.assertIn("application", cmd_list)
+                    self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
+                    self.assertEqual(kwargs["env"]["TERM"], "dumb")
 
-                                mock_boh_gen.assert_called_once()
-                                _, kwargs = mock_boh_gen.call_args
-                                self.assertEqual(
-                                    kwargs["cluster_type"], "kubernetes"
-                                )
-                                mock_cancel.assert_called_once()
-                                mock_cleanup.assert_called_once()
-
-    def test_analyze_results(self):
-        """Test analyze_results generates BoH and copies experiments."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        manager._scheduler = mock.Mock()
-        manager._scheduler.name = "slurm"
-        manager._scheduler.get_extra_env.return_value = {}
-        self.mock_run.return_value.stdout = "analysis complete"
-
-        with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            with (
-                mock.patch.object(manager, "cancel_experiments") as mock_cancel,
-                mock.patch.object(
-                    manager, "_cleanup_inputs_dir"
-                ) as mock_cleanup,
-            ):
-                with mock.patch("builtins.open", mock.mock_open()):
-                    with mock.patch("os.getcwd", return_value="/home/user"):
-                        with mock.patch("pathlib.Path.mkdir"):
-                            self.mock_os_path_exists.side_effect = (
-                                lambda p: True
-                            )
-
-                            output_path = manager.analyze_results()
-
-                            for call_args in self.mock_run.call_args_list:
-                                args, kwargs = call_args
-                                cmd_list = args[0]
-                                self.assertNotIn("on", cmd_list)
-                                # Verify env is passed for analyze
-                                if "analyze" in cmd_list:
-                                    self.assertIn(
-                                        "--fom-origin-types", cmd_list
-                                    )
-                                    self.assertIn("modifier", cmd_list)
-                                    self.assertIn("application", cmd_list)
-                                    self.assertEqual(
-                                        kwargs["env"]["TQDM_DISABLE"],
-                                        "1",
-                                    )
-                                    self.assertEqual(
-                                        kwargs["env"]["TERM"], "dumb"
-                                    )
-
-                            self.assertEqual(
-                                output_path,
-                                f"{self.tmp_dir}/ws1",
-                            )
-                            mock_boh_gen.return_value.generate.assert_called_once()
-                            mock_cancel.assert_called_once()
-                            mock_cleanup.assert_called_once()
-
-    def test_analyze_results_skip_copy_same_dir(self):
-        """Test analyze_results skips copy if src and dst are same."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        manager._scheduler = mock.Mock()
-        manager._scheduler.name = "slurm"
-        manager._scheduler.get_extra_env.return_value = {}
-        self.mock_run.return_value.stdout = "analysis complete"
-
-        with mock.patch("chs.ramble_manager.BOHGenerator"):
-            with mock.patch("builtins.open", mock.mock_open()):
-                with mock.patch("os.getcwd", return_value=self.tmp_dir):
-                    with mock.patch(
-                        "chs.ramble_manager.os.path.abspath"
-                    ) as mock_abspath:
-                        self.mock_os_path_exists.side_effect = lambda p: True
-
-                        def side_effect(p):
-                            return str(p)
-
-                        mock_abspath.side_effect = side_effect
-
-                        with mock.patch.object(
-                            manager, "cancel_experiments"
-                        ) as mock_cancel:
-                            output_path = manager.analyze_results()
-
-                            self.assertEqual(
-                                output_path,
-                                f"{self.tmp_dir}/ws1",
-                            )
-                            mock_cancel.assert_called_once()
+            self.assertEqual(
+                output_path, f"{self.tmp_dir}/ws1/results.latest.json"
+            )
 
     def test_generate_boh(self):
         """Test generate_boh generates BoH and copies experiments."""

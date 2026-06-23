@@ -171,7 +171,7 @@ class TestSlurmScheduler(unittest.TestCase):
             ]
             interfaces = scheduler._discover_network_interfaces()
             self.assertEqual(interfaces, [])
-            mock_logger.info.assert_called_with(
+            mock_logger.debug.assert_called_with(
                 "Detected network interfaces: %r", []
             )
 

@@ -877,7 +877,7 @@ class KubernetesScheduler(BaseScheduler):
                     job_ids.append(job_name)
 
             if job_ids:
-                logger.info(
+                logger.debug(
                     "Found %d JobSets to cancel matching %s.",
                     len(job_ids),
                     prefix,

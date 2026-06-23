@@ -24,7 +24,7 @@ def verify_gcp_credentials() -> None:
     """Verifies that GCP Application Default Credentials are available."""
     try:
         google.auth.default()
-        logger.info("GCP Credentials verified successfully.")
+        logger.debug("GCP Credentials verified successfully.")
     except DefaultCredentialsError as e:
         raise ChsPreflightException(
             "GCP Application Default Credentials (ADC) not found.\n"

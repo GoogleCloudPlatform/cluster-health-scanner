@@ -77,7 +77,7 @@ class KueueManager:
                 f"LocalQueues. Details: {e.stderr}"
             ) from e
 
-        logger.info(
+        logger.debug(
             "Waiting for Kueue ClusterQueue 'chs-cluster-queue' to become "
             "active."
         )
@@ -101,7 +101,7 @@ class KueueManager:
                 break
             except subprocess.CalledProcessError:
                 if time.time() - last_log_time >= 30:
-                    logger.info(
+                    logger.debug(
                         "Waiting for Kueue ClusterQueue 'chs-cluster-queue' "
                         "to become active."
                     )
@@ -200,7 +200,7 @@ class KueueManager:
         Raises:
             KueueException: If deletion fails.
         """
-        logger.info("Cleaning up Kueue resources...")
+        logger.debug("Cleaning up Kueue resources...")
         try:
             self._run_kubectl(
                 [
@@ -228,7 +228,7 @@ class KueueManager:
                     "--ignore-not-found",
                 ]
             )
-            logger.info("Successfully deleted Kueue resources.")
+            logger.debug("Successfully deleted Kueue resources.")
         except subprocess.CalledProcessError as e:
             raise KueueException(
                 f"Failed to delete Kueue resources. Details: {e.stderr}"

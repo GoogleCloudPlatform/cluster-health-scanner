@@ -1123,13 +1123,15 @@ class TestCli(unittest.TestCase):
         # Configure RambleManager mock instance
         self.mock_rm_instance.path = workspace_dir
 
-        def mock_analyze_results(**kwargs):
+        def mock_analyze_experiments(**kwargs):
             boh_file = os.path.join(workspace_dir, "bill_of_health.json")
             with open(boh_file, "w") as f:
                 f.write("{}")
             return workspace_dir
 
-        self.mock_rm_instance.analyze_results.side_effect = mock_analyze_results
+        self.mock_rm_instance.analyze_experiments.side_effect = (
+            mock_analyze_experiments
+        )
 
         result = self.runner.invoke(
             cli.cli,
@@ -1142,7 +1144,8 @@ class TestCli(unittest.TestCase):
             f"Exception: {result.exception}\nOutput: {result.output}",
         )
         self.mock_rm_instance.wait_for_jobs.assert_called_once()
-        self.mock_rm_instance.analyze_results.assert_called_once()
+        self.mock_rm_instance.analyze_experiments.assert_called_once()
+        self.mock_rm_instance.generate_boh.assert_called_once()
         self.mock_rm_instance.archive.assert_called_once()
         mock_results_viewer.assert_called_once()
 
