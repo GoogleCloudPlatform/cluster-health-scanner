@@ -41,7 +41,10 @@ def get_suites_renderable() -> Any:
 
 
 def get_tests_renderables(
-    suite: str | None, tests_flag: bool, machine_type: str | None = None
+    suite: str | None,
+    tests_flag: bool,
+    machine_type: str | None = None,
+    accelerator_type: str | None = None,
 ) -> list[Any]:
     """Returns renderables for available tests."""
     tests_details = utils.tests.get_all_supported_tests_details()
@@ -57,8 +60,15 @@ def get_tests_renderables(
                 machine_type
             )
             test_names = [t for t in test_names if t in supported_tests]
+        elif accelerator_type:
+            supported_tests = utils.tests.get_tests_by_accelerator_type(
+                accelerator_type
+            )
+            test_names = [t for t in test_names if t in supported_tests]
     elif machine_type:
         test_names = utils.tests.get_tests_by_machine_type(machine_type)
+    elif accelerator_type:
+        test_names = utils.tests.get_tests_by_accelerator_type(accelerator_type)
     else:
         test_names = utils.tests.get_all_supported_tests()
 
@@ -78,7 +88,7 @@ def get_tests_renderables(
             hints = []
             if not suite:
                 hints.append("--suite <suite_name>")
-            if not machine_type:
+            if not machine_type and not accelerator_type:
                 hints.append("--machine-type <machine_type>")
             if hints:
                 renderables.append(
@@ -92,6 +102,13 @@ def get_tests_renderables(
             renderables.append(
                 Text(
                     f"  (Filtered by machine type: {machine_type})", style="dim"
+                )
+            )
+        elif accelerator_type:
+            renderables.append(
+                Text(
+                    f"  (Filtered by accelerator: {accelerator_type.upper()})",
+                    style="dim",
                 )
             )
 

@@ -172,6 +172,12 @@ chs list tests --machine-type a3-ultragpu-8g
 
 # Combine filters: Find A3-Ultra tests within the 'lite' suite
 chs list tests --machine-type a3-ultragpu-8g --suite lite
+
+# List only TPU tests
+chs list tpu tests
+
+# List only GPU tests
+chs list gpu tests
 ```
 
 ### 3. run

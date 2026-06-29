@@ -211,6 +211,7 @@ def list_action(
     machine_types: bool = False,
     suite: str | None = None,
     machine_type: str | None = None,
+    accelerator_type: str | None = None,
 ) -> bool:
     """Orchestrates listing of available CHS resources.
 
@@ -238,6 +239,7 @@ def list_action(
         machine_types,
         suite,
         machine_type,
+        accelerator_type,
     )
     show_all = not (suites or tests or schedulers or machine_types)
     console = Console()
@@ -248,7 +250,7 @@ def list_action(
 
     if tests or show_all:
         for r in list_formatting.get_tests_renderables(
-            suite, tests, machine_type
+            suite, tests, machine_type, accelerator_type
         ):
             console.print(r)
         console.print()
@@ -884,6 +886,30 @@ def list_schedulers() -> bool:
 def list_machine_types() -> bool:
     """List available machine types."""
     return list_action(machine_types=True)
+
+
+@list_command.group(name="tpu")
+def list_tpu() -> None:
+    """List TPU-related resources."""
+    pass
+
+
+@list_tpu.command(name="tests")
+def list_tpu_tests() -> bool:
+    """List individual TPU tests."""
+    return list_action(tests=True, accelerator_type="tpu")
+
+
+@list_command.group(name="gpu")
+def list_gpu() -> None:
+    """List GPU-related resources."""
+    pass
+
+
+@list_gpu.command(name="tests")
+def list_gpu_tests() -> bool:
+    """List individual GPU tests."""
+    return list_action(tests=True, accelerator_type="gpu")
 
 
 def _handle_previous_run(

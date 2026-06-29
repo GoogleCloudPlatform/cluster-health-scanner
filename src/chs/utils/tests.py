@@ -106,3 +106,18 @@ def get_tests_by_machine_type_and_scheduler(
     if not scheduler_map:
         return []
     return scheduler_map.get(machine_type, [])
+
+
+def get_tests_by_accelerator_type(accelerator_type: str) -> list[str]:
+    """Returns list of tests supported on a specific accelerator type."""
+    tests_map = get_tests_map()
+    tests = set()
+    accel_lower = accelerator_type.lower()
+    for scheduler in tests_map.data:
+        for machine_type, machine_tests in tests_map.data[scheduler].items():
+            mt_lower = machine_type.lower()
+            if accel_lower == "tpu" and ("tpu" in mt_lower or "ct" in mt_lower):
+                tests.update(machine_tests)
+            elif accel_lower == "gpu" and "gpu" in mt_lower:
+                tests.update(machine_tests)
+    return sorted(list(tests))
