@@ -25,6 +25,7 @@ import yaml
 import subprocess
 from typing import Any
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 from chs.schedulers.base import BaseScheduler
 from chs.utils.kueue import KueueManager
@@ -37,6 +38,14 @@ from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
 from chs.constants import CHS_NAMESPACE
+
+
+@dataclass
+class TpuSliceData:
+    pools: dict[str, list[str]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    node_to_pool: dict[str, str] = field(default_factory=dict)
 
 
 def boolean_representer(dumper, data):
@@ -62,6 +71,7 @@ class KubernetesScheduler(BaseScheduler):
         self.nodes_arg = nodes
         self.nodepools_arg = nodepools
         self._resolved_nodes: list[str] | None = None
+        self._tpu_slice_data: TpuSliceData | None = None
         self.workspace_config_dir: str | None = None
         self.kueue_supported: bool = False
         self._jobset_labels_yaml: str = ""
@@ -400,14 +410,194 @@ class KubernetesScheduler(BaseScheduler):
             logger.warning("Unexpected error during network discovery: %s", e)
             return [], []
 
+    def _get_busy_nodes(self) -> set[str]:
+        """Returns a set of nodes running pods that request accelerators."""
+        try:
+            args = [
+                "get",
+                "pods",
+                "-A",
+                "-o",
+                "custom-columns=NODE:.spec.nodeName,PHASE:.status.phase,"
+                "CREQ:.spec.containers[*].resources.requests,CLIM:.spec.containers[*].resources.limits,"
+                "IREQ:.spec.initContainers[*].resources.requests,ILIM:.spec.initContainers[*].resources.limits",
+            ]
+            pod_output = self._run_kubectl(args)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise ChsSchedulerException(
+                f"Failed to get pods to determine busy nodes: {e}"
+            ) from e
+
+        busy_nodes = set()
+        for line in pod_output.splitlines()[1:]:
+            parts = line.split()
+            if not parts or len(parts) < 2:
+                continue
+
+            node_name = parts[0]
+            phase = parts[1]
+
+            if phase in ("Succeeded", "Failed"):
+                continue
+
+            resources_str = " ".join(parts[2:]).lower()
+            if "gpu" in resources_str or "tpu" in resources_str:
+                busy_nodes.add(node_name)
+
+        return busy_nodes
+
+    def _get_tpu_slices(self) -> TpuSliceData:
+        """Returns TPU pools mapping and node-to-pool mapping."""
+        if self._tpu_slice_data:
+            return self._tpu_slice_data
+
+        try:
+            node_output = self._run_kubectl(
+                [
+                    "get",
+                    "nodes",
+                    "-l",
+                    "cloud.google.com/gke-tpu-topology",
+                    "-o",
+                    "json",
+                ]
+            )
+            node_data = json.loads(node_output)
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            json.JSONDecodeError,
+        ) as e:
+            raise ChsSchedulerException(
+                f"Failed to get node labels for TPU topology: {e}"
+            ) from e
+
+        tpu_pools: dict[str, list[str]] = defaultdict(list)
+        node_to_pool: dict[str, str] = {}
+
+        for node in node_data.get("items", []):
+            node_name = node.get("metadata", {}).get("name")
+            if not node_name:
+                continue
+
+            labels = node.get("metadata", {}).get("labels", {})
+            pool = labels.get("cloud.google.com/gke-nodepool")
+
+            if pool:
+                node_to_pool[node_name] = pool
+                if "cloud.google.com/gke-tpu-topology" in labels:
+                    tpu_pools[pool].append(node_name)
+
+        self._tpu_slice_data = TpuSliceData(
+            pools=tpu_pools, node_to_pool=node_to_pool
+        )
+        return self._tpu_slice_data
+
+    def _filter_idle_nodes(self, nodes: list[str]) -> list[str]:
+        """Filters a list of nodes to only include those that are idle.
+
+        A node is considered idle if it has no active pods requesting
+        GPUs or TPUs. System pods do not request accelerators, so this
+        robustly identifies nodes running user workloads.
+        """
+        if not nodes:
+            return []
+
+        busy_nodes = self._get_busy_nodes()
+
+        if not busy_nodes:
+            return nodes
+
+        topology = self._get_tpu_slices()
+        tpu_pools = topology.pools
+        node_to_pool = topology.node_to_pool
+
+        idle_nodes = [n for n in nodes if n not in busy_nodes]
+
+        if len(idle_nodes) < len(nodes):
+            requested_busy = set(nodes) - set(idle_nodes)
+            busy_gpu_count = sum(
+                1
+                for n in requested_busy
+                if node_to_pool.get(n) not in tpu_pools
+            )
+            if busy_gpu_count > 0:
+                logger.info(
+                    "Found %d busy GPU node(s). They will be skipped.",
+                    busy_gpu_count,
+                )
+
+        return idle_nodes
+
+    def _validate_tpu_slices(
+        self,
+        nodes: list[str],
+        tpu_pools: dict[str, list[str]] | None = None,
+        node_to_pool: dict[str, str] | None = None,
+    ) -> list[str]:
+        """Validates that TPU nodes are not requested as partial slices.
+
+        Returns a filtered list of nodes that belong to complete slices.
+        Logs an error for any slice that is partial and drops its nodes.
+        """
+        if not nodes:
+            return []
+
+        if tpu_pools is None or node_to_pool is None:
+            topology = self._get_tpu_slices()
+            tpu_pools = topology.pools
+            node_to_pool = topology.node_to_pool
+
+        requested_nodes_set = set(nodes)
+
+        valid_nodes = []
+        nodes_by_pool = defaultdict(list)
+
+        for n in nodes:
+            pool = node_to_pool.get(n)
+            if pool and pool in tpu_pools:
+                nodes_by_pool[pool].append(n)
+            else:
+                valid_nodes.append(n)
+
+        for pool, pool_nodes in nodes_by_pool.items():
+            slice_nodes = set(tpu_pools[pool])
+            if not slice_nodes.issubset(requested_nodes_set):
+                missing_nodes = list(slice_nodes - requested_nodes_set)
+                if len(missing_nodes) > 3:
+                    missing_str = (
+                        f"{', '.join(missing_nodes[:3])}, and "
+                        f"{len(missing_nodes) - 3} others"
+                    )
+                else:
+                    missing_str = ", ".join(missing_nodes)
+
+                logger.warning(
+                    "Skipping TPU slice '%s': TPU tests require the entire "
+                    "slice to be idle, but the following node(s) are currently "
+                    "busy or missing: %s",
+                    pool,
+                    missing_str,
+                )
+            else:
+                valid_nodes.extend(pool_nodes)
+
+        return valid_nodes
+
+    def filter_partial_tpu_slices(self, nodes: list[str]) -> list[str]:
+        """Validates that the selected nodes form full TPU slices."""
+        topology = self._get_tpu_slices()
+        return self._validate_tpu_slices(
+            nodes, topology.pools, topology.node_to_pool
+        )
+
     def get_nodes_under_test(self) -> list[str]:
         if self._resolved_nodes is not None:
             return self._resolved_nodes
 
         if self.nodes_arg:
-            self._resolved_nodes = [
-                n.strip() for n in self.nodes_arg.split(",") if n.strip()
-            ]
+            nodes = [n.strip() for n in self.nodes_arg.split(",") if n.strip()]
+            self._resolved_nodes = self._filter_idle_nodes(nodes)
             return self._resolved_nodes
 
         try:
@@ -432,7 +622,8 @@ class KubernetesScheduler(BaseScheduler):
             args.extend(["-o", "jsonpath={.items[*].metadata.name}"])
 
             output = self._run_kubectl(args)
-            self._resolved_nodes = [n for n in output.split() if n]
+            discovered_nodes = [n for n in output.split() if n]
+            self._resolved_nodes = self._filter_idle_nodes(discovered_nodes)
             logger.debug("Resolved nodes: %s", self._resolved_nodes)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logger.warning(

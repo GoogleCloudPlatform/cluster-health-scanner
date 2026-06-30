@@ -122,6 +122,7 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        self.mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
         self.mock_scheduler.has_no_failed_jobs.return_value = False
         self.mock_scheduler.detect_nodes_hardware.return_value = [
             "a3-megagpu-8g"
@@ -436,11 +437,13 @@ class TestCli(unittest.TestCase):
         # Setup mock scheduler
         mock_scheduler = mock.Mock()
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
 
         def get_scheduler_side_effect(name, **kwargs):
             s = mock.Mock()
             s.name = name
             s.get_nodes_under_test.return_value = ["node1"]
+            s.filter_partial_tpu_slices.return_value = ["node1"]
             s.has_no_failed_jobs.return_value = False
             s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
             s.run_preflight_checks.side_effect = (
@@ -954,6 +957,7 @@ class TestCli(unittest.TestCase):
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
         mock_scheduler.has_no_failed_jobs.return_value = False
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
         mock_get_scheduler.return_value = mock_scheduler
@@ -1050,10 +1054,14 @@ class TestCli(unittest.TestCase):
 
                 if case.name == "no_nodes_provided":
                     self.mock_scheduler.get_nodes_under_test.return_value = []
+                    mock_filter = self.mock_scheduler.filter_partial_tpu_slices
+                    mock_filter.return_value = []
                 else:
                     self.mock_scheduler.get_nodes_under_test.return_value = [
                         "node1"
                     ]
+                    mock_filter = self.mock_scheduler.filter_partial_tpu_slices
+                    mock_filter.return_value = ["node1"]
 
                 result = self.runner.invoke(cli.cli, case.args_list)
                 self.assertNotEqual(result.exit_code, 0)

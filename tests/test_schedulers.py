@@ -22,7 +22,7 @@ import unittest
 import json
 import yaml
 from unittest import mock
-from chs.schedulers.kubernetes import KubernetesScheduler
+from chs.schedulers.kubernetes import KubernetesScheduler, TpuSliceData
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import detect_scheduler
 from chs.exceptions import ChsSchedulerException
@@ -237,7 +237,11 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertIsNone(scheduler.nodes_arg)
         self.assertEqual(scheduler.nodepools_arg, "pool-1")
 
-    def test_get_nodes_under_test(self, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_get_nodes_under_test(self, mock_filter, mock_logger):
         """Test get_nodes_under_test returns parsed nodes."""
         scheduler = KubernetesScheduler(
             nodes="node1, node2 ",
@@ -253,12 +257,18 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(scheduler.get_nodes_under_test(), [])
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_nodepool(self, mock_run, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes"
+    )
+    def test_get_nodes_under_test_nodepool(
+        self, mock_filter_idle, mock_run, mock_logger
+    ):
         """Test get_nodes_under_test uses nodepools to fetch nodes."""
         scheduler = KubernetesScheduler(
             nodepools="pool-1",
         )
         mock_run.return_value.stdout = "node-1 node-2"
+        mock_filter_idle.return_value = ["node-1", "node-2"]
 
         nodes = scheduler.get_nodes_under_test()
 
@@ -270,8 +280,18 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertIn("cloud.google.com/gke-nodepool in (pool-1)", cmd)
 
     @mock.patch("subprocess.run")
-    def test_get_nodes_under_test_nodes_precedence(self, mock_run, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._validate_tpu_slices"
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes"
+    )
+    def test_get_nodes_under_test_nodes_precedence(
+        self, mock_filter, mock_validate, mock_run, mock_logger
+    ):
         """Test nodes arg takes precedence over nodepools."""
+        mock_validate.side_effect = lambda nodes: nodes
+        mock_filter.side_effect = lambda nodes: nodes
         scheduler = KubernetesScheduler(
             nodes="node-1",
             nodepools="pool-1",
@@ -282,7 +302,11 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(nodes, ["node-1"])
         mock_run.assert_not_called()
 
-    def test_write_ramble_config(self, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_write_ramble_config(self, mock_filter, mock_logger):
         """Test write_ramble_config generates correct YAML."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -315,7 +339,11 @@ ramble:
                         workspace_config_dir, ["test1"], "a3-megagpu-8g"
                     )
 
-    def test_write_ramble_config_integration(self, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_write_ramble_config_integration(self, mock_filter, mock_logger):
         """Integration-like test for write_ramble_config using real template."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -371,7 +399,11 @@ ramble:
         self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
         self.assertEqual(all_interfaces[0]["network"], "default")
 
-    def test_write_ramble_config_with_timeout(self, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_write_ramble_config_with_timeout(self, mock_filter, mock_logger):
         """Test write_ramble_config injects timeout and deadline."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -426,8 +458,11 @@ ramble:
 
     @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._validate_tpu_slices"
+    )
     def test_setup_scheduler_resources_kueue_success(
-        self, mock_kueue_mgr_class, mock_run, mock_logger
+        self, mock_validate, mock_kueue_mgr_class, mock_run, mock_logger
     ):
         """Test setup_scheduler_resources caches labels on success."""
         scheduler = KubernetesScheduler(
@@ -459,8 +494,11 @@ ramble:
 
     @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._validate_tpu_slices"
+    )
     def test_setup_scheduler_resources_kueue_fallback(
-        self, mock_kueue_mgr_class, mock_run, mock_logger
+        self, mock_validate, mock_kueue_mgr_class, mock_run, mock_logger
     ):
         """Test setup_scheduler_resources falls back if Kueue setup fails."""
         from chs.exceptions import KueueException
@@ -490,7 +528,13 @@ ramble:
         self.assertEqual(scheduler._jobset_labels_yaml, "")
         self.assertEqual(scheduler._suspend_jobset, "false")
 
-    def test_write_ramble_config_uses_cached_labels(self, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_write_ramble_config_uses_cached_labels(
+        self, mock_filter, mock_logger
+    ):
         """Test write_ramble_config writes cached properties."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -965,6 +1009,71 @@ ramble:
         scheduler = KubernetesScheduler()
         with self.assertRaises(ChsSchedulerException):
             scheduler.extract_job_id("/tmp/exp")
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_validate_tpu_slices_success(
+        self, mock_get_tpu_slices, _mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        tpu_pools = {"pool1": ["node1", "node2"]}
+        node_to_pool = {"node1": "pool1", "node2": "pool1"}
+        mock_get_tpu_slices.return_value = TpuSliceData(
+            pools=tpu_pools, node_to_pool=node_to_pool
+        )
+
+        # Valid: all nodes provided
+        valid_nodes = scheduler._validate_tpu_slices(["node1", "node2"])
+        self.assertEqual(valid_nodes, ["node1", "node2"])
+
+    def test_validate_tpu_slices_missing_nodes(self, _mock_logger):
+        scheduler = KubernetesScheduler()
+        tpu_pools = {"pool1": ["node1", "node2"]}
+        node_to_pool = {"node1": "pool1", "node2": "pool1"}
+        nodes = ["node1"]
+
+        valid_nodes = scheduler._validate_tpu_slices(
+            nodes, tpu_pools, node_to_pool
+        )
+        self.assertEqual(valid_nodes, [])
+        _mock_logger.warning.assert_called_once_with(
+            "Skipping TPU slice '%s': TPU tests require the entire "
+            "slice to be idle, but the following node(s) are currently "
+            "busy or missing: %s",
+            "pool1",
+            "node2",
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes")
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_filter_idle_nodes_filters_busy_nodes(
+        self, mock_get_tpu_slices, mock_get_busy_nodes, _mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        mock_get_busy_nodes.return_value = ["node1"]
+        tpu_pools = {"pool1": ["node1", "node2"], "pool2": ["node3", "node4"]}
+        node_to_pool = {
+            "node1": "pool1",
+            "node2": "pool1",
+            "node3": "pool2",
+            "node4": "pool2",
+        }
+        mock_get_tpu_slices.return_value = TpuSliceData(
+            pools=tpu_pools, node_to_pool=node_to_pool
+        )
+        nodes = ["node1", "node2", "node3", "node4"]
+        valid_nodes = scheduler._filter_idle_nodes(nodes)
+        self.assertEqual(valid_nodes, ["node2", "node3", "node4"])
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_get_nodes_under_test_validates_args(
+        self, mock_filter, _mock_logger
+    ):
+        scheduler = KubernetesScheduler(nodes="node1,node2")
+        nodes = scheduler.get_nodes_under_test()
+        self.assertEqual(nodes, ["node1", "node2"])
 
 
 class TestSchedulerDetection(unittest.TestCase):

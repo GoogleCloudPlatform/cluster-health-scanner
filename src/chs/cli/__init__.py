@@ -1147,6 +1147,12 @@ def run(
         scheduler, detected_machine_types, tests, suite, validation
     )
 
+    nodes_under_test = scheduler_obj.filter_partial_tpu_slices(nodes_under_test)
+    if not nodes_under_test:
+        raise ex.NoNodesProvidedException(
+            "No valid nodes remain after TPU slice validation."
+        )
+
     machine_type = detected_machine_types[0]
 
     timeout = resources.DEFAULT_TIMEOUT

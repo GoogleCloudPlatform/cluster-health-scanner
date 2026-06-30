@@ -175,7 +175,11 @@ class TestJobMonitoring(unittest.TestCase):
         # Should NOT have called fetch_job_log (no map)
         mock_scheduler.fetch_job_log.assert_not_called()
 
-    def test_kubernetes_scheduler_get_nodes_under_test(self):
+    @patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._filter_idle_nodes",
+        side_effect=lambda nodes: nodes,
+    )
+    def test_kubernetes_scheduler_get_nodes_under_test(self, mock_filter):
         # Quick test for Kubernetes scheduler node resolution
         scheduler = KubernetesScheduler(nodes="node1,node2")
         self.assertEqual(scheduler.get_nodes_under_test(), ["node1", "node2"])
