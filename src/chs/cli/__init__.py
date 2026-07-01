@@ -687,9 +687,15 @@ def _show_results(
                     f"bills_of_health/{workspace_name}.json", tmp_file_path
                 )
                 viewer = ResultsViewer(tmp_file_path)
+            except FileNotFoundError:
+                raise ex.BillOfHealthNotFoundException(
+                    f"Results not found for run '{run_id}'.\n"
+                    "This usually happens if the run was canceled "
+                    "before completion, or if the upload to storage failed."
+                )
             except Exception as e:
                 raise ex.BillOfHealthNotFoundException(
-                    f"Failed to retrieve Bill of Health for run {run_id} "
+                    f"Failed to retrieve Bill of Health for run '{run_id}' "
                     f"from storage: {e}"
                 ) from e
     else:

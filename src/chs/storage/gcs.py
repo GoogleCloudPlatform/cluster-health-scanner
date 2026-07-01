@@ -63,6 +63,10 @@ class GcsStorageProvider(StorageProvider):
                 remote_src,
                 local_dest,
             )
+        except gcp_ex.NotFound as e:
+            raise FileNotFoundError(
+                f"Object {remote_src} not found in gs://{self.bucket_name}/"
+            ) from e
         except Exception as e:
             raise OSError(
                 f"Failed to download gs://{self.bucket_name}/{remote_src} "

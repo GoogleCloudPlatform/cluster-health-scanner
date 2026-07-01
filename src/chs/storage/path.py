@@ -55,6 +55,8 @@ class PathStorageProvider(StorageProvider):
         try:
             shutil.copy2(src_path, local_dest)
             logger.debug("Copied %s to %s", src_path, local_dest)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"File not found: {src_path}") from e
         except OSError as e:
             raise OSError(
                 f"Failed to copy {src_path} to {local_dest}: {e}"
