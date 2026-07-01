@@ -405,7 +405,9 @@ class ResultsViewer:
 
         self.console.print(f"Run ID: {summary_data.run_id}")
         self.console.print(f"Submission Time: {summary_data.submission_time}")
-        self.console.print(f"Scope: {summary_data.total_nodes} nodes")
+        self.console.print(
+            f"Nodes under test: {summary_data.total_nodes} nodes"
+        )
         self.console.print("\nTest Suite Breakdown:")
 
         for summary in summary_data.test_summaries:

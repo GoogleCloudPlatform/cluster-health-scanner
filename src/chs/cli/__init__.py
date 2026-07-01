@@ -153,8 +153,9 @@ def cancel_jobs_on_failure(
                     logger.error(f"Failed to clean up CHS resources: {e}")
                     Console().print(
                         "\n[bold red]WARNING: Automatic cleanup failed. "
-                        "You may have lingering jobs on the cluster. "
-                        "Please run `chs cancel` to manually clean up."
+                        "You may have resources from lingering tests on the "
+                        "cluster. Please run `chs cancel` to manually clean "
+                        "up."
                         "[/bold red]"
                     )
 
@@ -502,7 +503,7 @@ def analyze_action(
                         subprocess.CalledProcessError,
                     ) as e:
                         logger.warning(
-                            "Failed to cleanup jobs after analysis: %s", e
+                            "Failed to cleanup tests after analysis: %s", e
                         )
                 Console().print(
                     f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
@@ -547,6 +548,10 @@ def analyze_action(
                         thresholds_path=validation,
                         skip_validation=skip_validation,
                     )
+                Console().print(
+                    f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
+                    f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
+                )
 
                 next_tests = None
                 if tier_manager:
@@ -572,7 +577,7 @@ def analyze_action(
                     ):
                         try:
                             ramble_manager.cancel_experiments()
-                            logger.debug("Cleaned up jobs for run %s", run_id)
+                            logger.debug("Cleaned up tests for run %s", run_id)
                         except (
                             ex.ChsException,
                             subprocess.CalledProcessError,
@@ -733,7 +738,7 @@ def safe_cancel_action(
             )
         else:
             prompt_msg = (
-                "This will cancel ALL running CHS jobs and delete ALL "
+                "This will cancel ALL running CHS tests and delete ALL "
                 "CHS resources on the cluster.\n"
                 "Are you sure you want to proceed?"
             )
@@ -762,7 +767,7 @@ def safe_cancel_action(
         "[bold blue]Setting up cluster environment...[/bold blue]"
         if is_setup
         else (
-            "[bold red]Canceling all active CHS jobs and "
+            "[bold red]Canceling all active CHS tests and "
             "cleaning up resources...[/bold red]"
         )
     )
@@ -926,7 +931,7 @@ def _handle_previous_run(
 
         has_no_failed_jobs = False
         if scheduler_instance.has_no_failed_jobs():
-            logger.warning("The cluster still has healthy CHS jobs.")
+            logger.warning("The cluster still has healthy CHS tests.")
             has_no_failed_jobs = True
 
         if submission_complete and has_no_failed_jobs:
@@ -957,8 +962,8 @@ def _handle_previous_run(
             )
         else:
             msg = (
-                "Previous run found but some jobs "
-                "have failed. Cleaning all stale resources"
+                "Previous run found but some tests "
+                "errored out. Cleaning all stale resources"
             )
         safe_cancel_action(
             scheduler,
@@ -971,7 +976,7 @@ def _handle_previous_run(
             scheduler,
             auto_approve=auto_approve,
             message=(
-                "Previous run found but jobs no longer "
+                "Previous run found but tests no longer "
                 "exist on the cluster. Cleaning all "
                 "stale resources."
             ),
@@ -1212,35 +1217,34 @@ def run(
         t.get("name") if isinstance(t, dict) else str(t) for t in parsed_tests
     )
     preview_title = (
-        "CHS Dry Run Preview (No jobs will be submitted):"
+        "CHS Dry Run Preview (No tests will be submitted):"
         if dry_run
         else "CHS Execution Preview:"
     )
     console = Console()
     console.print(f"[bold]{preview_title}[/bold]")
     console.print(
-        f"  Target Cluster: [{theme.CHS_HEADER_STYLE}]{cluster_name}"
+        f"  Target Cluster:    [{theme.CHS_HEADER_STYLE}]{cluster_name}"
         f"[/{theme.CHS_HEADER_STYLE}]"
     )
     console.print(
-        f"  Machine Type:   [{theme.CHS_HEADER_STYLE}]{machine_type}"
+        f"  Machine Type:      [{theme.CHS_HEADER_STYLE}]{machine_type}"
         f"[/{theme.CHS_HEADER_STYLE}]"
     )
     console.print(
-        f"  Scheduler:      [{theme.CHS_HEADER_STYLE}]{scheduler}"
+        f"  Scheduler:         [{theme.CHS_HEADER_STYLE}]{scheduler}"
         f"[/{theme.CHS_HEADER_STYLE}]"
     )
     if nodes_under_test:
         scope = (
             f"[{theme.CHS_HEADER_STYLE}]{len(nodes_under_test)}"
             f"[/{theme.CHS_HEADER_STYLE}] "
-            f"nodes under test"
         )
     else:
         scope = "all available nodes"
-    console.print(f"  Scope:          {scope}")
+    console.print(f"  Nodes under test:  {scope}")
     console.print(
-        f"  Tests Scheduled: [{theme.CHS_HEADER_STYLE}]{test_names}"
+        f"  Tests Scheduled:   [{theme.CHS_HEADER_STYLE}]{test_names}"
         f"[/{theme.CHS_HEADER_STYLE}]"
     )
 
@@ -1280,7 +1284,7 @@ def run(
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
     console.print(
-        f"  Run ID:         [{theme.CHS_WARNING_STYLE}]{run_id}"
+        f"  Run ID:            [{theme.CHS_WARNING_STYLE}]{run_id}"
         f"[/{theme.CHS_WARNING_STYLE}]"
     )
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
@@ -1329,7 +1333,7 @@ def run(
         else:
             status_msg = (
                 f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
-                f"and submitting jobs...[/{theme.CHS_SUCCESS_STYLE}]"
+                f"and submitting tests...[/{theme.CHS_SUCCESS_STYLE}]"
             )
     with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
         with theme.get_progress_spinner(status_msg):
@@ -1378,7 +1382,7 @@ def run(
         )
     else:
         console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted jobs."
+            f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted tests."
             f"[/{theme.CHS_SUCCESS_STYLE}]"
         )
 

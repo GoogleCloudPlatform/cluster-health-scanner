@@ -653,14 +653,17 @@ class RambleManager:
             header_style = theme.CHS_HEADER_STYLE
             title_style = theme.CHS_TITLE_STYLE
             jobs = (
-                f"[{header_style}]Jobs Remaining:[/{header_style}] "
+                f"[{header_style}]Tests Remaining:[/{header_style}] "
                 f"[{title_style}]{len(active_jobs)}[/{title_style}]"
             )
             time_str = (
                 f"[{header_style}]Time Elapsed:[/{header_style}] "
                 f"[{title_style}]{elapsed_str}[/{title_style}]"
             )
-            return f"{jobs} | {time_str}"
+            return (
+                f"{jobs} | {time_str}\n \n"
+                f"[dim]You can safely detach from this run using Ctrl+C.[/dim]"
+            )
 
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -815,7 +818,7 @@ class RambleManager:
             console = Console()
             console.print(
                 "\n[yellow]Detached from active run. "
-                "Jobs will continue executing on the cluster.[/yellow]"
+                "Tests will continue executing on the cluster.[/yellow]"
             )
             console.print(
                 "To compile logs and generate results run: "
@@ -834,6 +837,10 @@ class RambleManager:
         logger.debug(
             "All jobs completed and logs fetched for run %s.",
             self._run_id,
+        )
+        Console().print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Tests execution completed.\n"
+            f"[/{theme.CHS_SUCCESS_STYLE}]"
         )
 
     def _safe_fetch_log(

@@ -56,9 +56,9 @@ class NvidiaSmiRenderer(DefaultRenderer):
             )
             validation_status = "N/A"
             if res.result_status == pb.RESULT_STATUS_SUCCESS:
-                validation_status = "[green]PASS[/]"
+                validation_status = "[green]MET[/]"
             elif res.result_status == pb.RESULT_STATUS_FAILED:
-                validation_status = "[red]FAIL[/]"
+                validation_status = "[red]NOT MET[/]"
 
             if nodes not in node_data:
                 node_data[nodes] = {
