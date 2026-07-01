@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for RambleManager."""
 
 import logging
@@ -221,11 +235,16 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(job_ids, ["123"])
         mock_update_registry.assert_called_once_with(["123"])
 
+        self.assertEqual(self.mock_app_data.update_run.call_count, 2)
+        args, kwargs = self.mock_app_data.update_run.call_args
+        self.assertEqual(args[0], "ws1")
+        self.assertTrue(args[1].get("submission_complete"))
+
     def test_register_initial_run_preserves_custom_fields(self):
         """Test _register_initial_run preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
-        mock_scheduler.name = "gke"
+        mock_scheduler.name = "kubernetes"
         manager._scheduler = mock_scheduler
 
         self.mock_app_data.get_run.return_value = {
@@ -239,13 +258,13 @@ class TestRambleManager(unittest.TestCase):
         updated_run = self.mock_app_data.update_run.call_args[0][1]
         self.assertTrue(updated_run.get("kueue_supported"))
         self.assertEqual(updated_run.get("custom_flag"), "yes")
-        self.assertEqual(updated_run.get("scheduler"), "gke")
+        self.assertEqual(updated_run.get("scheduler"), "kubernetes")
 
     def test_update_registry_preserves_custom_fields(self):
         """Test _update_registry preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         mock_scheduler = mock.Mock()
-        mock_scheduler.name = "gke"
+        mock_scheduler.name = "kubernetes"
         manager._scheduler = mock_scheduler
 
         self.mock_app_data.get_run.return_value = {"kueue_supported": True}
@@ -279,7 +298,7 @@ class TestRambleManager(unittest.TestCase):
             machine_type="a3-high",
             timeout=None,
             deadline=None,
-            workspace_name="ws1",
+            run_id=None,
         )
 
     def test_check_jobs_running_true(self):
@@ -355,7 +374,9 @@ class TestRambleManager(unittest.TestCase):
         self.mock_run.return_value.stdout = "analysis complete"
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
-            self.mock_app_data.get_run.return_value = {"scheduler": "gke"}
+            self.mock_app_data.get_run.return_value = {
+                "scheduler": "kubernetes"
+            }
             with mock.patch("chs.ramble_manager.get_scheduler"):
                 with (
                     mock.patch.object(
@@ -376,7 +397,9 @@ class TestRambleManager(unittest.TestCase):
 
                                 mock_boh_gen.assert_called_once()
                                 _, kwargs = mock_boh_gen.call_args
-                                self.assertEqual(kwargs["cluster_type"], "gke")
+                                self.assertEqual(
+                                    kwargs["cluster_type"], "kubernetes"
+                                )
                                 mock_cancel.assert_called_once()
                                 mock_cleanup.assert_called_once()
 
@@ -469,38 +492,33 @@ class TestRambleManager(unittest.TestCase):
         manager._scheduler = mock.Mock()
         manager._scheduler.name = "slurm"
         results_json_path = f"{self.tmp_dir}/ws1/results.latest.json"
-        self.mock_app_data.get_bucket.return_value = "my-bucket"
+        self.mock_app_data.get_storage_config.return_value = {
+            "type": "gcs",
+            "gcs": {"bucket_name": "my-bucket"},
+        }
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
             with mock.patch.object(
                 manager, "cancel_experiments"
             ) as mock_cancel:
-                with mock.patch.object(
-                    manager, "archive_and_upload_workspace"
-                ) as mock_archive:
-                    with mock.patch("os.getcwd", return_value="/home/user"):
-                        self.mock_os_path_exists.side_effect = lambda p: True
+                with mock.patch("os.getcwd", return_value="/home/user"):
+                    self.mock_os_path_exists.side_effect = lambda p: True
 
-                        # Mock PluginManager in core for Base PR isolation
-                        with mock.patch(
-                            "chs.core.plugin_manager.PluginManager"
-                        ):
-                            output_path = manager.generate_boh(
-                                results_json_path
-                            )
+                    # Mock PluginManager in core for Base PR isolation
+                    with mock.patch("chs.core.plugin_manager.PluginManager"):
+                        output_path = manager.generate_boh(results_json_path)
 
-                            self.assertEqual(output_path, f"{self.tmp_dir}/ws1")
-                            mock_boh_gen.assert_called_once_with(
-                                results_json_path,
-                                base_log_dir=f"{self.tmp_dir}/ws1",
-                                cluster_type="slurm",
-                                gcs_base_path="gs://my-bucket/workspaces/ws1",
-                                thresholds_path=None,
-                                skip_validation=False,
-                            )
-                        mock_boh_gen.return_value.generate.assert_called_once()
-                        mock_cancel.assert_called_once()
-                        mock_archive.assert_not_called()
+                        self.assertEqual(output_path, f"{self.tmp_dir}/ws1")
+                        mock_boh_gen.assert_called_once_with(
+                            results_json_path,
+                            base_log_dir=f"{self.tmp_dir}/ws1",
+                            cluster_type="slurm",
+                            gcs_base_path="gs://my-bucket/workspaces/ws1",
+                            thresholds_path=None,
+                            skip_validation=False,
+                        )
+                    mock_boh_gen.return_value.generate.assert_called_once()
+                    mock_cancel.assert_called_once()
 
     def test_wait_for_jobs(self):
         """Test wait_for_jobs calls _monitor_jobs."""
@@ -586,24 +604,58 @@ mycriteria:
         manager._cleanup_inputs_dir()
         self.assertFalse(os.path.exists(inputs_dir))
 
-    def test_archive_and_upload_workspace_success(self):
-        """Test archive_and_upload_workspace with bucket configured."""
+    def test_upload_boh_success(self):
+        """Test _upload_boh calls provider.upload_file."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        self.mock_os_path_exists.side_effect = (
+            lambda p: True
+            if "bill_of_health.json" in p
+            else self.real_os_path_exists(p)
+        )
+        mock_provider = mock.Mock()
+        manager._upload_boh(mock_provider)
+        mock_provider.upload_file.assert_called_once_with(
+            os.path.join(manager.path, "bill_of_health.json"),
+            "bills_of_health/ws1.json",
+        )
+
+    def test_upload_boh_failure(self):
+        """Test _upload_boh raises ChsArchiveException on provider failure."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        self.mock_os_path_exists.side_effect = (
+            lambda p: True
+            if "bill_of_health.json" in p
+            else self.real_os_path_exists(p)
+        )
+        mock_provider = mock.Mock()
+        mock_provider.upload_file.side_effect = Exception("Upload failed")
+        with self.assertRaises(ChsArchiveException):
+            manager._upload_boh(mock_provider)
+
+    def test_upload_workspace_success(self):
+        """Test _upload_workspace archives and calls provider.upload_file."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
-        self.mock_app_data.get_bucket.return_value = "my-bucket"
+        mock_provider = mock.Mock()
+
+        # Mock glob to return a dummy archive file
+        mock_glob = mock.patch("pathlib.Path.glob").start()
+        mock_archive_file = mock.Mock()
+        mock_archive_file.name = "ws1.tar.gz"
+        mock_glob.side_effect = (
+            lambda pat: [mock_archive_file] if "tar.gz" in pat else []
+        )
 
         with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager.archive_and_upload_workspace()
+            manager._upload_workspace(mock_provider)
 
             mock_exec.assert_called_once_with(
                 "workspace",
                 [
                     "archive",
                     "-t",
-                    "--upload-url",
-                    "gs://my-bucket/workspaces/",
                     "--archive-pattern",
                     "bill_of_health.json",
                     "--archive-pattern",
@@ -612,116 +664,66 @@ mycriteria:
                 capture_output=True,
                 error_context="Failed to archive workspace",
             )
+            mock_provider.upload_file.assert_called_once_with(
+                str(mock_archive_file), "workspaces/ws1.tar.gz"
+            )
+            mock_archive_file.unlink.assert_called_once()
+        mock_glob.stop()
 
-    def test_archive_and_upload_workspace_no_bucket(self):
-        """Test archive_and_upload_workspace with no bucket configured."""
+    def test_upload_workspace_no_archive_found(self):
+        """Test _upload_workspace logs warning if no archive found."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_app_data.get_bucket.return_value = None
+        os.makedirs(
+            os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
+        )
+        mock_provider = mock.Mock()
+
+        mock_glob = mock.patch("pathlib.Path.glob").start()
+        mock_glob.return_value = []  # No files found
 
         with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager.archive_and_upload_workspace()
-            mock_exec.assert_not_called()
-
-    def test_archive_and_upload_workspace_path_not_exists(self):
-        """Test archive_and_upload_workspace returns if path not exists."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_app_data.get_bucket.return_value = "my-bucket"
-        self.mock_os_path_exists.side_effect = (
-            lambda p: False
-            if p == manager.path
-            else self.real_os_path_exists(p)
-        )
-
-        with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager.archive_and_upload_workspace()
-            mock_exec.assert_not_called()
-
-    def test_archive_and_upload_workspace_exception(self):
-        """Test archive_and_upload_workspace does not raise on exception."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_app_data.get_bucket.return_value = "my-bucket"
-
-        with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            mock_exec.side_effect = ChsException("Archive failed")
-            manager.archive_and_upload_workspace()
-
-    @mock.patch("chs.ramble_manager.storage")
-    def test_archive_and_upload_boh_success(self, mock_storage):
-        """Test archive_and_upload_boh uses google-cloud-storage."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_app_data.get_bucket.return_value = "my-bucket"
-
-        self.mock_os_path_exists.side_effect = (
-            lambda p: True
-            if "bill_of_health.json" in p
-            else self.real_os_path_exists(p)
-        )
-
-        mock_client_instance = mock_storage.Client.return_value
-        mock_bucket = mock_client_instance.bucket.return_value
-        mock_blob = mock_bucket.blob.return_value
-
-        manager.archive_and_upload_boh()
-
-        mock_storage.Client.assert_called_once()
-        mock_client_instance.bucket.assert_called_once_with("my-bucket")
-        mock_bucket.blob.assert_called_once_with("bills_of_health/ws1.json")
-        mock_blob.upload_from_filename.assert_called_once_with(
-            os.path.join(manager.path, "bill_of_health.json")
-        )
-
-    @mock.patch("chs.ramble_manager.storage")
-    def test_archive_and_upload_boh_failure(self, mock_storage):
-        """Test archive_and_upload_boh raises on failure."""
-        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_app_data.get_bucket.return_value = "my-bucket"
-        self.mock_os_path_exists.side_effect = (
-            lambda p: True
-            if "bill_of_health.json" in p
-            else self.real_os_path_exists(p)
-        )
-
-        mock_client_instance = mock_storage.Client.return_value
-        mock_bucket = mock_client_instance.bucket.return_value
-        mock_blob = mock_bucket.blob.return_value
-        mock_blob.upload_from_filename.side_effect = Exception("Upload failed")
-
-        with self.assertRaises(ChsArchiveException):
-            manager.archive_and_upload_boh()
+            manager._upload_workspace(mock_provider)
+            mock_exec.assert_called_once()
+            mock_provider.upload_file.assert_not_called()
+        mock_glob.stop()
 
     def test_archive_success(self):
-        """Test archive calls both archival methods."""
+        """Test archive retrieves provider and calls upload methods."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
+        mock_provider = mock.Mock()
+
         with (
-            mock.patch.object(manager, "archive_and_upload_boh") as mock_boh,
-            mock.patch.object(
-                manager, "archive_and_upload_workspace"
-            ) as mock_workspace,
+            mock.patch(
+                "chs.storage.StorageProviderFactory.get_active_provider",
+                return_value=mock_provider,
+            ),
+            mock.patch.object(manager, "_upload_boh") as mock_boh,
+            mock.patch.object(manager, "_upload_workspace") as mock_workspace,
         ):
             manager.archive()
-            mock_boh.assert_called_once()
-            mock_workspace.assert_called_once()
+            mock_boh.assert_called_once_with(mock_provider)
+            mock_workspace.assert_called_once_with(mock_provider)
 
-    def test_archive_boh_failure(self):
-        """Test archive calls workspace archival even if BOH archival fails."""
+    def test_archive_no_provider(self):
+        """Test archive skips upload if provider cannot be loaded."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
         with (
-            mock.patch.object(manager, "archive_and_upload_boh") as mock_boh,
-            mock.patch.object(
-                manager, "archive_and_upload_workspace"
-            ) as mock_workspace,
+            mock.patch(
+                "chs.storage.StorageProviderFactory.get_active_provider",
+                side_effect=Exception("No provider"),
+            ),
+            mock.patch.object(manager, "_upload_boh") as mock_boh,
+            mock.patch.object(manager, "_upload_workspace") as mock_workspace,
         ):
-            mock_boh.side_effect = ChsArchiveException("BOH failed")
-            with self.assertRaises(ChsArchiveException):
-                manager.archive()
-            mock_boh.assert_called_once()
-            mock_workspace.assert_called_once()
+            manager.archive()
+            mock_boh.assert_not_called()
+            mock_workspace.assert_not_called()
 
 
 if __name__ == "__main__":

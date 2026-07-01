@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import dataclasses
 import os
 import sys
@@ -55,17 +69,17 @@ class _MergeConfigsTestCase:
 
 class TestApplicationHelper(unittest.TestCase):
     def test_is_tpu(self):
-        self.assertTrue(is_tpu("tpu7x"))
-        self.assertTrue(is_tpu("tpuv6e"))
-        self.assertFalse(is_tpu("a3-ultra"))
-        self.assertFalse(is_tpu("a3-high"))
+        self.assertTrue(is_tpu("tpu7x-standard-4t"))
+        self.assertTrue(is_tpu("ct6e-standard-4t"))
+        self.assertFalse(is_tpu("a3-ultragpu-8g"))
+        self.assertFalse(is_tpu("a3-megagpu-8g"))
         self.assertFalse(is_tpu(""))
         self.assertFalse(is_tpu(None))
 
     def test_deep_merge_cases(self):
         # For _deep_merge(dest, src):
         #    - dest: Base configuration (common.yaml).
-        #    - src: Overriding configuration (gke.yaml or slurm.yaml).
+        #    - src: Overriding configuration (kubernetes.yaml or slurm.yaml).
         chs_app = Chs()
 
         circular_src = {}
@@ -155,7 +169,7 @@ class TestApplicationHelper(unittest.TestCase):
         # For TestHelper._merge_configs(context_dict, configs, ...):
         #    - context_dict (dest): Suite variables (higher precedence).
         #    - configs (src): Default configurations from deep_merge of
-        #     common.yaml with gke.yaml or slurm.yaml (lower precedence).
+        #     common.yaml with kubernetes.yaml or slurm.yaml (lower precedence).
         test_cases = [
             _MergeConfigsTestCase(
                 name="precedence",

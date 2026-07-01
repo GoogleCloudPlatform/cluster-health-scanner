@@ -1,0 +1,9 @@
+description: Tests the JAX 'hbm' test against a kubernetes scheduler for tpuv6e
+command:
+- run
+- --tests
+- hbm
+- --nodes
+- node1
+- --dry-run
+- kubernetes

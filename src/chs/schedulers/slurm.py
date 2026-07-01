@@ -1,5 +1,20 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Slurm scheduler implementation for Cluster Health Scanner."""
 
+import concurrent.futures
 import importlib.resources as pkg_resources
 import logging
 import os
@@ -13,6 +28,7 @@ from google.api_core.exceptions import GoogleAPICallError
 
 from typing import Any, TYPE_CHECKING
 
+
 if TYPE_CHECKING:
     from chs.utils.app_data import ChsAppData
 
@@ -22,6 +38,8 @@ from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
+
+_MAX_CONCURRENT_API_REQUESTS = 10
 
 
 def boolean_representer(dumper, data):
@@ -58,25 +76,67 @@ class SlurmScheduler(BaseScheduler):
     def __init__(
         self,
         nodes: str | None = None,
-        nodelist: str | None = None,
-        partition: str | None = None,
+        nodelists: str | None = None,
+        partitions: str | None = None,
         app_data: "ChsAppData | None" = None,
     ):
         super().__init__(app_data)
         self.nodes_arg = nodes
-        self.nodelist_arg = nodelist
-        self.partition_arg = partition
+        self.nodelists_arg = nodelists
+        self.partitions_arg = partitions
         self._resolved_nodes: list[str] | None = None
+
+    def _resolve_project_id(self, node: str) -> str:
+        """Resolves GCP project ID from GCP application default credentials."""
+        try:
+            _, project = google.auth.default()
+        except Exception as e:
+            raise ex.ChsSchedulerException(
+                "Failed to get GCP credentials."
+            ) from e
+        if not project:
+            raise ex.ChsSchedulerException(
+                "Could not determine GCP project from credentials. Please set"
+                " it using 'gcloud auth application-default login --project"
+                " <PROJECT>' or the GOOGLE_CLOUD_PROJECT environment variable."
+            )
+        return project
 
     @property
     def name(self) -> str:
         return "slurm"
 
+    def get_cluster_name(self) -> str | None:
+        """Retrieves cluster name from Slurm scontrol.
+
+        Failsafe: All subprocess execution queries are wrapped in strict timeout
+        blocks.
+        """
+        try:
+            cmd = ["scontrol", "show", "config"]
+            res = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=5, check=False
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    if "ClusterName" in line:
+                        parts = line.split("=")
+                        if len(parts) == 2:
+                            val = parts[1].strip()
+                            logger.debug(
+                                "Found cluster name from scontrol: %s", val
+                            )
+                            return val
+        except Exception as e:
+            logger.debug("scontrol query failed: %s", e)
+
+        return None
+
     def _run_srun(self, args: list[str], timeout: int = 60) -> str:
         """Runs a command via srun and returns filtered output."""
         cmd = ["srun", "-N1", "-n1"]
-        if self.partition_arg:
-            cmd.extend(["-p", self.partition_arg])
+        if self.partitions_arg:
+            cmd.extend(["-p", self.partitions_arg])
         cmd.extend(args)
         result = subprocess.run(
             cmd,
@@ -129,12 +189,12 @@ class SlurmScheduler(BaseScheduler):
 
         if (
             bool(self.nodes_arg)
-            + bool(self.nodelist_arg)
-            + bool(self.partition_arg)
+            + bool(self.nodelists_arg)
+            + bool(self.partitions_arg)
         ) > 1:
             raise click.UsageError(
-                "Only one of --nodes, --nodelist, or "
-                "--partition can be provided."
+                "Only one of --nodes, --nodelists, or "
+                "--partitions can be provided."
             )
 
         if self.nodes_arg:
@@ -143,24 +203,25 @@ class SlurmScheduler(BaseScheduler):
             ]
             return self._resolved_nodes
 
-        if self.nodelist_arg:
+        if self.nodelists_arg:
             try:
                 output = subprocess.run(
-                    ["scontrol", "show", "hostname", self.nodelist_arg],
+                    ["scontrol", "show", "hostname", self.nodelists_arg],
                     text=True,
                     check=True,
                     capture_output=True,
+                    timeout=5,
                 ).stdout.strip()
                 self._resolved_nodes = [n for n in output.split("\n") if n]
                 return self._resolved_nodes
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 raise ex.ChsSchedulerException(
-                    f"Failed to expand nodelist: {e}"
+                    f"Failed to expand nodelists: {e}"
                 ) from e
 
         sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
-        if self.partition_arg:
-            sinfo_cmd.extend(["-p", self.partition_arg])
+        if self.partitions_arg:
+            sinfo_cmd.extend(["-p", self.partitions_arg])
 
         try:
             output = subprocess.run(
@@ -204,38 +265,55 @@ class SlurmScheduler(BaseScheduler):
                 return {}
 
             client = compute_v1.InstancesClient()
-            # TODO: Batch GCE API requests to avoid URL length
-            # limits if nodes list is large.
-            filter_str = " OR ".join([f'name = "{node}"' for node in nodes])
-            request = compute_v1.AggregatedListInstancesRequest(
-                project=project,
-                filter=filter_str,
-            )
-            page_result = client.aggregated_list(request=request)
-
             topology: dict[str, dict[str, list[str]]] = {}
-            for zone, instances_in_zone in page_result:
-                if instances_in_zone.instances:
-                    for item in instances_in_zone.instances:
-                        name = item.name
-                        if not name:
-                            continue
+            batch_size = 100
 
-                        resource_status = getattr(item, "resource_status", None)
-                        if not resource_status:
-                            continue
-                        topo_info = getattr(
-                            resource_status, "physical_host_topology", None
-                        )
-                        if not topo_info:
-                            continue
+            def fetch_batch(batch_nodes):
+                filter_str = " OR ".join([f'name = "{n}"' for n in batch_nodes])
+                request = compute_v1.AggregatedListInstancesRequest(
+                    project=project,
+                    filter=filter_str,
+                )
+                return client.aggregated_list(request=request)
 
-                        block = topo_info.block or "default-block"
-                        subblock = topo_info.subblock or "default-subblock"
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=_MAX_CONCURRENT_API_REQUESTS
+            ) as executor:
+                futures = [
+                    executor.submit(fetch_batch, nodes[i : i + batch_size])
+                    for i in range(0, len(nodes), batch_size)
+                ]
 
-                        topology.setdefault(block, {}).setdefault(
-                            subblock, []
-                        ).append(name)
+                for future in concurrent.futures.as_completed(futures):
+                    page_result = future.result()
+                    for zone, instances_in_zone in page_result:
+                        if instances_in_zone.instances:
+                            for item in instances_in_zone.instances:
+                                name = item.name
+                                if not name:
+                                    continue
+
+                                resource_status = getattr(
+                                    item, "resource_status", None
+                                )
+                                if not resource_status:
+                                    continue
+                                topo_info = getattr(
+                                    resource_status,
+                                    "physical_host_topology",
+                                    None,
+                                )
+                                if not topo_info:
+                                    continue
+
+                                block = topo_info.block or "default-block"
+                                subblock = (
+                                    topo_info.subblock or "default-subblock"
+                                )
+
+                                topology.setdefault(block, {}).setdefault(
+                                    subblock, []
+                                ).append(name)
 
             return topology
 
@@ -269,7 +347,7 @@ class SlurmScheduler(BaseScheduler):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
-        workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -302,6 +380,8 @@ class SlurmScheduler(BaseScheduler):
         variables["tcp_interfaces"] = tcp_interfaces_str
         variables["timeout"] = timeout
         variables["deadline"] = deadline
+
+        variables["chs_run_id"] = run_id
 
         logger.debug("Configuration: %r", config)
 

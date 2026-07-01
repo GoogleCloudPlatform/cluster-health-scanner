@@ -1,2 +1,0 @@
-description: "Tests the 'dcgm' test against a gke scheduler for a3-ultra"
-command: ["run", "--tests", "dcgm", "--scheduler", "gke", "--machine-type", "a3-ultra", "--nodes", "node1,node2", "--dry-run"]

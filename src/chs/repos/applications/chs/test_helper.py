@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import copy
 import datetime
 import logging
@@ -61,7 +75,7 @@ podAntiAffinity:
             return ""
         if scheduler == "slurm":
             return ",".join(nodes)
-        elif scheduler == "gke":
+        elif scheduler == "kubernetes":
             return "\n".join(
                 [TestHelper._yaml_block(f"- {n}", 12) for n in nodes]
             )
@@ -164,8 +178,8 @@ podAntiAffinity:
         extra_context: dict = None,
         extra_sbatch_headers: dict = None,
     ) -> dict:
-        scheduler = ctx_vars.get("scheduler", "gke")
-        machine_type = ctx_vars.get("machine_type", "a3-ultra")
+        scheduler = ctx_vars.get("scheduler", "kubernetes")
+        machine_type = ctx_vars.get("machine_type", "a3-ultragpu-8g")
 
         context_dict = {
             "variables": ctx_vars,
@@ -186,7 +200,7 @@ podAntiAffinity:
             ctx_vars["extra_sbatch_headers"] = TestHelper._get_sbatch_headers(
                 headers_dict
             )
-        elif scheduler == "gke":
+        elif scheduler == "kubernetes":
             nodes_list = ctx_vars.get("nodes")
             nodes_list = nodes_list if isinstance(nodes_list, list) else None
             TestHelper._k8s_settings(ctx_vars, nodes_str, nodes_list=nodes_list)
@@ -203,7 +217,7 @@ podAntiAffinity:
         default_config_file: str = None,
     ) -> dict:
         ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "gke")
+        scheduler = ctx_vars.get("scheduler", "kubernetes")
 
         if nodes_list is not None:
             ctx_vars["nodes"] = nodes_list
@@ -237,7 +251,7 @@ podAntiAffinity:
         extra_sbatch_headers: dict = None,
     ) -> dict:
         ctx_vars = copy.deepcopy(variables)
-        scheduler = ctx_vars.get("scheduler", "gke")
+        scheduler = ctx_vars.get("scheduler", "kubernetes")
 
         ctx_vars["node"] = ctx_vars.get("nodes")
 
@@ -456,7 +470,17 @@ podAntiAffinity:
         path = os.path.join(chs_dir, "configs", "benchmarks", filename)
         try:
             with open(path, "r") as f:
-                return f.read()
+                content = f.read()
+            # Strip leading copyright comments / empty lines
+            lines = content.splitlines()
+            start_idx = 0
+            while start_idx < len(lines):
+                line = lines[start_idx].strip()
+                if not line or line.startswith("#"):
+                    start_idx += 1
+                else:
+                    break
+            return "\n".join(lines[start_idx:])
         except Exception as e:
             logger.error(f"Failed to read benchmark config {path}: {e}")
             raise e

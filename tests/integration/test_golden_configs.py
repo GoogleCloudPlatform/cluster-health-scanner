@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import pathlib
 import re
@@ -43,6 +57,13 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "      exit 0\n"
         "    fi\n"
         "    ;;\n"
+        "  scontrol)\n"
+        '    if [[ "$*" == *"show config"* ]]; then\n'
+        '      echo "ClusterName = test-cluster"\n'
+        "    else\n"
+        "      exit 0\n"
+        "    fi\n"
+        "    ;;\n"
         "  kubectl)\n"
         '    if [[ "$*" == *"get networks.networking.gke.io"* ]]; then\n'
         '      echo \'{"items": [{"metadata": {"name": "default"}, '
@@ -64,13 +85,19 @@ def mock_cluster_env(tmp_path, monkeypatch):
         '    elif [[ "$*" == *"get deployment -n kueue-system"* ]]; then\n'
         '      echo "registry.k8s.io/kueue/kueue:v0.14.5"\n'
         '    elif [[ "$*" == *"get node"* ]]; then\n'
-        '      echo \'{"metadata": {"labels": '
+        '      if [[ "$*" == *".spec.providerID"* ]]; then\n'
+        '        echo "gce://mock-project/mock-zone/mock-node"\n'
+        "      else\n"
+        '        echo \'{"metadata": {"labels": '
         '{"cloud.google.com/gke-tpu-topology": "2x2x1"}}}\'\n'
+        "      fi\n"
         '    elif [[ "$*" == *"get clusterqueue"* ]]; then\n'
         '      if [[ "$MOCK_KUEUE_APPLY_FAIL" == "1" ]]; then\n'
         "        exit 1\n"
         "      fi\n"
         '      echo "True"\n'
+        '    elif [[ "$*" == *"config current-context"* ]]; then\n'
+        '      echo "test-cluster"\n'
         "    else\n"
         "      exit 0\n"
         "    fi\n"
@@ -84,9 +111,12 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "enroot",
         "unsquashfs",
         "srun",
-        "kubectl",
-        "sinfo",
         "scontrol",
+        "sacct",
+        "squeue",
+        "scancel",
+        "sinfo",
+        "kubectl",
     ]:
         mock_path = bin_dir / mock_bin
         mock_path.write_text(mock_script)
@@ -94,6 +124,24 @@ def mock_cluster_env(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
     return bin_dir
+
+
+def _get_machine_type_from_test_case(test_case: str) -> str:
+    if "a3mega" in test_case:
+        return "a3-megagpu-8g"
+    if "a3ultra" in test_case:
+        return "a3-ultragpu-8g"
+    if "a4x-max" in test_case:
+        return "a4x-maxgpu-4g-metal"
+    if "a4" in test_case:
+        return "a4-highgpu-8g"
+    if "tpu7x" in test_case:
+        return "tpu7x-standard-4t"
+    if "tpuv6e" in test_case:
+        return "ct6e-standard-4t"
+    raise ValueError(
+        f"Could not determine machine type from test case: {test_case}"
+    )
 
 
 @pytest.mark.parametrize("test_case", get_test_cases())
@@ -116,9 +164,43 @@ def test_golden_config(
     workspaces_dir = tmp_path / "workspaces"
     workspaces_dir.mkdir()
 
+    app_data_dir = tmp_path / "app_data"
+    app_data_dir.mkdir()
+
+    mocker.patch(
+        "platformdirs.user_data_dir",
+        return_value=str(app_data_dir),
+    )
+
     mocker.patch(
         "chs.utils.app_data.ChsAppData.get_workspaces_dir",
         return_value=str(workspaces_dir),
+    )
+
+    mocker.patch(
+        "chs.cli.utils.generate_random_suffix",
+        return_value="mock",
+    )
+
+    # Mock GCP credentials and preflight
+    mocker.patch(
+        "google.auth.default",
+        return_value=(None, "mock-project"),
+    )
+    mocker.patch("chs.preflights.run_platform_preflights")
+
+    # Mock GCE instances info query
+    detected_mt = _get_machine_type_from_test_case(test_case)
+
+    def mock_query_info(project, nodes):
+        return {
+            node: {"machine_type": detected_mt, "instance_id": "12345"}
+            for node in nodes
+        }
+
+    mocker.patch(
+        "chs.schedulers.base.query_gce_instances_info",
+        side_effect=mock_query_info,
     )
 
     result = runner.invoke(cli, command)
@@ -149,7 +231,13 @@ def test_golden_config(
             line.rstrip() for line in normalized.splitlines() if line.strip()
         )
 
-    scrubber = WorkspaceScrubber(str(workspace_path))
+    scrubber = WorkspaceScrubber(
+        str(workspace_path),
+        additional_replacements=[
+            (str(app_data_dir), "<APP_DATA_DIR>"),
+            (str(tmp_path), "<TMP_PATH>"),
+        ],
+    )
     temp_snapshot_dir = tmp_path / "temp_snapshot"
     scrubber.extract_and_scrub(str(temp_snapshot_dir))
 

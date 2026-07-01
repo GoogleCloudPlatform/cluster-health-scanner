@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for TestHelper."""
 
 import sys
@@ -100,7 +114,7 @@ class TestTestHelper(unittest.TestCase):
                 context_name=name
             )
             configs = {
-                "a3-ultra": {
+                "a3-ultragpu-8g": {
                     "nccl-tests": {
                         "variables": {},
                         "env_vars": {},
@@ -119,13 +133,13 @@ class TestTestHelper(unittest.TestCase):
     def test_prepare_base_context(self):
         ctx_vars = {
             "scheduler": "slurm",
-            "machine_type": "a3-ultra",
+            "machine_type": "a3-ultragpu-8g",
             "timeout": 600,
             "deadline": 3600,
             "nodes": ["node1"],
         }
         configs = {
-            "a3-ultra": {
+            "a3-ultragpu-8g": {
                 "my-app": {
                     "variables": {"default_var": "val"},
                 }
@@ -148,7 +162,7 @@ class TestTestHelper(unittest.TestCase):
 
     def test_prepare_cluster_context(self):
         variables = {
-            "scheduler": "gke",
+            "scheduler": "kubernetes",
             "machine_type": "tpu7x",
         }
         configs = {
@@ -174,13 +188,13 @@ class TestTestHelper(unittest.TestCase):
     def test_create_node_test_context(self):
         variables = {
             "scheduler": "slurm",
-            "machine_type": "a3-ultra",
+            "machine_type": "a3-ultragpu-8g",
             "timeout": 600,
             "deadline": 3600,
             "nodes": ["node1"],
         }
         configs = {
-            "a3-ultra": {
+            "a3-ultragpu-8g": {
                 "my-app": {
                     "variables": {},
                 }
@@ -200,7 +214,7 @@ class TestTestHelper(unittest.TestCase):
 
     def test_tpu_collectives_single_node_test(self):
         variables = {
-            "scheduler": "gke",
+            "scheduler": "kubernetes",
             "machine_type": "tpuv6e",
             "tpu_topology": "4x4",
             "cores_per_chip": 1,

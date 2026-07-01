@@ -1,2 +1,0 @@
-description: "Tests the JAX 'gemm' test against a gke scheduler for tpuv6e"
-command: ["run", "--tests", "gemm", "--scheduler", "gke", "--machine-type", "tpuv6e", "--nodes", "node1,node2", "--dry-run"]

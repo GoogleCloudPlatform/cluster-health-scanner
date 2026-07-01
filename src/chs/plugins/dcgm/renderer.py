@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from chs.protos import bill_of_health_pb2 as pb
 from rich.text import Text
 from rich.console import Group, RenderableType
@@ -124,4 +138,7 @@ class DcgmRenderer(DefaultRenderer):
                         first_level_row = False
             table.add_section()
 
+        val_table = self.render_validation_results(test_results)
+        if val_table:
+            return Group(*header_elements, table, val_table)
         return Group(*header_elements, table)

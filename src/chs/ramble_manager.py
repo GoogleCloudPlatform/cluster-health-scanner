@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Manages Ramble workspaces for Cluster Health Scanner runs.
 
 This module provides the RambleManager class, which encapsulates
@@ -20,8 +34,6 @@ import time
 from typing import Any
 import click
 from google.protobuf.json_format import MessageToJson
-from google.cloud import storage
-from google.api_core.exceptions import GoogleAPICallError
 
 from chs import exceptions as ex
 from chs.boh_generator import BOHGenerator
@@ -44,14 +56,16 @@ class RambleManager:
         run_command: Callable[
             ..., subprocess.CompletedProcess[str]
         ] = subprocess.run,
+        run_id: str | None = None,
     ) -> None:
         """Initializes the RambleManager.
 
         Args:
           base_dir: The base directory where Ramble workspaces will be created.
-          workspace_name: A unique name for this CHS workspace.
+          workspace_name: The physical workspace directory name.
           run_command: The function to use for running subprocess commands.
             Defaults to `subprocess.run`.
+          run_id: The user-facing run ID.
 
         Raises:
           click.UsageError: If the Ramble setup script is not found.
@@ -60,15 +74,17 @@ class RambleManager:
 
         self._base_dir = base_dir
         self._workspace_name = workspace_name
-
-        self._path = os.path.join(self._base_dir, self._workspace_name)
+        self._run_id = run_id
         self._app_data = ChsAppData()
+        self._path = os.path.join(self._base_dir, self._workspace_name)
 
         # Ensure the directory exists for logging and execution
         os.makedirs(self._path, exist_ok=True)
 
         logger.debug(
-            "Initialized manager with workspace_name='%s', path='%s'",
+            "Initialized manager with run_id='%s', workspace_name='%s', "
+            "path='%s'",
+            self._run_id,
             self._workspace_name,
             self._path,
         )
@@ -87,7 +103,8 @@ class RambleManager:
 
     def __repr__(self) -> str:
         return (
-            f"RambleManager(workspace_name='{self._workspace_name}',"
+            f"RambleManager(run_id='{self._run_id}',"
+            f" workspace_name='{self._workspace_name}',"
             f" path='{self._path}')"
         )
 
@@ -95,6 +112,16 @@ class RambleManager:
     def path(self) -> str:
         """The absolute path to the Ramble workspace."""
         return self._path
+
+    @property
+    def workspace_name(self) -> str:
+        """The physical workspace directory name."""
+        return self._workspace_name
+
+    @property
+    def run_id(self) -> str | None:
+        """The user-facing run ID."""
+        return self._run_id
 
     def _prepare_ramble_command(self, cmd: list[str]) -> list[str]:
         """Prepares a Ramble command by sourcing setup script."""
@@ -323,7 +350,7 @@ class RambleManager:
             machine_type=machine_type,
             timeout=timeout,
             deadline=deadline,
-            workspace_name=self._workspace_name,
+            run_id=self.run_id,
         )
 
     def setup_workspace(self) -> None:
@@ -347,7 +374,7 @@ class RambleManager:
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry.update(
             {
-                "run_id": self._workspace_name,
+                "run_id": self.run_id,
                 "workspace_path": self.path,
                 "job_entries": {},
                 "submission_time": (
@@ -385,6 +412,14 @@ class RambleManager:
         job_ids = self._scheduler.parse_job_ids(output)
         if job_ids:
             self._update_registry(job_ids)
+
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry["submission_complete"] = True
+        self._app_data.update_run(self._workspace_name, run_entry)
+        logger.info(
+            "All JobSets submitted successfully. "
+            "submission_complete set to True."
+        )
 
         return job_ids
 
@@ -428,7 +463,7 @@ class RambleManager:
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry.update(
             {
-                "run_id": self._workspace_name,
+                "run_id": self.run_id,
                 "workspace_path": self.path,
                 "job_entries": {
                     job_id: {"status": JobStatus.PENDING.value}
@@ -545,9 +580,7 @@ class RambleManager:
             app_data: ChsAppData to update run status.
             poll_interval: Seconds to wait between checks.
         """
-        logger.info(
-            "Waiting for jobs to complete for run %s...", self._workspace_name
-        )
+        logger.info("Waiting for jobs to complete for run %s...", self._run_id)
         self._monitor_jobs(app_data, poll_interval)
 
     def _monitor_jobs(self, app_data: ChsAppData, poll_interval: int) -> None:
@@ -605,7 +638,7 @@ class RambleManager:
 
         logger.info(
             "All jobs completed and logs fetched for run %s.",
-            self._workspace_name,
+            self._run_id,
         )
 
     def get_scheduler_type(self) -> str:
@@ -807,12 +840,14 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
-        bucket_name = self._app_data.get_bucket()
+        storage_config = self._app_data.get_storage_config()
         gcs_base_path = None
-        if bucket_name:
-            gcs_base_path = (
-                f"gs://{bucket_name}/workspaces/{self._workspace_name}"
-            )
+        if storage_config and storage_config.get("type") == "gcs":
+            bucket_name = storage_config.get("gcs", {}).get("bucket_name")
+            if bucket_name:
+                gcs_base_path = (
+                    f"gs://{bucket_name}/workspaces/{self._workspace_name}"
+                )
 
         boh_generator = BOHGenerator(
             results_json_path,
@@ -833,14 +868,14 @@ class RambleManager:
         # Cleanup jobs after successful analysis
         try:
             self.cancel_experiments()
-            logger.debug("Cleaned up jobs for run %s", self._workspace_name)
+            logger.debug("Cleaned up jobs for run %s", self._run_id)
         except Exception as e:
             logger.warning("Failed to cleanup jobs after analysis: %s", e)
 
         return str(workspace_dir)
 
-    def archive_and_upload_boh(self) -> None:
-        """Archives Bill of Health and uploads to GCS."""
+    def _upload_boh(self, provider) -> None:
+        """Uploads Bill of Health using the provider."""
         boh_path = os.path.join(self.path, "bill_of_health.json")
         if not os.path.exists(boh_path):
             logger.warning(
@@ -849,34 +884,19 @@ class RambleManager:
             )
             return
 
-        bucket_name = self._app_data.get_bucket()
-        if not bucket_name:
-            logger.warning("No GCS bucket configured. Skipping BOH archival.")
-            return
-
-        upload_url = (
-            f"gs://{bucket_name}/bills_of_health/{self._workspace_name}.json"
-        )
-        logger.info("Uploading Bill of Health to %s", upload_url)
-
+        logger.info("Uploading Bill of Health...")
         try:
-            client = storage.Client()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(f"bills_of_health/{self._workspace_name}.json")
-            blob.upload_from_filename(boh_path)
+            provider.upload_file(
+                boh_path, f"bills_of_health/{self._workspace_name}.json"
+            )
             logger.info("Bill of Health uploaded successfully.")
         except Exception as e:
-            prefix = (
-                "API error"
-                if isinstance(e, GoogleAPICallError)
-                else "Unexpected error"
-            )
             raise ex.ChsArchiveException(
-                f"{prefix} during BOH archival: {e}"
+                f"Failed to archive Bill of Health: {e}"
             ) from e
 
-    def archive_and_upload_workspace(self) -> None:
-        """Archives workspace artifacts and uploads to GCS."""
+    def _upload_workspace(self, provider) -> None:
+        """Archives workspace locally and uploads using the provider."""
         if not os.path.exists(self.path):
             logger.warning(
                 "Workspace path %s does not exist. Skipping archival.",
@@ -884,25 +904,14 @@ class RambleManager:
             )
             return
 
-        bucket_name = self._app_data.get_bucket()
-        if not bucket_name:
-            logger.warning(
-                "No GCS bucket configured. Skipping workspace archival."
-            )
-            return
-
-        upload_url = f"gs://{bucket_name}/workspaces/"
-        logger.info("Archiving workspace to %s", upload_url)
-
+        logger.info("Archiving workspace locally...")
         try:
-            # TODO: Add gcloud pre-flight check
+            # Archive locally (without --upload-url)
             self._execute_ramble_command(
                 "workspace",
                 [
                     "archive",
                     "-t",
-                    "--upload-url",
-                    upload_url,
                     "--archive-pattern",
                     "bill_of_health.json",
                     "--archive-pattern",
@@ -911,9 +920,39 @@ class RambleManager:
                 capture_output=True,
                 error_context="Failed to archive workspace",
             )
-            logger.info("Workspace archived and uploaded successfully.")
 
-        except (ex.ChsException, Exception) as e:
+            # Scan for the generated tarball
+            archive_dir = pathlib.Path(self.path) / "archive"
+            archives = list(archive_dir.glob("*.tar.gz")) + list(
+                archive_dir.glob("*.tgz")
+            )
+
+            if not archives:
+                raise ex.ChsArchiveException(
+                    "Workspace archive file not found."
+                )
+
+            # Use the first match (should be only one if clean)
+            archive_file = archives[0]
+            logger.info("Uploading workspace archive %s...", archive_file.name)
+
+            provider.upload_file(
+                str(archive_file), f"workspaces/{self._workspace_name}.tar.gz"
+            )
+            logger.info("Workspace archive uploaded successfully.")
+
+            # Clean up local archive
+            try:
+                archive_file.unlink()
+                logger.debug("Deleted local archive file: %s", archive_file)
+            except OSError as e:
+                logger.debug(
+                    "Failed to delete local archive file %s: %s",
+                    archive_file,
+                    e,
+                )
+
+        except Exception as e:
             logger.warning(
                 "Non-fatal failure while archiving and uploading "
                 "the workspace: %s",
@@ -921,7 +960,7 @@ class RambleManager:
             )
 
     def archive(self) -> None:
-        """Orchestrates archival and upload of BoH and workspace."""
+        """Orchestrates archival of BoH and workspace using active provider."""
         if not os.path.exists(self.path) or not os.path.exists(
             os.path.join(self.path, ".ramble-workspace")
         ):
@@ -933,9 +972,21 @@ class RambleManager:
             return
 
         try:
-            self.archive_and_upload_boh()
+            from chs.storage import StorageProviderFactory
+
+            provider = StorageProviderFactory.get_active_provider()
+        except Exception as e:
+            logger.debug(
+                "Storage provider not configured or failed to load. "
+                "Skipping archival: %s",
+                e,
+            )
+            return
+
+        try:
+            self._upload_boh(provider)
         finally:
-            self.archive_and_upload_workspace()
+            self._upload_workspace(provider)
 
     def _cleanup_inputs_dir(self) -> None:
         """Deletes the inputs directory in the workspace."""

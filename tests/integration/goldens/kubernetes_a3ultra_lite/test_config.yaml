@@ -1,0 +1,9 @@
+description: Tests the 'lite' suite against a kubernetes scheduler for a3-ultra
+command:
+- run
+- --suite
+- lite
+- --nodes
+- node1,node2
+- --dry-run
+- kubernetes

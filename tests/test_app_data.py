@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import pathlib
 import tempfile
 import unittest
@@ -17,51 +31,44 @@ class TestChsAppData(unittest.TestCase):
         self.test_dir.cleanup()
 
     def test_get_latest_run_id_success(self):
-        self.workspaces_dir.mkdir(parents=True, exist_ok=True)
-
-        # Different days
-        (self.workspaces_dir / "2023-01-01_10.00.00.000000").mkdir()
-
-        # Same day, different hour
-        (self.workspaces_dir / "2024-05-12_08.00.00.000000").mkdir()
-
-        # Same day, same hour/minute, different seconds
-        (self.workspaces_dir / "2024-05-12_10.00.15.000000").mkdir()
-        (self.workspaces_dir / "2024-05-12_10.00.18.000000").mkdir()
-
-        # Same day, same hour/minute/second, different milliseconds
-        (self.workspaces_dir / "2024-05-12_10.00.18.100000").mkdir()
-        (self.workspaces_dir / "2024-05-12_10.00.18.999999").mkdir()
-        (self.workspaces_dir / "2024-05-12_10.00.18.150000").mkdir()
-
-        (self.workspaces_dir / "invalid_folder").mkdir()
-        (self.workspaces_dir / "2024-05-12_wrong_format").mkdir()
-        (
-            self.workspaces_dir
-            / "not_a_dir_but_valid_name_2024-05-12_13.00.00.000000"
-        ).touch()
+        self.app_data.update_run(
+            "20230101-100000_run-1",
+            {
+                "run_id": "run-1",
+                "submission_time": "2023-01-01T10:00:00Z",
+            },
+        )
+        self.app_data.update_run(
+            "20240512-080000_run-2",
+            {
+                "run_id": "run-2",
+                "submission_time": "2024-05-12T08:00:00Z",
+            },
+        )
+        self.app_data.update_run(
+            "20240512-100018_run-4",
+            {
+                "run_id": "run-4",
+                "submission_time": "2024-05-12T10:00:18Z",
+            },
+        )
+        self.app_data.update_run(
+            "20240512-100015_run-3",
+            {
+                "run_id": "run-3",
+                "submission_time": "2024-05-12T10:00:15Z",
+            },
+        )
 
         latest = self.app_data.get_latest_run_id()
-        self.assertEqual(latest, "2024-05-12_10.00.18.999999")
+        self.assertEqual(latest, "run-4")
 
-    def test_get_latest_run_id_no_valid_runs(self):
-        self.workspaces_dir.mkdir(parents=True, exist_ok=True)
-        (self.workspaces_dir / "invalid_folder").mkdir()
-        (self.workspaces_dir / "another_invalid_run").mkdir()
-
+    def test_get_latest_run_id_no_runs(self):
         with self.assertRaisesRegex(
-            ex.NoPreviousRunsFoundException, "No previous runs found."
+            ex.NoPreviousRunsFoundException,
+            "No previous runs found in registry.",
         ):
             self.app_data.get_latest_run_id()
-
-    @mock.patch.object(app_data.ChsAppData, "get_workspaces_dir")
-    def test_get_latest_run_id_no_workspace_dir(self, mock_get_workspaces_dir):
-        non_existent_dir = pathlib.Path(self.test_dir.name) / "does_not_exist"
-        mock_get_workspaces_dir.return_value = str(non_existent_dir)
-
-        with self.assertRaisesRegex(
-            ex.WorkspaceNotFoundException, "No workspaces directory found."
-        ):
             self.app_data.get_latest_run_id()
 
     def test_get_images_dir(self):
@@ -114,6 +121,30 @@ class TestChsAppData(unittest.TestCase):
         keys = list(latest_runs.keys())
         self.assertEqual(keys[0], "run3")
         self.assertEqual(keys[1], "run2")
+
+    def test_resolve_run_id_success(self):
+        self.app_data.update_run(
+            "20260512-120000_run-1",
+            {
+                "run_id": "run-1",
+                "submission_time": "2026-05-12T12:00:00Z",
+            },
+        )
+
+        resolved = self.app_data.resolve_run_id("run-1")
+        self.assertEqual(resolved, "20260512-120000_run-1")
+
+    def test_resolve_run_id_not_found(self):
+        with self.assertRaisesRegex(
+            ex.WorkspaceNotFoundException,
+            "Run ID 'non-existent' not found in registry.",
+        ):
+            self.app_data.resolve_run_id("non-existent")
+
+    def test_storage_config(self):
+        config = {"type": "path", "path": {"path": "/foo"}}
+        self.app_data.set_storage_config(config)
+        self.assertEqual(self.app_data.get_storage_config(), config)
 
 
 if __name__ == "__main__":

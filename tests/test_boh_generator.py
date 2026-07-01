@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the Bill of Health Generator."""
 
 import datetime
@@ -97,10 +111,10 @@ class TestBOHGenerator(unittest.TestCase):
         report = generator.generate()
         self.assertEqual(report.system_info.type, "SLURM_CLUSTER")
 
-        # Test GKE
-        generator = BOHGenerator(self.test_json_path, cluster_type="gke")
+        # Test Kubernetes
+        generator = BOHGenerator(self.test_json_path, cluster_type="kubernetes")
         report = generator.generate()
-        self.assertEqual(report.system_info.type, "GKE_CLUSTER")
+        self.assertEqual(report.system_info.type, "KUBERNETES_CLUSTER")
 
         # Test custom
         generator = BOHGenerator(self.test_json_path, cluster_type="custom")
@@ -125,7 +139,7 @@ class TestBOHGenerator(unittest.TestCase):
             "experiments": [
                 {
                     "experiment_name": "my-test",
-                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
                     "CONTEXTS": [
                         {
                             "name": "null",
@@ -153,7 +167,7 @@ class TestBOHGenerator(unittest.TestCase):
             "experiments": [
                 {
                     "experiment_name": "my-test",
-                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
                     "CONTEXTS": [
                         {
                             "name": "null",
@@ -372,6 +386,21 @@ class TestBOHGenerator(unittest.TestCase):
             )
             self.assertEqual(name, "generic_test")
             self.assertEqual(level, "workload")
+
+    def test_extract_test_info_plugin_name(self):
+        """Test that _extract_test_info uses class attribute test_name."""
+        generator = BOHGenerator(self.test_json_path)
+
+        exp = {
+            "experiment_name": "chs-gkeramblett-standard-hvku-stream-gke-"
+            "gkeramblett-a3-ultragpu-8g-a3-ult-bf64941f-b8xs",
+            "application_name": "nvidia-stream",
+            "workload_name": "standard",
+        }
+
+        name, level, desc = generator._extract_test_info(exp)
+        self.assertEqual(name, "stream")
+        self.assertEqual(level, "standard")
 
     def test_generate_with_thresholds_scalar(self):
         """Test threshold evaluation with 'scalar' type."""
@@ -696,7 +725,7 @@ class TestBOHGenerator(unittest.TestCase):
             "default": {
                 "my-test": {"type": "min", "thresholds": {"metric1": 80}}
             },
-            "a3-ultra": {
+            "a3-ultragpu-8g": {
                 "my-test": {"type": "scalar", "thresholds": {"metric1": 80}}
             },
         }
@@ -710,7 +739,7 @@ class TestBOHGenerator(unittest.TestCase):
             "experiments": [
                 {
                     "experiment_name": "my-test",
-                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultra"},
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
                     "CONTEXTS": [
                         {
                             "name": "null",

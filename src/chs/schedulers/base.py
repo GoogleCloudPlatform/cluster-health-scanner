@@ -1,9 +1,27 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Base scheduler module."""
 
 import abc
 import json
 import os
 from typing import Any, TYPE_CHECKING
+import logging
+from chs.utils.gcp import query_gce_instances_info
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from chs.utils.app_data import ChsAppData
@@ -19,11 +37,53 @@ class BaseScheduler(abc.ABC):
           app_data: ChsAppData instance or None.
         """
         self._app_data = app_data
+        self.node_to_instance_id: dict[
+            str, str
+        ] = {}  # Store node -> GCE instance_id
+
+    @abc.abstractmethod
+    def _resolve_project_id(self, node: str) -> str:
+        """Resolves the GCP project ID for the cluster/nodes."""
+        pass
+
+    def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
+        """Detects machine types and maps instance IDs for the given nodes.
+
+        Stores mapping node_to_instance_id for future use.
+        Returns a list of unique detected machine types (GCE names).
+        """
+        if not nodes:
+            return []
+
+        project = self._resolve_project_id(nodes[0])
+        instances_info = query_gce_instances_info(project, nodes)
+
+        unique_types = set()
+        for node in nodes:
+            instance_info = instances_info.get(node)
+            if instance_info:
+                machine_type = instance_info["machine_type"]
+                unique_types.add(machine_type)
+                self.node_to_instance_id[node] = instance_info["instance_id"]
+            else:
+                logger.warning(f"Could not retrieve GCE info for node {node}")
+                unique_types.add("unknown")
+
+        return sorted(list(unique_types))
+
+    def get_cluster_name(self) -> str | None:
+        """Retrieves the cluster name. Overridden by subclasses.
+
+        Returns:
+            The cluster name as a string, or None.
+        """
+        return None
 
     def run_preflight_checks(
         self,
         tests: list[dict[str, Any]] | None = None,
         workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Runs preflight checks for the scheduler. Optional to implement."""
         return tests
@@ -86,7 +146,7 @@ class BaseScheduler(abc.ABC):
         machine_type: str,
         timeout: int | None = None,
         deadline: int | None = None,
-        workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -94,6 +154,9 @@ class BaseScheduler(abc.ABC):
           workspace_config_dir: Directory to write the config file to.
           tests: List of tests to run.
           machine_type: The machine type of the cluster nodes.
+          timeout: The timeout for the job in seconds.
+          deadline: The deadline for the job in seconds.
+          run_id: The user-facing run ID.
         """
         pass
 

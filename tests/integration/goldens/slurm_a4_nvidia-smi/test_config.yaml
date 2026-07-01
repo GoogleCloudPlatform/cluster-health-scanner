@@ -1,2 +1,9 @@
-description: "Tests the 'nvidia-smi' test against a slurm scheduler for a4"
-command: ["run", "--tests", "nvidia-smi", "--scheduler", "slurm", "--machine-type", "a4", "--nodes", "node1,node2", "--dry-run"]
+description: Tests the 'nvidia-smi' test against a slurm scheduler for a4
+command:
+- run
+- --tests
+- nvidia-smi
+- --nodes
+- node1,node2
+- --dry-run
+- slurm

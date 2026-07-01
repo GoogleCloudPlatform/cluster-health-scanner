@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Command-line interface implementation for the Cluster Health Scanner (CHS).
 
 This module defines the CLI structure using click and provides the
@@ -11,15 +25,11 @@ import json
 import logging
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlparse
-from google.cloud import storage
 
 import click
 
@@ -28,13 +38,16 @@ from chs import (
     ChsAppData,
     RambleManager,
     ResultsViewer,
+    detect_scheduler,
     exceptions as ex,
     get_scheduler,
     load_suite,
+    preflights,
     resources,
     utils,
     validators,
 )
+from chs.storage import StorageProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +248,12 @@ def is_latest_chs_run_active(app_data: ChsAppData) -> bool:
         if not latest_run_id:
             return False
 
+        workspace_name = app_data.resolve_run_id(latest_run_id)
         workspaces_dir = app_data.get_workspaces_dir()
         ramble_manager = RambleManager(
-            base_dir=workspaces_dir, workspace_name=latest_run_id
+            base_dir=workspaces_dir,
+            workspace_name=workspace_name,
+            run_id=latest_run_id,
         )
         if ramble_manager.check_jobs_running():
             logger.warning(
@@ -269,7 +285,7 @@ def _parse_str_to_list(value: str | None) -> list[str] | None:
 
 def _validate_run_args(
     scheduler: str,
-    machine_type: str,
+    detected_machine_types: list[str],
     tests: str | None,
     suite: str | None,
     validation: str | None = None,
@@ -278,7 +294,7 @@ def _validate_run_args(
 
     Args:
       scheduler: Name of the scheduler.
-      machine_type: Machine type string.
+      detected_machine_types: List of detected machine types.
       tests: Comma-separated list of tests, or None.
       suite: Suite name, or None.
       validation: Path to thresholds validation file, or None.
@@ -286,6 +302,18 @@ def _validate_run_args(
     Raises:
       ex.ChsValidationError: If validation fails.
     """
+    homogeneity_validator = validators.HomogeneityValidator()
+    errors = homogeneity_validator.validate(
+        {
+            "detected_machine_types": detected_machine_types,
+            "scheduler": scheduler,
+        }
+    )
+    if errors:
+        raise ex.ChsValidationError("\n".join(errors))
+
+    machine_type = detected_machine_types[0]
+
     validator = validators.ProjectConfigValidator()
     errors = validator.validate(
         {
@@ -313,6 +341,7 @@ def run_action(
     deadline: int | None = None,
     validation: str | None = None,
     skip_validation: bool = False,
+    run_id: str | None = None,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -342,14 +371,16 @@ def run_action(
         tests,
     )
 
-    ramble_manager = RambleManager(workspaces_base_dir, workspace_name)
+    ramble_manager = RambleManager(
+        workspaces_base_dir, workspace_name, run_id=run_id
+    )
 
     with archive_workspace(ramble_manager, on_success=False):
         try:
             logger.info("Running preflight checks")
             if scheduler_obj:
                 tests = scheduler_obj.run_preflight_checks(
-                    tests, workspace_name=workspace_name
+                    tests, workspace_name=workspace_name, run_id=run_id
                 )
                 workspace_config_dir = os.path.join(
                     ramble_manager.path, "configs"
@@ -417,7 +448,10 @@ def analyze_action(
     logger.debug("Analyzing run_id=%r", run_id)
     workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
-    ramble_manager = RambleManager(workspaces_base_dir, run_id)
+    workspace_name = app_data.resolve_run_id(run_id)
+    ramble_manager = RambleManager(
+        workspaces_base_dir, workspace_name, run_id=run_id
+    )
 
     if not os.path.exists(ramble_manager.path):
         raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
@@ -463,119 +497,68 @@ def analyze_action(
             return run_id
 
 
-def _get_gcs_blob(gcs_path: str) -> storage.Blob:
-    """Helper to get GCS blob from URI."""
-    parsed_uri = urlparse(gcs_path)
-    bucket_name = parsed_uri.netloc
-    blob_name = parsed_uri.path.lstrip("/")
-
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    return bucket.blob(blob_name)
-
-
-def _download_file(gcs_path: str, dest_path: str) -> None:
-    """Downloads a file from GCS."""
-    logger.info("Downloading file from GCS: %s", gcs_path)
-    try:
-        blob = _get_gcs_blob(gcs_path)
-        blob.download_to_filename(dest_path)
-    except Exception as e:
-        raise ex.ChsException(f"Failed to download file from GCS: {e}") from e
-
-
-def _write_file_content(f, dest_path: str) -> None:
-    """Writes content of extracted file to dest_path."""
-    with open(dest_path, "wb") as out:
-        shutil.copyfileobj(f, out)
-
-
-def _extract_from_archive(gcs_path: str, dest_path: str) -> None:
-    """Extracts bill_of_health.json from GCS archive."""
-    logger.info("Reading results from GCS archive: %s", gcs_path)
-    try:
-        blob = _get_gcs_blob(gcs_path)
-        with blob.open("rb") as gcs_file:
-            with tarfile.open(fileobj=gcs_file, mode="r:gz") as tar:
-                f = None
-                try:
-                    f = tar.extractfile("bill_of_health.json")
-                    if f is None:
-                        logger.debug(
-                            "bill_of_health.json found but is not a regular"
-                            " file"
-                        )
-                except KeyError:
-                    logger.debug(
-                        "bill_of_health.json not found at root, searching"
-                        " archive"
-                    )
-
-                if f is None:
-                    boh_member = None
-                    for member in tar.getmembers():
-                        if member.name.endswith("bill_of_health.json"):
-                            boh_member = member
-                            break
-                    if not boh_member:
-                        raise ex.ChsException("BoH not found in archive")
-                    f = tar.extractfile(boh_member)
-                    if f is None:
-                        raise ex.ChsException(
-                            "BoH found in archive but is not a regular file"
-                        )
-
-                _write_file_content(f, dest_path)
-    except ex.ChsException:
-        raise
-    except Exception as e:
-        raise ex.ChsException(f"Failed to extract from GCS archive: {e}") from e
-
-
-def _download_boh_from_gcs(gcs_path: str, dest_path: str) -> None:
-    """Downloads Bill of Health from GCS to dest_path."""
-    if not gcs_path.startswith("gs://"):
-        gcs_path = "gs://" + gcs_path
-
-    if gcs_path.endswith(".json"):
-        _download_file(gcs_path, dest_path)
-    elif gcs_path.endswith(".tar.gz") or gcs_path.endswith(".tgz"):
-        _extract_from_archive(gcs_path, dest_path)
-    else:
-        # Directory
-        gcs_json_path = gcs_path.rstrip("/") + "/bill_of_health.json"
-        _download_file(gcs_json_path, dest_path)
-
-
 def _show_results(
     app_data: ChsAppData,
     run_id: str | None,
     tests: str | None = None,
     resources: str | None = None,
-    gcs: str | None = None,
 ) -> None:
     """Show Bill of Health results for a run."""
     workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
 
-    if gcs:
+    if not run_id:
+        run_id = app_data.get_latest_run_id()
+        logger.info("No run_id provided. Using latest run: %s", run_id)
+        logger.info("Showing results for latest run: %s", run_id)
+
+    # Try to resolve run_id to workspace_name
+    try:
+        workspace_name = app_data.resolve_run_id(run_id)
+    except ex.WorkspaceNotFoundException:
+        # Fallback to run_id if not found in local registry
+        workspace_name = run_id
+
+    boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
+
+    if not boh_path.exists():
+        logger.info(
+            "Local Bill of Health not found. "
+            "Attempting to download from storage..."
+        )
+        run_entry = app_data.get_run(workspace_name)
+        storage_config = None
+        if run_entry:
+            storage_config = run_entry.get("storage")
+
+        try:
+            if storage_config:
+                provider = StorageProviderFactory.get_provider(storage_config)
+            else:
+                logger.info(
+                    "Run-specific storage config not found. "
+                    "Falling back to active storage provider."
+                )
+                provider = StorageProviderFactory.get_active_provider()
+        except Exception as e:
+            raise ex.BillOfHealthNotFoundException(
+                f"Could not find local bill of health at {boh_path} "
+                f"and failed to resolve storage provider: {e}"
+            ) from e
+
         with tempfile.NamedTemporaryFile(
             delete=True, suffix=".json"
         ) as tmp_file:
-            _download_boh_from_gcs(gcs, tmp_file.name)
-            viewer = ResultsViewer(tmp_file.name)
+            try:
+                provider.download_file(
+                    f"bills_of_health/{workspace_name}.json", tmp_file.name
+                )
+                viewer = ResultsViewer(tmp_file.name)
+            except Exception as e:
+                raise ex.BillOfHealthNotFoundException(
+                    f"Failed to retrieve Bill of Health for run {run_id} "
+                    f"from storage: {e}"
+                ) from e
     else:
-        # Local run
-        if not run_id:
-            run_id = app_data.get_latest_run_id()
-            logger.info("No run_id provided. Using latest run: %s", run_id)
-            logger.info("Showing results for latest run: %s", run_id)
-
-        boh_path = workspaces_dir / run_id / "bill_of_health.json"
-        if not boh_path.exists():
-            raise ex.BillOfHealthNotFoundException(
-                f"Could not find bill of health at {boh_path}. "
-                f"Have you run 'chs analyze {run_id}'?"
-            )
         viewer = ResultsViewer(boh_path)
 
     parsed_tests = _parse_str_to_list(tests)
@@ -600,7 +583,10 @@ def cancel_action(app_data: ChsAppData, run_id: str) -> str:
     logger.debug("Canceling run_id=%r", run_id)
     workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
-    ramble_manager = RambleManager(workspaces_base_dir, run_id)
+    workspace_name = app_data.resolve_run_id(run_id)
+    ramble_manager = RambleManager(
+        workspaces_base_dir, workspace_name, run_id=run_id
+    )
 
     with archive_workspace(ramble_manager, on_success=True):
         try:
@@ -694,13 +680,6 @@ def list_command(
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--scheduler",
-    "-sch",
-    required=True,
-    help="Scheduler to use (e.g., slurm, gke)",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
     "--tests",
     "-t",
     help="Comma-separated list of specific tests to run (optional)",
@@ -712,30 +691,24 @@ def list_command(
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--nodelist",
-    help="Slurm node list pattern to run on (e.g., node-[1-3])",
+    "--nodelists",
+    help="Slurm nodelists to run on (e.g., node-[1-3],node-[4-5])",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--nodepool",
-    help="GKE node pool to run on",
+    "--nodepools",
+    help="Kubernetes node pools to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--partition",
-    help="Slurm partition to run on",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
-    "--machine-type",
-    required=True,
-    help="The machine type of the cluster nodes (e.g., a3-high).",
+    "--partitions",
+    help="Slurm partitions to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--dry-run",
-    is_flag=True,
-    help="Set up the workspace but do not execute experiments or analyze.",
+    type=click.Choice(["slurm", "kubernetes"]),
+    help="Set up the workspace for the specified scheduler but do not execute.",
 )
 @click.option(
     "--validation",
@@ -750,47 +723,122 @@ def list_command(
     is_flag=True,
     help="Skip threshold evaluation entirely.",
 )
+@click.option(
+    "--run-id",
+    help="Custom run ID for this execution.",
+    callback=validators.validate_run_id,
+)
+@click.option(
+    "--attach",
+    is_flag=True,
+    help=(
+        "Attach to an in-flight run. If the previous run was interrupted "
+        "mid-submission, it is canceled and restarted."
+    ),
+)
 @click.pass_obj
 def run(
     obj,
     *,
     suite: str | None,
-    scheduler: str,
     tests: str | None,
     nodes: str | None,
-    nodelist: str | None,
-    nodepool: str | None,
-    partition: str | None,
-    machine_type: str,
-    dry_run: bool,
+    nodelists: str | None,
+    nodepools: str | None,
+    partitions: str | None,
+    dry_run: str | None,
     validation: str | None = None,
     skip_validation: bool = False,
+    run_id: str | None = None,
+    attach: bool = False,
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
     \b
     Args:
       suite: Name of the test suite to run.
-      scheduler: Scheduler to use (e.g., slurm, gke).
       tests: Comma-separated list of specific tests to run (optional).
       nodes: Comma-separated list of individual nodes to run on.
-      nodelist: Slurm node list pattern to run on (e.g., node-[1-3]).
-      nodepool: GKE node pool to run on.
-      partition: Slurm partition to run on.
-      machine_type: The machine type of the cluster nodes (e.g., a3-high).
+      nodelists: Slurm node list pattern to run on (e.g., node-[1-3]).
+      nodepools: Kubernetes node pools to run on.
+      partitions: Slurm partitions to run on.
       dry_run: Set up the workspace but do not execute experiments or analyze.
 
     Returns:
       A RunExecutionResult object containing details of the run.
     """
     app_data = obj["app_data"]
+
+    if attach:
+        try:
+            latest_run_id = app_data.get_latest_run_id()
+            run_entry = app_data.get_run(app_data.resolve_run_id(latest_run_id))
+            if run_entry and run_entry.get("submission_complete", False):
+                logger.info(
+                    "Previous submission complete. Attaching to monitor "
+                    "jobs..."
+                )
+                analyze_action(
+                    app_data, latest_run_id, validation, skip_validation
+                )
+                return RunExecutionResult(
+                    suite=suite or "lite",
+                    scheduler_name="kubernetes",
+                    tests=None,
+                    workspace_name=app_data.resolve_run_id(latest_run_id),
+                    workspaces_base_dir=app_data.get_workspaces_dir(),
+                    job_ids=None,
+                )
+            else:
+                logger.warning(
+                    "Previous run died mid-submission. Canceling orphaned "
+                    "jobs and restarting..."
+                )
+                cancel_action(app_data, latest_run_id)
+        except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
+            pass
+
     if is_latest_chs_run_active(app_data):
         raise ex.ChsRunInProgressException(
             "The latest CHS run is still in progress. Please wait for it to"
             " complete or cancel it before submitting a new run."
         )
 
-    _validate_run_args(scheduler, machine_type, tests, suite, validation)
+    is_dry_run = dry_run is not None
+    if is_dry_run:
+        scheduler = dry_run
+    else:
+        scheduler = detect_scheduler()
+
+    preflights.run_platform_preflights()
+
+    scheduler_obj = get_scheduler(
+        scheduler,
+        nodes=nodes,
+        nodelists=nodelists,
+        nodepools=nodepools,
+        partitions=partitions,
+        app_data=app_data,
+    )
+
+    nodes_under_test = scheduler_obj.get_nodes_under_test()
+    if not nodes_under_test:
+        raise ex.NoNodesProvidedException("No nodes provided to run on.")
+
+    detected_machine_types = scheduler_obj.detect_nodes_hardware(
+        nodes_under_test
+    )
+
+    if not detected_machine_types or "unknown" in detected_machine_types:
+        raise ex.MachineTypeDiscoveryException(
+            "Failed to detect machine type of some nodes"
+        )
+
+    _validate_run_args(
+        scheduler, detected_machine_types, tests, suite, validation
+    )
+
+    machine_type = detected_machine_types[0]
 
     timeout = resources.DEFAULT_TIMEOUT
     deadline = resources.DEFAULT_DEADLINE
@@ -849,34 +897,27 @@ def run(
         if not suite:
             suite = "custom"
 
-    scheduler_obj = get_scheduler(
-        scheduler,
-        nodes=nodes,
-        nodelist=nodelist,
-        nodepool=nodepool,
-        partition=partition,
-        app_data=app_data,
+    short_hash = utils.generate_random_suffix()
+    if not run_id:
+        if dry_run:
+            cluster_name = "dry-run-cluster"
+        else:
+            cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
+        run_id = f"{cluster_name}-{suite}"
+    run_id = f"{run_id}-{short_hash}"
+
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y%m%d-%H%M%S"
     )
-
-    if scheduler_obj.name == "slurm" or scheduler_obj.name == "gke":
-        nodes_under_test = scheduler_obj.get_nodes_under_test()
-        if not nodes_under_test:
-            raise ex.NoNodesProvidedException("No nodes provided to run on.")
-    else:
-        # TODO: Add support for other schedulers.
-        raise ex.UnsupportedSchedulerException(
-            "Only Slurm and GKE schedulers are supported."
-        )
-
-    workspace_name = datetime.datetime.now().strftime("%Y-%m-%d_%H.%M.%S.%f")
+    workspace_name = f"{timestamp}_{run_id}"
     workspaces_base_dir = app_data.get_workspaces_dir()
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
     logger.debug("Workspace name: %s", workspace_name)
-    logger.info("Request ID (Workspace Name): %s", workspace_name)
+    logger.info("Run ID: %s", run_id)
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
-    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not is_dry_run):
         job_ids = run_action(
             suite=suite,
             scheduler_obj=scheduler_obj,
@@ -884,11 +925,12 @@ def run(
             workspace_name=workspace_name,
             workspaces_base_dir=workspaces_base_dir,
             machine_type=machine_type,
-            dry_run=dry_run,
+            dry_run=is_dry_run,
             timeout=timeout,
             deadline=deadline,
             validation=validation,
             skip_validation=skip_validation,
+            run_id=run_id,
         )
 
         result = RunExecutionResult(
@@ -908,7 +950,8 @@ def run(
         app_data.update_run(
             workspace_name,
             {
-                "run_id": workspace_name,
+                "run_id": run_id,
+                "workspace_name": workspace_name,
                 "workspace_path": os.path.join(
                     workspaces_base_dir, workspace_name
                 ),
@@ -917,10 +960,11 @@ def run(
                 ).isoformat(),
                 "scheduler": scheduler,
                 "command_statement": command_statement,
+                "storage": app_data.get_storage_config(),
             },
         )
 
-        if dry_run:
+        if is_dry_run:
             logger.info("Dry run completed. Workspace setup is ready.")
             return result
 
@@ -936,7 +980,7 @@ def run(
     # Automatically trigger analysis
     analyze_action(
         app_data,
-        workspace_name,
+        run_id,
         validation=validation,
         skip_validation=skip_validation,
     )
@@ -1025,25 +1069,19 @@ def cancel(obj) -> str:
     help="Comma-separated list of resource names to show details for.",
     callback=validators.validate_non_empty_string,
 )
-@click.option(
-    "--gcs",
-    help="Path to Bill of Health in GCS (bucket/path/to/file)",
-    callback=validators.validate_non_empty_string,
-)
 @click.pass_obj
 def results(
     obj,
     run_id: str | None,
     tests: str | None,
     resources: str | None,
-    gcs: str | None,
 ) -> None:
     """Show Bill of Health results for a run.
 
     If no run_id is provided, the most recent run from the workspaces directory
     will be used.
     """
-    _show_results(obj["app_data"], run_id, tests, resources, gcs)
+    _show_results(obj["app_data"], run_id, tests, resources)
 
 
 @cli.command()
@@ -1065,10 +1103,42 @@ def history(obj) -> None:
         command_statement = run.get("command_statement", "")
         if not command_statement:
             # Reconstruct for old runs or runs without stored statement
-            scheduler = run.get("scheduler", "unknown")
-            command_statement = f"chs run --scheduler {scheduler}"
+            command_statement = "chs run"
 
         click.echo(f"{run_id:<30} {command_statement}")
+
+
+def _validate_and_save_storage(app_data: ChsAppData, config: dict) -> None:
+    """Helper to validate storage config and save if successful."""
+    try:
+        provider = StorageProviderFactory.get_provider(config)
+        click.echo("Validating storage access...")
+        provider.validate()
+        app_data.set_storage_config(config)
+        click.echo("Storage configured and validated successfully.")
+    except Exception as e:
+        raise click.ClickException(f"Storage validation failed: {e}")
+
+
+def _interactive_configure_storage(app_data: ChsAppData) -> None:
+    """Guided flow for storage configuration."""
+    click.echo("Select storage type:")
+    click.echo("  [1] GCS")
+    click.echo("  [2] Path")
+    choice = click.prompt("Choice", type=int, default=1)
+
+    if choice == 1:
+        bucket_name = click.prompt("Enter GCS bucket name")
+        if bucket_name.lower().startswith("gs://"):
+            bucket_name = bucket_name[5:]
+        config = {"type": "gcs", "gcs": {"bucket_name": bucket_name}}
+    elif choice == 2:
+        path = click.prompt("Enter target directory path (absolute)")
+        config = {"type": "path", "path": {"path": path}}
+    else:
+        raise click.ClickException("Invalid choice.")
+
+    _validate_and_save_storage(app_data, config)
 
 
 @cli.group()
@@ -1077,21 +1147,42 @@ def configure() -> None:
     pass
 
 
-@configure.command("bucket")
-@click.option(
-    "--name",
-    "bucket_name",
-    required=False,
-    default="chs-results",
-    help="GCS bucket name for storing results",
-)
+@configure.group("storage", invoke_without_command=True)
 @click.pass_context
-def set_bucket_command(ctx: click.Context, bucket_name: str) -> None:
-    """Sets the GCS bucket for storing results."""
+def configure_storage(ctx: click.Context) -> None:
+    """Configure storage settings."""
+    if ctx.invoked_subcommand is None:
+        app_data = ctx.obj["app_data"]
+        _interactive_configure_storage(app_data)
+
+
+@configure_storage.command("gcs")
+@click.argument("bucket_name", required=False)
+@click.pass_context
+def configure_gcs(ctx: click.Context, bucket_name: str | None) -> None:
+    """Configure GCS storage."""
     app_data = ctx.obj["app_data"]
-    # TODO: Create bucket if it doesn't exist
-    app_data.set_bucket(bucket_name)
-    click.echo(f"GCS bucket set to: {bucket_name}")
+    if not bucket_name:
+        bucket_name = click.prompt("Enter GCS bucket name")
+
+    if bucket_name.lower().startswith("gs://"):
+        bucket_name = bucket_name[5:]
+
+    config = {"type": "gcs", "gcs": {"bucket_name": bucket_name}}
+    _validate_and_save_storage(app_data, config)
+
+
+@configure_storage.command("path")
+@click.argument("path", required=False)
+@click.pass_context
+def configure_path(ctx: click.Context, path: str | None) -> None:
+    """Configure Local Path storage."""
+    app_data = ctx.obj["app_data"]
+    if not path:
+        path = click.prompt("Enter target directory path (absolute)")
+
+    config = {"type": "path", "path": {"path": path}}
+    _validate_and_save_storage(app_data, config)
 
 
 def main() -> None:

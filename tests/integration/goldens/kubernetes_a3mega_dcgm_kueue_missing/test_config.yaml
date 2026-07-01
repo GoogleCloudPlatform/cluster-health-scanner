@@ -1,0 +1,12 @@
+description: Tests the 'dcgm' test against a kubernetes scheduler for a3-mega when
+  Kueue CRDs are missing
+env:
+  MOCK_KUEUE_MISSING: '1'
+command:
+- run
+- --tests
+- dcgm
+- --nodes
+- node1,node2
+- --dry-run
+- kubernetes

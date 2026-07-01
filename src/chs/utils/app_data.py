@@ -1,10 +1,23 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """App data module for CHS.
 
 This module provides the ChsAppData class, which manages the persistence of
 CHS run metadata, configuration, and workspace directories.
 """
 
-import datetime
 import json
 import logging
 import os
@@ -77,19 +90,17 @@ class ChsAppData:
         except OSError as e:
             logger.warning("Failed to write to data file %s: %s", file_path, e)
 
-    def set_bucket(self, bucket_name: str) -> None:
-        """Sets the GCS bucket name in the app data."""
+    def set_storage_config(self, config: dict) -> None:
+        """Sets the storage configuration in the app data."""
         metadata = self._load_json(self._metadata_file)
-        if bucket_name.lower().startswith("gs://"):
-            bucket_name = bucket_name[5:]
-        metadata["bucket_name"] = bucket_name
+        metadata["storage"] = config
         self._save_json(self._metadata_file, metadata)
-        logger.debug("AppData: Set bucket_name to %s", bucket_name)
+        logger.debug("AppData: Set storage config to %s", config)
 
-    def get_bucket(self) -> str | None:
-        """Retrieves the GCS bucket name from the app data."""
+    def get_storage_config(self) -> dict:
+        """Retrieves the storage configuration from the app data."""
         metadata = self._load_json(self._metadata_file)
-        return metadata.get("bucket_name")
+        return metadata.get("storage", {})
 
     def update_run(self, run_id: str, run_data: dict[str, Any]) -> None:
         """Updates or adds a run entry in the app data.
@@ -192,32 +203,26 @@ class ChsAppData:
             return None
 
     def get_latest_run_id(self) -> str:
-        """Finds and returns the most recent run_id from the workspaces.
-
-        Returns:
-          The run_id of the most recently created workspace.
-
-        Raises:
-          WorkspaceNotFoundException: If workspaces directory does not exist.
-          NoPreviousRunsFoundException: If no valid runs are found.
-        """
-        workspaces_dir = pathlib.Path(self.get_workspaces_dir())
-        if not workspaces_dir.exists():
-            raise ex.WorkspaceNotFoundException(
-                "No workspaces directory found."
+        """Finds and returns the user-facing run_id of the most recent run."""
+        runs = self.get_all_runs()
+        if not runs:
+            raise ex.NoPreviousRunsFoundException(
+                "No previous runs found in registry."
             )
+        sorted_runs = sorted(
+            runs.items(),
+            key=lambda item: item[1].get("submission_time", ""),
+            reverse=True,
+        )
+        return sorted_runs[0][1].get("run_id")
 
-        valid_runs = []
-        date_format = "%Y-%m-%d_%H.%M.%S.%f"
-        for d in workspaces_dir.iterdir():
-            if d.is_dir():
-                try:
-                    datetime.datetime.strptime(d.name, date_format)
-                    valid_runs.append(d.name)
-                except ValueError:
-                    continue
+    def resolve_run_id(self, run_id: str) -> str:
+        """Resolves a user-friendly run_id to its physical workspace name."""
+        runs = self.get_all_runs()
+        for ws_name, run_data in runs.items():
+            if run_data.get("run_id") == run_id:
+                return ws_name
 
-        if not valid_runs:
-            raise ex.NoPreviousRunsFoundException("No previous runs found.")
-
-        return max(valid_runs)
+        raise ex.WorkspaceNotFoundException(
+            f"Run ID '{run_id}' not found in registry."
+        )

@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import importlib
 import logging
 import pkgutil
@@ -80,22 +94,42 @@ class PluginManager:
             return None
         return self._find_registered_name(test_name)
 
+    def _load_and_instantiate_plugin(
+        self, plugin_cls: Type[TestPlugin], test_name: str
+    ) -> TestPlugin | None:
+        """Helper to safely instantiate and configure a plugin class."""
+        try:
+            plugin_instance = plugin_cls()
+            plugin_instance.test_name = test_name
+            return plugin_instance
+        except Exception:
+            logger.exception(
+                "Failed to load plugin for %s. Using default.",
+                test_name,
+            )
+            return None
+
     def get_plugin(self, name: str) -> TestPlugin:
         """Returns the specific plugin for a test, or the default fallback."""
         # Use existing if already resolved/exact match
         if name in self._plugins:
-            return self._plugins[name]()
+            plugin_instance = self._load_and_instantiate_plugin(
+                self._plugins[name], name
+            )
+            return (
+                plugin_instance
+                if plugin_instance
+                else DefaultPlugin(test_name=name)
+            )
 
         resolved_name = self.resolve_test_name(name)
         plugin_cls = self._plugins.get(resolved_name) if resolved_name else None
 
         if plugin_cls:
-            try:
-                return plugin_cls()
-            except Exception:
-                logger.exception(
-                    "Failed to load plugin for %s. Using default.",
-                    name,
-                )
+            plugin_instance = self._load_and_instantiate_plugin(
+                plugin_cls, resolved_name
+            )
+            if plugin_instance:
+                return plugin_instance
 
-        return DefaultPlugin()
+        return DefaultPlugin(test_name=resolved_name or name)

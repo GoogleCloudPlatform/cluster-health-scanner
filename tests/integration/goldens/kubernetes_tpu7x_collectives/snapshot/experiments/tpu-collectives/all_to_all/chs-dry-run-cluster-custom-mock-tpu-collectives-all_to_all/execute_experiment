@@ -1,0 +1,11 @@
+#!/bin/bash
+if [ "tpu-collectives" = "chs" ]; then
+    echo "Skipping JobSet submission for tpu-collectives scaffolding experiment."
+    echo "Submitted chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-collectives/all_to_all/chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all/chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all.out
+    exit 0
+fi
+
+kubectl delete -f "<WORKSPACE_ROOT>/experiments/tpu-collectives/all_to_all/chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all/jobset.yaml" --ignore-not-found || true
+kubectl apply -f "<WORKSPACE_ROOT>/experiments/tpu-collectives/all_to_all/chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all/jobset.yaml"
+echo "Submitted chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all at $(date)" > <WORKSPACE_ROOT>/experiments/tpu-collectives/all_to_all/chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all/chs-dry-run-cluster-custom-mock-tpu-collectives-all_to_all.out
+

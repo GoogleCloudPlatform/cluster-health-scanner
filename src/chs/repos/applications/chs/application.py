@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from copy import deepcopy
 import logging
 import sys
@@ -15,6 +29,7 @@ sys.path.append(config_dir)
 
 from test_helper import TestHelper
 from ramble.appkit import *
+from chs.resources import is_tpu
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +78,6 @@ def parse_tests_config(raw_input) -> TestsModel:
     return TestsModel(tests=[])
 
 
-def is_tpu(machine_type: str) -> bool:
-    """Returns True if the machine type is a TPU."""
-    return machine_type.startswith("tpu") if machine_type else False
-
-
 class Chs(ExecutableApplication):
     """Cluster health scanner for running diagnostics"""
 
@@ -82,23 +92,13 @@ class Chs(ExecutableApplication):
         "scheduler",
         default="slurm",
         description="Scheduler for the suite",
-        values=["slurm", "gke"],
+        values=["slurm", "kubernetes"],
     )
 
     variable(
         "machine_type",
         default="",
         description="Machine type to test",
-        values=[
-            "a3-high",
-            "a3-ultra",
-            "a4",
-            "a3-mega",
-            "a4x",
-            "a4x-max",
-            "tpu7x",
-            "tpuv6e",
-        ],
     )
 
     executable(
@@ -136,12 +136,12 @@ class Chs(ExecutableApplication):
             with open(common_cfg_path, "r") as f:
                 configs = yaml.load(f) or {}
 
-        if scheduler == "gke":
-            gke_cfg_path = os.path.join(configs_dir, "gke.yaml")
-            if os.path.exists(gke_cfg_path):
-                with open(gke_cfg_path, "r") as f:
-                    gke_configs = yaml.load(f) or {}
-                self._deep_merge(configs, gke_configs)
+        if scheduler == "kubernetes":
+            kubernetes_cfg_path = os.path.join(configs_dir, "kubernetes.yaml")
+            if os.path.exists(kubernetes_cfg_path):
+                with open(kubernetes_cfg_path, "r") as f:
+                    kubernetes_configs = yaml.load(f) or {}
+                self._deep_merge(configs, kubernetes_configs)
 
         elif scheduler == "slurm":
             slurm_cfg_path = os.path.join(configs_dir, "slurm.yaml")
@@ -167,6 +167,11 @@ class Chs(ExecutableApplication):
                 f"Failed to parse tests configuration: {e}"
             ) from e
 
+        chs_run_id = self.expander.expand_var_name("chs_run_id", typed=True)
+        base_prefix = (
+            f"chs-{chs_run_id}" if chs_run_id else self.expander.experiment_name
+        )
+
         for test in tests_config.tests:
             test_vars = self.non_reserved_variables(
                 workspace,
@@ -180,6 +185,7 @@ class Chs(ExecutableApplication):
                     "srun_args",
                 },
             )
+            test_vars["chs_test_name"] = test.name
 
             if test.variables:
                 test_vars.update(test.variables)
@@ -221,7 +227,7 @@ class Chs(ExecutableApplication):
                 application_name = "nccl-tests"
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{test.name}-{workload}"
+                    experiment_name = f"{base_prefix}-{test.name}-{workload}"
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
                     contexts = TestHelper.nccl_test(
@@ -237,7 +243,9 @@ class Chs(ExecutableApplication):
                         )
             elif test.name == "dcgm":
                 application_name = "nvidia-dcgm"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}-level-{{diag_level}}"
+                experiment_name = (
+                    f"{base_prefix}-{test.name}-level-{{diag_level}}"
+                )
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -250,7 +258,7 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "stream":
                 application_name = "nvidia-stream"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+                experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -263,7 +271,7 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "nvidia-smi":
                 application_name = "nvidia-smi"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+                experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -285,7 +293,9 @@ class Chs(ExecutableApplication):
                 workloads = test.workloads if test.workloads else ["check"]
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    experiment_name = (
+                        f"{base_prefix}-{application_name}-{workload}"
+                    )
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
                     if is_tpu_machine:
@@ -301,9 +311,7 @@ class Chs(ExecutableApplication):
                     )
             elif test.name == "hbm":
                 application_name = "tpu-hbm"
-                experiment_name = (
-                    f"{self.expander.experiment_name}-{application_name}"
-                )
+                experiment_name = f"{base_prefix}-{application_name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -316,9 +324,7 @@ class Chs(ExecutableApplication):
                 )
             elif test.name == "host-device":
                 application_name = "tpu-host-device"
-                experiment_name = (
-                    f"{self.expander.experiment_name}-{application_name}"
-                )
+                experiment_name = f"{base_prefix}-{application_name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
@@ -338,7 +344,9 @@ class Chs(ExecutableApplication):
                 )
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-{workload}"
+                    experiment_name = (
+                        f"{base_prefix}-{application_name}-{workload}"
+                    )
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
 
@@ -360,7 +368,7 @@ class Chs(ExecutableApplication):
                 )
 
                 for workload in workloads:
-                    experiment_name = f"{self.expander.experiment_name}-{application_name}-single-node-{workload}"
+                    experiment_name = f"{base_prefix}-{application_name}-single-node-{workload}"
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
 
@@ -376,7 +384,7 @@ class Chs(ExecutableApplication):
 
             elif test.name == "tpu-info":
                 application_name = "tpu-info"
-                experiment_name = f"{self.expander.experiment_name}-{test.name}"
+                experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name

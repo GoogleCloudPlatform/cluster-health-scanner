@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the Cluster Health Scanner (CHS) validators package."""
 
 import os
@@ -33,10 +47,19 @@ class TestValidators(unittest.TestCase):
                 {
                     "name": "nvidia-smi",
                     "platforms": [
-                        {"scheduler": "slurm", "machine_type": "a3-mega"},
-                        {"scheduler": "slurm", "machine_type": "a3-ultra"},
-                        {"scheduler": "gke", "machine_type": "a3-mega"},
-                        {"scheduler": "gke", "machine_type": "a3-ultra"},
+                        {"scheduler": "slurm", "machine_type": "a3-megagpu-8g"},
+                        {
+                            "scheduler": "slurm",
+                            "machine_type": "a3-ultragpu-8g",
+                        },
+                        {
+                            "scheduler": "kubernetes",
+                            "machine_type": "a3-megagpu-8g",
+                        },
+                        {
+                            "scheduler": "kubernetes",
+                            "machine_type": "a3-ultragpu-8g",
+                        },
                     ],
                 }
             ]
@@ -48,7 +71,7 @@ class TestValidators(unittest.TestCase):
 
     def test_machine_type_validator_valid(self):
         v = validators.MachineTypeValidator()
-        errors = v.validate({"machine_type": "a3-mega"})
+        errors = v.validate({"machine_type": "a3-megagpu-8g"})
         self.assertEqual(errors, [])
 
     def test_machine_type_validator_invalid(self):
@@ -78,7 +101,9 @@ class TestValidators(unittest.TestCase):
 
     def test_project_config_validator_valid(self):
         v = validators.ProjectConfigValidator()
-        errors = v.validate({"scheduler": "slurm", "machine_type": "a3-mega"})
+        errors = v.validate(
+            {"scheduler": "slurm", "machine_type": "a3-megagpu-8g"}
+        )
         self.assertEqual(errors, [])
 
     def test_project_config_validator_invalid(self):
@@ -170,8 +195,8 @@ class TestValidators(unittest.TestCase):
             {
                 "suite": "unknown_suite",
                 "tests": ["unknown_test"],
-                "scheduler": "gke",
-                "machine_type": "a3-mega",
+                "scheduler": "kubernetes",
+                "machine_type": "a3-megagpu-8g",
             }
         )
         self.assertEqual(len(errors), 2)
@@ -265,6 +290,71 @@ class TestValidators(unittest.TestCase):
         v = validators.ThresholdsValidator()
         errors = v.validate({})
         self.assertEqual(errors, [])
+
+    def test_validate_run_id_valid(self):
+        self.assertEqual(
+            validators.validate_run_id(None, None, "my-run-id"), "my-run-id"
+        )
+        self.assertEqual(
+            validators.validate_run_id(None, None, "run123"), "run123"
+        )
+        self.assertEqual(validators.validate_run_id(None, None, "a"), "a")
+        self.assertEqual(
+            validators.validate_run_id(None, None, "a-b-c"), "a-b-c"
+        )
+        self.assertEqual(validators.validate_run_id(None, None, None), None)
+
+    def test_validate_run_id_invalid(self):
+        import click
+
+        invalid_cases = [
+            "",  # Empty
+            "   ",  # Whitespace
+            "Uppercase-Name",  # Uppercase
+            "name_with_underscore",  # Underscore
+            "name_with_special!",  # Special character
+            "-start-with-dash",  # Starts with dash
+            "end-with-dash-",  # Ends with dash
+            "a" * 36,  # Too long (36 chars)
+        ]
+        for case in invalid_cases:
+            with self.subTest(case):
+                with self.assertRaises(click.BadParameter):
+                    validators.validate_run_id(None, None, case)
+
+    def test_homogeneity_validator_valid(self):
+        v = validators.HomogeneityValidator()
+        errors = v.validate(
+            {
+                "detected_machine_types": ["a3-megagpu-8g"],
+                "scheduler": "kubernetes",
+            }
+        )
+        self.assertEqual(errors, [])
+
+    def test_homogeneity_validator_invalid_kubernetes(self):
+        v = validators.HomogeneityValidator()
+        errors = v.validate(
+            {
+                "detected_machine_types": ["a3-megagpu-8g", "a3-ultragpu-8g"],
+                "scheduler": "kubernetes",
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Heterogeneous cluster detected", errors[0])
+        self.assertIn("--nodepools", errors[0])
+
+    def test_homogeneity_validator_invalid_slurm(self):
+        v = validators.HomogeneityValidator()
+        errors = v.validate(
+            {
+                "detected_machine_types": ["a3-megagpu-8g", "a3-ultragpu-8g"],
+                "scheduler": "slurm",
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Heterogeneous cluster detected", errors[0])
+        self.assertIn("--partitions", errors[0])
 
 
 if __name__ == "__main__":

@@ -42,15 +42,35 @@ EOF
 cat "${ENROOT_CONFIG_CREDENTIALS}"
 ```
 
-### GKE Configuration
+### Kubernetes Configuration
 
-To run tests on GKE, you first need to get the cluster credentials. For example:
+To run tests on Kubernetes, you first need to get the cluster credentials. For example:
 
 ```bash
 gcloud container clusters get-credentials {cluster_name} \
     --location {location} \
     --project {project_id}
 ```
+
+### Google Cloud & Kubernetes Execution (GKE)
+
+CHS provides a turnkey run script for executing tests natively on GKE clusters using Helm under the hood. It fully automates Workload Identity prerequisites, IAM bindings, namespace configuration, and test execution.
+
+To configure your test run, edit the values in `helm/values.yaml` (e.g., `run.suite`, `run.nodepools`).
+
+Then, simply run the script:
+```bash
+./bin/run_chs_gke.sh [optional-run-name]
+```
+
+This idempotent script will:
+1. Fetch and configure `kubectl` credentials for your cluster.
+2. Configure Docker authentication for Artifact Registry.
+3. Automatically create and bind the required Google Service Account (GSA) to the Workload Identity KSA for the `chs-system` namespace.
+4. Ensure the `chs-system` namespace exists.
+5. Deploy and execute the test run inside the cluster using `helm upgrade --install`.
+
+Because the setup is completely idempotent, you simply run `./bin/run_chs_gke.sh` every time you want to execute a CHS test run on GKE.
 
 ## Installation
 
@@ -104,26 +124,32 @@ chs list --tests --machine-type a3-ultra --from-suite lite
 #### 2. `configure`
 Configure CHS settings.
 
-*Note: Configuring a GCS bucket is optional. Setting a bucket allows CHS to upload reports and archives to GCS for persistence and sharing.*
+*Note: Configuring a storage target is optional. Setting a storage target allows CHS to upload reports and archives for persistence and sharing.*
 
 **Commands:**
--   `bucket`: Sets the GCS bucket for storing results.
+-   `storage gcs <BUCKET_NAME>`: Configures a Google Cloud Storage bucket.
+-   `storage path <DIRECTORY_PATH>`: Configures a local or mounted directory path.
 
-**Options:**
--   `--name`: GCS bucket name (default: `chs-results`).
+If no subcommand is provided (i.e., `chs configure storage`), CHS will start an interactive prompt to select and configure the storage type.
 
-**Example:**
+During configuration, CHS will validate write access to the target storage (via a canary write/delete test) and fail-fast if validation fails.
+
+**Examples:**
 ```bash
-# Set the GCS bucket name
-chs configure bucket --name my-results-bucket
+# Configure GCS bucket
+chs configure storage gcs my-results-bucket
+
+# Configure Local Path storage
+chs configure storage path /mnt/shared/chs-archive
 ```
 
 #### 3. `run`
 Executes a test suite on a specified cluster.
 
+**Scheduler Auto-detection:**
+CHS automatically detects the scheduler (`slurm` or `kubernetes`) of the active environment. Slurm detection is attempted first (by checking if `sinfo` and `squeue` are available and reachable). If Slurm is not detected, it falls back to Kubernetes (by checking for in-cluster credentials or `kubectl` connectivity).
+
 **Arguments:**
--   `--scheduler` / `-sch` **(Required)**: The scheduler to use.
-    *   *Supported values:* `slurm`, `gke`.
 -   `--machine-type` **(Required)**: The machine type of the cluster nodes.
     *   *Supported values:* `a3-ultra`, `a3-mega`, `a4`.
 -   `--suite` / `-s`: Name of the test suite to run.
@@ -134,9 +160,9 @@ Executes a test suite on a specified cluster.
     *   *Supported values:* `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`.
 -   `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
 -   `--nodelist`: Slurm node list pattern to run on (e.g., `node-[1-3]`).
--   `--nodepool`: GKE node pool to run on.
+-   `--nodepool`: Kubernetes node pool to run on.
 -   `--partition`: Slurm partition to run on.
--   `--dry-run`: Set up the workspace but do not execute experiments or analyze.
+-   `--dry-run` `[slurm|kubernetes]`: Set up the workspace for the specified scheduler but do not execute (developer dry-run).
 -   `--validation`: Path to a user-defined thresholds YAML file (optional).
 -   `--skip-validation`: Skip threshold evaluation entirely.
 
@@ -165,36 +191,36 @@ Below are the details of the supported test suites and the tests included in eac
 
 **Examples:**
 
-#### GKE Examples
+#### Kubernetes Examples
 
 ```bash
 # Run the lite suite (default) on a3-ultra machine
-chs run --scheduler gke --machine-type a3-ultra
+chs run --machine-type a3-ultra
 
 # Run the lite suite on a specific node pool
-chs run --scheduler gke --machine-type a3-ultra --nodepool my-node-pool
+chs run --machine-type a3-ultra --nodepool my-node-pool
 
 # Run the lite suite on specific nodes
-chs run --scheduler gke --machine-type a3-ultra --nodes node-01,node-02
+chs run --machine-type a3-ultra --nodes node-01,node-02
 
 # Run specific tests on specific nodes
-chs run --scheduler gke --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+chs run --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 #### Slurm Examples
 
 ```bash
 # Run the lite suite (default) on a3-ultra machine
-chs run --scheduler slurm --machine-type a3-ultra
+chs run --machine-type a3-ultra
 
 # Run the lite suite on a specific partition
-chs run --scheduler slurm --machine-type a3-ultra --partition my-partition
+chs run --machine-type a3-ultra --partition my-partition
 
 # Run the lite suite on specific nodes
-chs run --scheduler slurm --machine-type a3-ultra --nodes node-01,node-02
+chs run --machine-type a3-ultra --nodes node-01,node-02
 
 # Run specific tests on specific nodes
-chs run --scheduler slurm --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
+chs run --machine-type a3-ultra --tests nccl-cluster,gemm --nodes node-01,node-02
 ```
 
 **Output:**
@@ -226,31 +252,30 @@ chs analyze 2023-10-27_10.30.00.123456
 -   Generates a `bill_of_health.json` file in the run's directory.
 -   Copies experiment logs to a user-accessible directory.
 
-**Output Directory Structure:**
+**Output Directory Structure & Archiving:**
 
-Workspaces are created in: `~/.local/share/chs/workspaces`
+Workspaces are created locally in: `~/.local/share/chs/workspaces`
+The workspace name (Run ID) follows the format: `yyyy-mm-dd_hh.mm.ss.ffffff`
 
-The workspace name follows the format: `yyyy-mm-dd_hh.mm.ss.ffffff`
+Upon completion of analysis, CHS automatically archives the workspace and uploads it to the configured storage target (if configured):
+1.  **Bill of Health**: Uploaded/copied to `<storage_target>/bills_of_health/<run_id>.json`.
+2.  **Workspace Archive**: The workspace (configs, templates, and raw logs) is compressed into a tarball and uploaded/copied to `<storage_target>/workspaces/<run_id>.tar.gz`.
 
-The Bill of Health and experiment logs are located in the `chs-results` directory within the workspace.
-
-This folder is what will be uploaded to GCS.
-
+Local workspace directory structure:
 ```
 ~/.local/share/chs/workspaces/
 └── <WORKSPACE_NAME>/            # e.g., 2026-02-13_08.48.45.261141
-    └── chs-results/             # Contains Bill of Health and experiment logs
-        ├── bill_of_health.json  # The summarized Bill of Health report
-        └── experiments/         # Raw logs and experiment data
-            ├── nccl-tests/
-            │   └── ...
-            └── ...
+    ├── bill_of_health.json      # The generated Bill of Health report
+    └── experiments/             # Raw logs and experiment data (created by Ramble)
+        ├── nccl-tests/
+        │   └── ...
+        └── ...
 ```
 
-The `bill_of_health.json` contains a `log_file` field for every test, pointing to the absolute path of the log file in the `experiments` directory.
+The `bill_of_health.json` contains a `log_file` field for every test, pointing to the path of the log file relative to the workspace root.
 
-**Example Log File Path:**
-`log_file: "/usr/local/google/home/user/.local/share/chs/workspaces/2026-02-13_08.48.45.261141/chs-results/experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
+**Example Log File Path in BoH:**
+`log_file: "experiments/nccl-tests/all-gather/cluster_health_diagnostics-nccl-all-gather/cluster_health_diagnostics-nccl-all-gather.out"`
 #### 5. `cancel`
 Cancels running jobs for a specific test run.
 
@@ -302,10 +327,84 @@ Displays a table with Workspace and Details.
 ```
 Workspace                     Details
 ------------------------------------------------------------------------------------------
-2026-05-05_16.23.13.228716    chs run --scheduler gke --machine-type a3-ultra --dry-run
-2026-05-04_19.05.29.792632    chs run --scheduler gke
+2026-05-05_16.23.13.228716    chs run --machine-type a3-ultra --dry-run kubernetes
+2026-05-04_19.05.29.792632    chs run --machine-type a3-ultra
 ```
 
+
+## Docker Execution (Kubernetes Only)
+
+CHS can be run natively via Docker without needing to install any host dependencies (other than Docker and valid GCP/Kubernetes credentials). This containerized execution strictly targets Kubernetes environments.
+
+The Docker execution model runs the internal processes as `root` and uses Docker Named Volumes (`chs-local-state`) for persistent state to avoid host permission errors while reading read-only host credentials (like `~/.kube/config`).
+
+### 0. Building and Pushing the Docker Image
+
+If you make code changes and need to build a new CHS Docker image for your cluster:
+
+```bash
+# Set your artifact registry repository path (matches helm/values.yaml)
+export REPO="us-docker.pkg.dev/gce-ai-infra/chs/chs"
+
+# Build the image locally
+docker build -t ${REPO}:latest .
+
+# Configure Docker authentication for Artifact Registry
+gcloud auth configure-docker us-docker.pkg.dev
+
+# Push the image to the registry
+docker push ${REPO}:latest
+```
+
+
+### 1. Initial Storage Configuration (Run Once)
+Before triggering a run, configure where the archives should be saved. This configuration is permanently saved into the `chs-local-state` volume.
+
+**Option A: Archiving to GCS**
+```bash
+docker run -it --network host \
+  -v ~/.kube:/workspace/.kube:ro \
+  -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+  -v chs-local-state:/workspace/.local/share \
+  chs:latest configure storage gcs --bucket-name my-bucket
+```
+
+**Option B: Archiving to a Local Host Directory**
+If you want to extract the archive tarballs directly to your machine, bind-mount a host directory to the container (e.g., `-v ~/chs-archives:/archive`):
+```bash
+docker run -it --network host \
+  -v ~/.kube:/workspace/.kube:ro \
+  -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+  -v chs-local-state:/workspace/.local/share \
+  -v ~/chs-archives:/archive \
+  chs:latest configure storage path --path /archive
+```
+
+### 2. Running Diagnostics
+Because configuration is saved in the `chs-local-state` volume, subsequent runs will automatically respect the chosen storage backend.
+
+```bash
+docker run -it --network host \
+  -v ~/.kube:/workspace/.kube:ro \
+  -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+  -v chs-local-state:/workspace/.local/share \
+  -v ~/chs-archives:/archive \
+  chs:latest run --suite lite
+```
+*(Note: If using GCS, the `~/chs-archives:/archive` mount can be omitted).*
+
+### 3. Native GKE Deployment
+CHS can be deployed inside the cluster using the bundled Helm chart. The orchestrator pod prefers CPU nodes and uses a specialized `--attach` mechanism to gracefully recover state if the pod is preempted while jobs are running.
+
+It is highly recommended to use the provided turnkey execution script (which automatically drives Helm and configures security bindings) rather than running Helm manually:
+
+```bash
+# 1. Configure your run preferences in helm/values.yaml
+# 2. Run the deployment script:
+./bin/run_chs_gke.sh
+```
+
+See the `helm/` directory for additional configuration values.
 
 ## Configuration
 
@@ -327,12 +426,12 @@ You can configure these thresholds by providing a YAML file containing baseline 
 
 * **Specify custom thresholds:** Use the `--validation <PATH>` flag during `chs run` or `chs analyze` to specify a custom thresholds YAML file:
   ```bash
-  chs run --scheduler gke --machine-type a3-ultra --validation /path/to/custom_thresholds.yaml
+  chs run --machine-type a3-ultra --validation /path/to/custom_thresholds.yaml
   chs analyze --validation /path/to/custom_thresholds.yaml
   ```
 * **Skip validation:** If you want to run tests or analyze results without applying any threshold checks, use the `--skip-validation` flag.
   ```bash
-  chs run --scheduler gke --machine-type a3-ultra --skip-validation
+  chs run --machine-type a3-ultra --skip-validation
   ```
 
 ### Configuration Schema & Hierarchy
@@ -436,17 +535,15 @@ a3-ultra:
 
 ## Known Limitations
 
--   **GCS Bucket Configuration**: For the `chs configure bucket` command, the specified GCS bucket must already exist; CHS does not create it automatically.
+-   **GCS Storage Configuration**: For the `chs configure storage gcs` command, the specified GCS bucket must already exist; CHS does not create it automatically.
 
-## Support and Feedback
 
-To report bugs or request new features, please [create a new issue in Buganizer](https://github.com/GoogleCloudPlatform/cluster-health-scanner/issues).
 
 ## Development & TODOs
 
 The following features are currently in development or planned:
 
--   **Scheduler Support**: Currently, only `slurm` and `gke` are supported. Support for JBVMs and Bare Metals is planned.
+-   **Scheduler Support**: Currently, only `slurm` and `kubernetes` are supported. Support for JBVMs and Bare Metals is planned.
 -   **Dynamic Listing**: The `list` command currently acts as a placeholder and needs to be connected to the Ramble registry to dynamically list available suites and tests.
 -   **Workspace Cleanup**: A `cleanup` command or logic to manage old workspaces is pending implementation.
 -   **Configurable Paths**: Support for user-defined workspace directories via configuration or flags.

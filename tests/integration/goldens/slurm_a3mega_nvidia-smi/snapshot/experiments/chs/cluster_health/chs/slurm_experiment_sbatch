@@ -21,6 +21,6 @@ scontrol show hostnames > <WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/ho
 rm -f "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/.slurm_config" "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/chs.out"
 touch "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/.slurm_config" "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/.slurm_job_info" "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/chs.out"
 scontrol show config > <WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/.slurm_config
-echo 'Initiating cluster health diagnostics for a3-mega' >> "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/chs.out" 2>&1
+echo 'Initiating cluster health diagnostics for a3-megagpu-8g' >> "<WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/chs.out" 2>&1
 date +%s > <WORKSPACE_ROOT>/experiments/chs/cluster_health/chs/.slurm_script_end_time
 

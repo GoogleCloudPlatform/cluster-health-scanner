@@ -1,2 +1,9 @@
-description: "Tests the 'dcgm' test against a slurm scheduler for a4"
-command: ["run", "--tests", "dcgm", "--scheduler", "slurm", "--machine-type", "a4", "--nodes", "node1,node2", "--dry-run"]
+description: Tests the 'dcgm' test against a slurm scheduler for a4
+command:
+- run
+- --tests
+- dcgm
+- --nodes
+- node1,node2
+- --dry-run
+- slurm

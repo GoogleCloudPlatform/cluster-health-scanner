@@ -1,190 +1,204 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 tests:
   - name: nvidia-smi
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a4x-max
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
 
   - name: dcgm
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a4x-max
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
 
   - name: gemm
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: tpu7x
-      - scheduler: gke
-        machine_type: tpuv6e
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
       - scheduler: slurm
-        machine_type: tpuv6e
+        machine_type: ct6e-standard-4t
 
   - name: nccl-single-node
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a4x-max
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
 
   - name: nccl-cluster
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a4x-max
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
 
   - name: nccl-pairwise
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a4x-max
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
 
   - name: stream
     platforms:
       - scheduler: slurm
-        machine_type: a3-ultra
+        machine_type: a3-ultragpu-8g
       - scheduler: slurm
-        machine_type: a4
+        machine_type: a4-highgpu-8g
       - scheduler: slurm
-        machine_type: a3-mega
+        machine_type: a3-megagpu-8g
       - scheduler: slurm
-        machine_type: a4x
-      - scheduler: gke
-        machine_type: a3-ultra
-      - scheduler: gke
-        machine_type: a4
-      - scheduler: gke
-        machine_type: a3-mega
-      - scheduler: gke
-        machine_type: a4x
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a3-ultragpu-8g
+      - scheduler: kubernetes
+        machine_type: a4-highgpu-8g
+      - scheduler: kubernetes
+        machine_type: a3-megagpu-8g
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
 
   - name: tpu-info
     platforms:
-      - scheduler: gke
-        machine_type: tpu7x
-      - scheduler: gke
-        machine_type: tpuv6e
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
       - scheduler: slurm
-        machine_type: tpuv6e
+        machine_type: ct6e-standard-4t
 
   - name: hbm
     platforms:
-      - scheduler: gke
-        machine_type: tpu7x
-      - scheduler: gke
-        machine_type: tpuv6e
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
       - scheduler: slurm
-        machine_type: tpuv6e
+        machine_type: ct6e-standard-4t
 
   - name: host-device
     platforms:
-      - scheduler: gke
-        machine_type: tpu7x
-      - scheduler: gke
-        machine_type: tpuv6e
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
       - scheduler: slurm
-        machine_type: tpuv6e
+        machine_type: ct6e-standard-4t
 
   - name: collectives
     platforms:
-      - scheduler: gke
-        machine_type: tpu7x
-      - scheduler: gke
-        machine_type: tpuv6e
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
 
   - name: collectives-single-node
     platforms:
-      - scheduler: gke
-        machine_type: tpu7x
-      - scheduler: gke
-        machine_type: tpuv6e
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t

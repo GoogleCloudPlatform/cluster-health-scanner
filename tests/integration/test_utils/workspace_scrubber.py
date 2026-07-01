@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import pathlib
 import re
@@ -54,14 +68,22 @@ def should_keep_file(rel_path: str) -> bool:
 
 
 class WorkspaceScrubber:
-    def __init__(self, workspace_root: str):
+    def __init__(
+        self,
+        workspace_root: str,
+        additional_replacements: list[tuple[str, str]] | None = None,
+    ):
         self.workspace_root = workspace_root
         self.home_dir = os.path.expanduser("~")
         self.workspace_name = os.path.basename(workspace_root)
+        self.additional_replacements = additional_replacements or []
 
     def scrub_text(self, content: str) -> str:
         content = content.replace(self.workspace_root, "<WORKSPACE_ROOT>")
         content = content.replace(self.home_dir, "<HOME_DIR>")
+
+        for raw, placeholder in self.additional_replacements:
+            content = content.replace(raw, placeholder)
 
         # Apply default scrubbing rules
         for pattern, replacement in SCRUBBING_RULES:

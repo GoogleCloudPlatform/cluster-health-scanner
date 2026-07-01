@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for KueueManager."""
 
 import os
@@ -32,10 +46,14 @@ class TestKueueManager(unittest.TestCase):
 
     def test_setup_already_active_returns_label(self):
         """Test setup returns queue label if ClusterQueue is already active."""
-        self.mock_scheduler._run_kubectl.side_effect = ["a3-megagpu-8g", "True"]
-        label = self.kueue_mgr.setup(self.tmp_dir, "a3-mega", ["node1"])
+        self.mock_scheduler._run_kubectl.side_effect = [
+            "a3-megagpu-8g",
+            "True",
+            "",
+        ]
+        label = self.kueue_mgr.setup(self.tmp_dir, "a3-megagpu-8g", ["node1"])
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 2)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
 
     def test_setup_success_renders_and_verifies(self):
         """Test setup renders template, applies it, and verifies readiness."""
@@ -47,7 +65,7 @@ class TestKueueManager(unittest.TestCase):
         ]
 
         label = self.kueue_mgr.setup(
-            self.tmp_dir, "a3-mega", ["node1", "node2"]
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
 
@@ -67,7 +85,9 @@ class TestKueueManager(unittest.TestCase):
             "",
         ]
 
-        label = self.kueue_mgr.setup(self.tmp_dir, "tpu7x", ["node1", "node2"])
+        label = self.kueue_mgr.setup(
+            self.tmp_dir, "tpu7x-standard-4t", ["node1", "node2"]
+        )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
 
         config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
@@ -121,7 +141,7 @@ class TestKueueManager(unittest.TestCase):
         self.mock_scheduler._run_kubectl.return_value = ""
         self.kueue_mgr.cleanup(config_path)
         self.mock_scheduler._run_kubectl.assert_called_once_with(
-            ["delete", "-f", config_path]
+            ["delete", "--ignore-not-found", "-f", config_path]
         )
 
     def test_cleanup_failure_raises(self):

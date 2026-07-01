@@ -1,4 +1,0 @@
-description: "Tests the 'nccl-cluster' test against a gke scheduler for a4x-max"
-command: ["run", "--tests", "nccl-cluster", "--scheduler", "gke", "--machine-type", "a4x-max", "--nodes", "node1,node2", "--dry-run"]
-env:
-  MOCK_KUEUE_MISSING: "0"

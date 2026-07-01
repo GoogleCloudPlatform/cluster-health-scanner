@@ -1,2 +1,0 @@
-description: "Tests the 'nccl-cluster' test against a gke scheduler for a4"
-command: ["run", "--tests", "nccl-cluster", "--scheduler", "gke", "--machine-type", "a4", "--nodes", "node1,node2", "--dry-run"]
