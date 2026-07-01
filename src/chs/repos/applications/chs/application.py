@@ -127,7 +127,7 @@ class Chs(ExecutableApplication):
                 dest[key] = value
         return dest
 
-    def create_experiment_chain(self, workspace):
+    def create_experiment_chain(self):
         configs_dir = os.path.join(config_dir, "configs")
         configs = {}
         scheduler = self.expander.expand_var_name("scheduler", typed=True)
@@ -172,7 +172,6 @@ class Chs(ExecutableApplication):
 
         for test in tests_config.tests:
             test_vars = self.non_reserved_variables(
-                workspace,
                 remove_keys={
                     "n_ranks",
                     "processes_per_node",
@@ -236,8 +235,8 @@ class Chs(ExecutableApplication):
                         topology,
                     )
                     for context in contexts:
-                        self.experiment_set.render_chained_experiments(
-                            application_name, workload, context
+                        self.experiment_set.render_experiment_set(
+                            application_name, workload, context, chained=True
                         )
             elif test.name == "dcgm":
                 application_name = "nvidia-dcgm"
@@ -251,8 +250,8 @@ class Chs(ExecutableApplication):
                 context = TestHelper.dcgm_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "diag", context
+                self.experiment_set.render_experiment_set(
+                    application_name, "diag", context, chained=True
                 )
             elif test.name == "stream":
                 application_name = "nvidia-stream"
@@ -264,8 +263,8 @@ class Chs(ExecutableApplication):
                 context = TestHelper.stream_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "standard", context
+                self.experiment_set.render_experiment_set(
+                    application_name, "standard", context, chained=True
                 )
             elif test.name == "nvidia-smi":
                 application_name = "nvidia-smi"
@@ -277,8 +276,8 @@ class Chs(ExecutableApplication):
                 context = TestHelper.nvidia_smi_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
-                self.experiment_set.render_chained_experiments(
-                    application_name, "local", context
+                self.experiment_set.render_experiment_set(
+                    application_name, "local", context, chained=True
                 )
             elif test.name == "gemm":
                 machine_type = self.expander.expand_var_name(
@@ -301,15 +300,18 @@ class Chs(ExecutableApplication):
                             local_vars, experiment_name, deepcopy(configs)
                         )
                         for context in contexts:
-                            self.experiment_set.render_chained_experiments(
-                                application_name, workload, context
+                            self.experiment_set.render_experiment_set(
+                                application_name,
+                                workload,
+                                context,
+                                chained=True,
                             )
                     else:
                         context = TestHelper.gemm_test(
                             local_vars, experiment_name, deepcopy(configs)
                         )
-                        self.experiment_set.render_chained_experiments(
-                            application_name, workload, context
+                        self.experiment_set.render_experiment_set(
+                            application_name, workload, context, chained=True
                         )
             elif test.name == "hbm":
                 application_name = "tpu-hbm"
@@ -322,8 +324,8 @@ class Chs(ExecutableApplication):
                     local_vars, experiment_name, deepcopy(configs)
                 )
                 for context in contexts:
-                    self.experiment_set.render_chained_experiments(
-                        application_name, "check", context
+                    self.experiment_set.render_experiment_set(
+                        application_name, "check", context, chained=True
                     )
             elif test.name == "host-device":
                 application_name = "tpu-host-device"
@@ -336,8 +338,8 @@ class Chs(ExecutableApplication):
                     local_vars, experiment_name, deepcopy(configs)
                 )
                 for context in contexts:
-                    self.experiment_set.render_chained_experiments(
-                        application_name, "check", context
+                    self.experiment_set.render_experiment_set(
+                        application_name, "check", context, chained=True
                     )
             elif test.name == "collectives":
                 application_name = "tpu-collectives"
@@ -361,8 +363,8 @@ class Chs(ExecutableApplication):
                         local_vars, experiment_name, deepcopy(configs)
                     )
                     for context in contexts:
-                        self.experiment_set.render_chained_experiments(
-                            application_name, workload, context
+                        self.experiment_set.render_experiment_set(
+                            application_name, workload, context, chained=True
                         )
             elif test.name == "collectives-single-node":
                 application_name = "tpu-collectives"
@@ -384,8 +386,8 @@ class Chs(ExecutableApplication):
                         local_vars, experiment_name, deepcopy(configs)
                     )
                     for context in contexts:
-                        self.experiment_set.render_chained_experiments(
-                            application_name, workload, context
+                        self.experiment_set.render_experiment_set(
+                            application_name, workload, context, chained=True
                         )
 
             elif test.name == "tpu-info":
@@ -399,8 +401,8 @@ class Chs(ExecutableApplication):
                     local_vars, experiment_name, deepcopy(configs)
                 )
                 for context in contexts:
-                    self.experiment_set.render_chained_experiments(
-                        application_name, "local", context
+                    self.experiment_set.render_experiment_set(
+                        application_name, "local", context, chained=True
                     )
             elif test.name == "tpu-network-diagnostics":
                 application_name = "tpu-network-diagnostics"
@@ -413,8 +415,8 @@ class Chs(ExecutableApplication):
                     local_vars, experiment_name, deepcopy(configs)
                 )
                 for context in contexts:
-                    self.experiment_set.render_chained_experiments(
-                        application_name, "diagnostic", context
+                    self.experiment_set.render_experiment_set(
+                        application_name, "diagnostic", context, chained=True
                     )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")
