@@ -402,5 +402,19 @@ class Chs(ExecutableApplication):
                     self.experiment_set.render_chained_experiments(
                         application_name, "local", context
                     )
+            elif test.name == "tpu-network-diagnostics":
+                application_name = "tpu-network-diagnostics"
+                experiment_name = f"{base_prefix}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                contexts = TestHelper.tpu_network_diagnostics_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                for context in contexts:
+                    self.experiment_set.render_chained_experiments(
+                        application_name, "diagnostic", context
+                    )
             else:
                 logger.warn(f"Unknown test {test.name} requested. Skipping.")

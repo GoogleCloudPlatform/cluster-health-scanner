@@ -45,7 +45,7 @@ class TpuErrorDetector(BasicModifier):
 
     figure_of_merit(
         "TPU Hardware / Driver / Network Error Detected",
-        fom_regex=r"(?i)(?P<hardware_error>.*(TPU device reset|Hardware error|Failed to initialize PJRT client|Failed to initialize PJRT|PjRtClient|Collective operation timed out|ICI link failure|libtpu not found|PermissionError:.*(/dev/vfio|/dev/accel)).*)",
+        fom_regex=r"(?i)(?P<hardware_error>.*(TPU device reset|Hardware error|Failed to initialize PJRT client|Failed to initialize PJRT|PjRtClient|Collective operation timed out|ICI link failure|libtpu not found|PermissionError:.*(/dev/vfio|/dev/accel)|SDC \(Bit flips\) Detected).*)",
         group_name="hardware_error",
         units="",
         fom_type=FomType.INFO,

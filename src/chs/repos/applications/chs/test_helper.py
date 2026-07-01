@@ -519,6 +519,19 @@ podAntiAffinity:
         ]
 
     @staticmethod
+    def tpu_network_diagnostics_test(variables, experiment_name, configs):
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-network-diagnostics",
+            extra_context={"modifiers": []},
+        )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
+
+    @staticmethod
     def _load_benchmark_config(filename):
         if not filename:
             return ""
