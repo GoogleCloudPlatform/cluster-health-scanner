@@ -580,7 +580,7 @@ class RambleManager:
     def wait_for_jobs(
         self,
         app_data: ChsAppData,
-        poll_interval: int = 30,
+        poll_interval: int = 15,
         tier: int | None = None,
     ) -> None:
         """Waits for all jobs in the workspace to complete and fetches logs.

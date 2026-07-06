@@ -184,5 +184,6 @@ class KubernetesPreflightChecker:
             text=True,
             capture_output=True,
             check=True,
+            timeout=120,
         )
         return result.stdout.strip()

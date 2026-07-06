@@ -244,7 +244,7 @@ class KubernetesScheduler(BaseScheduler):
     def _run_kubectl(
         self,
         args: list[str],
-        timeout: int | None = None,
+        timeout: int | None = 120,
         namespaced: bool = False,
     ) -> str:
         """Runs a kubectl command and returns filtered output."""
@@ -253,6 +253,7 @@ class KubernetesScheduler(BaseScheduler):
         if namespaced:
             cmd.extend(["-n", CHS_NAMESPACE])
         cmd.extend(args)
+
         result = subprocess.run(
             cmd,
             text=True,

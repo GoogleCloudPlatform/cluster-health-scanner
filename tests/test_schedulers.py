@@ -877,7 +877,7 @@ ramble:
             text=True,
             capture_output=True,
             check=True,
-            timeout=None,
+            timeout=120,
         )
 
     @mock.patch("subprocess.run")
