@@ -143,6 +143,43 @@ class BOHGenerator:
             metrics.append(metric)
         return metrics
 
+    def _evaluate_metric_conditions(
+        self,
+        metric: pb.Metric,
+        conditions: dict[str, Any],
+        aliases: dict[str, str],
+        ramble_vars: dict[str, Any] = None,
+    ) -> bool:
+        """Evaluates all conditions for a metric within its context."""
+        if not conditions:
+            return True
+
+        metric_context = (
+            metric.metadata.fields["context"].string_value
+            if "context" in metric.metadata.fields
+            else ""
+        )
+        context_parts = (
+            [part.strip() for part in metric_context.split(",")]
+            if metric_context
+            else []
+        )
+
+        for condition_name, expected_condition_value in conditions.items():
+            resolved_condition_name = aliases.get(
+                condition_name, condition_name
+            )
+
+            if ramble_vars and resolved_condition_name in ramble_vars:
+                if str(ramble_vars[resolved_condition_name]) != str(
+                    expected_condition_value
+                ):
+                    return False
+            else:
+                if str(expected_condition_value) not in context_parts:
+                    return False
+        return True
+
     def _split_test_result_per_node(
         self, test_result: pb.TestResult
     ) -> list[pb.TestResult]:
@@ -171,7 +208,10 @@ class BOHGenerator:
         return split_results
 
     def _evaluate_thresholds(
-        self, machine_type: str, test_result: pb.TestResult
+        self,
+        machine_type: str,
+        test_result: pb.TestResult,
+        ramble_vars: dict[str, Any] = None,
     ) -> None:
         """Evaluates metrics against thresholds defined in thresholds.yaml."""
         test_name = test_result.test_name
@@ -203,8 +243,28 @@ class BOHGenerator:
         overall_success = True
         metrics_map = {m.key: m for m in test_result.metrics}
 
+        flattened_thresholds = []
+        for metric_name, metric_threshold_configs in merged_thresholds.items():
+            threshold_config_list = (
+                metric_threshold_configs
+                if isinstance(metric_threshold_configs, list)
+                else [metric_threshold_configs]
+            )
+
+            for threshold_config in threshold_config_list:
+                if isinstance(threshold_config, dict):
+                    threshold_value = threshold_config.get("value")
+                    conditions = threshold_config.get("conditions", {})
+                else:
+                    threshold_value = threshold_config
+                    conditions = {}
+
+                flattened_thresholds.append(
+                    (metric_name, threshold_value, conditions)
+                )
+
         if comp_type == "relative":
-            for th_key, th_val in merged_thresholds.items():
+            for th_key, th_val, conditions in flattened_thresholds:
                 validation = pb.ValidationCriteria(
                     comparator=pb.Comparator.COMPARATOR_GTE, name=th_key
                 )
@@ -222,6 +282,13 @@ class BOHGenerator:
 
                     for m in test_result.metrics:
                         if m.key == ach_key:
+                            if not self._evaluate_metric_conditions(
+                                m,
+                                conditions,
+                                aliases,
+                                ramble_vars,
+                            ):
+                                continue
                             ach_val = (
                                 m.value.number_value
                                 if m.value.HasField("number_value")
@@ -253,12 +320,19 @@ class BOHGenerator:
                                 overall_success = False
 
         else:
-            for th_key, th_val in merged_thresholds.items():
+            for th_key, th_val, conditions in flattened_thresholds:
                 raw_fom_name = aliases.get(th_key, th_key)
 
                 found_metric = False
                 for metric in test_result.metrics:
                     if metric.key == raw_fom_name:
+                        if not self._evaluate_metric_conditions(
+                            metric,
+                            conditions,
+                            aliases,
+                            ramble_vars,
+                        ):
+                            continue
                         found_metric = True
                         validation = pb.ValidationCriteria(name=th_key)
                         if comp_type == "min":
@@ -512,7 +586,9 @@ class BOHGenerator:
 
             for result in results_to_add:
                 if needs_evaluation:
-                    self._evaluate_thresholds(machine_type, result)
+                    self._evaluate_thresholds(
+                        machine_type, result, exp | ramble_vars
+                    )
                 self.report.test_results.append(result)
 
         return self.report

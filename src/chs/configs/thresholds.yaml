@@ -41,6 +41,92 @@ tpu7x-standard-4t:
     type: min
     thresholds:
       Throughput: 1000.0
+  tpu-hbm:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 3200
+          conditions:
+            elements: 2147483648
+  tpu-collectives:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 155.0
+          conditions:
+            tpu_topology: "2x2x1"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 130.0
+          conditions:
+            tpu_topology: "2x2x1"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 65.0
+          conditions:
+            tpu_topology: "2x2x1"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 170.0
+          conditions:
+            tpu_topology: "2x2x2"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 200.0
+          conditions:
+            tpu_topology: "2x2x2"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 75.0
+          conditions:
+            tpu_topology: "2x2x2"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 175.0
+          conditions:
+            tpu_topology: "2x2x4"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 140.0
+          conditions:
+            tpu_topology: "2x2x4"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "2x2x4"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 72.0
+          conditions:
+            tpu_topology: "2x4x4"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 170.0
+          conditions:
+            tpu_topology: "2x4x4"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "2x4x4"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 500.0
+          conditions:
+            tpu_topology: "4x4x4"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 370.0
+          conditions:
+            tpu_topology: "4x4x4"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 83.0
+          conditions:
+            tpu_topology: "4x4x4"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
 
 ct6e-standard-4t:
   tpu-network-diagnostics:
@@ -55,6 +141,107 @@ ct6e-standard-4t:
     type: min
     thresholds:
       Throughput: 850.0
+  tpu-hbm:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 1100
+          conditions:
+            elements: 2147483648
+  tpu-collectives:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 180.0
+          conditions:
+            tpu_topology: "2x2"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 170.0
+          conditions:
+            tpu_topology: "2x2"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 130.0
+          conditions:
+            tpu_topology: "2x2"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 180.0
+          conditions:
+            tpu_topology: "2x4"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 140.0
+          conditions:
+            tpu_topology: "2x4"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 75.0
+          conditions:
+            tpu_topology: "2x4"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 170.0
+          conditions:
+            tpu_topology: "4x4"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 175.0
+          conditions:
+            tpu_topology: "4x4"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 80.0
+          conditions:
+            tpu_topology: "4x4"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 155.0
+          conditions:
+            tpu_topology: "4x8"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 150.0
+          conditions:
+            tpu_topology: "4x8"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "4x8"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 175.0
+          conditions:
+            tpu_topology: "8x8"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 175.0
+          conditions:
+            tpu_topology: "8x8"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "8x8"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
+        - value: 180.0
+          conditions:
+            tpu_topology: "8x16"
+            "Matrix Dim": 16384
+            workload_name: "all_gather"
+        - value: 150.0
+          conditions:
+            tpu_topology: "8x16"
+            "Matrix Dim": 16384
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "8x16"
+            "Matrix Dim": 16384
+            workload_name: "all_to_all"
 
 a3-ultragpu-8g:
   nccl-cluster:

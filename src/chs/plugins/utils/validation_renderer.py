@@ -151,10 +151,16 @@ def render_validation_results(
                 prefix = rendering.format_context_prefix(metric)
                 row_style = status_style
 
+                metric_value_2f = (
+                    f"{metric_value:.2f}"
+                    if isinstance(metric_value, float)
+                    else str(metric_value)
+                )
+
                 table.add_row(
                     target_str,
                     f"{prefix}{metric.key}",
-                    str(metric_value),
+                    metric_value_2f,
                     metric.unit,
                     threshold_str,
                     Text(status_str, style=status_style),

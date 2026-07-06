@@ -46,6 +46,31 @@ class TpuCollectivesRenderer(DefaultRenderer):
     def _should_only_show_first_host(self) -> bool:
         return True
 
+    def _filter_validation_results(
+        self, test_results: list[pb.TestResult], sorted_nodes: list[str]
+    ) -> list[pb.TestResult]:
+        """Filters the validation results to only include metrics
+        for the first node."""
+        if not test_results or not sorted_nodes:
+            return test_results
+
+        filtered_result = pb.TestResult()
+        filtered_result.CopyFrom(test_results[0])
+
+        first_node = sorted_nodes[0]
+
+        filtered_metrics = [
+            metric
+            for metric in filtered_result.metrics
+            if (context := metric.metadata.fields.get("context")) is None
+            or first_node in context.string_value
+        ]
+
+        del filtered_result.metrics[:]
+        filtered_result.metrics.extend(filtered_metrics)
+
+        return [filtered_result]
+
     def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
         """Renders detail tables for tpu-collectives tests."""
         if not test_results:
@@ -172,7 +197,11 @@ class TpuCollectivesRenderer(DefaultRenderer):
 
             render_elements.append(node_table)
 
-        val_table = self.render_validation_results(test_results)
+        validation_test_results = self._filter_validation_results(
+            test_results, sorted_nodes
+        )
+
+        val_table = self.render_validation_results(validation_test_results)
         if val_table:
             render_elements.append(val_table)
         return Group(*render_elements)
