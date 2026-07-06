@@ -43,6 +43,7 @@ class HardErrorEvent:
     category: str
     message: str
     node: str
+    test: str
 
 
 @dataclass
@@ -292,6 +293,7 @@ class ResultsViewer:
                                     category=category,
                                     message=val,
                                     node=t.node_name,
+                                    test=display_name,
                                 )
                             )
 
@@ -348,6 +350,7 @@ class ResultsViewer:
                                     "cancelled."
                                 ),
                                 node=t.node_name,
+                                test=display_name,
                             )
                         )
 
@@ -469,7 +472,7 @@ class ResultsViewer:
 
             grouped_errors = defaultdict(list)
             for err in summary_data.errors_and_warnings:
-                grouped_errors[err.category].append(err)
+                grouped_errors[(err.category, err.test)].append(err)
 
             sorted_errors = sorted(
                 grouped_errors.items(), key=lambda x: len(x[1]), reverse=True
@@ -478,14 +481,15 @@ class ResultsViewer:
             total_categories = len(sorted_errors)
             shown_categories = sorted_errors[:5]
 
-            for category, errs in shown_categories:
+            for (category, test_name), errs in shown_categories:
                 err_type = errs[0].type
                 msg = errs[0].message
                 nodes = sorted(list(set(e.node for e in errs)))
                 node_count = len(nodes)
 
                 self.console.print(
-                    f"{err_type} Category: {category} ({node_count} nodes)"
+                    f"{err_type} Category: {category} - Test: {test_name} "
+                    f"({node_count} nodes)"
                 )
                 if msg:
                     self.console.print(f"  • Message: {msg}")
