@@ -43,6 +43,7 @@ from chs import (
     exceptions as ex,
     get_scheduler,
     load_suite,
+    is_suite_tiered,
     preflights,
     resources,
     utils,
@@ -266,27 +267,6 @@ def list_action(
     return show_all
 
 
-def cluster_has_no_failed_jobs(scheduler) -> bool:
-    """Checks if the cluster has no failed jobs.
-
-    Args:
-      scheduler: The Scheduler instance to check.
-
-    Returns:
-      True if the cluster has NO failed CHS jobs, False otherwise.
-    """
-    if scheduler.has_no_failed_jobs():
-        logger.warning("The cluster still has healthy CHS jobs.")
-        return True
-
-    return False
-
-
-def _is_suite_tiered(suite_cfg: dict) -> bool:
-    """Checks if a suite defines any tests with dependencies."""
-    return any("trigger_condition" in t for t in suite_cfg.get("tests", []))
-
-
 def _parse_str_to_list(value: str | None) -> list[str] | None:
     """Parses a comma-separated string.
 
@@ -405,14 +385,12 @@ def run_action(
                 workspace_config_dir = os.path.join(
                     ramble_manager.path, "configs"
                 )
-                setup_tests = scheduler_obj.setup_scheduler_resources(
+                tests = scheduler_obj.setup_scheduler_resources(
                     workspace_config_dir=workspace_config_dir,
                     tests=tests,
                     machine_type=machine_type,
                     workspace_name=workspace_name,
                 )
-                if setup_tests is not None:
-                    tests = setup_tests
 
             ramble_manager.create_workspace()
             if not skip_validation:
@@ -431,8 +409,7 @@ def run_action(
                 logger.debug("Setup complete. Skipping experiment execution.")
                 return None
 
-            if scheduler_obj:
-                scheduler_obj.apply_scheduler_resources()
+            scheduler_obj.apply_scheduler_resources()
 
             job_ids = ramble_manager.execute_experiments(
                 tier=1, active_tests=active_tests
@@ -929,79 +906,77 @@ def _handle_previous_run(
     """Checks for a previous run, optionally attaches to it, or cleans up."""
     try:
         latest_run_id = app_data.get_latest_run_id()
-        if latest_run_id:
-            workspace_name = app_data.resolve_run_id(latest_run_id)
-            run_entry = app_data.get_run(workspace_name)
-
-            if run_entry:
-                submission_complete = run_entry.get(
-                    "submission_complete", False
-                )
-                scheduler_name = run_entry.get("scheduler", scheduler)
-                scheduler_instance = get_scheduler(scheduler_name)
-                try:
-                    has_no_failed_jobs = cluster_has_no_failed_jobs(
-                        scheduler_instance
-                    )
-
-                    if submission_complete and has_no_failed_jobs:
-                        cleanup_cmd = (
-                            "./bin/delete_chs_gke.sh"
-                            if utils.is_in_cluster()
-                            else "chs cancel"
-                        )
-                        logger.warning(
-                            "Parallel runs are not supported. "
-                            "Attaching to ongoing/completed run. "
-                            f"Run `{cleanup_cmd}` to destroy it."
-                        )
-                        analyze_action(
-                            app_data, latest_run_id, validation, skip_validation
-                        )
-                        return RunExecutionResult(
-                            suite=suite or "lite",
-                            scheduler_name=scheduler_name,
-                            tests=None,
-                            workspace_name=workspace_name,
-                            workspaces_base_dir=app_data.get_workspaces_dir(),
-                            job_ids=None,
-                        )
-                    else:
-                        if not submission_complete:
-                            msg = (
-                                "Previous run died mid-submission. "
-                                "Cleaning all stale resources"
-                            )
-                        else:
-                            msg = (
-                                "Previous run found but some jobs "
-                                "have failed. Cleaning all stale resources"
-                            )
-                        safe_cancel_action(
-                            scheduler_name,
-                            auto_approve=auto_approve,
-                            message=msg,
-                            action_type="setup",
-                        )
-                except ex.NoActiveJobsException:
-                    safe_cancel_action(
-                        scheduler_name,
-                        auto_approve=auto_approve,
-                        message=(
-                            "Previous run found but jobs no longer "
-                            "exist on the cluster. Cleaning all "
-                            "stale resources."
-                        ),
-                        action_type="setup",
-                    )
-            else:
-                safe_cancel_action(
-                    scheduler, auto_approve=auto_approve, action_type="setup"
-                )
-        else:
+        if not latest_run_id:
             safe_cancel_action(
                 scheduler, auto_approve=auto_approve, action_type="setup"
             )
+            return None
+
+        workspace_name = app_data.resolve_run_id(latest_run_id)
+        run_entry = app_data.get_run(workspace_name)
+        if not run_entry:
+            safe_cancel_action(
+                scheduler, auto_approve=auto_approve, action_type="setup"
+            )
+            return None
+
+        submission_complete = run_entry.get("submission_complete", False)
+        scheduler = run_entry.get("scheduler", scheduler)
+        scheduler_instance = get_scheduler(scheduler)
+
+        has_no_failed_jobs = False
+        if scheduler_instance.has_no_failed_jobs():
+            logger.warning("The cluster still has healthy CHS jobs.")
+            has_no_failed_jobs = True
+
+        if submission_complete and has_no_failed_jobs:
+            cleanup_cmd = (
+                "./bin/delete_chs_gke.sh"
+                if utils.is_in_cluster()
+                else "chs cancel"
+            )
+            logger.warning(
+                "Parallel runs are not supported. "
+                "Attaching to ongoing/completed run. "
+                f"Run `{cleanup_cmd}` to destroy it."
+            )
+            analyze_action(app_data, latest_run_id, validation, skip_validation)
+            return RunExecutionResult(
+                suite=suite or "lite",
+                scheduler_name=scheduler,
+                tests=None,
+                workspace_name=workspace_name,
+                workspaces_base_dir=app_data.get_workspaces_dir(),
+                job_ids=None,
+            )
+
+        if not submission_complete:
+            msg = (
+                "Previous run died mid-submission. "
+                "Cleaning all stale resources"
+            )
+        else:
+            msg = (
+                "Previous run found but some jobs "
+                "have failed. Cleaning all stale resources"
+            )
+        safe_cancel_action(
+            scheduler,
+            auto_approve=auto_approve,
+            message=msg,
+            action_type="setup",
+        )
+    except ex.NoActiveJobsException:
+        safe_cancel_action(
+            scheduler,
+            auto_approve=auto_approve,
+            message=(
+                "Previous run found but jobs no longer "
+                "exist on the cluster. Cleaning all "
+                "stale resources."
+            ),
+            action_type="setup",
+        )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         safe_cancel_action(
             scheduler, auto_approve=auto_approve, action_type="setup"
@@ -1097,7 +1072,6 @@ def run(
 ) -> RunExecutionResult:
     """Command to run a test suite.
 
-    \b
     Args:
       suite: Name of the test suite to run.
       tests: Comma-separated list of specific tests to run (optional).
@@ -1171,7 +1145,7 @@ def run(
             suite = "lite"
 
         suite_cfg = load_suite(suite)
-        is_tiered = _is_suite_tiered(suite_cfg)
+        is_tiered = is_suite_tiered(suite_cfg)
 
         if is_tiered:
             tier_manager = TierManager(suite_cfg.get("tests", []))
@@ -1188,19 +1162,13 @@ def run(
             resolved_tests = [{"name": t} for t in all_tests]
             active_tier_tests = initial_tests
         else:
-            resolved_tests = suite_cfg.get("tests", [])
-            active_tier_tests = [
-                t.get("name") if isinstance(t, dict) else str(t)
-                for t in resolved_tests
-            ]
+            active_tier_tests = resolved_tests = suite_cfg.get("tests", [])
 
         supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
             machine_type, scheduler
         )
         resolved_tests = [
-            t
-            for t in resolved_tests
-            if (t.get("name") if isinstance(t, dict) else t) in supported_tests
+            t for t in resolved_tests if t.get("name") in supported_tests
         ]
         if not resolved_tests:
             raise ex.ChsValidationError(
@@ -1221,10 +1189,7 @@ def run(
         timeout = max(timeout, resources.DEFAULT_TIMEOUT)
         deadline = max(deadline, timeout + 600)
 
-        test_names = [
-            t.get("name", str(t)) if isinstance(t, dict) else str(t)
-            for t in resolved_tests
-        ]
+        test_names = [t.get("name") for t in resolved_tests]
         logger.debug(
             f"Loaded {len(resolved_tests)} tests ({', '.join(test_names)}) "
             f"for suite '{suite}' from suites.yaml."
@@ -1325,7 +1290,6 @@ def run(
     # Normalize command statement to start with "chs"
     command_statement = " ".join(["chs"] + sys.argv[1:])
 
-    is_tiered = _is_suite_tiered(load_suite(suite) if not tests else {})
     app_data.update_run(
         workspace_name,
         {

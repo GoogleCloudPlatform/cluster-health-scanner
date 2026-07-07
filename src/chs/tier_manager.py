@@ -42,26 +42,30 @@ class TierManager:
 
     def _build_tiers_from_dag(self, tests_config: list[dict]) -> list[dict]:
         configs = {t.get("name"): t for t in tests_config if t.get("name")}
-        in_degrees = {name: 0 for name in configs}
-        adj = {name: [] for name in configs}
+        in_degrees = {test_name: 0 for test_name in configs}
+        adj = {test_name: [] for test_name in configs}
 
-        for name, config in configs.items():
+        for test_name, config in configs.items():
             trigger = config.get("trigger_condition", {})
             for status, deps in trigger.items():
                 for dep_name in deps:
                     if dep_name in configs:
-                        adj[dep_name].append(name)
-                        in_degrees[name] += 1
+                        adj[dep_name].append(test_name)
+                        in_degrees[test_name] += 1
 
         tiers = []
-        current_level = [name for name, deg in in_degrees.items() if deg == 0]
+        current_level = [
+            test_name for test_name, deg in in_degrees.items() if deg == 0
+        ]
 
         while current_level:
-            tier_dict = {"tests": [configs[name] for name in current_level]}
+            tier_dict = {
+                "tests": [configs[test_name] for test_name in current_level]
+            }
             tiers.append(tier_dict)
             next_level = []
-            for name in current_level:
-                for neighbor in adj[name]:
+            for test_name in current_level:
+                for neighbor in adj[test_name]:
                     in_degrees[neighbor] -= 1
                     if in_degrees[neighbor] == 0:
                         next_level.append(neighbor)
@@ -110,7 +114,7 @@ class TierManager:
             required_status = self._parse_status(status_str)
             for dep_name in deps:
                 actual_status = self._cumulative_results.get(
-                    dep_name, TestStatus.ERROR
+                    dep_name, TestStatus.DEGRADED
                 )
                 if actual_status == required_status:
                     return True
@@ -132,12 +136,12 @@ class TierManager:
         self._current_tier_index += 1
 
         tests_to_run = [
-            test_config.get("name")
+            test_config
             for test_config in current_tier.get("tests", [])
             if self._is_condition_met(test_config)
         ]
-        return tests_to_run if tests_to_run else None
+        return tests_to_run
 
     def get_all_tests(self) -> list[str]:
-        """Returns a list of all test names across all tiers."""
-        return [t.get("name") for t in self._tests_config if t.get("name")]
+        """Returns all tests config"""
+        return self._tests_config

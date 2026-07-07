@@ -19,6 +19,8 @@ import re
 import subprocess
 from typing import Any
 
+from packaging.version import InvalidVersion, Version
+
 from chs.exceptions import ChsPreflightException
 
 logger = logging.getLogger(__name__)
@@ -125,7 +127,8 @@ class KubernetesPreflightChecker:
                 ]
             )
             match = re.search(
-                r"(?:v)?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)", image_output
+                r":v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)(?:@sha256:[a-fA-F0-9]{64})?$",
+                image_output,
             )
             if match:
                 version = match.group(1)
@@ -143,16 +146,19 @@ class KubernetesPreflightChecker:
 
     def _is_kueue_version_supported(self, version: str) -> bool:
         """Validates if the installed Kueue version is supported."""
-        v_parts = [int(x) for x in version.split("-")[0].split(".")]
-        if v_parts < [0, 14, 5]:
-            logger.warning(
-                "Kueue version %s not supported. "
-                "Minimum supported version is v0.14.5. "
-                "Reference for upgrading: https://kueue.sigs.k8s.io/docs/installation/#upgrading",
-                version,
-            )
+        try:
+            if Version(version) < Version("0.14.5"):
+                logger.warning(
+                    "Kueue version %s not supported. "
+                    "Minimum supported version is v0.14.5. "
+                    "Reference for upgrading: https://kueue.sigs.k8s.io/docs/installation/#upgrading",
+                    version,
+                )
+                return False
+            return True
+        except InvalidVersion:
+            logger.warning("Could not parse Kueue version: %s", version)
             return False
-        return True
 
     def _filter_tests_without_kueue(
         self, tests: list[dict[str, Any]] | None

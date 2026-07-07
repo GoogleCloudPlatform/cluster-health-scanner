@@ -102,11 +102,28 @@ class TestKueueManager(unittest.TestCase):
         ):
             self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
 
-    @mock.patch("chs.utils.kueue.time.time")
-    def test_apply_and_verify_timeout_raises(self, mock_time):
+    def test_apply_and_verify_success(self):
+        """Test apply_and_verify successfully runs apply and wait commands."""
+        self.mock_scheduler._run_kubectl.return_value = ""
+        self.kueue_mgr.apply_and_verify("/tmp/kueue-configs.yaml")
+
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            ["apply", "-f", "/tmp/kueue-configs.yaml"],
+            timeout=None,
+        )
+
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "wait",
+                "--for=condition=Active",
+                "clusterqueue/chs-cluster-queue",
+                "--timeout=300s",
+            ],
+            timeout=350,
+        )
+
+    def test_apply_and_verify_timeout_raises(self):
         """Test timeout during verification wait loop raises KueueException."""
-        # start_time, loop check 1, log check, loop check 2
-        mock_time.side_effect = [100, 101, 102, 405]
         self.mock_scheduler._run_kubectl.side_effect = [
             "",
             subprocess.CalledProcessError(
@@ -115,9 +132,19 @@ class TestKueueManager(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(
-            KueueException, "Timeout waiting for Kueue ClusterQueue"
+            KueueException, "Timeout or error waiting for Kueue ClusterQueue"
         ):
             self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
+
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "wait",
+                "--for=condition=Active",
+                "clusterqueue/chs-cluster-queue",
+                "--timeout=300s",
+            ],
+            timeout=350,
+        )
 
     def test_cleanup_success(self):
         """Test cleanup deletes resources via kubectl."""
@@ -132,7 +159,8 @@ class TestKueueManager(unittest.TestCase):
                 "-n",
                 "chs",
                 "--ignore-not-found",
-            ]
+            ],
+            timeout=None,
         )
         self.mock_scheduler._run_kubectl.assert_any_call(
             [
@@ -140,10 +168,12 @@ class TestKueueManager(unittest.TestCase):
                 "clusterqueue",
                 "chs-cluster-queue",
                 "--ignore-not-found",
-            ]
+            ],
+            timeout=None,
         )
         self.mock_scheduler._run_kubectl.assert_any_call(
-            ["delete", "resourceflavor", "chs-flavor", "--ignore-not-found"]
+            ["delete", "resourceflavor", "chs-flavor", "--ignore-not-found"],
+            timeout=None,
         )
 
     def test_cleanup_failure_raises(self):

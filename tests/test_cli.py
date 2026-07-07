@@ -142,9 +142,9 @@ class TestCli(unittest.TestCase):
         )
         self.mock_load_suite.return_value = {
             "tests": [
-                "nccl-cluster",
-                "nccl-pairwise",
-                "dcgm",
+                {"name": "nccl-cluster"},
+                {"name": "nccl-pairwise"},
+                {"name": "dcgm"},
             ]
         }
         self.mock_app_data_cls = self.enterContext(
@@ -471,7 +471,11 @@ class TestCli(unittest.TestCase):
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
                     scheduler_name="slurm",
-                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    tests=[
+                        {"name": "nccl-cluster"},
+                        {"name": "nccl-pairwise"},
+                        {"name": "dcgm"},
+                    ],
                     workspace_name=MOCK_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
@@ -623,7 +627,11 @@ class TestCli(unittest.TestCase):
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
                     scheduler_name="mock_scheduler",
-                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    tests=[
+                        {"name": "nccl-cluster"},
+                        {"name": "nccl-pairwise"},
+                        {"name": "dcgm"},
+                    ],
                     workspace_name=MOCK_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],

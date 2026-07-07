@@ -64,3 +64,8 @@ def get_all_suites_details() -> list[dict[str, Any]]:
     """Derives list of all suite details from suites.yaml."""
     data = _load_suites()
     return data.get("suites", [])
+
+
+def is_suite_tiered(suite_cfg: dict) -> bool:
+    """Checks if a suite defines any tests with dependencies."""
+    return any("trigger_condition" in t for t in suite_cfg.get("tests", []))

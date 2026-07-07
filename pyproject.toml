@@ -19,6 +19,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-compute",
     "pyOpenSSL<24.1.0",
+    "packaging",
 ]
 
 [project.optional-dependencies]

@@ -885,11 +885,20 @@ ramble:
         self, mock_run, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        mock_run.return_value.stdout = "invalid-format"
-        with self.assertRaisesRegex(
-            ex.ChsSchedulerException, "Unexpected providerID format"
-        ):
-            scheduler._resolve_project_id("node1")
+        invalid_formats = [
+            "invalid-format",
+            "gce://my-project-id",
+            "gce://my-project-id/us-central1-a",
+            "gce://my-project-id/us-central1-a/node1/extra",
+            "gce://my-project-id//node1",
+            "gke://my-project-id/us-central1-a/node1",
+        ]
+        for fmt in invalid_formats:
+            mock_run.return_value.stdout = fmt
+            with self.assertRaisesRegex(
+                ex.ChsSchedulerException, "Unexpected providerID format"
+            ):
+                scheduler._resolve_project_id("node1")
 
     @mock.patch("subprocess.run")
     def test_resolve_project_id_kubernetes_error(self, mock_run, mock_logger):

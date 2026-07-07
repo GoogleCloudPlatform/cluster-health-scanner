@@ -147,6 +147,63 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             self.assertIsNone(filtered)
             self.assertTrue(kueue_supported)
 
+    def test_get_kueue_version_ip_registry(self):
+        """Test parsing Kueue version from registry URL with IP and port."""
+        version_output = "192.168.1.100:5000/kueue/kueue:v0.14.5"
+        with mock.patch.object(
+            self.checker, "_run_kubectl", return_value=version_output
+        ):
+            version = self.checker._get_kueue_version()
+            self.assertEqual(version, "0.14.5")
+
+    def test_get_kueue_version_without_v(self):
+        """Test parsing Kueue version without leading 'v'."""
+        version_output = "registry.k8s.io/kueue/kueue:0.14.5"
+        with mock.patch.object(
+            self.checker, "_run_kubectl", return_value=version_output
+        ):
+            version = self.checker._get_kueue_version()
+            self.assertEqual(version, "0.14.5")
+
+    def test_get_kueue_version_with_sha256(self):
+        """Test parsing Kueue version with trailing sha256 digest."""
+        version_output = (
+            "registry.k8s.io/kueue/kueue:v0.14.5@"
+            "sha256:5f32b1a5e12f6b8f36c53d9e2a84c8a2b5b3a4f6d8e0c1b2a3f4e5d6c7b8a9f0"
+        )
+        with mock.patch.object(
+            self.checker, "_run_kubectl", return_value=version_output
+        ):
+            version = self.checker._get_kueue_version()
+            self.assertEqual(version, "0.14.5")
+
+    def test_is_kueue_version_supported_exact(self):
+        """Test exact match of minimum supported Kueue version."""
+        self.assertTrue(self.checker._is_kueue_version_supported("0.14.5"))
+        self.assertTrue(self.checker._is_kueue_version_supported("v0.14.5"))
+
+    def test_is_kueue_version_supported_higher(self):
+        """Test Kueue version higher than minimum."""
+        self.assertTrue(self.checker._is_kueue_version_supported("0.15.0"))
+        self.assertTrue(self.checker._is_kueue_version_supported("1.0.0"))
+
+    def test_is_kueue_version_supported_lower(self):
+        """Test Kueue version lower than minimum."""
+        self.assertFalse(self.checker._is_kueue_version_supported("0.14.4"))
+        self.assertFalse(self.checker._is_kueue_version_supported("v0.13.0"))
+
+    def test_is_kueue_version_supported_prerelease(self):
+        """Test that a prerelease of the minimum version is not supported."""
+        self.assertFalse(self.checker._is_kueue_version_supported("0.14.5-rc1"))
+        self.assertTrue(self.checker._is_kueue_version_supported("0.14.6-rc1"))
+
+    def test_is_kueue_version_supported_invalid(self):
+        """Test invalid Kueue version formats."""
+        self.assertFalse(
+            self.checker._is_kueue_version_supported("invalid-version")
+        )
+        self.assertFalse(self.checker._is_kueue_version_supported("latest"))
+
 
 if __name__ == "__main__":
     unittest.main()

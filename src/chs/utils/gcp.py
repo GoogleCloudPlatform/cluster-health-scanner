@@ -50,16 +50,17 @@ def query_gce_instances_info(
             page_result = client.aggregated_list(request=request)
 
             for zone, instances_in_zone in page_result:
-                if instances_in_zone.instances:
-                    for instance in instances_in_zone.instances:
-                        if instance.name in batch:
-                            normalized_machine_type = normalize_machine_type(
-                                instance.machine_type
-                            )
-                            info_map[instance.name] = {
-                                "machine_type": normalized_machine_type,
-                                "instance_id": str(instance.id),
-                            }
+                if not instances_in_zone.instances:
+                    continue
+                for instance in instances_in_zone.instances:
+                    if instance.name in batch:
+                        normalized_machine_type = normalize_machine_type(
+                            instance.machine_type
+                        )
+                        info_map[instance.name] = {
+                            "machine_type": normalized_machine_type,
+                            "instance_id": str(instance.id),
+                        }
         except GoogleAPICallError as e:
             raise ChsSchedulerException(f"Failed to query GCE API: {e}")
 

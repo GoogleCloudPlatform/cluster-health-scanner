@@ -19,6 +19,7 @@ import importlib.resources as pkg_resources
 import json
 import logging
 import os
+import re
 import yaml
 
 
@@ -94,11 +95,10 @@ class KubernetesScheduler(BaseScheduler):
                 ["get", "node", node, "-o", "jsonpath={.spec.providerID}"]
             ).strip()
             # providerID format: gce://project-id/zone/instance-name
-            if provider_id.startswith("gce://"):
-                parts = provider_id.replace("gce://", "").split("/")
-                if len(parts) >= 1:
-                    return parts[0]
-            raise ValueError(f"Unexpected providerID format: {provider_id}")
+            match = re.match(r"^gce://([^/]+)/([^/]+)/([^/]+)$", provider_id)
+            if not match:
+                raise ValueError(f"Unexpected providerID format: {provider_id}")
+            return match.group(1)
         except Exception as e:
             raise ChsSchedulerException(
                 f"Failed to resolve project ID from node: {e}"
@@ -142,14 +142,12 @@ class KubernetesScheduler(BaseScheduler):
                     e,
                 )
                 self.kueue_supported = False
-
-                filtered_tests = (
+                return (
                     KubernetesPreflightChecker(
                         self
                     )._filter_tests_without_kueue(tests)
                     or []
                 )
-                return filtered_tests
 
         return tests
 
@@ -453,17 +451,18 @@ class KubernetesScheduler(BaseScheduler):
             return self._tpu_slice_data
 
         try:
-            node_output = self._run_kubectl(
-                [
-                    "get",
-                    "nodes",
-                    "-l",
-                    "cloud.google.com/gke-tpu-topology",
-                    "-o",
-                    "json",
-                ]
+            node_data = json.loads(
+                self._run_kubectl(
+                    [
+                        "get",
+                        "nodes",
+                        "-l",
+                        "cloud.google.com/gke-tpu-topology",
+                        "-o",
+                        "json",
+                    ]
+                )
             )
-            node_data = json.loads(node_output)
         except (
             subprocess.CalledProcessError,
             FileNotFoundError,
@@ -473,8 +472,8 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to get node labels for TPU topology: {e}"
             ) from e
 
-        tpu_pools: dict[str, list[str]] = defaultdict(list)
-        node_to_pool: dict[str, str] = {}
+        tpu_nodepools: dict[str, list[str]] = defaultdict(list)
+        node_to_nodepool: dict[str, str] = {}
 
         for node in node_data.get("items", []):
             node_name = node.get("metadata", {}).get("name")
@@ -482,15 +481,14 @@ class KubernetesScheduler(BaseScheduler):
                 continue
 
             labels = node.get("metadata", {}).get("labels", {})
-            pool = labels.get("cloud.google.com/gke-nodepool")
+            nodepool = labels.get("cloud.google.com/gke-nodepool")
 
-            if pool:
-                node_to_pool[node_name] = pool
-                if "cloud.google.com/gke-tpu-topology" in labels:
-                    tpu_pools[pool].append(node_name)
+            if nodepool:
+                node_to_nodepool[node_name] = nodepool
+                tpu_nodepools[nodepool].append(node_name)
 
         self._tpu_slice_data = TpuSliceData(
-            pools=tpu_pools, node_to_pool=node_to_pool
+            pools=tpu_nodepools, node_to_pool=node_to_nodepool
         )
         return self._tpu_slice_data
 
@@ -532,64 +530,71 @@ class KubernetesScheduler(BaseScheduler):
 
     def _validate_tpu_slices(
         self,
-        nodes: list[str],
-        tpu_pools: dict[str, list[str]] | None = None,
-        node_to_pool: dict[str, str] | None = None,
+        requested_nodes: list[str],
+        tpu_slices: dict[str, list[str]] | None = None,
+        node_to_slice: dict[str, str] | None = None,
     ) -> list[str]:
         """Validates that TPU nodes are not requested as partial slices.
 
         Returns a filtered list of nodes that belong to complete slices.
         Logs an error for any slice that is partial and drops its nodes.
         """
-        if not nodes:
+        if not requested_nodes:
             return []
 
-        if tpu_pools is None or node_to_pool is None:
+        if tpu_slices is None or node_to_slice is None:
             topology = self._get_tpu_slices()
-            tpu_pools = topology.pools
-            node_to_pool = topology.node_to_pool
+            tpu_slices = topology.pools
+            node_to_slice = topology.node_to_pool
 
-        requested_nodes_set = set(nodes)
+        requested_nodes_set = set(requested_nodes)
 
-        valid_nodes = []
-        nodes_by_pool = defaultdict(list)
+        filtered_nodes = []
+        requested_nodes_by_slice = defaultdict(list)
 
-        for n in nodes:
-            pool = node_to_pool.get(n)
-            if pool and pool in tpu_pools:
-                nodes_by_pool[pool].append(n)
+        for node in requested_nodes:
+            slice_name = node_to_slice.get(node)
+            if slice_name and slice_name in tpu_slices:
+                requested_nodes_by_slice[slice_name].append(node)
             else:
-                valid_nodes.append(n)
+                filtered_nodes.append(node)
 
-        for pool, pool_nodes in nodes_by_pool.items():
-            slice_nodes = set(tpu_pools[pool])
-            if not slice_nodes.issubset(requested_nodes_set):
-                missing_nodes = list(slice_nodes - requested_nodes_set)
-                if len(missing_nodes) > 3:
-                    missing_str = (
-                        f"{', '.join(missing_nodes[:3])}, and "
-                        f"{len(missing_nodes) - 3} others"
+        for (
+            slice_name,
+            slice_nodes_requested,
+        ) in requested_nodes_by_slice.items():
+            all_slice_nodes = set(tpu_slices[slice_name])
+            if not all_slice_nodes.issubset(requested_nodes_set):
+                missing_slice_nodes = list(
+                    all_slice_nodes - requested_nodes_set
+                )
+                if len(missing_slice_nodes) > 3:
+                    missing_nodes_str = (
+                        f"{', '.join(missing_slice_nodes[:3])}, and "
+                        f"{len(missing_slice_nodes) - 3} others"
                     )
                 else:
-                    missing_str = ", ".join(missing_nodes)
+                    missing_nodes_str = ", ".join(missing_slice_nodes)
 
                 logger.warning(
                     "Skipping TPU slice '%s': TPU tests require the entire "
                     "slice to be idle, but the following node(s) are currently "
                     "busy or missing: %s",
-                    pool,
-                    missing_str,
+                    slice_name,
+                    missing_nodes_str,
                 )
             else:
-                valid_nodes.extend(pool_nodes)
+                filtered_nodes.extend(slice_nodes_requested)
 
-        return valid_nodes
+        return filtered_nodes
 
     def filter_partial_tpu_slices(self, nodes: list[str]) -> list[str]:
         """Validates that the selected nodes form full TPU slices."""
         topology = self._get_tpu_slices()
         return self._validate_tpu_slices(
-            nodes, topology.pools, topology.node_to_pool
+            requested_nodes=nodes,
+            tpu_slices=topology.pools,
+            node_to_slice=topology.node_to_pool,
         )
 
     def get_nodes_under_test(self) -> list[str]:

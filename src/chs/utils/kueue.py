@@ -18,7 +18,6 @@ import importlib.resources as pkg_resources
 import logging
 import os
 import subprocess
-import time
 from typing import Any
 
 from chs.exceptions import KueueException
@@ -42,10 +41,10 @@ class KueueManager:
         """
         self.scheduler = scheduler
 
-    def _run_kubectl(self, args: list[str]) -> str:
+    def _run_kubectl(self, args: list[str], timeout: int | None = None) -> str:
         """Runs kubectl command via the scheduler instance."""
         if hasattr(self.scheduler, "_run_kubectl"):
-            return self.scheduler._run_kubectl(args)
+            return self.scheduler._run_kubectl(args, timeout=timeout)
 
         cmd = ["kubectl"] + args
         result = subprocess.run(
@@ -53,6 +52,7 @@ class KueueManager:
             text=True,
             capture_output=True,
             check=True,
+            timeout=timeout,
         )
         return result.stdout.strip()
 
@@ -81,37 +81,24 @@ class KueueManager:
             "Waiting for Kueue ClusterQueue 'chs-cluster-queue' to become "
             "active."
         )
-        start_time = time.time()
-        timeout = 300
-        verified = False
-        last_log_time = start_time
 
-        while time.time() - start_time < timeout:
-            try:
-                self._run_kubectl(
-                    [
-                        "wait",
-                        "--for=condition=Active",
-                        "clusterqueue/chs-cluster-queue",
-                        "--timeout=10s",
-                    ]
-                )
-                verified = True
-                logger.debug("Kueue ClusterQueue is active.")
-                break
-            except subprocess.CalledProcessError:
-                if time.time() - last_log_time >= 30:
-                    logger.debug(
-                        "Waiting for Kueue ClusterQueue 'chs-cluster-queue' "
-                        "to become active."
-                    )
-                    last_log_time = time.time()
-
-        if not verified:
-            raise KueueException(
-                "Timeout waiting for Kueue ClusterQueue 'chs-cluster-queue' "
-                "to become active."
+        try:
+            self._run_kubectl(
+                [
+                    "wait",
+                    "--for=condition=Active",
+                    "clusterqueue/chs-cluster-queue",
+                    "--timeout=300s",
+                ],
+                timeout=350,
             )
+            logger.debug("Kueue ClusterQueue is active.")
+
+        except subprocess.CalledProcessError as e:
+            raise KueueException(
+                "Timeout or error waiting for Kueue ClusterQueue "
+                f"'chs-cluster-queue' to become active. Details: {e}"
+            ) from e
 
     def generate_configs(
         self, workspace_config_dir: str, machine_type: str, nodes: list[str]
@@ -138,7 +125,6 @@ class KueueManager:
             )
 
         resource_map = MACHINE_TYPE_RESOURCE_MAP.get(machine_type, {})
-        instance_type = machine_type
         accelerators_per_node = resource_map.get("accelerators", 0)
         nominal_quota = len(nodes) * accelerators_per_node
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
@@ -151,7 +137,7 @@ class KueueManager:
                 kueue_tpl = f.read()
 
         rendered_kueue = kueue_tpl.format(
-            instance_type=instance_type,
+            instance_type=machine_type,
             nominal_quota=str(nominal_quota),
             resource_name=resource_name,
             namespace=CHS_NAMESPACE,

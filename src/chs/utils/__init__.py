@@ -15,7 +15,7 @@
 """Utility functions for CHS."""
 
 from chs.utils.app_data import ChsAppData
-from chs.utils.suites import load_suite
+from chs.utils.suites import load_suite, is_suite_tiered
 from chs.utils import suites
 from chs.utils import tests
 from chs.utils import formatting
@@ -38,6 +38,7 @@ from chs.utils.theme import (
 __all__ = [
     "ChsAppData",
     "load_suite",
+    "is_suite_tiered",
     "create_styled_table",
     "CHS_HEADER_STYLE",
     "CHS_WARNING_STYLE",
