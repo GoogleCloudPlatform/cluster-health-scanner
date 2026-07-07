@@ -27,17 +27,34 @@ default:
     thresholds:
       bandwidth: 50
 
+
 tpu7x-standard-4t:
   tpu-network-diagnostics:
     type: min
     thresholds:
       bandwidth: 150.0
+  tpu-info:
+    type: scalar
+    thresholds:
+      "JAX Devices": 8
+  tpu-gemm:
+    type: min
+    thresholds:
+      Throughput: 1000.0
 
 ct6e-standard-4t:
   tpu-network-diagnostics:
     type: min
     thresholds:
       bandwidth: 150.0
+  tpu-info:
+    type: scalar
+    thresholds:
+      "JAX Devices": 4
+  tpu-gemm:
+    type: min
+    thresholds:
+      Throughput: 850.0
 
 a3-ultragpu-8g:
   nccl-cluster:

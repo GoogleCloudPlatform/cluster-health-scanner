@@ -54,9 +54,9 @@ def _parse_status(
 ) -> tuple[str, str]:
     """Returns (status_str, status_style) for validation criteria."""
     if validation_criteria.result_status == pb.RESULT_STATUS_SUCCESS:
-        return "PASS", "green"
+        return "MET", "green"
     elif validation_criteria.result_status == pb.RESULT_STATUS_FAILED:
-        return "FAIL", "red"
+        return "NOT MET", "red"
     return "UNKNOWN", "yellow"
 
 

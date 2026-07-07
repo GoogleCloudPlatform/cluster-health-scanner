@@ -143,6 +143,33 @@ class BOHGenerator:
             metrics.append(metric)
         return metrics
 
+    def _split_test_result_per_node(
+        self, test_result: pb.TestResult
+    ) -> list[pb.TestResult]:
+        split_results = []
+        for target in test_result.target_resources:
+            node_result = pb.TestResult()
+            node_result.CopyFrom(test_result)
+
+            node_result.ClearField("target_resources")
+            node_result.target_resources.add(
+                node_name=target.node_name, instance_id=target.instance_id
+            )
+
+            node_metrics = []
+            for metric in node_result.metrics:
+                ctx = ""
+                if "context" in metric.metadata.fields:
+                    ctx = metric.metadata.fields["context"].string_value
+                if not ctx or target.node_name in ctx:
+                    node_metrics.append(metric)
+
+            node_result.ClearField("metrics")
+            node_result.metrics.extend(node_metrics)
+
+            split_results.append(node_result)
+        return split_results
+
     def _evaluate_thresholds(
         self, machine_type: str, test_result: pb.TestResult
     ) -> None:
@@ -429,11 +456,11 @@ class BOHGenerator:
                         node_name=n, instance_id=inst_id
                     )
 
+            resolved_name = self.pm.resolve_test_name(test_result.test_name)
+            plugin = self.pm.get_plugin(resolved_name)
+
             contexts = exp.get("CONTEXTS", [])
             if contexts:
-                resolved_name = self.pm.resolve_test_name(test_result.test_name)
-                plugin = self.pm.get_plugin(resolved_name)
-
                 contexts_to_process = plugin.get_required_contexts(contexts)
 
                 for ctx in contexts_to_process:
@@ -470,10 +497,23 @@ class BOHGenerator:
                 ]
             elif self.skip_validation:
                 test_result.result_status = pb.RESULT_STATUS_UNKNOWN
-            else:
-                self._evaluate_thresholds(machine_type, test_result)
 
-            self.report.test_results.append(test_result)
+            needs_evaluation = not (
+                job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES
+                or self.skip_validation
+            )
+
+            results_to_add = [test_result]
+            if (
+                plugin.creates_per_node_results()
+                and len(test_result.target_resources) > 1
+            ):
+                results_to_add = self._split_test_result_per_node(test_result)
+
+            for result in results_to_add:
+                if needs_evaluation:
+                    self._evaluate_thresholds(machine_type, result)
+                self.report.test_results.append(result)
 
         return self.report
 

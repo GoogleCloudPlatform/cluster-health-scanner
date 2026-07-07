@@ -57,6 +57,9 @@ class TestPlugin(ABC):
 
     def get_relative_fom_keys(self) -> list[tuple[str, str]]:
         """For relative tests, returns list of (achieved_fom_key,
-        peak_fom_key).
-        """
+        peak_fom_key)."""
         return []
+
+    def creates_per_node_results(self) -> bool:
+        """Returns True if the test generates one TestResult per node."""
+        return False

@@ -14,6 +14,7 @@
 
 from typing import Any, Iterable
 from chs.protos import bill_of_health_pb2 as pb
+from rich.markup import escape
 
 
 def extract_node_names(
@@ -62,7 +63,9 @@ def format_context_prefix(metric: pb.Metric) -> str:
         if "context" in metric.metadata.fields
         else ""
     )
-    return f"[{ctx_name}] " if ctx_name and ctx_name != "unknown" else ""
+    return (
+        escape(f"[{ctx_name}] ") if ctx_name and ctx_name != "unknown" else ""
+    )
 
 
 def parse_value(value_proto) -> Any:
