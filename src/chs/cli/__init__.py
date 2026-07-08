@@ -522,8 +522,10 @@ def analyze_action(
 
             while not run_entry.get("is_boh_final", False):
                 active_tier = run_entry.get("active_tier", 1)
+                active_tier_tests_raw = run_entry.get("active_tier_tests") or []
                 active_tier_tests = set(
-                    run_entry.get("active_tier_tests") or []
+                    t.get("name") if isinstance(t, dict) else t
+                    for t in active_tier_tests_raw
                 )
 
                 if tier_manager:
@@ -1167,7 +1169,11 @@ def run(
             resolved_tests = [{"name": t} for t in all_tests]
             active_tier_tests = initial_tests
         else:
-            active_tier_tests = resolved_tests = suite_cfg.get("tests", [])
+            resolved_tests = suite_cfg.get("tests", [])
+            active_tier_tests = [
+                t.get("name") if isinstance(t, dict) else t
+                for t in resolved_tests
+            ]
 
         supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
             machine_type, scheduler

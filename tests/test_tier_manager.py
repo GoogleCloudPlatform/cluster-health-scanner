@@ -173,7 +173,7 @@ class TestTierManagerExecution(unittest.TestCase):
 
         # First call should return both tests
         tests = tm.get_next_tier_tests({})
-        self.assertCountEqual(tests, [{"name": "test1"}, {"name": "test2"}])
+        self.assertCountEqual(tests, ["test1", "test2"])
 
         # Second call should return None as we are past the only tier
         self.assertIsNone(tm.get_next_tier_tests({}))
@@ -190,17 +190,12 @@ class TestTierManagerExecution(unittest.TestCase):
         tm = TierManager(configs)
 
         # Tier 0 runs first
-        self.assertEqual(tm.get_next_tier_tests({}), [{"name": "test_base"}])
+        self.assertEqual(tm.get_next_tier_tests({}), ["test_base"])
 
         # Tier 1: since test_base is HEALTHY, test_dependent triggers.
         self.assertEqual(
             tm.get_next_tier_tests({"test_base": TestStatus.HEALTHY}),
-            [
-                {
-                    "name": "test_dependent",
-                    "trigger_condition": {"HEALTHY": ["test_base"]},
-                }
-            ],
+            ["test_dependent"],
         )
 
         # Tier 2 is past the end
@@ -218,7 +213,7 @@ class TestTierManagerExecution(unittest.TestCase):
         tm = TierManager(configs)
 
         # Tier 0 runs first
-        self.assertEqual(tm.get_next_tier_tests({}), [{"name": "test_base"}])
+        self.assertEqual(tm.get_next_tier_tests({}), ["test_base"])
 
         # Tier 1: test_base is ERROR (not HEALTHY), dependent is skipped.
         self.assertEqual(
@@ -241,24 +236,14 @@ class TestTierManagerExecution(unittest.TestCase):
         tm = TierManager(configs)
 
         # Tier 0 runs test_a and test_b
-        self.assertCountEqual(
-            tm.get_next_tier_tests({}), [{"name": "test_a"}, {"name": "test_b"}]
-        )
+        self.assertCountEqual(tm.get_next_tier_tests({}), ["test_a", "test_b"])
 
         # Case 1: test_b is ERROR, matching trigger -> triggers.
         self.assertEqual(
             tm.get_next_tier_tests(
                 {"test_a": TestStatus.DEGRADED, "test_b": TestStatus.ERROR}
             ),
-            [
-                {
-                    "name": "test_dependent",
-                    "trigger_condition": {
-                        "HEALTHY": ["test_a"],
-                        "ERROR": ["test_b"],
-                    },
-                }
-            ],
+            ["test_dependent"],
         )
 
     def test_get_next_tier_tests_or_logic_not_satisfied(self):
@@ -279,7 +264,7 @@ class TestTierManagerExecution(unittest.TestCase):
         # Tier 0 runs test_a and test_b
         self.assertCountEqual(
             tm.get_next_tier_tests({}),
-            [{"name": "test_a"}, {"name": "test_b"}],
+            ["test_a", "test_b"],
         )
 
         # Case 2: neither conditions are met -> skips.
@@ -302,17 +287,12 @@ class TestTierManagerExecution(unittest.TestCase):
         tm = TierManager(configs)
 
         # Tier 0 runs test_base
-        self.assertEqual(tm.get_next_tier_tests({}), [{"name": "test_base"}])
+        self.assertEqual(tm.get_next_tier_tests({}), ["test_base"])
 
         # Tier 1: no results passed, test_base defaults to DEGRADED.
         self.assertEqual(
             tm.get_next_tier_tests({}),
-            [
-                {
-                    "name": "test_dependent",
-                    "trigger_condition": {"DEGRADED": ["test_base"]},
-                }
-            ],
+            ["test_dependent"],
         )
 
     def test_get_next_tier_tests_invalid_status_parses_to_degraded(self):
@@ -327,18 +307,13 @@ class TestTierManagerExecution(unittest.TestCase):
         tm = TierManager(configs)
 
         # Tier 0 runs test_base
-        self.assertEqual(tm.get_next_tier_tests({}), [{"name": "test_base"}])
+        self.assertEqual(tm.get_next_tier_tests({}), ["test_base"])
 
         # Tier 1 evaluates. Since INVALID_STATUS_STR is parsed as DEGRADED,
         # it will trigger when test_base results in DEGRADED.
         self.assertEqual(
             tm.get_next_tier_tests({"test_base": TestStatus.DEGRADED}),
-            [
-                {
-                    "name": "test_dependent",
-                    "trigger_condition": {"INVALID_STATUS_STR": ["test_base"]},
-                }
-            ],
+            ["test_dependent"],
         )
 
 

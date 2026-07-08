@@ -136,12 +136,12 @@ class TierManager:
         self._current_tier_index += 1
 
         tests_to_run = [
-            test_config
+            test_config.get("name")
             for test_config in current_tier.get("tests", [])
-            if self._is_condition_met(test_config)
+            if self._is_condition_met(test_config) and test_config.get("name")
         ]
         return tests_to_run
 
     def get_all_tests(self) -> list[str]:
-        """Returns all tests config"""
-        return self._tests_config
+        """Returns all tests config names"""
+        return [t.get("name") for t in self._tests_config if t.get("name")]
