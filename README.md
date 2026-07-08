@@ -422,7 +422,7 @@ docker run -it --network host \
   -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
   -v chs-local-state:/workspace/.local/share \
   -v ~/chs-archives:/archive \
-  chs:latest configure storage path --path /archive
+  chs:latest configure storage path /archive
 ```
 
 ### 2. Running Diagnostics
