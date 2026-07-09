@@ -507,6 +507,8 @@ mycriteria:
                     "bill_of_health.json",
                     "--archive-pattern",
                     "internal.log",
+                    "--archive-pattern",
+                    "debug.txt",
                 ],
                 capture_output=True,
                 error_context="Failed to archive workspace",

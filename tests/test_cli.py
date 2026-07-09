@@ -136,6 +136,9 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch("chs.preflights.run_platform_preflights", autospec=True)
         )
+        self.enterContext(
+            mock.patch("chs.cli._setup_workspace_logger", autospec=True)
+        )
 
         self.mock_load_suite = self.enterContext(
             mock.patch("chs.cli.load_suite", autospec=True)

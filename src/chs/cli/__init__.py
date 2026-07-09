@@ -85,6 +85,32 @@ def handle_chs_exceptions(f):
     return wrapper
 
 
+def _setup_workspace_logger(workspace_path: str) -> None:
+    """Configures a file handler to save all DEBUG logs to the workspace."""
+    debug_log_path = os.path.join(workspace_path, "debug.txt")
+    root_logger = logging.getLogger()
+    if any(
+        getattr(h, "baseFilename", "") == debug_log_path
+        for h in root_logger.handlers
+    ):
+        return
+
+    os.makedirs(workspace_path, exist_ok=True)
+    file_handler = logging.FileHandler(debug_log_path)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-8s: %(message)s", "%Y-%m-%d %H:%M:%S"
+        )
+    )
+    root_logger.addHandler(file_handler)
+    if root_logger.level > logging.DEBUG:
+        root_logger.setLevel(logging.DEBUG)
+        for handler in root_logger.handlers:
+            if handler != file_handler and handler.level == logging.NOTSET:
+                handler.setLevel(logging.INFO)
+
+
 def _archive_and_log(ramble_manager: RambleManager, spinner_label: str) -> None:
     """Archives the workspace and logs the results with a progress spinner."""
     console = Console()
@@ -376,6 +402,8 @@ def run_action(
         workspaces_base_dir, workspace_name, run_id=run_id
     )
 
+    _setup_workspace_logger(ramble_manager.path)
+
     with archive_workspace(ramble_manager, on_success=False):
         try:
             logger.debug("Running preflight checks")
@@ -455,6 +483,8 @@ def analyze_action(
     ramble_manager = RambleManager(
         workspaces_base_dir, workspace_name, run_id=run_id
     )
+
+    _setup_workspace_logger(ramble_manager.path)
 
     if not os.path.exists(ramble_manager.path):
         raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
