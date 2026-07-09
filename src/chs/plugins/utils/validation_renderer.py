@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
+
 from rich.console import RenderableType, Group
 from rich.text import Text
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import create_styled_table
 from . import rendering
+
+MAX_DISPLAY_NODES = 5
 
 
 def has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
@@ -75,18 +79,45 @@ def render_validation_results(
     if not test_results or not has_validation_criteria(test_results):
         return None
 
+    grouped_results = collections.defaultdict(list)
+    for res in test_results:
+        grouped_results[(res.test_name, res.test_level)].append(res)
+
     renderables = []
-    for test_result in test_results:
-        if not has_validation_criteria([test_result]):
+
+    for (test_name, test_level), group in grouped_results.items():
+        if not has_validation_criteria(group):
             continue
 
-        is_success = test_result.result_status == pb.RESULT_STATUS_SUCCESS
-        border_color = "green" if is_success else "red"
+        all_success = all(
+            res.result_status == pb.RESULT_STATUS_SUCCESS for res in group
+        )
+        all_failed = all(
+            res.result_status == pb.RESULT_STATUS_FAILED for res in group
+        )
 
-        nodes_str = rendering.format_nodes(test_result.target_resources)
+        if all_success:
+            border_color = "green"
+        elif all_failed:
+            border_color = "red"
+        else:
+            border_color = "yellow"
+
+        unique_targets = {}
+        for res in group:
+            for target in res.target_resources:
+                unique_targets[target.SerializeToString()] = target
+        all_targets = list(unique_targets.values())
+
+        nodes_str = rendering.format_nodes(all_targets[:MAX_DISPLAY_NODES])
+        if len(all_targets) > MAX_DISPLAY_NODES:
+            nodes_str += (
+                f", ... and {len(all_targets) - MAX_DISPLAY_NODES} more"
+            )
+
         title_text = Text(
-            f"\nValidation Results: {test_result.test_name}"
-            f" ({test_result.test_level}) - [{nodes_str}]",
+            f"\nValidation Results: {test_name}"
+            f" ({test_level}) - [{nodes_str}]",
             style=f"bold {border_color}",
         )
         renderables.append(title_text)
@@ -96,33 +127,39 @@ def render_validation_results(
             expand=False,
             show_lines=True,
         )
+        table.add_column("Target", style="magenta")
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="bold white")
         table.add_column("Unit", style="dim")
         table.add_column("Threshold", style="yellow")
         table.add_column("Status", style="bold")
 
-        for metric in test_result.metrics:
-            if not metric.HasField("validation_criteria"):
-                continue
+        for res in group:
+            target_str = rendering.format_nodes(res.target_resources)
+            for metric in res.metrics:
+                if not metric.HasField("validation_criteria"):
+                    continue
 
-            validation_criteria = metric.validation_criteria
-            if not validation_criteria.name:
-                continue
+                validation_criteria = metric.validation_criteria
+                if not validation_criteria.name:
+                    continue
 
-            metric_value = rendering.parse_value(metric.value)
-            threshold_str = _parse_threshold(validation_criteria)
-            status_str, status_style = _parse_status(validation_criteria)
+                metric_value = rendering.parse_value(metric.value)
+                threshold_str = _parse_threshold(validation_criteria)
+                status_str, status_style = _parse_status(validation_criteria)
 
-            prefix = rendering.format_context_prefix(metric)
+                prefix = rendering.format_context_prefix(metric)
+                row_style = status_style
 
-            table.add_row(
-                f"{prefix}{metric.key}",
-                str(metric_value),
-                metric.unit,
-                threshold_str,
-                Text(status_str, style=status_style),
-            )
+                table.add_row(
+                    target_str,
+                    f"{prefix}{metric.key}",
+                    str(metric_value),
+                    metric.unit,
+                    threshold_str,
+                    Text(status_str, style=status_style),
+                    style=row_style,
+                )
 
         renderables.append(table)
         renderables.append(Text())
