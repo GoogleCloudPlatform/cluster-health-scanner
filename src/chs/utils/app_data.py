@@ -102,6 +102,13 @@ class ChsAppData:
         metadata = self._load_json(self._metadata_file)
         return metadata.get("storage", {})
 
+    def remove_storage_config(self) -> None:
+        """Removes the storage configuration from the app data."""
+        metadata = self._load_json(self._metadata_file)
+        if metadata.pop("storage", None) is not None:
+            self._save_json(self._metadata_file, metadata)
+            logger.debug("AppData: Removed storage config")
+
     def update_run(self, run_id: str, run_data: dict[str, Any]) -> None:
         """Updates or adds a run entry in the app data.
 

@@ -1743,6 +1743,28 @@ def configure_path(ctx: click.Context, path: str | None) -> None:
     _validate_and_save_storage(app_data, config)
 
 
+@configure_storage.command("show")
+@click.pass_context
+def show_storage(ctx: click.Context) -> None:
+    """Show currently configured storage."""
+    app_data = ctx.obj["app_data"]
+    config = app_data.get_storage_config()
+    if not config:
+        click.echo("No storage configured.")
+    else:
+        path = utils.formatting.format_storage_path(config)
+        click.echo(f"Configured storage: {path}")
+
+
+@configure_storage.command("remove")
+@click.pass_context
+def remove_storage(ctx: click.Context) -> None:
+    """Remove configured storage."""
+    app_data = ctx.obj["app_data"]
+    app_data.remove_storage_config()
+    click.echo("Storage configuration removed.")
+
+
 def main() -> None:
     """Main entry point for the CHS CLI."""
 
