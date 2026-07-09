@@ -839,7 +839,7 @@ class RambleManager:
             self._run_id,
         )
         Console().print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Tests execution completed.\n"
+            f"[{theme.CHS_SUCCESS_STYLE}]Tests execution completed."
             f"[/{theme.CHS_SUCCESS_STYLE}]"
         )
 

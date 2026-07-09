@@ -19,16 +19,19 @@ execution to the CHS application library.
 """
 
 import logging
-import sys
 
 from chs import cli
+
+
+from rich.logging import RichHandler
 
 
 def main():
     logging.basicConfig(
         level=logging.INFO,
-        stream=sys.stderr,
         format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
     )
     cli.main()
 
