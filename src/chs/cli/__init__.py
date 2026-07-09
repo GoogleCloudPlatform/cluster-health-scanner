@@ -1451,7 +1451,7 @@ def _get_run_id_or_prompt(
         style=custom_style,
     ).ask()
 
-    if not selected:
+    if not selected or selected == "Exit":
         raise click.Abort()
 
     return selected
