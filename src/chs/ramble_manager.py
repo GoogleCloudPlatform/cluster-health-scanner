@@ -830,7 +830,7 @@ class RambleManager:
             )
             console.print(
                 "To cancel execution and cleanup run: "
-                f"[cyan]chs cancel {self._run_id}[/cyan]"
+                "[cyan]chs cancel[/cyan]"
             )
             raise ex.ChsDetachedException()
 
@@ -1205,7 +1205,10 @@ class RambleManager:
                 "Skipping archival: %s",
                 e,
             )
-            return local_ws_path, local_boh_path
+            return (
+                local_ws_path if os.path.exists(local_ws_path) else None,
+                local_boh_path if os.path.exists(local_boh_path) else None,
+            )
 
         boh_dest = None
         ws_dest = None
@@ -1224,8 +1227,12 @@ class RambleManager:
             logger.debug("Failed to upload workspace: %s", e)
 
         return (
-            provider.get_uri(ws_dest) if ws_dest else local_ws_path,
-            provider.get_uri(boh_dest) if boh_dest else local_boh_path,
+            provider.get_uri(ws_dest)
+            if ws_dest
+            else (local_ws_path if os.path.exists(local_ws_path) else None),
+            provider.get_uri(boh_dest)
+            if boh_dest
+            else (local_boh_path if os.path.exists(local_boh_path) else None),
         )
 
     def _cleanup_inputs_dir(self) -> None:
