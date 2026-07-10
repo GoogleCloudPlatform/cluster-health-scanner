@@ -27,7 +27,9 @@ class NcclSingleNodeRenderer(DefaultRenderer):
             "Single Node Detail",
             "Node",
             test_results,
-            lambda res: format_nodes(res.target_resources)
-            if res.target_resources
-            else "Unknown Node",
+            lambda res: (
+                format_nodes(res.target_resources)
+                if res.target_resources
+                else "Unknown Node"
+            ),
         )

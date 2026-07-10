@@ -364,8 +364,8 @@ a3-megagpu-8g:
 a4x-highgpu-4g:
   variables:
     pod_annotations_yaml: |
-      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
-      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+      compute-domain.nvidia.com/domain-name: {job_name}-cd
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
@@ -398,24 +398,26 @@ a4x-highgpu-4g:
       - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
-        resourceClaimTemplateName: {job_name}-compute-domain-channel
+        resourceClaimTemplateName: {job_name}-cdc
     custom_resources_yaml: |
       apiVersion: resource.nvidia.com/v1beta1
       kind: ComputeDomain
       metadata:
-        name: {job_name}-compute-domain
+        name: {job_name}-cd
+        namespace: "{kubernetes_namespace}"
         labels:
           chs-run: {job_name}
       spec:
         numNodes: {n_nodes}
         channel:
           resourceClaimTemplate:
-            name: {job_name}-compute-domain-channel
+            name: {job_name}-cdc
       ---
       apiVersion: resource.k8s.io/v1beta1
       kind: ResourceClaimTemplate
       metadata:
-        name: {job_name}-compute-domain-channel
+        name: {job_name}-cdc
+        namespace: "{kubernetes_namespace}"
       spec:
         spec:
           devices:
@@ -504,8 +506,8 @@ a4x-highgpu-4g:
 a4x-maxgpu-4g-metal:
   variables:
     pod_annotations_yaml: |
-      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
-      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+      compute-domain.nvidia.com/domain-name: {job_name}-cd
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
@@ -538,24 +540,26 @@ a4x-maxgpu-4g-metal:
       - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
-        resourceClaimTemplateName: {job_name}-compute-domain-channel
+        resourceClaimTemplateName: {job_name}-cdc
     custom_resources_yaml: |
       apiVersion: resource.nvidia.com/v1beta1
       kind: ComputeDomain
       metadata:
-        name: {job_name}-compute-domain
+        name: {job_name}-cd
+        namespace: "{kubernetes_namespace}"
         labels:
           chs-run: {job_name}
       spec:
         numNodes: {n_nodes}
         channel:
           resourceClaimTemplate:
-            name: {job_name}-compute-domain-channel
+            name: {job_name}-cdc
       ---
       apiVersion: resource.k8s.io/v1beta1
       kind: ResourceClaimTemplate
       metadata:
-        name: {job_name}-compute-domain-channel
+        name: {job_name}-cdc
+        namespace: "{kubernetes_namespace}"
       spec:
         spec:
           devices:

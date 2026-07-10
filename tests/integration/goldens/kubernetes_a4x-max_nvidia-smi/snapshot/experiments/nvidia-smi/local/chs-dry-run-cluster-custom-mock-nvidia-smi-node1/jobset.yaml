@@ -23,8 +23,8 @@ spec:
             metadata:
 
               annotations:
-                compute-domain.nvidia.com/channel-claim-template: chs-dry-run-cluster-custom-mock-nvidia-s-<HASH>-compute-domain-channel
-                compute-domain.nvidia.com/domain-name: chs-dry-run-cluster-custom-mock-nvidia-s-<HASH>-compute-domain
+                compute-domain.nvidia.com/channel-claim-template: chs-dry-run-cluster-custom-mock-nvidia-s-<HASH>-cdc
+                compute-domain.nvidia.com/domain-name: chs-dry-run-cluster-custom-mock-nvidia-s-<HASH>-cd
                 networking.gke.io/default-interface: eth0
                 networking.gke.io/interfaces: |
                   [{"interfaceName": "eth0", "network": "default"}, {"interfaceName": "eth1", "network": "gpu-net-1"}]

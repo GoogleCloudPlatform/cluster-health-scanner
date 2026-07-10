@@ -34,8 +34,10 @@ class NcclPairwiseRenderer(DefaultRenderer):
             "Pairwise Detail (Aggregated)",
             "Pair (Node 1 <-> Node 2)",
             test_results,
-            lambda res: format_nodes(res.target_resources, join_str=" <-> ")
-            if res.target_resources
-            else "Unknown Pair",
+            lambda res: (
+                format_nodes(res.target_resources, join_str=" <-> ")
+                if res.target_resources
+                else "Unknown Pair"
+            ),
             self.topology,
         )

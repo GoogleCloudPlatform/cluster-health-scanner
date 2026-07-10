@@ -829,8 +829,7 @@ class RambleManager:
                 f"[cyan]chs results {self._run_id}[/cyan]"
             )
             console.print(
-                "To cancel execution and cleanup run: "
-                "[cyan]chs cancel[/cyan]"
+                "To cancel execution and cleanup run: [cyan]chs cancel[/cyan]"
             )
             raise ex.ChsDetachedException()
 

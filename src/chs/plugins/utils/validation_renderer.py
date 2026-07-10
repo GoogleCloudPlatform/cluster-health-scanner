@@ -116,8 +116,7 @@ def render_validation_results(
             )
 
         title_text = Text(
-            f"\nValidation Results: {test_name}"
-            f" ({test_level}) - [{nodes_str}]",
+            f"\nValidation Results: {test_name} ({test_level}) - [{nodes_str}]",
             style=f"bold {border_color}",
         )
         renderables.append(title_text)
