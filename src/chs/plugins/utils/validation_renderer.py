@@ -147,7 +147,6 @@ def render_validation_results(
                 threshold_str = _parse_threshold(validation_criteria)
                 status_str, status_style = _parse_status(validation_criteria)
 
-                prefix = rendering.format_context_prefix(metric)
                 row_style = status_style
 
                 metric_value_2f = (
@@ -158,7 +157,7 @@ def render_validation_results(
 
                 table.add_row(
                     target_str,
-                    f"{prefix}{metric.key}",
+                    rendering.escape(metric.key),
                     metric_value_2f,
                     metric.unit,
                     threshold_str,
