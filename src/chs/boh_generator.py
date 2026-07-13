@@ -323,7 +323,6 @@ class BOHGenerator:
             for th_key, th_val, conditions in flattened_thresholds:
                 raw_fom_name = aliases.get(th_key, th_key)
 
-                found_metric = False
                 for metric in test_result.metrics:
                     if metric.key == raw_fom_name:
                         if not self._evaluate_metric_conditions(
@@ -333,7 +332,6 @@ class BOHGenerator:
                             ramble_vars,
                         ):
                             continue
-                        found_metric = True
                         validation = pb.ValidationCriteria(name=th_key)
                         if comp_type == "min":
                             validation.comparator = pb.Comparator.COMPARATOR_GTE
@@ -376,13 +374,6 @@ class BOHGenerator:
 
                         if not is_pass:
                             overall_success = False
-
-                if not found_metric:
-                    logger.warning(
-                        "Metric %s (alias for %s) not found in results",
-                        raw_fom_name,
-                        th_key,
-                    )
 
         test_result.result_status = (
             pb.RESULT_STATUS_SUCCESS
