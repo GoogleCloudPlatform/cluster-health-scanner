@@ -21,7 +21,7 @@ class NcclPairwisePlugin(
     NcclPairwiseRenderer, NcclPairwiseExtractor, TestPlugin
 ):
     def get_fom_aliases(self) -> dict[str, str]:
-        return {"bandwidth": "Avg. Bus Bandwidth"}
+        return {"bandwidth": "Peak Detected Bandwidth"}
 
 
 __chs_plugin__ = {

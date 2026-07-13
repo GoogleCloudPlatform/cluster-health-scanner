@@ -87,7 +87,7 @@ class ThresholdsValidator(Validator):
                     )
                 else:
                     for metric, val in cfg["thresholds"].items():
-                        if not isinstance(val, (int, float, bool, str)):
+                        if not isinstance(val, (int, float, bool, str, list)):
                             errors.append(
                                 f"Invalid threshold value for "
                                 f"metric '{metric}' "
