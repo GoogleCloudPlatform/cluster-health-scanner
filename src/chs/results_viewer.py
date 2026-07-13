@@ -528,12 +528,9 @@ class ResultsViewer:
                     "\nNo warnings or errors for the selected resources."
                 )
 
-        abs_path = os.path.abspath(self.boh_path)
         self.console.print(
             "For full raw metrics and detailed results for all nodes, "
-            "please use [bold cyan]chs results --details[/bold cyan] "
-            "or check the Bill of Health in:\n"
-            f"{abs_path}\n"
+            "please use [bold cyan]chs results --details[/bold cyan]"
         )
 
         if show_details:

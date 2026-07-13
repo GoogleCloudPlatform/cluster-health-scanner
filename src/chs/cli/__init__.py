@@ -116,12 +116,15 @@ def _archive_and_log(ramble_manager: RambleManager, spinner_label: str) -> None:
     console = Console()
     with theme.get_progress_spinner(spinner_label):
         ws_path, boh_path = ramble_manager.archive()
-    if ws_path:
+    storage_provider = StorageProviderFactory.get_provider_for_run(
+        ramble_manager.workspace_name
+    )
+    if ws_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived to: {ws_path}"
             f"[/{theme.CHS_SUCCESS_STYLE}]"
         )
-    if boh_path:
+    if boh_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
             f"{boh_path}[/{theme.CHS_SUCCESS_STYLE}]"
@@ -135,6 +138,8 @@ def archive_workspace(
     """Context manager to ensure workspace is archived even in error cases."""
     try:
         yield
+    except ex.ChsDetachedException:
+        raise
     except Exception:
         _archive_and_log(
             ramble_manager,
@@ -668,26 +673,17 @@ def _show_results(
         workspace_name = run_id
 
     boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
+    run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
 
     if not boh_path.exists():
         logger.debug(
             "Local Bill of Health not found. "
             "Attempting to download from storage..."
         )
-        run_entry = app_data.get_run(workspace_name)
-        storage_config = None
-        if run_entry:
-            storage_config = run_entry.get("storage")
-
         try:
-            if storage_config:
-                provider = StorageProviderFactory.get_provider(storage_config)
-            else:
-                logger.debug(
-                    "Run-specific storage config not found. "
-                    "Falling back to active storage provider."
-                )
-                provider = StorageProviderFactory.get_active_provider()
+            provider = (
+                run_provider or StorageProviderFactory.get_active_provider()
+            )
         except Exception as e:
             raise ex.BillOfHealthNotFoundException(
                 f"Could not find local bill of health at {boh_path} "

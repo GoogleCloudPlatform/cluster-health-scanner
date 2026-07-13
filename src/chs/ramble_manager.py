@@ -45,6 +45,7 @@ from chs import resources
 from chs.boh_generator import BOHGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
+from chs.storage import StorageProviderFactory
 from chs.utils import theme
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
@@ -1195,9 +1196,13 @@ class RambleManager:
             return None, None
 
         try:
-            from chs.storage import StorageProviderFactory
-
-            provider = StorageProviderFactory.get_active_provider()
+            provider = StorageProviderFactory.get_provider_for_run(
+                self._workspace_name
+            )
+            if not provider:
+                raise ex.ChsException(
+                    "No storage provider configured for this run"
+                )
         except Exception as e:
             logger.debug(
                 "Storage provider not configured or failed to load. "

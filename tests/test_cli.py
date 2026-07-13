@@ -838,33 +838,37 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
 
-    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
-    def test_results_command_no_boh_no_storage(self, mock_get_active_provider):
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
+    def test_results_command_no_boh_no_storage(self, mock_get_provider_for_run):
         """Test results command when BoH is missing and no storage set."""
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
-        mock_get_active_provider.side_effect = Exception(
-            "No storage configured"
-        )
+        mock_get_provider_for_run.return_value = None
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with (
+            mock.patch(
+                "chs.storage.StorageProviderFactory.get_active_provider",
+                side_effect=Exception("No storage configured"),
+            ),
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
             os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
             result = self.runner.invoke(cli.cli, ["results"])
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("failed to resolve storage provider", result.output)
 
-    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_results_command_download_success(
-        self, mock_viewer, mock_get_active_provider
+        self, mock_viewer, mock_get_provider_for_run
     ):
         """Test results command downloads BoH from storage if missing."""
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
 
         mock_provider = mock.Mock()
-        mock_get_active_provider.return_value = mock_provider
+        mock_get_provider_for_run.return_value = mock_provider
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
@@ -899,6 +903,14 @@ class TestCli(unittest.TestCase):
             with cli.archive_workspace(mock_rm):
                 raise ValueError("test error")
         mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_detached(self):
+        """Test archive_workspace bypassing archival on ChsDetachedException."""
+        mock_rm = mock.Mock()
+        with self.assertRaises(exceptions.ChsDetachedException):
+            with cli.archive_workspace(mock_rm):
+                raise exceptions.ChsDetachedException()
+        mock_rm.archive.assert_not_called()
 
     def test_archive_workspace_context_manager_archive_failure(self):
         """Test archive_workspace raising ChsArchiveException when BOH fails."""

@@ -546,7 +546,7 @@ mycriteria:
 
         with (
             mock.patch(
-                "chs.storage.StorageProviderFactory.get_active_provider",
+                "chs.storage.StorageProviderFactory.get_provider_for_run",
                 return_value=mock_provider,
             ),
             mock.patch.object(manager, "_upload_boh") as mock_boh,
@@ -564,8 +564,8 @@ mycriteria:
         )
         with (
             mock.patch(
-                "chs.storage.StorageProviderFactory.get_active_provider",
-                side_effect=Exception("No provider"),
+                "chs.storage.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
             ),
             mock.patch.object(manager, "_upload_boh") as mock_boh,
             mock.patch.object(manager, "_upload_workspace") as mock_workspace,
