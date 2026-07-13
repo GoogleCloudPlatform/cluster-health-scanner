@@ -974,7 +974,7 @@ def _handle_previous_run(
             )
             logger.warning(
                 "Parallel runs are not supported. "
-                "Attaching to ongoing/completed run. "
+                f"Attaching to ongoing/completed run: {latest_run_id}. "
                 f"Run `{cleanup_cmd}` to destroy it."
             )
             analyze_action(app_data, latest_run_id, validation, skip_validation)
