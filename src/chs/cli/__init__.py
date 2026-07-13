@@ -680,6 +680,11 @@ def _show_results(
 
     boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
+    boh_uri = (
+        run_provider.get_uri(f"bills_of_health/{workspace_name}.json")
+        if run_provider
+        else None
+    )
 
     if not boh_path.exists():
         logger.debug(
@@ -702,7 +707,7 @@ def _show_results(
                 provider.download_file(
                     f"bills_of_health/{workspace_name}.json", tmp_file_path
                 )
-                viewer = ResultsViewer(tmp_file_path)
+                viewer = ResultsViewer(tmp_file_path, boh_uri=boh_uri)
             except FileNotFoundError:
                 raise ex.BillOfHealthNotFoundException(
                     f"Results not found for run '{run_id}'.\n"
@@ -715,7 +720,7 @@ def _show_results(
                     f"from storage: {e}"
                 ) from e
     else:
-        viewer = ResultsViewer(boh_path)
+        viewer = ResultsViewer(boh_path, boh_uri=boh_uri)
 
     parsed_tests = _parse_str_to_list(tests)
     parsed_resources = _parse_str_to_list(resources)

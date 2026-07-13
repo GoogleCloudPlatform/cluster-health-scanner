@@ -1308,7 +1308,9 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.mock_rm_instance.wait_for_jobs.assert_not_called()
         self.mock_rm_instance.generate_boh.assert_not_called()
-        mock_results_viewer.assert_called_once_with(pathlib.Path(boh_path))
+        mock_results_viewer.assert_called_once_with(
+            pathlib.Path(boh_path), boh_uri=None
+        )
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_analyze_command_shortcut_results(self, mock_results_viewer):

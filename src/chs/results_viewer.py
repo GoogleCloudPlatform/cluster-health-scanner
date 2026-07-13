@@ -77,9 +77,14 @@ class RunSummaryData:
 class ResultsViewer:
     """Renders Bill of Health results using Rich formatting via Plugins."""
 
-    def __init__(self, boh_path: str):
+    def __init__(
+        self,
+        boh_path: str | os.PathLike[str],
+        boh_uri: str | None = None,
+    ):
         """Initializes the viewer with the path to the Bill of Health JSON."""
         self.boh_path = boh_path
+        self.boh_uri = boh_uri
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
@@ -603,10 +608,15 @@ class ResultsViewer:
                     "\nNo warnings or errors for the selected resources."
                 )
 
-        self.console.print(
+        base_msg = (
             "For full raw metrics and detailed results for all nodes, "
             "please use [bold cyan]chs results --details[/bold cyan]"
         )
+        if self.boh_uri:
+            self.console.print(f"{base_msg} or check the Bill of Health in:")
+            self.console.print(f"[cyan]{self.boh_uri}[/cyan]\n")
+        else:
+            self.console.print(base_msg)
 
         if show_details:
             self.show_details(tests, resources)
