@@ -4,6 +4,6 @@ command:
 - --tests
 - hbm
 - --nodes
-- node1
+- node1,node2
 - --dry-run
 - --auto-approve

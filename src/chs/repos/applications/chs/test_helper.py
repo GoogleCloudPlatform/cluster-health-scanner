@@ -292,6 +292,11 @@ podAntiAffinity:
             for slice_id, slice_nodes in tpu_slices.items():
                 slice_vars = copy.deepcopy(variables)
                 slice_vars["nodes"] = slice_nodes
+                slice_topo = variables.get("tpu_slice_topologies", {}).get(
+                    slice_id
+                )
+                if slice_topo:
+                    slice_vars["tpu_topology"] = slice_topo
 
                 if len(tpu_slices) == 1:
                     slice_exp_name = experiment_name

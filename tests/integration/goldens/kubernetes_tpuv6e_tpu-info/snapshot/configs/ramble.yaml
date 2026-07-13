@@ -22,8 +22,12 @@ ramble:
     jobset_labels_yaml: 'kueue.x-k8s.io/queue-name: chs-local-queue'
     suspend_jobset: 'true'
     kubernetes_namespace: chs
-    tpu_topology: 2x2x1
-    tpu_slices: {}
+    tpu_slices:
+      default-pool:
+      - node1
+      - node2
+    tpu_slice_topologies:
+      default-pool: 2x2x1
   applications:
     chs:
       workloads:

@@ -47,6 +47,7 @@ class TpuSliceData:
         default_factory=lambda: defaultdict(list)
     )
     node_to_pool: dict[str, str] = field(default_factory=dict)
+    pool_to_topology: dict[str, str] = field(default_factory=dict)
 
 
 def boolean_representer(dumper, data):
@@ -291,26 +292,6 @@ class KubernetesScheduler(BaseScheduler):
         except Exception as e:
             logger.warning("Failed to delete secrets: %s", e)
 
-    def _discover_tpu_topology(self, node_name: str) -> str:
-        """Queries node labels to discover TPU topology.
-
-        # TODO: This is GKE-specific. Generalize for generic Kubernetes.
-        """
-        try:
-            args = ["get", "node", node_name, "-o", "json"]
-            output = self._run_kubectl(args)
-            if not output:
-                return ""
-
-            data = json.loads(output)
-            labels = data.get("metadata", {}).get("labels", {})
-            return labels.get("cloud.google.com/gke-tpu-topology", "")
-        except Exception as e:
-            logger.warning(
-                "Failed to discover TPU topology for node %s: %s", node_name, e
-            )
-            return ""
-
     def _group_nodes_by_slice(
         self, node_names: list[str]
     ) -> dict[str, list[str]]:
@@ -324,7 +305,12 @@ class KubernetesScheduler(BaseScheduler):
             output = self._run_kubectl(args)
             if output:
                 data = json.loads(output)
-                items = data.get("items", [])
+                # If only one node was queried, kubectl returns a
+                # single Node object instead of a List
+                items = data.get("items")
+                if items is None:
+                    items = [data] if data.get("kind") == "Node" else []
+
                 for item in items:
                     node_name = item.get("metadata", {}).get("name")
                     if not node_name:
@@ -474,6 +460,7 @@ class KubernetesScheduler(BaseScheduler):
 
         tpu_nodepools: dict[str, list[str]] = defaultdict(list)
         node_to_nodepool: dict[str, str] = {}
+        pool_to_topology: dict[str, str] = {}
 
         for node in node_data.get("items", []):
             node_name = node.get("metadata", {}).get("name")
@@ -482,13 +469,18 @@ class KubernetesScheduler(BaseScheduler):
 
             labels = node.get("metadata", {}).get("labels", {})
             nodepool = labels.get("cloud.google.com/gke-nodepool")
+            topology = labels.get("cloud.google.com/gke-tpu-topology")
 
             if nodepool:
                 node_to_nodepool[node_name] = nodepool
                 tpu_nodepools[nodepool].append(node_name)
+                if topology and nodepool not in pool_to_topology:
+                    pool_to_topology[nodepool] = topology
 
         self._tpu_slice_data = TpuSliceData(
-            pools=tpu_nodepools, node_to_pool=node_to_nodepool
+            pools=tpu_nodepools,
+            node_to_pool=node_to_nodepool,
+            pool_to_topology=pool_to_topology,
         )
         return self._tpu_slice_data
 
@@ -745,10 +737,16 @@ class KubernetesScheduler(BaseScheduler):
         variables["kubernetes_namespace"] = CHS_NAMESPACE
 
         if resources.is_tpu(machine_type) and nodes:
-            topology = self._discover_tpu_topology(nodes[0])
-            if topology:
-                variables["tpu_topology"] = topology
-            variables["tpu_slices"] = self._group_nodes_by_slice(nodes)
+            tpu_slices = self._group_nodes_by_slice(nodes)
+            variables["tpu_slices"] = tpu_slices
+
+            slice_data = self._get_tpu_slices()
+            slice_topologies = {}
+            for slice_id in tpu_slices:
+                topo = slice_data.pool_to_topology.get(slice_id)
+                if topo:
+                    slice_topologies[slice_id] = topo
+            variables["tpu_slice_topologies"] = slice_topologies
 
         if self._jobset_labels_yaml:
             variables["jobset_labels_yaml"] = self._jobset_labels_yaml

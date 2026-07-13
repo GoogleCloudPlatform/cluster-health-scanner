@@ -16,8 +16,8 @@ spec:
     - name: w
       template:
         spec:
-          parallelism: 1
-          completions: 1
+          parallelism: 2
+          completions: 2
           activeDeadlineSeconds: 1200
           template:
             metadata:
@@ -38,6 +38,7 @@ spec:
                         operator: In
                         values:
                             - node1
+                            - node2
                 podAntiAffinity:
                   requiredDuringSchedulingIgnoredDuringExecution:
                   - labelSelector:

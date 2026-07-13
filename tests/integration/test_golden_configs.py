@@ -84,6 +84,13 @@ def mock_cluster_env(tmp_path, monkeypatch):
         "      exit 0\n"
         '    elif [[ "$*" == *"get deployment -n kueue-system"* ]]; then\n'
         '      echo "registry.k8s.io/kueue/kueue:v0.14.5"\n'
+        '    elif [[ "$*" == *"get nodes"* ]]; then\n'
+        '      echo \'{"items": [{"metadata": {"name": "node1", '
+        '"labels": {"cloud.google.com/gke-nodepool": "default-pool", '
+        '"cloud.google.com/gke-tpu-topology": "2x2x1"}}}, '
+        '{"metadata": {"name": "node2", "labels": '
+        '{"cloud.google.com/gke-nodepool": "default-pool", '
+        '"cloud.google.com/gke-tpu-topology": "2x2x1"}}}]}\'\n'
         '    elif [[ "$*" == *"get node"* ]]; then\n'
         '      if [[ "$*" == *".spec.providerID"* ]]; then\n'
         '        echo "gce://mock-project/mock-zone/mock-node"\n'
