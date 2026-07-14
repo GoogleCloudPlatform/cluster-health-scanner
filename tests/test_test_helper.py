@@ -260,7 +260,7 @@ class TestTestHelper(unittest.TestCase):
                 "\\\\", "\\"
             )
 
-            self.assertIn('mesh_shape: "2x2x1"', unescaped)
+            self.assertIn('mesh_shape: "2x2x2"', unescaped)
             self.assertIn("ici_size: 4", unescaped)
 
 

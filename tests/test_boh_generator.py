@@ -922,6 +922,146 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(tier_results["tpu-info"], TestStatus.ERROR)
         self.assertFalse(hard_failure)
 
+    def test_generate_tpu_collectives_peak_bandwidth(self):
+        """Test peak bandwidth threshold evaluation for tpu-collectives."""
+        thresholds_data = {
+            "default": {
+                "tpu-collectives": {
+                    "type": "min",
+                    "thresholds": {
+                        "peak_bandwidth": [
+                            {
+                                "value": 155.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "all_gather",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "2x2x1",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "node-1,16384,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 160.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_SUCCESS)
+
+        self.assertEqual(len(res.metrics), 3)
+
+        peak_metric = next(
+            (m for m in res.metrics if m.key == "Peak Bandwidth (median)"), None
+        )
+        self.assertIsNotNone(peak_metric)
+        self.assertEqual(peak_metric.value.number_value, 160.0)
+        self.assertEqual(
+            peak_metric.metadata.fields["context"].string_value,
+            "node-1,peak,16384,float32",
+        )
+        self.assertEqual(
+            peak_metric.validation_criteria.result_status,
+            pb.RESULT_STATUS_SUCCESS,
+        )
+
+        # Test case 2: Failing peak (150.0 < 155.0)
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "all_gather",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "2x2x1",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "node-1,16384,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 150.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_FAILED)
+        peak_metric = next(
+            (m for m in res.metrics if m.key == "Peak Bandwidth (median)"), None
+        )
+        self.assertIsNotNone(peak_metric)
+        self.assertEqual(peak_metric.value.number_value, 150.0)
+        self.assertEqual(
+            peak_metric.validation_criteria.result_status,
+            pb.RESULT_STATUS_FAILED,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

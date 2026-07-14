@@ -17,6 +17,7 @@ import datetime
 import logging
 import os
 import textwrap
+from chs.constants import TOPOLOGY_TO_MESH
 from chs.utils import sanitize_dns_1123
 from ramble.context import Context, create_context_from_dict
 
@@ -644,8 +645,10 @@ podAntiAffinity:
         for d in dims:
             ici *= d
 
-        scaled_dims = [dims[0] * cores_per_chip] + dims[1:]
-        mesh_shape = "x".join(str(d) for d in scaled_dims)
+        mesh_shape = TOPOLOGY_TO_MESH.get(topology)
+        if not mesh_shape:
+            scaled_dims = [dims[0] * cores_per_chip] + dims[1:]
+            mesh_shape = "x".join(str(d) for d in scaled_dims)
 
         escaped = ctx_vars.get("benchmarks_yaml_escaped", "")
         escaped = (

@@ -63,3 +63,7 @@ class TestPlugin(ABC):
     def creates_per_node_results(self) -> bool:
         """Returns True if the test generates one TestResult per node."""
         return False
+
+    def post_process_test_result(self, test_result: pb.TestResult) -> None:
+        """Hook to modify the TestResult before threshold evaluation."""
+        pass

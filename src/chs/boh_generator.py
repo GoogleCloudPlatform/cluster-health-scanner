@@ -587,6 +587,9 @@ class BOHGenerator:
                 results_to_add = self._split_test_result_per_node(test_result)
 
             for result in results_to_add:
+                if hasattr(plugin, "post_process_test_result"):
+                    plugin.post_process_test_result(result)
+
                 if needs_evaluation:
                     self._evaluate_thresholds(
                         machine_type, result, exp | ramble_vars

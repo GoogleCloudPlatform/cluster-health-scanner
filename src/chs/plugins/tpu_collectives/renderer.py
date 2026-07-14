@@ -82,6 +82,9 @@ class TpuCollectivesRenderer(DefaultRenderer):
             test_level = res.test_level if res.test_level else "check"
 
             for m in res.metrics:
+                if m.key == "Peak Bandwidth (median)":
+                    continue
+
                 ctx = (
                     m.metadata.fields["context"].string_value
                     if "context" in m.metadata.fields
