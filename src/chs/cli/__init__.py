@@ -1121,6 +1121,18 @@ def run(
 
     scheduler = detect_scheduler()
 
+    scheduler_obj = get_scheduler(
+        scheduler,
+        nodes=nodes,
+        nodelists=nodelists,
+        nodepools=nodepools,
+        partitions=partitions,
+    )
+
+    nodes_under_test = scheduler_obj.get_nodes_under_test()
+    if not nodes_under_test:
+        raise ex.NoNodesProvidedException("No nodes provided to run on.")
+
     if not dry_run:
         attach_result = _handle_previous_run(
             app_data=app_data,
@@ -1134,18 +1146,6 @@ def run(
             return attach_result
 
     preflights.run_platform_preflights()
-
-    scheduler_obj = get_scheduler(
-        scheduler,
-        nodes=nodes,
-        nodelists=nodelists,
-        nodepools=nodepools,
-        partitions=partitions,
-    )
-
-    nodes_under_test = scheduler_obj.get_nodes_under_test()
-    if not nodes_under_test:
-        raise ex.NoNodesProvidedException("No nodes provided to run on.")
 
     detected_machine_types = scheduler_obj.detect_nodes_hardware(
         nodes_under_test

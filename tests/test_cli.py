@@ -1001,8 +1001,12 @@ class TestCli(unittest.TestCase):
             f"Command failed: {result.output}\nException: {result.exception}",
         )
         self.assertEqual(mock_get_scheduler.call_count, 2)
-        _, kwargs = mock_get_scheduler.call_args_list[-1]
-        self.assertEqual(kwargs.get("nodepools"), "pool1")
+        calls_with_nodepool = [
+            c
+            for c in mock_get_scheduler.call_args_list
+            if c[1].get("nodepools") == "pool1"
+        ]
+        self.assertEqual(len(calls_with_nodepool), 1)
 
     def test_run_command_heterogeneous_cluster_raises(self):
         """Test `run` command when a heterogeneous cluster is detected."""
