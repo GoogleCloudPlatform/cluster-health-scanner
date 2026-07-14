@@ -25,4 +25,8 @@ RUN pip install --no-cache-dir .
 
 WORKDIR /workspace
 
+# Tells the CHS python app how it is being invoked so it logs correctly
+ARG CHS_VERSION=latest
+ENV CHS_CLI_NAME="docker run chs:${CHS_VERSION}"
+
 ENTRYPOINT ["chs"]

@@ -24,6 +24,7 @@ import functools
 import logging
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1321,10 +1322,16 @@ def run(
     )
     logger.debug("Workspaces base directory: %s", workspaces_base_dir)
 
-    # TODO: Revisit command statement normalization when
-    # distributing as a Docker image.
-    # Normalize command statement to start with "chs"
-    command_statement = " ".join(["chs"] + sys.argv[1:])
+    # Normalize command statement via an environment override (e.g. for Docker),
+    # or fallback to local execution logic.
+    cli_name = os.environ.get("CHS_CLI_NAME")
+    if not cli_name:
+        is_module_run = os.path.basename(sys.argv[0]) == "__main__.py"
+        cli_name = "python -m chs" if is_module_run else "chs"
+
+    # Safely quote the arguments, but leave the base CLI name unquoted
+    args_string = shlex.join(sys.argv[1:])
+    command_statement = f"{cli_name} {args_string}".strip()
 
     app_data.update_run(
         workspace_name,
