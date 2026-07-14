@@ -31,7 +31,9 @@ class NvidiaSmiRenderer(DefaultRenderer):
 
         node_data = self._extract_node_data(test_results)
 
-        has_thresholds = self._has_validation_criteria(test_results)
+        has_thresholds = not all(
+            r.result_status == pb.RESULT_STATUS_UNKNOWN for r in test_results
+        )
 
         render_elements = [Text("\nNVIDIA SMI Summary", style="bold")]
         render_elements.append(
@@ -58,7 +60,16 @@ class NvidiaSmiRenderer(DefaultRenderer):
             if res.result_status == pb.RESULT_STATUS_SUCCESS:
                 validation_status = "[green]MET[/]"
             elif res.result_status == pb.RESULT_STATUS_FAILED:
-                validation_status = "[red]NOT MET[/]"
+                failed_threshold = any(
+                    m.HasField("validation_criteria")
+                    and m.validation_criteria.result_status
+                    == pb.RESULT_STATUS_FAILED
+                    for m in res.metrics
+                )
+                if failed_threshold:
+                    validation_status = "[red]NOT MET[/]"
+                else:
+                    validation_status = "[yellow]ERROR[/]"
 
             if nodes not in node_data:
                 node_data[nodes] = {

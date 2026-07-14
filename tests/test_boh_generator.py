@@ -678,8 +678,8 @@ class TestBOHGenerator(unittest.TestCase):
             pb.RESULT_STATUS_FAILED,
         )
 
-    def test_generate_missing_fom_ignored(self):
-        """Test that missing FOM for a defined threshold is ignored safely."""
+    def test_generate_missing_fom_fails(self):
+        """Test that missing FOM for a defined threshold causes failure."""
         thresholds_data = {
             "default": {
                 "my-test": {
@@ -713,11 +713,7 @@ class TestBOHGenerator(unittest.TestCase):
         )
         report = generator.generate()
         self.assertEqual(
-            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
-        )
-        self.assertEqual(
-            report.test_results[0].metrics[0].validation_criteria.result_status,
-            pb.RESULT_STATUS_SUCCESS,
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
         )
 
     def test_generate_machine_override_type(self):

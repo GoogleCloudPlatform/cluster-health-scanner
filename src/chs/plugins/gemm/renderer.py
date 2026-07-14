@@ -40,7 +40,9 @@ class GemmRenderer(DefaultRenderer):
         if not test_results:
             return Text("No detailed metrics available.", style="yellow")
 
-        has_thresholds = self._has_validation_criteria(test_results)
+        has_thresholds = not all(
+            r.result_status == pb.RESULT_STATUS_UNKNOWN for r in test_results
+        )
 
         table = create_styled_table(expand=False)
         table.add_column("Workload")
@@ -81,7 +83,16 @@ class GemmRenderer(DefaultRenderer):
             if res.result_status == pb.RESULT_STATUS_SUCCESS:
                 validation_status = "[green]MET[/]"
             elif res.result_status == pb.RESULT_STATUS_FAILED:
-                validation_status = "[red]NOT MET[/]"
+                failed_threshold = any(
+                    m.HasField("validation_criteria")
+                    and m.validation_criteria.result_status
+                    == pb.RESULT_STATUS_FAILED
+                    for m in res.metrics
+                )
+                if failed_threshold:
+                    validation_status = "[red]NOT MET[/]"
+                else:
+                    validation_status = "[yellow]ERROR[/]"
 
             parsed_results.append(
                 GemmParsedResult(

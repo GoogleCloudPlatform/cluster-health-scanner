@@ -102,7 +102,9 @@ def render_nccl_detail(
             "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
         )
 
-    has_thresholds = validation_renderer.has_validation_criteria(test_results)
+    has_thresholds = not all(
+        r.result_status == pb.RESULT_STATUS_UNKNOWN for r in test_results
+    )
 
     node_to_location = {}
     if topology:
@@ -176,6 +178,9 @@ def render_nccl_detail(
                     == pb.RESULT_STATUS_FAILED
                 ):
                     validation_status = "[red]FAIL[/]"
+            else:
+                if res.result_status == pb.RESULT_STATUS_FAILED:
+                    validation_status = "[yellow]ERROR[/]"
             row.append(validation_status)
 
         table.add_row(*row)

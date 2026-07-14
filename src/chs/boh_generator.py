@@ -279,8 +279,10 @@ class BOHGenerator:
                             "Peak metric %s not found for relative check",
                             peak_key,
                         )
+                        overall_success = False
                         continue
 
+                    achieved_metric_found = False
                     for m in test_result.metrics:
                         if m.key == ach_key:
                             if not self._evaluate_metric_conditions(
@@ -290,6 +292,7 @@ class BOHGenerator:
                                 ramble_vars,
                             ):
                                 continue
+                            achieved_metric_found = True
                             ach_val = (
                                 m.value.number_value
                                 if m.value.HasField("number_value")
@@ -320,12 +323,17 @@ class BOHGenerator:
                             if not is_pass:
                                 overall_success = False
 
+                    if not achieved_metric_found:
+                        overall_success = False
+
         else:
             for th_key, th_val, conditions in flattened_thresholds:
                 raw_fom_name = aliases.get(th_key, th_key)
 
+                found_metric = False
                 for metric in test_result.metrics:
                     if metric.key == raw_fom_name:
+                        found_metric = True
                         if not self._evaluate_metric_conditions(
                             metric,
                             conditions,
@@ -376,6 +384,8 @@ class BOHGenerator:
                         if not is_pass:
                             overall_success = False
 
+                if not found_metric:
+                    overall_success = False
         test_result.result_status = (
             pb.RESULT_STATUS_SUCCESS
             if overall_success

@@ -59,6 +59,8 @@ class TestGroupSummary:
     group_has_no_thresholds: bool
     explicit_skip_validation: bool
     below_threshold_resources: list[str]
+    missing_metrics: int
+    missing_metrics_resources: list[str]
     display_name: str
 
 
@@ -305,6 +307,8 @@ class ResultsViewer:
             test_nodes_count = len(test_nodes)
             is_pairwise = "pairwise" in canonical_name.lower()
             below_threshold_resources = []
+            missing_metrics_resources = []
+            missing_metrics = 0
             failed_to_execute = 0
             for res in results:
                 has_real_metrics = any(
@@ -316,6 +320,15 @@ class ResultsViewer:
                     for m in res.metrics
                 )
 
+                failed_threshold = False
+                for m in res.metrics:
+                    if (
+                        m.HasField("validation_criteria")
+                        and m.validation_criteria.result_status
+                        == pb.RESULT_STATUS_FAILED
+                    ):
+                        failed_threshold = True
+
                 if res.result_status == pb.RESULT_STATUS_SUCCESS:
                     met_threshold += (
                         1 if is_pairwise else len(res.target_resources)
@@ -326,17 +339,27 @@ class ResultsViewer:
                 ):
                     pass
                 else:
-                    below_threshold += (
-                        1 if is_pairwise else len(res.target_resources)
-                    )
-                    if is_pairwise and len(res.target_resources) == 2:
-                        below_threshold_resources.append(
-                            f"{res.target_resources[0].node_name} <-> "
-                            f"{res.target_resources[1].node_name}"
-                        )
+                    count = 1 if is_pairwise else len(res.target_resources)
+                    if failed_threshold:
+                        below_threshold += count
+                        if is_pairwise and len(res.target_resources) == 2:
+                            below_threshold_resources.append(
+                                f"{res.target_resources[0].node_name} <-> "
+                                f"{res.target_resources[1].node_name}"
+                            )
+                        else:
+                            for t in res.target_resources:
+                                below_threshold_resources.append(t.node_name)
                     else:
-                        for t in res.target_resources:
-                            below_threshold_resources.append(t.node_name)
+                        missing_metrics += count
+                        if is_pairwise and len(res.target_resources) == 2:
+                            missing_metrics_resources.append(
+                                f"{res.target_resources[0].node_name} <-> "
+                                f"{res.target_resources[1].node_name}"
+                            )
+                        else:
+                            for t in res.target_resources:
+                                missing_metrics_resources.append(t.node_name)
 
                 if (
                     not has_real_metrics
@@ -361,7 +384,9 @@ class ResultsViewer:
 
             entity_noun = "pairs" if is_pairwise else "nodes"
             denominator = len(results) if is_pairwise else test_nodes_count
-            failed_to_execute = denominator - met_threshold - below_threshold
+            failed_to_execute = (
+                denominator - met_threshold - below_threshold - missing_metrics
+            )
 
             test_summaries.append(
                 TestGroupSummary(
@@ -375,6 +400,8 @@ class ResultsViewer:
                     group_has_no_thresholds=group_has_no_thresholds,
                     explicit_skip_validation=explicit_skip_validation,
                     below_threshold_resources=below_threshold_resources,
+                    missing_metrics=missing_metrics,
+                    missing_metrics_resources=missing_metrics_resources,
                     display_name=display_name,
                 )
             )
@@ -429,20 +456,32 @@ class ResultsViewer:
                     "(No thresholds set)"
                 )
             else:
-                if summary.failed_to_execute > 0:
-                    self.console.print(
-                        f"  • {summary.display_name:<30} : "
-                        f"{summary.met_threshold} / "
-                        f"{summary.denominator} {summary.entity_noun} "
-                        "met the threshold "
-                        f"({summary.failed_to_execute} failed to complete)"
-                    )
+                total_nodes = summary.denominator
+                evaluated_nodes = (
+                    summary.met_threshold + summary.below_threshold
+                )
+
+                if evaluated_nodes > 0:
+                    if evaluated_nodes == total_nodes:
+                        self.console.print(
+                            f"  • {summary.display_name:<30} : "
+                            f"{summary.met_threshold} / "
+                            f"{total_nodes} {summary.entity_noun} "
+                            "met the threshold"
+                        )
+                    else:
+                        self.console.print(
+                            f"  • {summary.display_name:<30} : "
+                            f"{summary.met_threshold} / "
+                            f"{evaluated_nodes} evaluated "
+                            f"{summary.entity_noun} "
+                            f"met the threshold ({total_nodes} total)"
+                        )
                 else:
                     self.console.print(
                         f"  • {summary.display_name:<30} : "
-                        f"{summary.met_threshold} / "
-                        f"{summary.denominator} {summary.entity_noun} "
-                        "met the threshold"
+                        f"0 {summary.entity_noun} evaluated against "
+                        f"thresholds ({total_nodes} total)"
                     )
 
                 if (
@@ -470,6 +509,37 @@ class ResultsViewer:
                         )
                         for node in below_threshold_unique:
                             self.console.print(f"      * {node}")
+
+                if (
+                    summary.missing_metrics > 0
+                    and summary.missing_metrics_resources
+                ):
+                    missing_unique = sorted(
+                        list(set(summary.missing_metrics_resources))
+                    )
+                    if len(missing_unique) > 5:
+                        self.console.print(
+                            f"    - {summary.entity_noun.title()} Missing "
+                            "Required Metrics (First 5):"
+                        )
+                        for node in missing_unique[:5]:
+                            self.console.print(f"      * {node}")
+                        self.console.print(
+                            f"      ... and " f"{len(missing_unique) - 5} more."
+                        )
+                    else:
+                        self.console.print(
+                            f"    - {summary.entity_noun.title()} Missing "
+                            "Required Metrics:"
+                        )
+                        for node in missing_unique:
+                            self.console.print(f"      * {node}")
+
+                if summary.failed_to_execute > 0:
+                    self.console.print(
+                        f"    - {summary.entity_noun.title()} Failed "
+                        f"To Execute: {summary.failed_to_execute}"
+                    )
 
         if summary_data.errors_and_warnings:
             self.console.print("\nPOTENTIAL ERRORS / WARNINGS:")
