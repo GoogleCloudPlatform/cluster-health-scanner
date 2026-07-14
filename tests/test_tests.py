@@ -230,6 +230,60 @@ class TestTests(unittest.TestCase):
         self.assertEqual(tests_m3, ["t2"])
         self.assertEqual(tests_m4, [])
 
+    def test_get_plugin_to_test_map(self):
+        """Test getting plugin name map for all tests and plugins."""
+        data = {
+            "tests": [
+                {"name": "nvidia-smi"},
+                {"name": "dcgm"},
+                {"name": "gemm", "plugin_name": "tpu-gemm"},
+                {"name": "nccl-single-node"},
+                {"name": "nccl-cluster"},
+                {"name": "nccl-pairwise"},
+                {"name": "stream"},
+                {"name": "tpu-info"},
+                {"name": "hbm", "plugin_name": "tpu-hbm"},
+                {"name": "host-device", "plugin_name": "tpu-host-device"},
+                {"name": "collectives", "plugin_name": "tpu-collectives"},
+                {
+                    "name": "collectives-single-node",
+                    "plugin_name": "tpu-collectives-single-node",
+                },
+                {
+                    "name": "tpu-network-diagnostics",
+                    "plugin_name": "tpu-network-diagnostics",
+                },
+            ]
+        }
+        with open(self.tests_path, "w") as f:
+            yaml.dump(data, f)
+
+        with mock.patch.dict(
+            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
+        ):
+            from chs.utils.tests import get_plugin_to_test_map
+
+            mapping = get_plugin_to_test_map()
+            self.assertEqual(mapping["nvidia-smi"], "nvidia-smi")
+            self.assertEqual(mapping["dcgm"], "dcgm")
+            self.assertEqual(mapping["tpu-gemm"], "gemm")
+            self.assertEqual(mapping["nccl-single-node"], "nccl-single-node")
+            self.assertEqual(mapping["nccl-cluster"], "nccl-cluster")
+            self.assertEqual(mapping["nccl-pairwise"], "nccl-pairwise")
+            self.assertEqual(mapping["stream"], "stream")
+            self.assertEqual(mapping["tpu-info"], "tpu-info")
+            self.assertEqual(mapping["tpu-hbm"], "hbm")
+            self.assertEqual(mapping["tpu-host-device"], "host-device")
+            self.assertEqual(mapping["tpu-collectives"], "collectives")
+            self.assertEqual(
+                mapping["tpu-collectives-single-node"],
+                "collectives-single-node",
+            )
+            self.assertEqual(
+                mapping["tpu-network-diagnostics"],
+                "tpu-network-diagnostics",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

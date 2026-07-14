@@ -106,6 +106,34 @@ class TestResultsViewer(unittest.TestCase):
         )  # One panel for test1 and one for separator newline
 
     @mock.patch.object(Console, "print")
+    @mock.patch(
+        "chs.utils.tests.get_plugin_to_test_map",
+        return_value={"tpu-collectives": "collectives"},
+    )
+    def test_show_details_filtered_by_test_alias(self, mock_map, mock_print):
+        """Test show_details filtered by suite test name alias."""
+        data = {
+            "report_id": "test-id",
+            "chs_version": "1.0.0",
+            "test_results": [
+                {
+                    "test_name": "tpu-collectives",
+                    "result_status": "RESULT_STATUS_SUCCESS",
+                    "target_resources": [{"node_name": "node1"}],
+                    "metrics": [],
+                }
+            ],
+        }
+        json_path = os.path.join(self.test_dir.name, "boh_alias.json")
+        with open(json_path, "w") as f:
+            json.dump(data, f)
+
+        viewer = ResultsViewer(json_path)
+        results = viewer._filter_results(tests=["collectives"])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].test_name, "tpu-collectives")
+
+    @mock.patch.object(Console, "print")
     def test_show_details_filtered_by_resource(self, mock_print):
         """Test show_details filtered by resource."""
         viewer = ResultsViewer(self.valid_json_path)

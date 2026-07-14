@@ -898,6 +898,34 @@ class TestBOHGenerator(unittest.TestCase):
             report.test_results[1].result_status, pb.RESULT_STATUS_DEADLINE
         )
 
+    def test_parse_tier_results_from_boh_with_prefixed_test_names(self):
+        """Test parse_tier_results_from_boh correctly matches test names."""
+        boh = pb.BillOfHealth()
+        t1 = boh.test_results.add()
+        t1.test_name = "tpu-collectives"
+        t1.result_status = pb.RESULT_STATUS_SUCCESS
+
+        t2 = boh.test_results.add()
+        t2.test_name = "tpu-hbm"
+        t2.result_status = pb.RESULT_STATUS_SUCCESS
+
+        t3 = boh.test_results.add()
+        t3.test_name = "tpu-gemm"
+        t3.result_status = pb.RESULT_STATUS_FAILED
+
+        expected = ["collectives", "hbm", "gemm", "tpu-info"]
+        tier_results, hard_failure = (
+            chs.boh_generator.parse_tier_results_from_boh(boh, expected)
+        )
+
+        from chs.tier_manager import TestStatus
+
+        self.assertEqual(tier_results["collectives"], TestStatus.HEALTHY)
+        self.assertEqual(tier_results["hbm"], TestStatus.HEALTHY)
+        self.assertEqual(tier_results["gemm"], TestStatus.DEGRADED)
+        self.assertEqual(tier_results["tpu-info"], TestStatus.ERROR)
+        self.assertFalse(hard_failure)
+
 
 if __name__ == "__main__":
     unittest.main()

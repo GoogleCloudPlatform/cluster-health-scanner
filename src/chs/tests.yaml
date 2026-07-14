@@ -60,6 +60,7 @@ tests:
         machine_type: a4x-maxgpu-4g-metal
 
   - name: gemm
+    plugin_name: tpu-gemm
     category: "Compute"
     description: "General Matrix Multiply benchmark"
     platforms:
@@ -188,6 +189,7 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: hbm
+    plugin_name: tpu-hbm
     category: "Memory"
     description: "High Bandwidth Memory test"
     platforms:
@@ -199,6 +201,7 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: host-device
+    plugin_name: tpu-host-device
     category: "Memory"
     description: "Host to device bandwidth check"
     platforms:
@@ -210,6 +213,7 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: collectives
+    plugin_name: tpu-collectives
     category: "Network & Collectives"
     description: "Cluster collectives testing"
     platforms:
@@ -219,6 +223,7 @@ tests:
         machine_type: ct6e-standard-4t
 
   - name: collectives-single-node
+    plugin_name: tpu-collectives-single-node
     category: "Network & Collectives"
     description: "Single node collectives testing"
     platforms:

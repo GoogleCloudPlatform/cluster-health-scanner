@@ -28,6 +28,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from google.protobuf import json_format
 from chs.utils.app_data import ChsAppData
 from chs.utils import lifecycle
+from chs.utils.tests import get_plugin_to_test_map
 
 logger = logging.getLogger(__name__)
 
@@ -599,11 +600,12 @@ def parse_tier_results_from_boh(
         json_format.Parse(boh_json, boh_pb)
         boh = boh_pb
 
+    plugin_map = get_plugin_to_test_map()
     tier_results = {test: TestStatus.ERROR for test in expected_tests}
     has_hard_failure = False
 
     for result in boh.test_results:
-        test = result.test_name
+        test = plugin_map.get(result.test_name, result.test_name)
         if test in expected_tests:
             if result.result_status == pb.ResultStatus.RESULT_STATUS_FAILED:
                 tier_results[test] = TestStatus.DEGRADED

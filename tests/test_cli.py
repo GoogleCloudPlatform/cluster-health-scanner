@@ -695,6 +695,194 @@ class TestCli(unittest.TestCase):
                 )
 
     @mock.patch("chs.cli.analyze_action")
+    def test_run_command_active_tier_tests_filtered_by_supported_tests(
+        self, mock_analyze_action
+    ):
+        """Test active_tier_tests only contains tests for given machine type."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                {"name": "nvidia-smi"},
+                {"name": "dcgm"},
+                {"name": "tpu-info"},
+                {"name": "collectives"},
+            ]
+        }
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t", "a3-megagpu-8g"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                ["run", "--suite", "standard", "--auto-approve"],
+                standalone_mode=False,
+            )
+            self.assertEqual(
+                result.exit_code,
+                0,
+                f"Command failed: {result.output}\n"
+                f"Exception: {result.exception}",
+            )
+
+            self.mock_app_data.update_run.assert_called_once()
+            _, run_details = self.mock_app_data.update_run.call_args[0]
+            self.assertEqual(
+                run_details["active_tier_tests"],
+                ["tpu-info", "collectives"],
+            )
+
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_raises_validation_error_when_initial_tier_tests_empty(
+        self, mock_analyze_action
+    ):
+        """Test Exception raised when initial tier has no supported tests."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                {"name": "tier1-gpu-test"},
+                {
+                    "name": "tpu-info",
+                    "trigger_condition": {"DEGRADED": ["tier1-gpu-test"]},
+                },
+            ]
+        }
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                ["run", "--suite", "standard", "--auto-approve"],
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn(
+                "No supported initial health checks found in suite",
+                result.output,
+            )
+
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_preserves_suite_test_variables(
+        self, mock_analyze_action
+    ):
+        """Test suite variables and workloads are preserved in tests config."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "a3-megagpu-8g"
+        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                {
+                    "name": "dcgm",
+                    "variables": {"diag_level": [3]},
+                },
+                {
+                    "name": "nccl-cluster",
+                    "workloads": ["all-gather"],
+                    "variables": {"begin_message_size": "256M"},
+                },
+            ]
+        }
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["a3-megagpu-8g"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=TestsMap(
+                    data={
+                        "kubernetes": {
+                            "a3-megagpu-8g": [
+                                "dcgm",
+                                "nccl-cluster",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                ["run", "--suite", "standard", "--auto-approve"],
+                standalone_mode=False,
+            )
+            self.assertEqual(
+                result.exit_code,
+                0,
+                f"Command failed: {result.output}\n"
+                f"Exception: {result.exception}",
+            )
+
+            self.mock_app_data.update_run.assert_called_once()
+            _, run_details = self.mock_app_data.update_run.call_args[0]
+            self.assertEqual(
+                run_details["tests"],
+                [
+                    {
+                        "name": "dcgm",
+                        "variables": {"diag_level": [3]},
+                    },
+                    {
+                        "name": "nccl-cluster",
+                        "workloads": ["all-gather"],
+                        "variables": {"begin_message_size": "256M"},
+                    },
+                ],
+            )
+
+    @mock.patch("chs.cli.analyze_action")
     def test_run_command_custom_run_id(self, mock_analyze_action):
         """Test 'run' command with a custom run ID."""
         mock_default_dir = "/mocked/workspaces"

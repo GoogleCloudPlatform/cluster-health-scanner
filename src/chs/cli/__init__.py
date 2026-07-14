@@ -315,6 +315,11 @@ def _parse_str_to_list(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _get_test_name(test: dict[str, Any] | str) -> str:
+    """Extracts test name string from a test dictionary or string."""
+    return test.get("name") if isinstance(test, dict) else str(test)
+
+
 def _validate_run_args(
     scheduler: str,
     detected_machine_types: list[str],
@@ -1181,6 +1186,16 @@ def run(
         suite_cfg = load_suite(suite)
         is_tiered = is_suite_tiered(suite_cfg)
 
+        supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
+            machine_type, scheduler
+        )
+
+        resolved_tests = [
+            t if isinstance(t, dict) else {"name": t}
+            for t in suite_cfg.get("tests", [])
+            if _get_test_name(t) in supported_tests
+        ]
+
         if is_tiered:
             tier_manager = TierManager(suite_cfg.get("tests", []))
             all_tests = tier_manager.get_all_tests()
@@ -1193,24 +1208,21 @@ def run(
                     f"Suite '{suite}' has no initial tier tests."
                 )
 
-            resolved_tests = [{"name": t} for t in all_tests]
-            active_tier_tests = initial_tests
-        else:
-            resolved_tests = suite_cfg.get("tests", [])
             active_tier_tests = [
-                t.get("name") if isinstance(t, dict) else t
-                for t in resolved_tests
+                t for t in initial_tests if t in supported_tests
             ]
+            if not active_tier_tests:
+                raise ex.ChsValidationError(
+                    f"No supported initial health checks found in suite"
+                    f" '{suite}' for scheduler '{scheduler}' and "
+                    f"machine type '{machine_type}'."
+                )
+        else:
+            active_tier_tests = [_get_test_name(t) for t in resolved_tests]
 
-        supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
-            machine_type, scheduler
-        )
-        resolved_tests = [
-            t for t in resolved_tests if t.get("name") in supported_tests
-        ]
         if not resolved_tests:
             raise ex.ChsValidationError(
-                f"No supported tests found in suite '{suite}' for"
+                f"No supported tests found in suite '{suite}' for "
                 f"scheduler '{scheduler}' and machine type '{machine_type}'."
             )
 

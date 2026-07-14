@@ -33,6 +33,7 @@ from chs import exceptions as ex
 from chs.plugins.utils import rendering
 from chs.utils import lifecycle
 from chs.utils.app_data import ChsAppData
+from chs.utils.tests import get_plugin_to_test_map
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +129,17 @@ class ResultsViewer:
     def _filter_results(
         self, tests: list[str] | None = None, resources: list[str] | None = None
     ) -> list[pb.TestResult]:
+        plugin_map = get_plugin_to_test_map()
         filtered_results = []
         for result in self.boh.test_results:
             match_tests = True
             match_resources = True
 
             if tests:
-                match_tests = any(t == result.test_name for t in tests)
+                base_name = plugin_map.get(result.test_name, result.test_name)
+                match_tests = any(
+                    t in (result.test_name, base_name) for t in tests
+                )
             if resources:
                 match_resources = False
                 for target in result.target_resources:
