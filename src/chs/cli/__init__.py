@@ -1130,19 +1130,138 @@ def run(
     """
     app_data = obj["app_data"]
 
-    scheduler = detect_scheduler()
+    with theme.get_progress_spinner(
+        "Discovering hardware and validating arguments..."
+    ):
+        scheduler = detect_scheduler()
 
-    scheduler_obj = get_scheduler(
-        scheduler,
-        nodes=nodes,
-        nodelists=nodelists,
-        nodepools=nodepools,
-        partitions=partitions,
+        scheduler_obj = get_scheduler(
+            scheduler,
+            nodes=nodes,
+            nodelists=nodelists,
+            nodepools=nodepools,
+            partitions=partitions,
+        )
+
+        nodes_under_test = scheduler_obj.get_nodes_under_test()
+        if not nodes_under_test:
+            raise ex.NoNodesProvidedException("No nodes provided to run on.")
+
+        preflights.run_platform_preflights()
+
+        detected_machine_types = scheduler_obj.detect_nodes_hardware(
+            nodes_under_test
+        )
+
+        if not detected_machine_types or "unknown" in detected_machine_types:
+            raise ex.MachineTypeDiscoveryException(
+                "Failed to detect machine type of some nodes"
+            )
+
+        _validate_run_args(
+            scheduler, detected_machine_types, tests, suite, validation
+        )
+
+        nodes_under_test = scheduler_obj.filter_partial_tpu_slices(
+            nodes_under_test
+        )
+        if not nodes_under_test:
+            raise ex.NoNodesProvidedException(
+                "No valid nodes remain after TPU slice validation."
+            )
+
+        machine_type = detected_machine_types[0]
+
+        timeout = resources.DEFAULT_TIMEOUT
+        deadline = resources.DEFAULT_DEADLINE
+        is_tiered = False
+        active_tier_tests = None
+
+        if not tests:
+            if not suite:
+                suite = "lite"
+
+            suite_cfg = load_suite(suite)
+            is_tiered = is_suite_tiered(suite_cfg)
+
+            supported_tests = (
+                utils.tests.get_tests_by_machine_type_and_scheduler(
+                    machine_type, scheduler
+                )
+            )
+
+            resolved_tests = [
+                t if isinstance(t, dict) else {"name": t}
+                for t in suite_cfg.get("tests", [])
+                if _get_test_name(t) in supported_tests
+            ]
+
+            if is_tiered:
+                tier_manager = TierManager(suite_cfg.get("tests", []))
+                all_tests = tier_manager.get_all_tests()
+                if not all_tests:
+                    raise ex.ChsValidationError(
+                        f"Suite '{suite}' has no tests."
+                    )
+
+                initial_tests = tier_manager.get_next_tier_tests({})
+                if not initial_tests:
+                    raise ex.ChsValidationError(
+                        f"Suite '{suite}' has no initial tier tests."
+                    )
+
+                active_tier_tests = [
+                    t for t in initial_tests if t in supported_tests
+                ]
+                if not active_tier_tests:
+                    raise ex.ChsValidationError(
+                        f"No supported initial health checks found in suite"
+                        f" '{suite}' for scheduler '{scheduler}' and "
+                        f"machine type '{machine_type}'."
+                    )
+            else:
+                active_tier_tests = [_get_test_name(t) for t in resolved_tests]
+
+            if not resolved_tests:
+                raise ex.ChsValidationError(
+                    f"No supported tests found in suite '{suite}' for "
+                    f"scheduler '{scheduler}' and machine type"
+                    f" '{machine_type}'."
+                )
+
+            try:
+                timeout = int(suite_cfg.get("timeout"))
+            except (ValueError, TypeError):
+                pass  # nothing to do here, as the default value will be used
+
+            try:
+                deadline = int(suite_cfg.get("deadline"))
+            except (ValueError, TypeError):
+                pass  # nothing to do here, as the default value will be used
+
+            timeout = max(timeout, resources.DEFAULT_TIMEOUT)
+            deadline = max(deadline, timeout + 600)
+
+            test_names = [t.get("name") for t in resolved_tests]
+            logger.debug(
+                f"Loaded {len(resolved_tests)} tests ({', '.join(test_names)}) "
+                f"for suite '{suite}' from suites.yaml."
+            )
+            parsed_tests = resolved_tests
+        else:
+            parsed_tests_strs = _parse_str_to_list(tests)
+            parsed_tests = (
+                [{"name": t} for t in parsed_tests_strs]
+                if parsed_tests_strs
+                else []
+            )
+            if not suite:
+                suite = "custom"
+
+    Console().print(
+        f"[{theme.CHS_SUCCESS_STYLE}]Validation and hardware discovery "
+        f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
-
-    nodes_under_test = scheduler_obj.get_nodes_under_test()
-    if not nodes_under_test:
-        raise ex.NoNodesProvidedException("No nodes provided to run on.")
 
     if not dry_run:
         attach_result = _handle_previous_run(
@@ -1155,112 +1274,6 @@ def run(
         )
         if attach_result:
             return attach_result
-
-    preflights.run_platform_preflights()
-
-    detected_machine_types = scheduler_obj.detect_nodes_hardware(
-        nodes_under_test
-    )
-
-    if not detected_machine_types or "unknown" in detected_machine_types:
-        raise ex.MachineTypeDiscoveryException(
-            "Failed to detect machine type of some nodes"
-        )
-
-    _validate_run_args(
-        scheduler, detected_machine_types, tests, suite, validation
-    )
-
-    nodes_under_test = scheduler_obj.filter_partial_tpu_slices(nodes_under_test)
-    if not nodes_under_test:
-        raise ex.NoNodesProvidedException(
-            "No valid nodes remain after TPU slice validation."
-        )
-
-    machine_type = detected_machine_types[0]
-
-    timeout = resources.DEFAULT_TIMEOUT
-    deadline = resources.DEFAULT_DEADLINE
-    is_tiered = False
-    active_tier_tests = None
-
-    if not tests:
-        if not suite:
-            suite = "lite"
-
-        suite_cfg = load_suite(suite)
-        is_tiered = is_suite_tiered(suite_cfg)
-
-        supported_tests = utils.tests.get_tests_by_machine_type_and_scheduler(
-            machine_type, scheduler
-        )
-
-        resolved_tests = [
-            t if isinstance(t, dict) else {"name": t}
-            for t in suite_cfg.get("tests", [])
-            if _get_test_name(t) in supported_tests
-        ]
-
-        if is_tiered:
-            tier_manager = TierManager(suite_cfg.get("tests", []))
-            all_tests = tier_manager.get_all_tests()
-            if not all_tests:
-                raise ex.ChsValidationError(f"Suite '{suite}' has no tests.")
-
-            initial_tests = tier_manager.get_next_tier_tests({})
-            if not initial_tests:
-                raise ex.ChsValidationError(
-                    f"Suite '{suite}' has no initial tier tests."
-                )
-
-            active_tier_tests = [
-                t for t in initial_tests if t in supported_tests
-            ]
-            if not active_tier_tests:
-                raise ex.ChsValidationError(
-                    f"No supported initial health checks found in suite"
-                    f" '{suite}' for scheduler '{scheduler}' and "
-                    f"machine type '{machine_type}'."
-                )
-        else:
-            active_tier_tests = [_get_test_name(t) for t in resolved_tests]
-
-        if not resolved_tests:
-            raise ex.ChsValidationError(
-                f"No supported tests found in suite '{suite}' for "
-                f"scheduler '{scheduler}' and machine type '{machine_type}'."
-            )
-
-        try:
-            timeout = int(suite_cfg.get("timeout"))
-        except (ValueError, TypeError):
-            pass  # nothing to do here, as the default value will be used
-
-        try:
-            deadline = int(suite_cfg.get("deadline"))
-        except (ValueError, TypeError):
-            pass  # nothing to do here, as the default value will be used
-
-        timeout = max(timeout, resources.DEFAULT_TIMEOUT)
-        deadline = max(deadline, timeout + 600)
-
-        test_names = [t.get("name") for t in resolved_tests]
-        logger.debug(
-            f"Loaded {len(resolved_tests)} tests ({', '.join(test_names)}) "
-            f"for suite '{suite}' from suites.yaml."
-        )
-        parsed_tests = resolved_tests
-    else:
-        # TODO: Validate input tests with supported tests
-        parsed_tests_strs = _parse_str_to_list(tests)
-        parsed_tests = (
-            [{"name": t} for t in parsed_tests_strs]
-            if parsed_tests_strs
-            else []
-        )
-        if not suite:
-            suite = "custom"
-
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
 
     test_names = ", ".join(

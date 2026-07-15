@@ -1208,6 +1208,25 @@ class TestCli(unittest.TestCase):
         self.assertIn("Heterogeneous cluster detected", result.output)
         self.assertIn("--partitions", result.output)
 
+    @mock.patch("chs.cli._handle_previous_run")
+    def test_validations_occur_before_preparing_cluster(
+        self, mock_handle_previous_run
+    ):
+        """Test validation failures prevent cluster preparation for execution"""
+        self.mock_scheduler.name = "slurm"
+        self.mock_scheduler.get_nodes_under_test.return_value = [
+            "node1",
+            "node2",
+        ]
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "a3-megagpu-8g",
+            "a3-ultragpu-8g",
+        ]
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Heterogeneous cluster detected", result.output)
+        mock_handle_previous_run.assert_not_called()
+
     def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
         ws_dir = tempfile.mkdtemp()
