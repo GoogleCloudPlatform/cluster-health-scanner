@@ -261,6 +261,56 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(args[0], "ws1")
         self.assertTrue(args[1].get("submission_complete"))
 
+    def test_execute_experiments_skips_scaffolding(self):
+        """Test execute_experiments skips registering scaffolding 'chs' app."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "mock_scheduler"
+        mock_scheduler.get_extra_env.return_value = {}
+        mock_scheduler.extract_job_id.return_value = "123"
+        manager._scheduler = mock_scheduler
+
+        with (
+            mock.patch("os.path.exists", return_value=True),
+            mock.patch(
+                "chs.ramble_manager.get_scheduler", return_value=mock_scheduler
+            ),
+            mock.patch(
+                "os.walk",
+                return_value=[
+                    (
+                        "/tmp/workspace/experiments/chs/cluster_health/chs",
+                        [],
+                        ["execute_experiment"],
+                    ),
+                    (
+                        "/tmp/workspace/experiments/nvidia-smi/local/nvidia-smi",
+                        [],
+                        ["execute_experiment"],
+                    ),
+                ],
+            ),
+            mock.patch.object(
+                manager, "_update_registry"
+            ) as mock_update_registry,
+        ):
+            mock_scheduler.extract_job_id.side_effect = (
+                lambda path: "nvidia-smi-id"
+                if "nvidia-smi" in path
+                else "chs-id"
+            )
+            job_ids = manager.execute_experiments()
+
+        self.assertEqual(job_ids, ["nvidia-smi-id"])
+        mock_update_registry.assert_called_once_with(
+            {
+                "nvidia-smi-id": (
+                    "/tmp/workspace/experiments/" "nvidia-smi/local/nvidia-smi"
+                )
+            },
+            tier=1,
+        )
+
     def test_update_registry_preserves_custom_fields(self):
         """Test _update_registry preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)

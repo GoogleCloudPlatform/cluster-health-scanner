@@ -425,6 +425,13 @@ class RambleManager:
             for root, dirs, files in os.walk(experiments_dir):
                 if "execute_experiment" in files:
                     exp_name = os.path.basename(root)
+                    app_name = os.path.basename(
+                        os.path.dirname(os.path.dirname(root))
+                    )
+                    if app_name == "chs":
+                        dirs.clear()
+                        continue
+
                     if active_tests and not any(
                         t in exp_name for t in active_tests
                     ):
