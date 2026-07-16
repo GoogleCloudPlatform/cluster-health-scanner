@@ -321,12 +321,40 @@ a4x-maxgpu-4g-metal:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 330.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 340.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 80.0
+          conditions:
+            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 600.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 800.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 240.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 380.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 40.0
+          conditions:
+            workload_name: "all-to-all"
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 4
