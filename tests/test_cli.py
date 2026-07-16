@@ -1169,8 +1169,13 @@ class TestCli(unittest.TestCase):
         mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
-        mock_scheduler.has_no_failed_jobs.return_value = False
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
+        mock_scheduler.run_preflight_checks.side_effect = (
+            lambda tests=None, *args, **kwargs: tests
+        )
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, *args, **kwargs: tests
+        )
         mock_get_scheduler.return_value = mock_scheduler
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         result = self.runner.invoke(
@@ -1195,6 +1200,32 @@ class TestCli(unittest.TestCase):
             if c[1].get("nodepools") == "pool1"
         ]
         self.assertEqual(len(calls_with_nodepool), 1)
+
+    def test_run_preflight_failure_aborts_before_cancellation(self):
+        """Test preflight check failure aborts before handling previous run."""
+        self.mock_app_data.get_latest_run_id.return_value = "old_run_id"
+        self.mock_app_data.resolve_run_id.return_value = "old_workspace"
+        self.mock_app_data.get_run.return_value = {
+            "submission_complete": False,
+            "scheduler": "kubernetes",
+        }
+        self.mock_scheduler.run_preflight_checks.side_effect = (
+            exceptions.ChsPreflightException(
+                "Missing required cluster dependencies: JobSet."
+            )
+        )
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--auto-approve"],
+        )
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn(
+            "Missing required cluster dependencies: JobSet.", result.output
+        )
+        self.mock_scheduler.has_no_failed_jobs.assert_not_called()
+        self.mock_scheduler.cancel_jobs_by_prefix.assert_not_called()
 
     def test_run_command_heterogeneous_cluster_raises(self):
         """Test `run` command when a heterogeneous cluster is detected."""

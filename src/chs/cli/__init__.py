@@ -417,11 +417,7 @@ def run_action(
 
     with archive_workspace(ramble_manager, on_success=False):
         try:
-            logger.debug("Running preflight checks")
             if scheduler_obj:
-                tests = scheduler_obj.run_preflight_checks(
-                    tests, workspace_name=workspace_name, run_id=run_id
-                )
                 workspace_config_dir = os.path.join(
                     ramble_manager.path, "configs"
                 )
@@ -1257,6 +1253,14 @@ def run(
             )
             if not suite:
                 suite = "custom"
+
+        logger.debug("Running preflight checks")
+        parsed_tests = scheduler_obj.run_preflight_checks(parsed_tests)
+        if active_tier_tests and parsed_tests is not None:
+            remaining_names = {_get_test_name(t) for t in parsed_tests}
+            active_tier_tests = [
+                t for t in active_tier_tests if t in remaining_names
+            ]
 
     Console().print(
         f"[{theme.CHS_SUCCESS_STYLE}]Validation and hardware discovery "
