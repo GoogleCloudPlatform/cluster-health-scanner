@@ -339,7 +339,7 @@ class Chs(ExecutableApplication):
                     self.experiment_set.render_chained_experiments(
                         application_name, "check", context
                     )
-            elif test.name == "collectives":
+            elif test.name == "tpu-collectives":
                 application_name = "tpu-collectives"
                 workloads = (
                     test.workloads
@@ -364,7 +364,7 @@ class Chs(ExecutableApplication):
                         self.experiment_set.render_chained_experiments(
                             application_name, workload, context
                         )
-            elif test.name == "collectives-single-node":
+            elif test.name == "tpu-collectives-single-node":
                 application_name = "tpu-collectives"
                 workloads = (
                     test.workloads

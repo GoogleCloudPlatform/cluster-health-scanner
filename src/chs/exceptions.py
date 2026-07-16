@@ -115,3 +115,9 @@ class NoActiveJobsException(ChsException):
     """Raised when there are no CHS jobs found on the cluster."""
 
     pass
+
+
+class InvalidTestConfigException(ChsException):
+    """Raised test config defined in suites.yaml is invalid"""
+
+    pass

@@ -107,7 +107,7 @@ class TestResultsViewer(unittest.TestCase):
 
     @mock.patch.object(Console, "print")
     @mock.patch(
-        "chs.utils.tests.get_plugin_to_test_map",
+        "chs.results_viewer.get_plugin_to_test_map",
         return_value={"tpu-collectives": "collectives"},
     )
     def test_show_details_filtered_by_test_alias(self, mock_map, mock_print):

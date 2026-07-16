@@ -61,7 +61,7 @@ class TpuCollectives(ExecutableApplication):
     executable(
         "execute",
         template=(
-            '{driver_escape_overrides} cd {run_dir} && printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && python3 {run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"'
+            'set -o pipefail; {driver_escape_overrides} cd {run_dir} && printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && python3 {run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"'
         ),
         use_mpi=False,
     )

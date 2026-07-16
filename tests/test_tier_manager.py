@@ -17,7 +17,10 @@
 import unittest
 
 import chs.exceptions as ex
-from chs.tier_manager import TierManager, TestStatus
+from chs.tier_manager import (
+    TierManager,
+    TestStatus as _TestStatus,
+)
 
 
 class TestTierManagerDAGBuilding(unittest.TestCase):
@@ -194,7 +197,7 @@ class TestTierManagerExecution(unittest.TestCase):
 
         # Tier 1: since test_base is HEALTHY, test_dependent triggers.
         self.assertEqual(
-            tm.get_next_tier_tests({"test_base": TestStatus.HEALTHY}),
+            tm.get_next_tier_tests({"test_base": _TestStatus.HEALTHY}),
             ["test_dependent"],
         )
 
@@ -217,7 +220,7 @@ class TestTierManagerExecution(unittest.TestCase):
 
         # Tier 1: test_base is ERROR (not HEALTHY), dependent is skipped.
         self.assertEqual(
-            tm.get_next_tier_tests({"test_base": TestStatus.ERROR}), []
+            tm.get_next_tier_tests({"test_base": _TestStatus.ERROR}), []
         )
 
     def test_get_next_tier_tests_or_logic_satisfied(self):
@@ -241,7 +244,7 @@ class TestTierManagerExecution(unittest.TestCase):
         # Case 1: test_b is ERROR, matching trigger -> triggers.
         self.assertEqual(
             tm.get_next_tier_tests(
-                {"test_a": TestStatus.DEGRADED, "test_b": TestStatus.ERROR}
+                {"test_a": _TestStatus.DEGRADED, "test_b": _TestStatus.ERROR}
             ),
             ["test_dependent"],
         )
@@ -270,7 +273,7 @@ class TestTierManagerExecution(unittest.TestCase):
         # Case 2: neither conditions are met -> skips.
         self.assertEqual(
             tm.get_next_tier_tests(
-                {"test_a": TestStatus.DEGRADED, "test_b": TestStatus.DEGRADED}
+                {"test_a": _TestStatus.DEGRADED, "test_b": _TestStatus.DEGRADED}
             ),
             [],
         )
@@ -295,8 +298,8 @@ class TestTierManagerExecution(unittest.TestCase):
             ["test_dependent"],
         )
 
-    def test_get_next_tier_tests_invalid_status_parses_to_degraded(self):
-        """Invalid status in trigger condition parses to DEGRADED."""
+    def test_get_next_tier_tests_invalid_status_raises_error(self):
+        """Invalid status in trigger condition raises Exception."""
         configs = [
             {
                 "name": "test_dependent",
@@ -309,12 +312,9 @@ class TestTierManagerExecution(unittest.TestCase):
         # Tier 0 runs test_base
         self.assertEqual(tm.get_next_tier_tests({}), ["test_base"])
 
-        # Tier 1 evaluates. Since INVALID_STATUS_STR is parsed as DEGRADED,
-        # it will trigger when test_base results in DEGRADED.
-        self.assertEqual(
-            tm.get_next_tier_tests({"test_base": TestStatus.DEGRADED}),
-            ["test_dependent"],
-        )
+        # Tier 1 evaluates. INVALID_STATUS_STR raises Exception.
+        with self.assertRaises(ex.InvalidTestConfigException):
+            tm.get_next_tier_tests({"test_base": _TestStatus.DEGRADED})
 
 
 if __name__ == "__main__":

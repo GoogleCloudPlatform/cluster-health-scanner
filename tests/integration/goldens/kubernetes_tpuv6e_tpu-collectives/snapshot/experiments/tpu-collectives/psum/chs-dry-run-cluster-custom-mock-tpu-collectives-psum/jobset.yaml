@@ -1,0 +1,82 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: chs-dry-run-cluster-custom-mock-tpu-coll-<HASH>
+  namespace: chs
+  labels:
+    kueue.x-k8s.io/queue-name: chs-local-queue
+
+spec:
+  suspend: true
+  ttlSecondsAfterFinished: 86400
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+  replicatedJobs:
+    - name: w
+      template:
+        spec:
+          parallelism: 2
+          completions: 2
+          activeDeadlineSeconds: 1200
+          template:
+            metadata:
+
+
+            spec:
+              restartPolicy: Never
+              nodeSelector:
+                node.kubernetes.io/instance-type: ct6e-standard-4t
+                cloud.google.com/gke-tpu-accelerator: tpu-v6e-slice
+                cloud.google.com/gke-tpu-topology: 2x2x1
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                            - node1
+                            - node2
+                podAntiAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchExpressions:
+                      - key: jobset.sigs.k8s.io/jobset-name
+                        operator: Exists
+                    topologyKey: "kubernetes.io/hostname"
+              tolerations:
+                - key: "google.com/tpu"
+                  operator: "Exists"
+                  effect: "NoSchedule"
+
+              containers:
+              - name: standard-container
+                stdin: true
+                tty: true
+                image: "us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+                securityContext:
+                  privileged: true
+                resources:
+                  limits:
+                    google.com/tpu: 4
+                env:
+                - name: MY_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                command:
+                - bash
+                - -c
+                - |
+                  export NODE_RANK=$JOB_COMPLETION_INDEX
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/tpu-collectives/psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum"
+                  mkdir -p "<WORKSPACE_ROOT>/experiments/tpu-collectives/psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum"
+                  cd "<WORKSPACE_ROOT>/experiments/tpu-collectives/psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum"
+                  rm -f "<WORKSPACE_ROOT>/experiments/tpu-collectives/psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum.out"
+                  touch "<WORKSPACE_ROOT>/experiments/tpu-collectives/psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum/chs-dry-run-cluster-custom-mock-tpu-collectives-psum.out"
+                  set -o pipefail;  cd /app/accelerator-microbenchmarks && printf "%b" "benchmarks:\n- benchmark_name: psum\n  benchmark_sweep_params:\n  - {matrix_dim_range: {start: 8, end: 16384, multiplier: 2}, dtype: "float32", mesh_shape: "2x2x2", ici_size_range: 4, sharding_strategy: "2x2x2", op_dimension: 1, num_runs: 20}\n  trace_dir: "../microbenchmarks/collectives/psum"\n  csv_path: "../microbenchmarks/collectives/psum"\n  xlml_metrics_dir: "../microbenchmarks/collectives/psum"\n  xla_dump_dir: "../microbenchmarks/collectives/psum/hlo_graphs"" > Ironwood/configs/chs_tpu_collectives.yaml && python3 Ironwood/src/run_benchmark.py --config Ironwood/configs/chs_tpu_collectives.yaml 2>&1 | sed "s/^/HOST ${MY_NODE_NAME:-$(hostname)}: /" 
+
+              restartPolicy: Never
+

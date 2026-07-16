@@ -7,6 +7,7 @@ metadata:
     kueue.x-k8s.io/queue-name: chs-local-queue
 
 spec:
+
   suspend: true
   ttlSecondsAfterFinished: 86400
   network:

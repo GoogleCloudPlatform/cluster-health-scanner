@@ -48,6 +48,7 @@ metadata:
     kueue.x-k8s.io/queue-name: chs-local-queue
 
 spec:
+
   suspend: true
   ttlSecondsAfterFinished: 86400
   network:
@@ -172,16 +173,16 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/chs-dry-run-cluster-custom-mock-nccl-cluster-all-reduce/chs-dry-run-cluster-custom-mock-nccl-cluster-all-reduce.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-reduce/chs-dry-run-cluster-custom-mock-nccl-cluster-all-reduce/chs-dry-run-cluster-custom-mock-nccl-cluster-all-reduce.out"
+                    if [ -d "/usr/local/gib/scripts" ]; then
+                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
+                    fi
+                    nvidia-smi -pm 1 || true
                     export LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/gib/lib64;
                     export NCCL_DEBUG=INFO;
                     export NCCL_MNNVL_ENABLE=0;
                     export NCCL_NET=gIB;
                     export NCCL_TESTS_SPLIT_MASK=0x0;
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
-                    nvidia-smi -pm 1 || true
-                    if [ -d "/usr/local/gib/scripts" ]; then
-                        NCCL_LIB_DIR=/usr/local/gib/scripts . /usr/local/gib/scripts/set_nccl_env.sh
-                    fi
                     mpirun -n 8 -N 4 \
                       --hostfile /tmp/hostfile --bind-to none \
                       --mca btl self,tcp --mca btl_tcp_if_include eth0 \

@@ -894,7 +894,17 @@ class TestBOHGenerator(unittest.TestCase):
             report.test_results[1].result_status, pb.RESULT_STATUS_DEADLINE
         )
 
-    def test_parse_tier_results_from_boh_with_prefixed_test_names(self):
+    @mock.patch(
+        "chs.boh_generator.get_plugin_to_test_map",
+        return_value={
+            "tpu-collectives": "collectives",
+            "tpu-hbm": "hbm",
+            "tpu-gemm": "gemm",
+        },
+    )
+    def test_parse_tier_results_from_boh_with_prefixed_test_names(
+        self, mock_map
+    ):
         """Test parse_tier_results_from_boh correctly matches test names."""
         boh = pb.BillOfHealth()
         t1 = boh.test_results.add()

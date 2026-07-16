@@ -651,11 +651,17 @@ podAntiAffinity:
             mesh_shape = "x".join(str(d) for d in scaled_dims)
 
         escaped = ctx_vars.get("benchmarks_yaml_escaped", "")
+        start_val = str(ctx_vars.get("message_size_start", max(8, ici)))
+        end_val = str(ctx_vars.get("message_size_end", 16384))
+        multiplier_val = str(ctx_vars.get("message_size_multiplier", 2))
+
         escaped = (
             escaped.replace("__MESH__", mesh_shape)
             .replace("__SHARDING__", mesh_shape)
             .replace("__ICI__", str(ici))
-            .replace("__START__", str(max(8, ici)))
+            .replace("__START__", start_val)
+            .replace("__END__", end_val)
+            .replace("__MULTIPLIER__", multiplier_val)
         )
         ctx_vars["benchmarks_yaml_escaped"] = escaped
 

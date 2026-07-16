@@ -13,11 +13,7 @@
 # limitations under the License.
 
 import enum
-import logging
-
 import chs.exceptions as ex
-
-logger = logging.getLogger(__name__)
 
 
 class TestStatus(enum.Enum):
@@ -88,11 +84,16 @@ class TierManager:
         self._current_tier_index = completed_tier
 
     def _parse_status(self, status_str: str) -> TestStatus:
-        """Parses a string into a TestStatus, defaulting to DEGRADED."""
+        """Parses a string into a TestStatus.
+
+        Raises InvalidTestConfigException if the status string is invalid.
+        """
         try:
             return TestStatus(status_str.upper())
-        except ValueError:
-            return TestStatus.DEGRADED
+        except ValueError as e:
+            raise ex.InvalidTestConfigException(
+                f"Invalid test status: {status_str}"
+            ) from e
 
     def _is_condition_met(self, test_config: dict) -> bool:
         """Checks if the trigger conditions for a test are met.
@@ -111,6 +112,8 @@ class TierManager:
             return True
 
         for status_str, deps in trigger.items():
+            if isinstance(deps, str):
+                deps = [deps]
             required_status = self._parse_status(status_str)
             for dep_name in deps:
                 actual_status = self._cumulative_results.get(

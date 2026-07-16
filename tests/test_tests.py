@@ -25,7 +25,7 @@ from chs.utils.tests import (
     get_all_supported_machine_types,
     get_all_supported_schedulers,
     get_tests_map,
-    TestsMap,
+    TestsMap as _TestsMap,
     get_tests_by_machine_type,
 )
 
@@ -178,7 +178,7 @@ class TestTests(unittest.TestCase):
             "s1": {"m1": ["t1"], "m2": ["t1", "t2"]},
             "s2": {"m1": ["t1"], "m2": ["t1"]},
         }
-        self.assertEqual(tests_map, TestsMap(data=expected))
+        self.assertEqual(tests_map, _TestsMap(data=expected))
         self.assertEqual(tests_map.get("s1"), expected["s1"])
         self.assertEqual(tests_map.get("s2"), expected["s2"])
         self.assertIsNone(tests_map.get("unknown_scheduler"))

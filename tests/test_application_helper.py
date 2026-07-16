@@ -43,7 +43,7 @@ sys.modules["ramble.appkit"] = appkit_mock
 sys.modules["spack"] = MagicMock()
 sys.modules["spack.util.spack_yaml"] = MagicMock()
 
-from chs.repos.applications.chs.test_helper import TestHelper  # noqa: E402
+from chs.repos.applications.chs.test_helper import TestHelper as _TestHelper  # noqa: E402
 from chs.repos.applications.chs.application import Chs, is_tpu  # noqa: E402
 
 
@@ -166,7 +166,7 @@ class TestApplicationHelper(unittest.TestCase):
                     self.assertEqual(result, case.expected_dest)
 
     def test_merge_configs_cases(self):
-        # For TestHelper._merge_configs(context_dict, configs, ...):
+        # For _TestHelper._merge_configs(context_dict, configs, ...):
         #    - context_dict (dest): Suite variables (higher precedence).
         #    - configs (src): Default configurations from deep_merge of
         #     common.yaml with kubernetes.yaml or slurm.yaml (lower precedence).
@@ -380,14 +380,14 @@ class TestApplicationHelper(unittest.TestCase):
             with self.subTest(case.name):
                 if case.expected_exception:
                     with self.assertRaises(case.expected_exception):
-                        TestHelper._merge_configs(
+                        _TestHelper._merge_configs(
                             case.context_dict,
                             case.configs,
                             case.machine_type,
                             case.ramble_app_name,
                         )
                 else:
-                    TestHelper._merge_configs(
+                    _TestHelper._merge_configs(
                         case.context_dict,
                         case.configs,
                         case.machine_type,

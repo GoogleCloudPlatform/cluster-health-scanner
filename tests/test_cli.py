@@ -20,19 +20,19 @@ routing, and error handling for various valid and invalid inputs.
 
 import dataclasses
 import datetime
-import unittest
-from unittest import mock
-from typing import Any
-
-from chs import cli
-from chs.cli import list_formatting
-from chs import exceptions
-from chs.utils.tests import TestsMap
-from click import testing
-import shutil
-import tempfile
 import os
 import pathlib
+import shutil
+import tempfile
+import unittest
+from typing import Any
+from unittest import mock
+
+from chs import cli
+from chs import exceptions
+from chs.cli import list_formatting
+from chs.utils.tests import TestsMap as _TestsMap
+from click import testing
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
@@ -212,7 +212,7 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch(
                 "chs.utils.tests.get_tests_map",
-                return_value=TestsMap(
+                return_value=_TestsMap(
                     data={
                         "slurm": {
                             "a3-megagpu-8g": [
@@ -724,7 +724,7 @@ class TestCli(unittest.TestCase):
             ),
             mock.patch(
                 "chs.utils.tests.get_tests_map",
-                return_value=TestsMap(
+                return_value=_TestsMap(
                     data={
                         "kubernetes": {
                             "tpu7x-standard-4t": [
@@ -785,7 +785,7 @@ class TestCli(unittest.TestCase):
             ),
             mock.patch(
                 "chs.utils.tests.get_tests_map",
-                return_value=TestsMap(
+                return_value=_TestsMap(
                     data={
                         "kubernetes": {
                             "tpu7x-standard-4t": [
@@ -841,7 +841,7 @@ class TestCli(unittest.TestCase):
             ),
             mock.patch(
                 "chs.utils.tests.get_tests_map",
-                return_value=TestsMap(
+                return_value=_TestsMap(
                     data={
                         "kubernetes": {
                             "a3-megagpu-8g": [

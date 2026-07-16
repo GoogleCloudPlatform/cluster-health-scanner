@@ -36,6 +36,7 @@ ramble:
       variables:
         begin_message_size: 256M
         end_message_size: 8G
+    - name: gemm
     default_interface_name: eth0
     all_interfaces_json: '[{"interfaceName": "eth0", "network": "default"}, {"interfaceName":
       "eth1", "network": "gpu-net-1"}]'

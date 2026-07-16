@@ -32,8 +32,12 @@ suites:
       end_message_size: 8G
   - name: tpu-info
   - name: hbm
-  - name: host-device
-  - name: collectives-single-node
+  - name: tpu-collectives
+    workloads: [psum]
+    variables:
+      message_size_start: 4096
+      message_size_end: 16384
+      message_size_multiplier: 2
 - name: standard
   est_time: "~30 mins"
   description: "Thorough network & collective testing (eg. nccl, collectives)."
@@ -56,7 +60,15 @@ suites:
       begin_message_size: 256M
       end_message_size: 8G
   - name: tpu-info
-  - name: collectives
+  - name: hbm
+  - name: gemm
+  - name: host-device
+  - name: tpu-collectives
+    workloads: [psum]
+  - name: tpu-network-diagnostics
+    trigger_condition:
+      DEGRADED: [tpu-collectives]
+      ERROR: [tpu-collectives]
 - name: burn-in
   est_time: ">2 hours"
   description: "Heavy stress testing."

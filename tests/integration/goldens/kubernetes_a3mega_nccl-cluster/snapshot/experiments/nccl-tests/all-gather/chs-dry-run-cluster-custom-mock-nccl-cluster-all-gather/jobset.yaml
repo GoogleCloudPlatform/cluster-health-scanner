@@ -20,6 +20,7 @@ metadata:
     kueue.x-k8s.io/queue-name: chs-local-queue
 
 spec:
+
   suspend: true
   ttlSecondsAfterFinished: 86400
   network:
@@ -171,12 +172,12 @@ spec:
                     echo "--- STARTING MPI EXECUTION ---"
                     rm -f "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather.out"
                     touch "<WORKSPACE_ROOT>/experiments/nccl-tests/all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather/chs-dry-run-cluster-custom-mock-nccl-cluster-all-gather.out"
+                    nvidia-smi -pm 1 || true
                     export NCCL_DEBUG=INFO;
                     export NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY=/dev/aperture_devices;
                     export NCCL_LIB_DIR=/usr/local/nvidia/lib64;
                     export NCCL_TESTS_SPLIT_MASK="";
                     export OMPI_ALLOW_RUN_AS_ROOT=1;
-                    nvidia-smi -pm 1 || true
                     WORKLOAD_NAME=$(basename $(dirname $(pwd)))
                     case "$WORKLOAD_NAME" in
                       all-to-all) BINARY="alltoall_perf" ;;

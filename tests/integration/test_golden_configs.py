@@ -239,6 +239,15 @@ def test_golden_config(
             sort_env,
             content,
         )
+
+        # Sanitize injected base64 scripts to prevent structural divergence
+        # whenever application diagnostic scripts are modified.
+        normalized = re.sub(
+            r"echo '[A-Za-z0-9+/=]+' \| base64 -d",
+            "echo '<BASE64_PAYLOAD>' | base64 -d",
+            normalized,
+        )
+
         return sorted(
             line.rstrip() for line in normalized.splitlines() if line.strip()
         )

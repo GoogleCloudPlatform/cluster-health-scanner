@@ -212,7 +212,7 @@ tests:
       - scheduler: slurm
         machine_type: ct6e-standard-4t
 
-  - name: collectives
+  - name: tpu-collectives
     plugin_name: tpu-collectives
     category: "Network & Collectives"
     description: "Cluster collectives testing"
@@ -222,7 +222,7 @@ tests:
       - scheduler: kubernetes
         machine_type: ct6e-standard-4t
 
-  - name: collectives-single-node
+  - name: tpu-collectives-single-node
     plugin_name: tpu-collectives-single-node
     category: "Network & Collectives"
     description: "Single node collectives testing"
