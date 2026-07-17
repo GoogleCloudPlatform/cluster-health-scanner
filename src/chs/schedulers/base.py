@@ -177,6 +177,11 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def get_active_job_names(self) -> list[str]:
+        """Returns a list of active job names on the cluster."""
+        pass
+
+    @abc.abstractmethod
     def has_no_failed_jobs(self) -> bool:
         """Checks if there are any failed CHS jobs.
 

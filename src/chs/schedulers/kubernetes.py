@@ -1057,6 +1057,27 @@ class KubernetesScheduler(BaseScheduler):
 
         self._delete_job_secrets()
 
+    def get_active_job_names(self) -> list[str]:
+        """Returns a list of active job names (JobSets) on the cluster."""
+        try:
+            output = self._run_kubectl(
+                ["get", "jobset", "-o", "name"], namespaced=True
+            )
+            if not output:
+                return []
+
+            job_names = []
+            for line in output.splitlines():
+                if line:
+                    job_names.append(line.split("/")[-1])
+            return job_names
+        except FileNotFoundError:
+            logger.warning("kubectl command not found. Cannot get jobs.")
+            return []
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to get jobsets: %s", e)
+            return []
+
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all JobSets matching the specified prefix natively."""
         logger.debug("Attempting native cancel for prefix: %s", prefix)

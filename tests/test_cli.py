@@ -28,11 +28,13 @@ import unittest
 from typing import Any
 from unittest import mock
 
+import click
+from click import testing
+
 from chs import cli
 from chs import exceptions
 from chs.cli import list_formatting
 from chs.utils.tests import TestsMap as _TestsMap
-from click import testing
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
@@ -124,6 +126,7 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         self.mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
         self.mock_scheduler.has_no_failed_jobs.return_value = False
+        self.mock_scheduler.get_active_job_names.return_value = []
         self.mock_scheduler.detect_nodes_hardware.return_value = [
             "a3-megagpu-8g"
         ]
@@ -448,6 +451,7 @@ class TestCli(unittest.TestCase):
             s.get_nodes_under_test.return_value = ["node1"]
             s.filter_partial_tpu_slices.return_value = ["node1"]
             s.has_no_failed_jobs.return_value = False
+            s.get_active_job_names.return_value = []
             s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
             s.run_preflight_checks.side_effect = (
                 lambda tests=None, *args, **kwargs: tests
@@ -996,6 +1000,59 @@ class TestCli(unittest.TestCase):
         mock_cancel_action.assert_called_once_with("slurm")
         self.mock_rm_instance.execute_experiments.assert_called_once()
 
+    @mock.patch("chs.cli.cancel_action")
+    @mock.patch("chs.cli.analyze_action")
+    def test_run_command_auto_attach_completed_run(
+        self, mock_analyze_action, mock_cancel_action
+    ):
+        """Test 'run' auto-cancels and restarts if previous run is completed."""
+        self.mock_app_data.get_latest_run_id.side_effect = None
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_run.return_value = {
+            "submission_complete": True,
+            "is_boh_final": True,
+        }
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["-v", "run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+        self.assertEqual(result.exit_code, 0)
+
+        mock_cancel_action.assert_called_once_with("slurm")
+        self.mock_rm_instance.execute_experiments.assert_called_once()
+
+    def test_run_command_aborts_on_foreign_active_jobs(self):
+        """Test 'run' aborts if foreign jobs are detected."""
+        self.mock_app_data.get_latest_runs.return_value = {
+            "ws1": {"run_id": "my-old-run-1"},
+            "ws2": {"run_id": "my-old-run-2"},
+        }
+
+        self.mock_scheduler.get_active_job_names.return_value = [
+            "chs-someone-elses-run-job-1",
+            "chs-someone-elses-run-job-2",
+        ]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIsInstance(result.exception, click.ClickException)
+        self.assertIn(
+            "A CHS run is already in progress on this cluster by another user",
+            str(result.exception),
+        )
+        self.mock_app_data.get_latest_run_id.assert_not_called()
+
     def test_analyze_action_exception_handling(self):
         """Test that analyze_action wraps exceptions in ClickException."""
         ws_dir = tempfile.mkdtemp()
@@ -1169,6 +1226,8 @@ class TestCli(unittest.TestCase):
         mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
+        mock_scheduler.has_no_failed_jobs.return_value = False
+        mock_scheduler.get_active_job_names.return_value = []
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
         mock_scheduler.run_preflight_checks.side_effect = (
             lambda tests=None, *args, **kwargs: tests
@@ -1193,7 +1252,7 @@ class TestCli(unittest.TestCase):
             0,
             f"Command failed: {result.output}\nException: {result.exception}",
         )
-        self.assertEqual(mock_get_scheduler.call_count, 2)
+        self.assertEqual(mock_get_scheduler.call_count, 3)
         calls_with_nodepool = [
             c
             for c in mock_get_scheduler.call_args_list

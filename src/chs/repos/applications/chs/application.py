@@ -302,7 +302,9 @@ class Chs(ExecutableApplication):
                         )
                         for context in contexts:
                             self.experiment_set.render_chained_experiments(
-                                application_name, workload, context
+                                application_name,
+                                workload,
+                                context,
                             )
                     else:
                         context = TestHelper.gemm_test(

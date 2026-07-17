@@ -531,6 +531,26 @@ class SlurmScheduler(BaseScheduler):
                 f"Failed to cancel jobs: {e}"
             ) from e
 
+    def get_active_job_names(self) -> list[str]:
+        """Returns a list of active job names on the cluster."""
+        try:
+            cmd = ["squeue", "-h", "-o", "%.200j"]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode != 0:
+                return []
+
+            job_names = []
+            for line in result.stdout.splitlines():
+                name = line.strip()
+                if name:
+                    job_names.append(name)
+            return job_names
+        except FileNotFoundError:
+            logger.warning("squeue command not found. Cannot get jobs.")
+            return []
+
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all jobs matching the specified prefix natively."""
         logger.debug("Attempting native cancel for prefix: %s", prefix)
@@ -540,7 +560,7 @@ class SlurmScheduler(BaseScheduler):
                 "squeue",
                 "-h",
                 "-o",
-                "%i %j",
+                "%i %.200j",
                 "-u",
                 os.environ.get("USER", ""),
             ]

@@ -938,6 +938,34 @@ def list_gpu_tests() -> bool:
     return list_action(tests=True, accelerator_type="gpu")
 
 
+def _check_for_foreign_runs(app_data: ChsAppData, scheduler: str) -> None:
+    """Checks if there are active jobs on the cluster by another user."""
+    scheduler_instance = get_scheduler(scheduler)
+    active_jobs = scheduler_instance.get_active_job_names()
+
+    chs_jobs = [j for j in active_jobs if j.startswith("chs-")]
+    if not chs_jobs:
+        return
+
+    recent_runs = app_data.get_latest_runs(1)
+    expected_prefixes = [
+        f"chs-{run.get('run_id', ws)}" for ws, run in recent_runs.items()
+    ]
+
+    foreign_jobs = []
+    for job in chs_jobs:
+        if not any(job.startswith(prefix) for prefix in expected_prefixes):
+            foreign_jobs.append(job)
+
+    if foreign_jobs:
+        raise click.ClickException(
+            "A CHS run is already in progress on this cluster by "
+            "another user. Please try again later.\n"
+            "If you believe this is stale, run `chs cancel` to forcefully "
+            "destroy it."
+        )
+
+
 def _handle_previous_run(
     app_data: ChsAppData,
     scheduler: str,
@@ -947,6 +975,8 @@ def _handle_previous_run(
     auto_approve: bool,
 ) -> RunExecutionResult | None:
     """Checks for a previous run, optionally attaches to it, or cleans up."""
+    _check_for_foreign_runs(app_data, scheduler)
+
     try:
         latest_run_id = app_data.get_latest_run_id()
         if not latest_run_id:
@@ -968,11 +998,26 @@ def _handle_previous_run(
         scheduler_instance = get_scheduler(scheduler)
 
         has_no_failed_jobs = False
-        if scheduler_instance.has_no_failed_jobs():
-            logger.warning("The cluster still has healthy CHS tests.")
-            has_no_failed_jobs = True
+        is_boh_final = run_entry.get("is_boh_final", False)
 
-        if submission_complete and has_no_failed_jobs:
+        try:
+            if scheduler_instance.has_no_failed_jobs():
+                logger.warning("The cluster still has healthy CHS tests.")
+                has_no_failed_jobs = True
+        except ex.NoActiveJobsException:
+            safe_cancel_action(
+                scheduler,
+                auto_approve=auto_approve,
+                message=(
+                    "Previous run found but tests no longer "
+                    "exist on the cluster. Cleaning all "
+                    "stale resources."
+                ),
+                action_type="setup",
+            )
+            return None
+
+        if submission_complete and has_no_failed_jobs and not is_boh_final:
             cleanup_cmd = (
                 "./bin/delete_chs_gke.sh"
                 if utils.is_in_cluster()
@@ -993,7 +1038,12 @@ def _handle_previous_run(
                 job_ids=None,
             )
 
-        if not submission_complete:
+        if is_boh_final:
+            msg = (
+                "Previous run is already completed. "
+                "Cleaning all stale resources"
+            )
+        elif not submission_complete:
             msg = (
                 "Previous run died mid-submission. "
                 "Cleaning all stale resources"
@@ -1007,17 +1057,6 @@ def _handle_previous_run(
             scheduler,
             auto_approve=auto_approve,
             message=msg,
-            action_type="setup",
-        )
-    except ex.NoActiveJobsException:
-        safe_cancel_action(
-            scheduler,
-            auto_approve=auto_approve,
-            message=(
-                "Previous run found but tests no longer "
-                "exist on the cluster. Cleaning all "
-                "stale resources."
-            ),
             action_type="setup",
         )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
