@@ -617,6 +617,39 @@ a4x-maxgpu-4g-metal:
       n_nodes: 1
       mpi_command: ""
 
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "2800000000"
+      cpu_affinity: "0-71:0-71:72-143:72-143"
+      mem_affinity: "0:0:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+      processes_per_node: "{gpus_per_node}"
+      n_ranks: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-71:0-71:72-143:72-143"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 16384
+      n: 16384
+      k: 16384
+
 
 tpu7x-standard-4t:
   variables:

@@ -81,6 +81,8 @@ tests:
       - scheduler: kubernetes
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
         machine_type: tpu7x-standard-4t
       - scheduler: kubernetes
         machine_type: ct6e-standard-4t
@@ -176,6 +178,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: kubernetes
         machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
 
   - name: tpu-info
     category: "TPU Diagnostics"
