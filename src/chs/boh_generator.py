@@ -199,7 +199,7 @@ class BOHGenerator:
                 ctx = ""
                 if "context" in metric.metadata.fields:
                     ctx = metric.metadata.fields["context"].string_value
-                if not ctx or target.node_name in ctx:
+                if not ctx or ctx == "null" or target.node_name in ctx:
                     node_metrics.append(metric)
 
             node_result.ClearField("metrics")

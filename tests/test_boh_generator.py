@@ -288,6 +288,36 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(trs2[1].node_name, "node2")
         self.assertEqual(trs2[1].instance_id, "")
 
+    def test_split_test_result_per_node_preserves_null_context(self):
+        """Test that per-node splitting retains metrics."""
+        test_result = pb.TestResult(test_name="tpu-info")
+        test_result.target_resources.add(node_name="node1")
+        test_result.target_resources.add(node_name="node2")
+
+        m_null = pb.Metric(key="TPU Hardware / Driver / Network Error Detected")
+        m_null.metadata.fields["context"].string_value = "null"
+        test_result.metrics.append(m_null)
+
+        m_node1 = pb.Metric(key="Node1 Metric")
+        m_node1.metadata.fields["context"].string_value = "node1"
+        test_result.metrics.append(m_node1)
+
+        generator = BOHGenerator(self.test_json_path)
+        split = generator._split_test_result_per_node(test_result)
+
+        self.assertEqual(len(split), 2)
+        node1_keys = [m.key for m in split[0].metrics]
+        node2_keys = [m.key for m in split[1].metrics]
+
+        self.assertIn(
+            "TPU Hardware / Driver / Network Error Detected", node1_keys
+        )
+        self.assertIn(
+            "TPU Hardware / Driver / Network Error Detected", node2_keys
+        )
+        self.assertIn("Node1 Metric", node1_keys)
+        self.assertNotIn("Node1 Metric", node2_keys)
+
     def test_generate_file_error(self):
         """Test error handling for missing input file."""
         with mock.patch.object(chs.boh_generator, "logger") as mock_logger:

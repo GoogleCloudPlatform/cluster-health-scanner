@@ -20,6 +20,8 @@ metadata:
 {jobset_annotations_section}
 spec:
   {suspend_section}
+  failurePolicy:
+    maxRestarts: 1
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true
@@ -28,6 +30,7 @@ spec:
     - name: w
       template:
         spec:
+          backoffLimit: 0
           parallelism: {n_nodes}
           completions: {n_nodes}
           activeDeadlineSeconds: {timeout}

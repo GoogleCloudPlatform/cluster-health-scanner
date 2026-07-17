@@ -7,8 +7,9 @@ metadata:
     kueue.x-k8s.io/queue-name: chs-local-queue
 
 spec:
-
   suspend: true
+  failurePolicy:
+    maxRestarts: 1
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true
@@ -17,6 +18,7 @@ spec:
     - name: w
       template:
         spec:
+          backoffLimit: 0
           parallelism: 1
           completions: 1
           activeDeadlineSeconds: 2400

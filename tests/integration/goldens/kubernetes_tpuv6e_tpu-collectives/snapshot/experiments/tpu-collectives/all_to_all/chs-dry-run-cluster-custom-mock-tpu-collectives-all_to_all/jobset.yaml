@@ -8,6 +8,8 @@ metadata:
 
 spec:
   suspend: true
+  failurePolicy:
+    maxRestarts: 1
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true
@@ -16,6 +18,7 @@ spec:
     - name: w
       template:
         spec:
+          backoffLimit: 0
           parallelism: 2
           completions: 2
           activeDeadlineSeconds: 1200
