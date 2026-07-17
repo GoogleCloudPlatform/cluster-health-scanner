@@ -18,7 +18,7 @@ import logging
 import pathlib
 import shutil
 import tempfile
-from chs.exceptions import ChsValidationError
+from chs.exceptions import ChsValidationError, StorageObjectNotFoundException
 from chs.storage.base import StorageProvider
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,9 @@ class PathStorageProvider(StorageProvider):
             shutil.copy2(src_path, local_dest)
             logger.debug("Copied %s to %s", src_path, local_dest)
         except FileNotFoundError as e:
-            raise FileNotFoundError(f"File not found: {src_path}") from e
+            raise StorageObjectNotFoundException(
+                f"File {src_path} not found."
+            ) from e
         except OSError as e:
             raise OSError(
                 f"Failed to copy {src_path} to {local_dest}: {e}"

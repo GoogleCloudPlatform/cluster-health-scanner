@@ -51,6 +51,10 @@ class BillOfHealthLoadException(ChsException):
     """Raised when the bill_of_health.json file cannot be loaded or parsed."""
 
 
+class StorageObjectNotFoundException(ChsException):
+    """Raised when a storage object is not found in the remote provider."""
+
+
 class BillOfHealthNotFoundException(ChsException):
     """Raised when the bill_of_health.json file is not found."""
 

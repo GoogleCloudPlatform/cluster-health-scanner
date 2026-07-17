@@ -24,8 +24,6 @@ from dataclasses import dataclass
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
-from chs.utils.theme import create_error_table as create_theme_error_table
 
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
@@ -159,33 +157,6 @@ class ResultsViewer:
             if match_tests and match_resources:
                 filtered_results.append(result)
         return filtered_results
-
-    def _append_errors(self, results: list[pb.TestResult]) -> None:
-        """Checks for errors (keys ending in 'Detected') and prints them."""
-        all_errors = []
-        for res in results:
-            for m in res.metrics:
-                if m.key.endswith("Error Detected") or m.key.endswith(
-                    "Failure Detected"
-                ):
-                    all_errors.append(m)
-
-        if all_errors:
-            self.console.print(
-                Text("\nDetected Errors/Warnings", style="bold red")
-            )
-            error_data = []
-            for m in all_errors:
-                if m.value.HasField("string_value"):
-                    val = m.value.string_value
-                elif m.value.HasField("bool_value"):
-                    val = str(m.value.bool_value)
-                else:
-                    val = "<unknown value type>"
-                error_data.append((m.key, val))
-
-            table = create_theme_error_table(error_data)
-            self.console.print(table)
 
     def _aggregate_summary_data(
         self,
@@ -679,18 +650,6 @@ class ResultsViewer:
 
             detail = plugin.render_detail(valid_results)
 
-            has_errors = any(
-                (
-                    m.key.endswith("Error Detected")
-                    or m.key.endswith("Failure Detected")
-                )
-                for res in valid_results
-                for m in res.metrics
-            )
-
-            if detail is not None or has_errors:
-                if detail is not None:
-                    self.console.print(detail)
-
-                self._append_errors(valid_results)
+            if detail is not None:
+                self.console.print(detail)
                 self.console.print()

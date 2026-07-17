@@ -80,7 +80,7 @@ def create_nccl_table(
         expand=True,
     )
     table.add_column("Workload")
-    table.add_column(resource_column_name)
+    table.add_column(resource_column_name, overflow="fold")
     if include_topology:
         table.add_column("Topological Context")
     table.add_column("Peak Bandwidth (GB/s)", justify="right")

@@ -16,7 +16,7 @@
 
 import logging
 import uuid
-from chs.exceptions import ChsValidationError
+from chs.exceptions import ChsValidationError, StorageObjectNotFoundException
 from chs.storage.base import StorageProvider
 from google.cloud import storage
 from google.api_core import exceptions as gcp_ex
@@ -64,8 +64,8 @@ class GcsStorageProvider(StorageProvider):
                 local_dest,
             )
         except gcp_ex.NotFound as e:
-            raise FileNotFoundError(
-                f"Object {remote_src} not found in gs://{self.bucket_name}/"
+            raise StorageObjectNotFoundException(
+                f"File gs://{self.bucket_name}/{remote_src} not found."
             ) from e
         except Exception as e:
             raise OSError(

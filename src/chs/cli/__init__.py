@@ -704,12 +704,15 @@ def _show_results(
                     f"bills_of_health/{workspace_name}.json", tmp_file_path
                 )
                 viewer = ResultsViewer(tmp_file_path, boh_uri=boh_uri)
-            except FileNotFoundError:
+            except ex.StorageObjectNotFoundException as e:
+                logger.debug("Storage object not found: %s", e)
                 raise ex.BillOfHealthNotFoundException(
                     f"Results not found for run '{run_id}'.\n"
-                    "This usually happens if the run was canceled "
-                    "before completion, or if the upload to storage failed."
-                )
+                    "This usually happens if the jobs are still running, "
+                    "the run was canceled, or the upload failed.\n"
+                    f"Tip: Run 'chs analyze {run_id}' to re-attach to the run "
+                    "and check its status."
+                ) from e
             except Exception as e:
                 raise ex.BillOfHealthNotFoundException(
                     f"Failed to retrieve Bill of Health for run '{run_id}' "

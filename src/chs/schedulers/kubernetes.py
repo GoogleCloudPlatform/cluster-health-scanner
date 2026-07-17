@@ -989,7 +989,14 @@ class KubernetesScheduler(BaseScheduler):
             logger.debug("Logs saved to %s", log_path)
 
         except subprocess.CalledProcessError as e:
-            logger.error("Failed to fetch logs for JobSet %s: %s", job_id, e)
+            if e.returncode < 0 or e.returncode == 130:
+                logger.debug(
+                    "Log fetching interrupted by user for JobSet %s.", job_id
+                )
+            else:
+                logger.error(
+                    "Failed to fetch logs for JobSet %s: %s", job_id, e
+                )
         except OSError as e:
             logger.error("Failed to write log file %s: %s", log_path, e)
 
