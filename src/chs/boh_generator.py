@@ -544,10 +544,20 @@ class BOHGenerator:
                     metrics = self._parse_foms(foms)
 
                     ctx_name = ctx.get("name", "unknown")
+                    parsed_metadata = plugin.parse_context_metadata(ctx_name)
+                    if "context" not in parsed_metadata:
+                        parsed_metadata["context"] = ctx_name
+
                     for metric in metrics:
-                        metric.metadata.fields[
-                            "context"
-                        ].string_value = ctx_name
+                        for k, v in parsed_metadata.items():
+                            if isinstance(v, bool):
+                                metric.metadata.fields[k].bool_value = v
+                            elif isinstance(v, (int, float)):
+                                metric.metadata.fields[k].number_value = float(
+                                    v
+                                )
+                            else:
+                                metric.metadata.fields[k].string_value = str(v)
 
                     test_result.metrics.extend(metrics)
 

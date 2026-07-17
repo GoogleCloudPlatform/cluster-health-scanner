@@ -24,6 +24,12 @@ from unittest import mock
 
 import chs.boh_generator
 from chs.boh_generator import BOHGenerator
+from chs.core.default_plugin import DefaultPlugin
+from chs.core.plugin_base import (
+    ColumnDef,
+    PluginDetailReport,
+    TableDataModel,
+)
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -56,6 +62,29 @@ class TestBOHGenerator(unittest.TestCase):
         now = datetime.datetime.now(datetime.timezone.utc)
         proto_time = ts.ToDatetime().replace(tzinfo=datetime.timezone.utc)
         self.assertLess(abs((now - proto_time).total_seconds()), 60)
+
+    def test_plugin_base_data_contracts(self):
+        """Test default plugin base data contracts."""
+        col = ColumnDef("key1", "Label 1", align="center")
+        self.assertEqual(col.key, "key1")
+        self.assertEqual(col.align, "center")
+
+        table = TableDataModel(
+            title="Test", headers=[col], rows=[{"key1": "val"}]
+        )
+        self.assertEqual(table.title, "Test")
+
+        report = PluginDetailReport(
+            test_name="t1", test_level="l1", tables=[table]
+        )
+        self.assertEqual(report.test_name, "t1")
+
+        plugin = DefaultPlugin(test_name="t1")
+        self.assertEqual(
+            plugin.parse_context_metadata("foo"), {"context": "foo"}
+        )
+        self.assertEqual(len(plugin.get_column_schema()), 3)
+        self.assertIsNone(plugin.get_detail_data([]))
 
     def test_parse_foms_various_inputs(self):
         """Test parsing of various FOM inputs."""
@@ -289,7 +318,7 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(trs2[1].instance_id, "")
 
     def test_split_test_result_per_node_preserves_null_context(self):
-        """Test that per-node splitting retains metrics."""
+        """Test per-node splitting retains metrics with 'null' context."""
         test_result = pb.TestResult(test_name="tpu-info")
         test_result.target_resources.add(node_name="node1")
         test_result.target_resources.add(node_name="node2")

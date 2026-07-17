@@ -13,9 +13,37 @@
 # limitations under the License.
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import RenderableType
+
+
+@dataclass
+class ColumnDef:
+    """Defines a table column's key, display label, and alignment."""
+
+    key: str
+    label: str
+    align: str = "left"
+
+
+@dataclass
+class TableDataModel:
+    """Structured table representation decoupled from UI rendering."""
+
+    title: str
+    headers: list[ColumnDef]
+    rows: list[dict[str, Any]]
+
+
+@dataclass
+class PluginDetailReport:
+    """Structured detail report containing extracted tables and metrics."""
+
+    test_name: str
+    test_level: str
+    tables: list[TableDataModel] = field(default_factory=list)
 
 
 class TestPlugin(ABC):
@@ -27,6 +55,29 @@ class TestPlugin(ABC):
     ) -> RenderableType:
         """Returns a Rich renderable for detailed views across nodes."""
         pass
+
+    def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
+        """Parses a raw context string into structured key-value pairs.
+
+        Default implementation returns the context string under 'context'.
+        Plugins override this to break context into explicit metadata fields
+        (e.g., node, matrix_shape, dtype, gpu_id, msg_size_bytes).
+        """
+        return {"context": ctx_name}
+
+    def get_column_schema(self) -> list[ColumnDef]:
+        """Returns the list of column definitions for raw metric tables."""
+        return [
+            ColumnDef("key", "Key"),
+            ColumnDef("value", "Value"),
+            ColumnDef("unit", "Unit"),
+        ]
+
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        """Extracts structured data model for detail views (HTML/JSON/CLI)."""
+        return None
 
     def get_description(self, test_name: str | None = None) -> str:
         """Returns a human-readable description of the test."""
