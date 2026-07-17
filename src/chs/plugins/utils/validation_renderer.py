@@ -12,56 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import collections
-
 from rich.console import RenderableType, Group
 from rich.text import Text
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import create_styled_table
 from . import rendering
-
-MAX_DISPLAY_NODES = 5
+from . import validation_analyzer
 
 
 def has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
     """Checks if any metric in the test results has validation criteria."""
-    return any(
-        m.HasField("validation_criteria") and m.validation_criteria.name
-        for res in test_results
-        for m in res.metrics
-    )
+    return validation_analyzer.has_validation_criteria(test_results)
 
 
 def _parse_threshold(validation_criteria: pb.ValidationCriteria) -> str:
     """Parses expected value and comparator into a string."""
-    threshold_value = "N/A"
-    if validation_criteria.HasField("expected_value"):
-        threshold_value = rendering.parse_value(
-            validation_criteria.expected_value
-        )
-    else:
-        threshold_value = "complex"
-
-    comparator_str = ""
-    if validation_criteria.comparator == pb.Comparator.COMPARATOR_GTE:
-        comparator_str = ">="
-    elif validation_criteria.comparator == pb.Comparator.COMPARATOR_EQ:
-        comparator_str = "=="
-    elif validation_criteria.comparator == pb.Comparator.COMPARATOR_CONTAINS:
-        comparator_str = "contains"
-
-    return f"{comparator_str} {threshold_value}".strip()
+    return validation_analyzer.parse_threshold(validation_criteria)
 
 
 def _parse_status(
     validation_criteria: pb.ValidationCriteria,
 ) -> tuple[str, str]:
     """Returns (status_str, status_style) for validation criteria."""
-    if validation_criteria.result_status == pb.RESULT_STATUS_SUCCESS:
-        return "MET", "green"
-    elif validation_criteria.result_status == pb.RESULT_STATUS_FAILED:
-        return "NOT MET", "red"
-    return "UNKNOWN", "yellow"
+    return validation_analyzer.parse_status(validation_criteria)
 
 
 def render_validation_results(
@@ -76,53 +49,25 @@ def render_validation_results(
         A Rich Renderable (Group of Tables) if validation criteria are present,
         otherwise None.
     """
-    if not test_results or not has_validation_criteria(test_results):
+    groups = validation_analyzer.extract_validation_data(test_results)
+    if not groups:
         return None
-
-    grouped_results = collections.defaultdict(list)
-    for res in test_results:
-        grouped_results[(res.test_name, res.test_level)].append(res)
 
     renderables = []
 
-    for (test_name, test_level), group in grouped_results.items():
-        if not has_validation_criteria(group):
-            continue
-
-        all_success = all(
-            res.result_status == pb.RESULT_STATUS_SUCCESS for res in group
+    for group in groups:
+        header = (
+            f"\nValidation Results: {group.test_name} "
+            f"({group.test_level}) - [{group.nodes_str}]"
         )
-        all_failed = all(
-            res.result_status == pb.RESULT_STATUS_FAILED for res in group
-        )
-
-        if all_success:
-            border_color = "green"
-        elif all_failed:
-            border_color = "red"
-        else:
-            border_color = "yellow"
-
-        unique_targets = {}
-        for res in group:
-            for target in res.target_resources:
-                unique_targets[target.SerializeToString()] = target
-        all_targets = list(unique_targets.values())
-
-        nodes_str = rendering.format_nodes(all_targets[:MAX_DISPLAY_NODES])
-        if len(all_targets) > MAX_DISPLAY_NODES:
-            nodes_str += (
-                f", ... and {len(all_targets) - MAX_DISPLAY_NODES} more"
-            )
-
         title_text = Text(
-            f"\nValidation Results: {test_name} ({test_level}) - [{nodes_str}]",
-            style=f"bold {border_color}",
+            header,
+            style=f"bold {group.status_summary}",
         )
         renderables.append(title_text)
 
         table = create_styled_table(
-            header_style=f"bold {border_color}",
+            header_style=f"bold {group.status_summary}",
             expand=False,
             show_lines=False,
         )
@@ -133,43 +78,19 @@ def render_validation_results(
         table.add_column("Threshold", style="yellow")
         table.add_column("Status", style="bold")
 
-        for res in group:
-            target_str = rendering.format_nodes(res.target_resources)
-            for metric in res.metrics:
-                if not metric.HasField("validation_criteria"):
-                    continue
-
-                validation_criteria = metric.validation_criteria
-                if not validation_criteria.name:
-                    continue
-
-                metric_value = rendering.parse_value(metric.value)
-                threshold_str = _parse_threshold(validation_criteria)
-                status_str, status_style = _parse_status(validation_criteria)
-
-                row_style = status_style
-
-                metric_value_2f = (
-                    f"{metric_value:.2f}"
-                    if isinstance(metric_value, float)
-                    else str(metric_value)
-                )
-
-                table.add_row(
-                    target_str,
-                    rendering.escape(metric.key),
-                    metric_value_2f,
-                    metric.unit,
-                    threshold_str,
-                    Text(status_str, style=status_style),
-                    style=row_style,
-                )
+        for row in group.rows:
+            table.add_row(
+                row.target,
+                rendering.escape(row.metric),
+                row.formatted_value,
+                row.unit,
+                row.threshold,
+                Text(row.status, style=row.status_style),
+                style=row.status_style,
+            )
 
         renderables.append(table)
         renderables.append(Text())
-
-    if not renderables:
-        return None
 
     if (
         renderables
