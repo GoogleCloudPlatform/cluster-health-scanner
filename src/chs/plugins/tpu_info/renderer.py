@@ -20,21 +20,84 @@ from chs.utils import create_styled_table
 from chs.protos import bill_of_health_pb2 as pb
 from chs.plugins.utils.rendering import format_nodes
 from chs.core.default_plugin.renderer import DefaultRenderer
+from chs.core.plugin_base import ColumnDef, TableDataModel, PluginDetailReport
 
 
 class TpuInfoRenderer(DefaultRenderer):
     """Renders details for tpu-info tests."""
 
-    def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
+    def get_column_schema(self) -> list[ColumnDef]:
+        return [
+            ColumnDef("node", "Node"),
+            ColumnDef("libtpu_version", "Libtpu Version"),
+            ColumnDef("accelerator_type", "Accelerator Type"),
+            ColumnDef("jax_devices", "JAX Devices", align="right"),
+        ]
+
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        """Extracts structured TPU Info data model."""
         if not test_results:
-            return Text("No detailed metrics available.", style="yellow")
+            return None
 
         node_data = self._extract_node_data(test_results)
+        rows = []
+        for node, data in node_data.items():
+            summary = data["summary"]
+            if not any(
+                k in summary
+                for k in ["Libtpu version", "Accelerator type", "JAX Devices"]
+            ):
+                continue
+            rows.append(
+                {
+                    "node": node,
+                    "libtpu_version": summary.get("Libtpu version", "N/A"),
+                    "accelerator_type": summary.get("Accelerator type", "N/A"),
+                    "jax_devices": summary.get("JAX Devices", "N/A"),
+                }
+            )
+
+        table_model = TableDataModel(
+            title="TPU Info Summary",
+            headers=self.get_column_schema(),
+            rows=rows,
+        )
+
+        test_name = test_results[0].test_name if test_results else "tpu-info"
+        test_level = test_results[0].test_level if test_results else ""
+
+        return PluginDetailReport(
+            test_name=test_name,
+            test_level=test_level,
+            tables=[table_model],
+        )
+
+    def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
+        report = self.get_detail_data(test_results)
+        if not report or not report.tables or not report.tables[0].rows:
+            return Text("No detailed metrics available.", style="yellow")
+
+        table_data = report.tables[0]
+        table = create_styled_table(expand=False)
+        table.add_column("Node", overflow="fold")
+        table.add_column("Libtpu Version")
+        table.add_column("Accelerator Type")
+        table.add_column("JAX Devices", justify="right")
+
+        for r in table_data.rows:
+            table.add_row(
+                r["node"],
+                r["libtpu_version"],
+                r["accelerator_type"],
+                str(r["jax_devices"]),
+            )
+
         elements = [
-            Text("\nTPU Info Summary", style="bold"),
-            self._build_summary_table(node_data),
+            Text(f"\n{table_data.title}", style="bold"),
+            table,
         ]
-        elements.extend(self._build_detailed_tables(node_data))
         val_table = self.render_validation_results(test_results)
         if val_table:
             elements.append(val_table)
@@ -76,28 +139,3 @@ class TpuInfoRenderer(DefaultRenderer):
                 node_data[nodes]["summary"][key] = val
 
         return node_data
-
-    def _build_summary_table(self, node_data: dict):
-        table = create_styled_table(expand=False)
-        table.add_column("Node", overflow="fold")
-        table.add_column("Libtpu Version")
-        table.add_column("Accelerator Type")
-        table.add_column("JAX Devices", justify="right")
-
-        for node, data in node_data.items():
-            summary = data["summary"]
-            if not any(
-                k in summary
-                for k in ["Libtpu version", "Accelerator type", "JAX Devices"]
-            ):
-                continue
-            table.add_row(
-                node,
-                summary.get("Libtpu version", "N/A"),
-                summary.get("Accelerator type", "N/A"),
-                summary.get("JAX Devices", "N/A"),
-            )
-        return table
-
-    def _build_detailed_tables(self, node_data: dict) -> list:
-        return []

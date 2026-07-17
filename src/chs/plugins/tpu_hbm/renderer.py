@@ -19,6 +19,7 @@ from chs.utils import create_styled_table
 from chs.protos import bill_of_health_pb2 as pb
 from chs.plugins.utils.rendering import format_nodes
 from chs.core.default_plugin.renderer import DefaultRenderer
+from chs.core.plugin_base import ColumnDef, TableDataModel, PluginDetailReport
 
 
 @dataclass
@@ -36,17 +37,96 @@ class HbmResult:
 class TpuHbmRenderer(DefaultRenderer):
     """Renders details for tpu-hbm tests."""
 
-    def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
-        """Renders detail tables for hbm tests per node."""
+    def get_column_schema(self) -> list[ColumnDef]:
+        return [
+            ColumnDef("num_elements", "Elements", align="right"),
+            ColumnDef("tensor_size", "Tensor Size (MB)", align="right"),
+            ColumnDef("dtype", "Dtype", align="left"),
+            ColumnDef("bandwidth", "Bandwidth (median) (GB/s)", align="right"),
+            ColumnDef("time_ms", "Time Taken (median) (ms)", align="right"),
+        ]
+
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        """Extracts structured TPU HBM data model."""
         if not test_results:
-            return Text("No detailed metrics available.", style="yellow")
+            return None
 
         node_data = self._extract_node_data(test_results)
         if not node_data:
-            return Text("No parsed HBM metrics found.", style="yellow")
+            return None
+
+        tables = []
+        for node in sorted(node_data.keys()):
+            node_results = node_data[node]
+            rows = []
+            for r in node_results:
+                rows.append(
+                    {
+                        "num_elements": f"{r.num_elements:,}",
+                        "tensor_size": (
+                            f"{r.tensor_size:.1f}"
+                            if r.tensor_size is not None
+                            else "N/A"
+                        ),
+                        "dtype": r.dtype,
+                        "bandwidth": (
+                            f"{r.bandwidth:.2f}"
+                            if r.bandwidth is not None
+                            else "N/A"
+                        ),
+                        "time_ms": (
+                            f"{r.time_ms:.3f}"
+                            if r.time_ms is not None
+                            else "N/A"
+                        ),
+                    }
+                )
+            tables.append(
+                TableDataModel(
+                    title=f"Node: {node}",
+                    headers=self.get_column_schema(),
+                    rows=rows,
+                )
+            )
+
+        test_name = test_results[0].test_name if test_results else "tpu-hbm"
+        test_level = test_results[0].test_level if test_results else ""
+
+        return PluginDetailReport(
+            test_name=test_name,
+            test_level=test_level,
+            tables=tables,
+        )
+
+    def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
+        """Renders detail tables for hbm tests per node."""
+        report = self.get_detail_data(test_results)
+        if not report or not report.tables:
+            return Text("No detailed metrics available.", style="yellow")
 
         elements = [Text("\nTPU HBM Bandwidth Detail", style="bold cyan")]
-        elements.extend(self._build_bandwidth_tables(node_data))
+
+        for table_data in report.tables:
+            table = create_styled_table(expand=False)
+            table.add_column("Elements", justify="right")
+            table.add_column("Tensor Size (MB)", justify="right")
+            table.add_column("Dtype", justify="left")
+            table.add_column("Bandwidth (median) (GB/s)", justify="right")
+            table.add_column("Time Taken (median) (ms)", justify="right")
+
+            for r in table_data.rows:
+                table.add_row(
+                    r["num_elements"],
+                    r["tensor_size"],
+                    r["dtype"],
+                    r["bandwidth"],
+                    r["time_ms"],
+                )
+
+            elements.append(Text(f"\n{table_data.title}", style="bold yellow"))
+            elements.append(table)
 
         val_table = self.render_validation_results(test_results)
         if val_table:
@@ -115,39 +195,3 @@ class TpuHbmRenderer(DefaultRenderer):
             node_data.setdefault(r.node, []).append(r)
 
         return node_data
-
-    def _build_bandwidth_tables(
-        self, node_data: dict[str, list[HbmResult]]
-    ) -> list:
-        """Builds bandwidth tables for each node."""
-        render_elements = []
-
-        for node in sorted(node_data.keys()):
-            node_results = node_data[node]
-
-            table = create_styled_table(expand=False)
-            table.add_column("Elements", justify="right")
-            table.add_column("Tensor Size (MB)", justify="right")
-            table.add_column("Dtype", justify="left")
-            table.add_column("Bandwidth (median) (GB/s)", justify="right")
-            table.add_column("Time Taken (median) (ms)", justify="right")
-
-            for r in node_results:
-                bw_str = (
-                    f"{r.bandwidth:.2f}" if r.bandwidth is not None else "N/A"
-                )
-                time_str = (
-                    f"{r.time_ms:.3f}" if r.time_ms is not None else "N/A"
-                )
-                ts_str = (
-                    f"{r.tensor_size:.1f}"
-                    if r.tensor_size is not None
-                    else "N/A"
-                )
-                elements_str = f"{r.num_elements:,}"
-                table.add_row(elements_str, ts_str, r.dtype, bw_str, time_str)
-
-            render_elements.append(Text(f"\nNode: {node}", style="bold yellow"))
-            render_elements.append(table)
-
-        return render_elements
