@@ -17,6 +17,20 @@ from chs.core.default_plugin.extractor import DefaultExtractor
 
 
 class TpuGemmExtractor(DefaultExtractor):
+    @classmethod
+    def parse_context_metadata(cls, ctx_name: str) -> dict[str, Any]:
+        """Parses TPU GEMM context string into structured fields."""
+        parts = ctx_name.split(",")
+        if len(parts) == 3:
+            return {
+                "node": parts[0],
+                "matrix_shape": parts[1],
+                "dtype": parts[2],
+                "sweep_param": f"{parts[1]},{parts[2]}",
+                "context": ctx_name,
+            }
+        return {"context": ctx_name}
+
     def get_required_contexts(
         self, contexts: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:

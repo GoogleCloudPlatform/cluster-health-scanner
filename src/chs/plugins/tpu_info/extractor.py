@@ -12,12 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 from typing import Any
 from chs.core.default_plugin.extractor import DefaultExtractor
 
 
 class TpuInfoExtractor(DefaultExtractor):
     """Overrides DefaultExtractor to preserve test naming and contexts."""
+
+    def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
+        """Parses TPU Info context string into structured fields."""
+        node_match = re.search(r"Node ([a-zA-Z0-9-]+)", ctx_name)
+        if node_match:
+            return {"node": node_match.group(1), "context": ctx_name}
+        return {"context": ctx_name}
 
     def extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         return "tpu-info", exp.get("workload_name", ""), self.get_description()

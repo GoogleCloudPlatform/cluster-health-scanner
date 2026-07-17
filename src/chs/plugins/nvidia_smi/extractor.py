@@ -17,6 +17,17 @@ from chs.core.default_plugin.extractor import DefaultExtractor
 
 
 class NvidiaSmiExtractor(DefaultExtractor):
+    def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
+        """Parses NVIDIA SMI context (e.g. GPU 0) into metadata."""
+        if ctx_name.startswith("GPU "):
+            gpu_idx = ctx_name.replace("GPU ", "")
+            return {
+                "gpu_id": ctx_name,
+                "gpu_index": gpu_idx,
+                "context": ctx_name,
+            }
+        return {"context": ctx_name}
+
     def extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         """Prevent DefaultExtractor from stripping name to 'nvidia'."""
         workload = exp.get("workload_name", "")

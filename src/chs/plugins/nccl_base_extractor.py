@@ -14,9 +14,13 @@
 
 from typing import Any
 from chs.core.default_plugin.extractor import DefaultExtractor
+from chs.plugins.utils.nccl_utils import parse_nccl_context_metadata
 
 
 class NcclBaseExtractor(DefaultExtractor):
+    def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
+        return parse_nccl_context_metadata(ctx_name)
+
     def get_required_contexts(
         self, contexts: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:

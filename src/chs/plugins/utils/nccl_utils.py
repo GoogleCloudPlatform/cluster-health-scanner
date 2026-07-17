@@ -90,6 +90,19 @@ def create_nccl_table(
     return table
 
 
+def parse_nccl_context_metadata(ctx_name: str) -> dict[str, float | str]:
+    """Parses NCCL context (message size in bytes) into structured metadata."""
+    try:
+        size_bytes = float(ctx_name)
+        return {
+            "msg_size_bytes": size_bytes,
+            "msg_size_gb": size_bytes / BYTES_PER_GB,
+            "context": ctx_name,
+        }
+    except ValueError:
+        return {"context": ctx_name}
+
+
 def render_nccl_detail(
     title: str,
     resource_column_name: str,
