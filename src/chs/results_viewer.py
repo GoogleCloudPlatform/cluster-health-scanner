@@ -309,7 +309,16 @@ class ResultsViewer:
         )
         if self.boh_uri:
             self.console.print(f"{base_msg} or check the Bill of Health in:")
-            self.console.print(f"[cyan]{self.boh_uri}[/cyan]\n")
+            href = (
+                self.boh_uri.replace(
+                    "gs://", "https://storage.cloud.google.com/", 1
+                )
+                if self.boh_uri.startswith("gs://")
+                else self.boh_uri
+            )
+            self.console.print(
+                f"[link={href}][cyan]{self.boh_uri}[/cyan][/link]\n"
+            )
         else:
             self.console.print(base_msg)
 

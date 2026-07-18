@@ -120,6 +120,22 @@ class ChsAppData:
 
         # Merge with existing data if present
         if run_id in runs:
+            if "job_entries" in run_data and "job_entries" in runs[run_id]:
+                existing_entries = dict(runs[run_id]["job_entries"])
+                new_entries = run_data["job_entries"]
+                for job_id, new_entry in new_entries.items():
+                    if job_id not in existing_entries:
+                        existing_entries[job_id] = new_entry
+                    else:
+                        curr_status = existing_entries[job_id].get("status")
+                        new_status = new_entry.get("status")
+                        if (
+                            JobStatus.is_terminal(curr_status)
+                            and new_status == JobStatus.PENDING.value
+                        ):
+                            continue
+                        existing_entries[job_id].update(new_entry)
+                run_data["job_entries"] = existing_entries
             runs[run_id].update(run_data)
         else:
             runs[run_id] = run_data
@@ -140,7 +156,11 @@ class ChsAppData:
             entry = job_entries.setdefault(job_id, {})
             # Update the status only if the job is in a non-terminal state.
             if not JobStatus.is_terminal(entry.get("status")):
-                entry["status"] = new_status
+                entry["status"] = (
+                    new_status.value
+                    if isinstance(new_status, JobStatus)
+                    else str(new_status)
+                )
         self._save_json(self._runs_file, runs)
         logger.debug("AppData: Updated status for run %s", run_id)
 

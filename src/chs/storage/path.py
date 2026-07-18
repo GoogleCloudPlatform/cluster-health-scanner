@@ -144,3 +144,7 @@ class PathStorageProvider(StorageProvider):
     def get_uri(self, remote_path: str) -> str:
         """Returns the full local absolute path."""
         return str(self._get_full_path(remote_path))
+
+    def exists(self, remote_path: str) -> bool:
+        """Checks if relative path exists under target_path."""
+        return self._get_full_path(remote_path).exists()

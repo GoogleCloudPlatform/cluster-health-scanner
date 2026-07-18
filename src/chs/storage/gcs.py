@@ -140,3 +140,13 @@ class GcsStorageProvider(StorageProvider):
     def get_uri(self, remote_path: str) -> str:
         """Returns the gs:// URI for the remote path."""
         return f"gs://{self.bucket_name}/{remote_path}"
+
+    def exists(self, remote_path: str) -> bool:
+        """Checks if blob exists in GCS bucket."""
+        try:
+            client = storage.Client()
+            bucket = client.bucket(self.bucket_name)
+            blob = bucket.blob(remote_path)
+            return blob.exists()
+        except Exception:
+            return False

@@ -599,7 +599,9 @@ mycriteria:
                 "chs.storage.StorageProviderFactory.get_provider_for_run",
                 return_value=mock_provider,
             ),
-            mock.patch.object(manager, "_upload_boh") as mock_boh,
+            mock.patch.object(
+                manager, "_upload_boh", return_value=("dest_json", "dest_html")
+            ) as mock_boh,
             mock.patch.object(manager, "_upload_workspace") as mock_workspace,
         ):
             manager.archive()

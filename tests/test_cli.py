@@ -105,7 +105,8 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.execute_experiments.return_value = []
         self.mock_rm_instance.archive.return_value = (
             "mock_ws_path",
-            "mock_boh_path",
+            "mock_json_path",
+            "mock_html_path",
         )
 
         self.mock_dt = self.enterContext(
@@ -1081,6 +1082,7 @@ class TestCli(unittest.TestCase):
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
+            "/mock/boh.html",
         )
         with cli.archive_workspace(mock_rm):
             pass
@@ -1092,6 +1094,7 @@ class TestCli(unittest.TestCase):
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
+            "/mock/boh.html",
         )
         with self.assertRaises(ValueError):
             with cli.archive_workspace(mock_rm):

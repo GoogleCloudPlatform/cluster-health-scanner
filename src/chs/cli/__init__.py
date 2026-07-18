@@ -50,8 +50,9 @@ from chs import (
     utils,
     validators,
 )
+
 from chs.boh_generator import parse_tier_results_from_boh
-from chs.tier_manager import TierManager
+from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
 from chs.storage import StorageProviderFactory
 from chs.cli import list_formatting
@@ -112,23 +113,37 @@ def _setup_workspace_logger(workspace_path: str) -> None:
                 handler.setLevel(logging.INFO)
 
 
+def _make_clickable_link(path_or_uri: str) -> str:
+    href = path_or_uri
+    if path_or_uri.startswith("gs://"):
+        href = path_or_uri.replace(
+            "gs://", "https://storage.cloud.google.com/", 1
+        )
+    return f"[link={href}]{path_or_uri}[/link]"
+
+
 def _archive_and_log(ramble_manager: RambleManager, spinner_label: str) -> None:
     """Archives the workspace and logs the results with a progress spinner."""
     console = Console()
     with theme.get_progress_spinner(spinner_label):
-        ws_path, boh_path = ramble_manager.archive()
+        ws_path, boh_json_path, boh_html_path = ramble_manager.archive()
     storage_provider = StorageProviderFactory.get_provider_for_run(
         ramble_manager.workspace_name
     )
     if ws_path and storage_provider:
         console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived to: {ws_path}"
-            f"[/{theme.CHS_SUCCESS_STYLE}]"
+            f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived to: "
+            f"{_make_clickable_link(ws_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
-    if boh_path and storage_provider:
+    if boh_json_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-            f"{boh_path}[/{theme.CHS_SUCCESS_STYLE}]"
+            f"{_make_clickable_link(boh_json_path)}[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+    if boh_html_path and storage_provider:
+        console.print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report saved at: "
+            f"{_make_clickable_link(boh_html_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
 
 
@@ -207,10 +222,20 @@ def _submit_next_tier(
     workspace_name: str,
     next_tier: int,
     next_tests: list[str],
+    tier_results: dict[str, Any] | None = None,
 ) -> None:
     """Submits the next tier of diagnostic tests."""
+    has_error = False
+    if tier_results:
+        has_error = any(s == TestStatus.ERROR for s in tier_results.values())
+
+    reason_msg = (
+        "Test execution error or timeout detected."
+        if has_error
+        else "Degraded performance detected."
+    )
     Console().print(
-        f"[{theme.CHS_WARNING_STYLE}]Degraded performance detected. "
+        f"[{theme.CHS_WARNING_STYLE}]{reason_msg} "
         f"Triggering follow-up diagnostics: {', '.join(next_tests)}"
         f"[/{theme.CHS_WARNING_STYLE}]"
     )
@@ -543,7 +568,7 @@ def _analyze_action(
                     "and CHS resources cleaned up."
                     f"[/{theme.CHS_SUCCESS_STYLE}]"
                 )
-                _show_results(app_data, run_id)
+                _show_results(app_data, run_id, suppress_boh_uri=True)
                 return run_id
 
             # 3. If neither exists, wait for jobs and then analyze
@@ -637,9 +662,10 @@ def _analyze_action(
                     workspace_name,
                     active_tier + 1,
                     list(next_tests),
+                    tier_results=tier_results,
                 )
 
-            _show_results(app_data, run_id)
+            _show_results(app_data, run_id, suppress_boh_uri=True)
         except (OSError, subprocess.CalledProcessError) as e:
             raise ex.ChsAnalysisException(
                 f"CHS analysis failed for run_id={run_id}: {e!r}"
@@ -650,14 +676,14 @@ def _analyze_action(
 
 def _show_results(
     app_data: ChsAppData,
-    run_id: str | None,
+    run_id: str | None = None,
     tests: str | None = None,
     resources: str | None = None,
     details: bool = False,
+    suppress_boh_uri: bool = False,
 ) -> None:
-    """Show Bill of Health results for a run."""
+    """Shows the Bill of Health summary and optional details."""
     workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
-
     if not run_id:
         run_id = app_data.get_latest_run_id()
         logger.debug("No run_id provided. Using latest run: %s", run_id)
@@ -672,11 +698,15 @@ def _show_results(
 
     boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
-    boh_uri = (
-        run_provider.get_uri(f"bills_of_health/{workspace_name}.json")
-        if run_provider
-        else None
-    )
+
+    boh_uri = None
+    if run_provider and not suppress_boh_uri:
+        html_remote = f"bills_of_health/{workspace_name}.html"
+        json_remote = f"bills_of_health/{workspace_name}.json"
+        if run_provider.exists(html_remote):
+            boh_uri = run_provider.get_uri(html_remote)
+        elif run_provider.exists(json_remote):
+            boh_uri = run_provider.get_uri(json_remote)
 
     if not boh_path.exists():
         logger.debug(
@@ -1313,8 +1343,10 @@ def run(
 
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
 
+    scheduled_tests = active_tier_tests if active_tier_tests else parsed_tests
     test_names = ", ".join(
-        t.get("name") if isinstance(t, dict) else str(t) for t in parsed_tests
+        t.get("name") if isinstance(t, dict) else str(t)
+        for t in scheduled_tests
     )
     preview_title = "CHS Execution Preview:"
     console = Console()

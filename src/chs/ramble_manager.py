@@ -43,6 +43,7 @@ from rich.console import Console
 from chs import exceptions as ex
 from chs import resources
 from chs.boh_generator import BOHGenerator
+from chs.html_generator import HtmlReportGenerator
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 from chs.storage import StorageProviderFactory
@@ -714,7 +715,10 @@ class RambleManager:
                                     pending_log_fetches.remove(job_id)
 
                                 active_jobs.remove(job_id)
-                            elif status == JobStatus.PENDING:
+                            elif status in (
+                                JobStatus.PENDING,
+                                JobStatus.UNKNOWN,
+                            ):
                                 if job_id not in pending_start_times:
                                     pending_start_times[job_id] = time.time()
 
@@ -739,7 +743,9 @@ class RambleManager:
                         if jobs_to_cancel:
                             scheduler.cancel_jobs(jobs_to_cancel)
                             for canceled_job in jobs_to_cancel:
-                                statuses[canceled_job] = JobStatus.DEADLINE
+                                statuses[canceled_job] = (
+                                    JobStatus.DEADLINE.value
+                                )
                                 if canceled_job in active_jobs:
                                     active_jobs.remove(canceled_job)
                                 pending_start_times.pop(canceled_job, None)
@@ -1091,24 +1097,47 @@ class RambleManager:
         with open(boh_path, "w") as f:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
+        try:
+            html_gen = HtmlReportGenerator()
+            html_path = workspace_dir / "bill_of_health.html"
+            html_gen.save_html(boh, str(html_path))
+            logger.debug("Interactive health report generated successfully.")
+        except Exception as e:
+            logger.warning(
+                "Failed to generate interactive health report: %s", e
+            )
+
         return str(workspace_dir)
 
-    def _upload_boh(self, provider) -> None:
-        """Uploads Bill of Health using the provider."""
+    def _upload_boh(self, provider) -> tuple[str | None, str | None]:
+        """Uploads Bill of Health (JSON and HTML) using the provider."""
         boh_path = os.path.join(self.path, "bill_of_health.json")
+        html_path = os.path.join(self.path, "bill_of_health.html")
+
         if not os.path.exists(boh_path):
             logger.debug(
                 "Bill of Health file %s does not exist. Skipping BOH archival.",
                 boh_path,
             )
-            return
+            return None, None
 
         logger.debug("Uploading Bill of Health...")
+        boh_json_dest = None
+        boh_html_dest = None
         try:
-            dest = f"bills_of_health/{self._workspace_name}.json"
-            provider.upload_file(boh_path, dest)
+            boh_json_dest = f"bills_of_health/{self._workspace_name}.json"
+            provider.upload_file(boh_path, boh_json_dest)
+
+            if os.path.exists(html_path):
+                boh_html_dest = f"bills_of_health/{self._workspace_name}.html"
+                provider.upload_file(html_path, boh_html_dest)
+                logger.debug(
+                    "Interactive health report uploaded successfully to %s",
+                    boh_html_dest,
+                )
+
             logger.debug("Bill of Health uploaded successfully.")
-            return dest
+            return boh_json_dest, boh_html_dest
         except Exception as e:
             raise ex.ChsArchiveException(
                 f"Failed to archive Bill of Health: {e}"
@@ -1181,15 +1210,16 @@ class RambleManager:
             return None
         return dest
 
-    def archive(self) -> tuple[str | None, str | None]:
+    def archive(self) -> tuple[str | None, str | None, str | None]:
         """Orchestrates archival of BoH and workspace using active provider.
 
         Returns:
-            A tuple of (workspace_uri, boh_uri). Returns local paths if no
-            storage provider is configured.
+            A tuple of (workspace_uri, json_boh_uri, html_boh_uri). Returns
+            local paths if no storage provider is configured.
         """
         local_ws_path = f"{self.path}.tar.gz"
-        local_boh_path = os.path.join(self.path, "bill_of_health.json")
+        local_json_path = os.path.join(self.path, "bill_of_health.json")
+        local_html_path = os.path.join(self.path, "bill_of_health.html")
 
         if not os.path.exists(self.path) or not os.path.exists(
             os.path.join(self.path, ".ramble-workspace")
@@ -1199,7 +1229,7 @@ class RambleManager:
                 "Skipping archival.",
                 self.path,
             )
-            return None, None
+            return None, None, None
 
         try:
             provider = StorageProviderFactory.get_provider_for_run(
@@ -1217,13 +1247,14 @@ class RambleManager:
             )
             return (
                 local_ws_path if os.path.exists(local_ws_path) else None,
-                local_boh_path if os.path.exists(local_boh_path) else None,
+                local_json_path if os.path.exists(local_json_path) else None,
+                local_html_path if os.path.exists(local_html_path) else None,
             )
 
-        boh_dest = None
+        boh_json_dest, boh_html_dest = None, None
         ws_dest = None
         try:
-            boh_dest = self._upload_boh(provider)
+            boh_json_dest, boh_html_dest = self._upload_boh(provider)
         except ex.ChsArchiveException as e:
             # If BoH upload fails, we still want to proceed with archiving
             # the workspace and returning the local paths.
@@ -1240,9 +1271,12 @@ class RambleManager:
             provider.get_uri(ws_dest)
             if ws_dest
             else (local_ws_path if os.path.exists(local_ws_path) else None),
-            provider.get_uri(boh_dest)
-            if boh_dest
-            else (local_boh_path if os.path.exists(local_boh_path) else None),
+            provider.get_uri(boh_json_dest)
+            if boh_json_dest
+            else (local_json_path if os.path.exists(local_json_path) else None),
+            provider.get_uri(boh_html_dest)
+            if boh_html_dest
+            else (local_html_path if os.path.exists(local_html_path) else None),
         )
 
     def _cleanup_inputs_dir(self) -> None:

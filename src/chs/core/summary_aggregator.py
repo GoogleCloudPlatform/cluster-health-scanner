@@ -17,7 +17,7 @@
 import os
 import re
 import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs.utils import lifecycle
@@ -49,6 +49,7 @@ class TestGroupSummary:
     missing_metrics: int
     missing_metrics_resources: list[str]
     display_name: str
+    failed_to_execute_resources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +108,7 @@ def aggregate_boh_summary(
         return None
 
     pm = plugin_manager or PluginManager()
+
     filtered_results = filter_test_results(boh, tests, resources)
 
     if not filtered_results:
@@ -222,7 +224,9 @@ def aggregate_boh_summary(
         is_pairwise = "pairwise" in canonical_name.lower()
         below_threshold_resources = []
         missing_metrics_resources = []
+        failed_to_execute_resources = []
         missing_metrics = 0
+        failed_threshold = False
         failed_to_execute = 0
         for res in results:
             has_real_metrics = any(
@@ -247,9 +251,17 @@ def aggregate_boh_summary(
                 met_threshold += 1 if is_pairwise else len(res.target_resources)
             elif res.result_status in (
                 pb.RESULT_STATUS_TIMEOUT,
+                pb.RESULT_STATUS_DEADLINE,
                 pb.RESULT_STATUS_CANCELLED,
             ):
-                pass
+                if is_pairwise and len(res.target_resources) == 2:
+                    failed_to_execute_resources.append(
+                        f"{res.target_resources[0].node_name} <-> "
+                        f"{res.target_resources[1].node_name}"
+                    )
+                else:
+                    for t in res.target_resources:
+                        failed_to_execute_resources.append(t.node_name)
             else:
                 count = 1 if is_pairwise else len(res.target_resources)
                 if failed_threshold:
@@ -314,6 +326,7 @@ def aggregate_boh_summary(
                 missing_metrics=missing_metrics,
                 missing_metrics_resources=missing_metrics_resources,
                 display_name=display_name,
+                failed_to_execute_resources=failed_to_execute_resources,
             )
         )
 

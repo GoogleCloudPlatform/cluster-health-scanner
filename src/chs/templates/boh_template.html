@@ -65,7 +65,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
         <div class="text-3xl font-extrabold text-slate-900 mt-1">
           <span id="totalNodes">0</span> <span class="text-xs font-normal text-slate-600">nodes</span>
         </div>
-        <div id="nodeStatusDetail" class="text-xs text-emerald-700 mt-2">0 Healthy • 0 Degraded</div>
+        <div id="nodeStatusDetail" class="text-xs text-slate-700 mt-2">0 Degraded • 0 Missing Metrics • 0 Healthy</div>
       </div>
 
       <!-- Card 2: Test Suite Executions -->
@@ -102,7 +102,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
       document.getElementById('systemType').textContent = meta.system_type || '-';
 
       document.getElementById('totalNodes').textContent = summary.total_nodes || 0;
-      document.getElementById('nodeStatusDetail').textContent = `${summary.healthy_count || 0} Healthy • ${summary.degraded_count || 0} Degraded • ${summary.missing_metrics_count || 0} Missing Metrics`;
+      document.getElementById('nodeStatusDetail').textContent = `${summary.degraded_count || 0} Degraded • ${summary.missing_metrics_count || 0} Missing Metrics • ${summary.healthy_count || 0} Healthy`;
       document.getElementById('totalSuites').textContent = summary.total_test_suites || 0;
       document.getElementById('potentialErrors').textContent = summary.potential_errors_count || 0;
     }

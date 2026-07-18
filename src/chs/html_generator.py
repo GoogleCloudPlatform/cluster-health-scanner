@@ -56,6 +56,7 @@ class HtmlReportGenerator:
             ):
                 degraded_nodes.update(ts.below_threshold_resources)
                 missing_metrics_nodes.update(ts.missing_metrics_resources)
+                missing_metrics_nodes.update(ts.failed_to_execute_resources)
 
         missing_metrics_only = missing_metrics_nodes - degraded_nodes
 

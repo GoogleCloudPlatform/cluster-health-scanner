@@ -105,6 +105,18 @@ class TestChsAppData(unittest.TestCase):
         run = self.app_data.get_run("run1")
         self.assertEqual(run["job_entries"], {"job1": {"status": "COMPLETED"}})
 
+    def test_update_run_preserves_terminal_status_on_merge(self):
+        self.app_data.update_run(
+            "run1", {"job_entries": {"job1": {"status": "DEADLINE"}}}
+        )
+
+        self.app_data.update_run(
+            "run1", {"job_entries": {"job1": {"status": "PENDING"}}}
+        )
+
+        run = self.app_data.get_run("run1")
+        self.assertEqual(run["job_entries"], {"job1": {"status": "DEADLINE"}})
+
     def test_get_latest_runs(self):
         self.app_data.update_run(
             "run1", {"submission_time": "2023-01-01T12:00:00Z"}
