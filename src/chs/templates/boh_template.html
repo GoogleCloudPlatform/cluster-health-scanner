@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bill of Health Report - Overview</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    :root {
+      --bg-main: #f8f9fa;
+      --card-bg: #ffffff;
+      --border-color: #dadce0;
+      --text-main: #202124;
+      --text-muted: #5f6368;
+    }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Google Sans', sans-serif; }
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+    }
+    .badge-success { background-color: #e6f4ea; color: #137333; border: 1px solid #ceead6; }
+    .badge-failed { background-color: #fce8e6; color: #c5221f; border: 1px solid #fad2cf; }
+    .badge-degraded { background-color: #fef7e0; color: #b06000; border: 1px solid #feefc3; }
+    .glass-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+    }
+  </style>
+</head>
+<body class="p-6 relative overflow-x-hidden">
+
+  <!-- RAW DATA INJECTION POINT FOR PART 1 -->
+  <script id="boh-overview-raw-data" type="application/json">
+__BOH_OVERVIEW_RAW_DATA_JSON__
+  </script>
+
+  <div class="max-w-7xl mx-auto space-y-6">
+
+    <!-- Global Header -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--border-color)] pb-5">
+      <div>
+        <div class="flex items-center gap-3">
+          <h1 class="text-2xl font-bold tracking-tight text-slate-900">Cluster Bill of Health Report</h1>
+        </div>
+        <p class="text-sm text-[var(--text-muted)] mt-1">
+          Run ID: <span id="runId" class="font-mono text-slate-800">-</span> •
+          Generated: <span id="createdAt" class="text-slate-800">-</span> •
+          System: <span id="systemType" class="text-slate-800">-</span>
+        </p>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="window.location.reload()" class="px-3 py-1.5 text-xs font-medium rounded bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-900 transition">Reset Filters</button>
+        <button onclick="window.print()" class="px-3 py-1.5 text-xs font-medium rounded bg-[#1a73e8] hover:bg-[#1967d2] text-white font-medium transition shadow">Export / Print</button>
+      </div>
+    </div>
+
+    <!-- PART 1: Executive Overview Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-3 gap-4">
+
+      <!-- Card 1: Total Nodes Tested -->
+      <div class="glass-card rounded-md p-4">
+        <span class="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wider">Total Nodes Tested</span>
+        <div class="text-3xl font-extrabold text-slate-900 mt-1">
+          <span id="totalNodes">0</span> <span class="text-xs font-normal text-slate-600">nodes</span>
+        </div>
+        <div id="nodeStatusDetail" class="text-xs text-emerald-700 mt-2">0 Healthy • 0 Degraded</div>
+      </div>
+
+      <!-- Card 2: Test Suite Executions -->
+      <div class="glass-card rounded-md p-4">
+        <span class="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wider">Test Suite Executions</span>
+        <div class="text-3xl font-extrabold text-slate-900 mt-1">
+          <span id="totalSuites">0</span> <span class="text-xs font-normal text-slate-600">tests</span>
+        </div>
+      </div>
+
+      <!-- Card 3: Potential Errors & Warnings -->
+      <div class="glass-card rounded-md p-4">
+        <span class="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wider">Potential Errors & Warnings</span>
+        <div class="text-3xl font-extrabold text-red-600 mt-1">
+          <span id="potentialErrors">0</span> <span class="text-xs font-normal text-slate-600">detected</span>
+        </div>
+        <div class="text-xs text-red-700 mt-2">Potential errors</div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    const rawText = document.getElementById('boh-overview-raw-data').textContent.trim();
+    const data = rawText ? JSON.parse(rawText) : {};
+
+    function initPart1() {
+      const meta = data.metadata || {};
+      const summary = data.summary || {};
+
+      document.getElementById('runId').textContent = meta.report_id || '-';
+      document.getElementById('createdAt').textContent = meta.created_at || '-';
+      document.getElementById('systemType').textContent = meta.system_type || '-';
+
+      document.getElementById('totalNodes').textContent = summary.total_nodes || 0;
+      document.getElementById('nodeStatusDetail').textContent = `${summary.healthy_count || 0} Healthy • ${summary.degraded_count || 0} Degraded • ${summary.missing_metrics_count || 0} Missing Metrics`;
+      document.getElementById('totalSuites').textContent = summary.total_test_suites || 0;
+      document.getElementById('potentialErrors').textContent = summary.potential_errors_count || 0;
+    }
+
+    initPart1();
+  </script>
+</body>
+</html>
