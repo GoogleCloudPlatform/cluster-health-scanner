@@ -20,7 +20,8 @@ from .renderer import TpuNetworkDiagnosticsRenderer
 class TpuNetworkDiagnosticsPlugin(
     TpuNetworkDiagnosticsRenderer, TpuNetworkDiagnosticsExtractor, TestPlugin
 ):
-    pass
+    def creates_per_node_results(self) -> bool:
+        return True
 
 
 __chs_plugin__ = {

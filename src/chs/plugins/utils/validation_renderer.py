@@ -124,7 +124,7 @@ def render_validation_results(
         table = create_styled_table(
             header_style=f"bold {border_color}",
             expand=False,
-            show_lines=True,
+            show_lines=False,
         )
         table.add_column("Target", style="magenta")
         table.add_column("Metric", style="cyan")

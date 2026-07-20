@@ -16,6 +16,9 @@ from typing import Any
 from chs.core.default_plugin.extractor import DefaultExtractor
 
 
+from chs.protos import bill_of_health_pb2 as pb
+
+
 class TpuNetworkDiagnosticsExtractor(DefaultExtractor):
     """Overrides DefaultExtractor to preserve test naming and contexts."""
 
@@ -35,3 +38,34 @@ class TpuNetworkDiagnosticsExtractor(DefaultExtractor):
         return {
             "bandwidth": "Bandwidth",
         }
+
+    def post_process_test_result(self, test_result: pb.TestResult) -> None:
+        """Calculates and appends the Minimum Bandwidth metric for each node."""
+        min_bandwidth_by_node: dict[str, float] = {}
+
+        for metric in test_result.metrics:
+            if metric.key == "Bandwidth" and metric.value.HasField(
+                "number_value"
+            ):
+                context_name = (
+                    metric.metadata.fields["context"].string_value
+                    if "context" in metric.metadata.fields
+                    else ""
+                )
+                context_parts = context_name.split(" Axis-")
+                if len(context_parts) == 2:
+                    node_name = context_parts[0].strip()
+                    bandwidth_value = metric.value.number_value
+                    if (
+                        node_name not in min_bandwidth_by_node
+                        or bandwidth_value < min_bandwidth_by_node[node_name]
+                    ):
+                        min_bandwidth_by_node[node_name] = bandwidth_value
+                    metric.key = "Axis Bandwidth"
+
+        for node_name, min_bandwidth_value in min_bandwidth_by_node.items():
+            min_metric = test_result.metrics.add()
+            min_metric.key = "Bandwidth"
+            min_metric.value.number_value = min_bandwidth_value
+            min_metric.unit = "GB/s"
+            min_metric.metadata.fields["context"].string_value = node_name
