@@ -1,9 +1,0 @@
-description: Tests the 'stream' test against a kubernetes scheduler for a3-mega
-command:
-- run
-- --tests
-- stream
-- --nodes
-- node1,node2
-- --dry-run
-- --auto-approve

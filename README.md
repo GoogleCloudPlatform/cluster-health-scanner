@@ -197,7 +197,6 @@ Executes a test suite on a specified cluster.
 - `--nodelists`: Slurm node list pattern/lists to run on (e.g., `node-[1-3]`).
 - `--nodepools`: Kubernetes node pools to run on.
 - `--partitions`: Slurm partitions to run on.
-- `--dry-run [slurm|kubernetes]`: Set up the workspace for the specified scheduler but do not execute (developer dry-run).
 - `--validation`: Path to a user-defined thresholds YAML file (optional).
 - `--skip-validation`: Skip threshold evaluation entirely.
 - `--run-id`: Custom run ID for this execution.
@@ -299,7 +298,7 @@ chs history
 ```
 Workspace                     Details
 ------------------------------------------------------------------------------------------
-2026-05-05_16.23.13.228716    chs run --dry-run kubernetes
+2026-05-05_16.23.13.228716    chs run kubernetes
 2026-05-04_19.05.29.792632    chs run
 ```
 

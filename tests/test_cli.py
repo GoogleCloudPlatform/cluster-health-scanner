@@ -923,37 +923,6 @@ class TestCli(unittest.TestCase):
         )
 
     @mock.patch("chs.cli.analyze_action")
-    def test_run_command_dry_run(self, mock_analyze_action):
-        """Test 'run' command with dry-run."""
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
-        self.mock_rm_instance.execute_experiments.return_value = []
-        self.mock_scheduler.name = "slurm"
-
-        result = self.runner.invoke(
-            cli.cli,
-            [
-                "-v",
-                "run",
-                "--suite",
-                "suite1",
-                "--dry-run",
-                "--auto-approve",
-            ],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-
-        expected_run_id = "mockcluster-suite1-mockhash"
-        expected_workspace_name = f"20230101-120000_{expected_run_id}"
-
-        self.mock_rm_cls.assert_any_call(
-            mock_default_dir, expected_workspace_name, run_id=expected_run_id
-        )
-        mock_analyze_action.assert_not_called()
-        self.mock_get_cluster_name.assert_called_once()
-
-    @mock.patch("chs.cli.analyze_action")
     def test_run_command_auto_attach_success(self, mock_analyze_action):
         """Test 'run' command automatically attaches to an active run."""
         self.mock_app_data.get_latest_run_id.side_effect = None
@@ -1833,7 +1802,7 @@ class TestCliHistory(unittest.TestCase):
                     "run2": {
                         "run_id": "run2",
                         "submission_time": "2023-01-02T12:00:00Z",
-                        "command_statement": "chs run --dry-run kubernetes",
+                        "command_statement": "chs run kubernetes",
                         "storage": {
                             "type": "path",
                             "path": {"path": "/tmp/test"},
@@ -1849,7 +1818,7 @@ class TestCliHistory(unittest.TestCase):
                     "run1",
                     "run2",
                     "chs run",
-                    "chs run --dry-run kubernetes",
+                    "chs run kubernetes",
                     "/tmp/test",
                 ],
                 unexpected_strings=[

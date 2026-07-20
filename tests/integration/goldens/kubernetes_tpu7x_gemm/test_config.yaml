@@ -1,9 +1,0 @@
-description: Tests the JAX 'gemm' test against a kubernetes scheduler for tpu7x
-command:
-- run
-- --tests
-- gemm
-- --nodes
-- node1,node2
-- --dry-run
-- --auto-approve

@@ -1,9 +1,0 @@
-description: Tests the 'tpu-info' test against a kubernetes scheduler for tpuv6e
-command:
-- run
-- --tests
-- tpu-info
-- --nodes
-- node1,node2
-- --dry-run
-- --auto-approve

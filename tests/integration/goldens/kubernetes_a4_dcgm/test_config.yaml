@@ -1,9 +1,0 @@
-description: Tests the 'dcgm' test against a kubernetes scheduler for a4
-command:
-- run
-- --tests
-- dcgm
-- --nodes
-- node1,node2
-- --dry-run
-- --auto-approve

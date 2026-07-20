@@ -1,9 +1,0 @@
-description: Tests the 'standard' suite against a kubernetes scheduler for a3-ultra
-command:
-- run
-- --suite
-- standard
-- --nodes
-- node1,node2
-- --dry-run
-- --auto-approve

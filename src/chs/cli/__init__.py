@@ -373,7 +373,6 @@ def run_action(
     workspace_name: str,
     workspaces_base_dir: str,
     machine_type: str,
-    dry_run: bool = False,
     timeout: int | None = None,
     deadline: int | None = None,
     validation: str | None = None,
@@ -396,7 +395,7 @@ def run_action(
       thresholds: Path to user-defined thresholds YAML file.
 
     Returns:
-      A list of submitted job IDs, or None if dry_run is True.
+      A list of submitted job IDs.
 
     Raises:
       ChsExecutionException: If an error occurs during CHS execution.
@@ -441,9 +440,6 @@ def run_action(
                 deadline=deadline,
             )
             ramble_manager.setup_workspace()
-            if dry_run:
-                logger.debug("Setup complete. Skipping experiment execution.")
-                return None
 
             scheduler_obj.apply_scheduler_resources()
 
@@ -1108,11 +1104,6 @@ def _handle_previous_run(
     callback=validators.validate_non_empty_string,
 )
 @click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Set up the workspace for the detected scheduler but do not execute.",
-)
-@click.option(
     "--auto-approve",
     "-y",
     is_flag=True,
@@ -1146,7 +1137,6 @@ def run(
     nodelists: str | None,
     nodepools: str | None,
     partitions: str | None,
-    dry_run: bool = False,
     auto_approve: bool = False,
     validation: str | None = None,
     skip_validation: bool = False,
@@ -1161,7 +1151,6 @@ def run(
       nodelists: Slurm node list pattern to run on (e.g., node-[1-3]).
       nodepools: Kubernetes node pools to run on.
       partitions: Slurm partitions to run on.
-      dry_run: Set up the workspace but do not execute experiments or analyze.
 
     Returns:
       A RunExecutionResult object containing details of the run.
@@ -1309,27 +1298,22 @@ def run(
         f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
 
-    if not dry_run:
-        attach_result = _handle_previous_run(
-            app_data=app_data,
-            scheduler=scheduler,
-            suite=suite,
-            validation=validation,
-            skip_validation=skip_validation,
-            auto_approve=auto_approve,
-        )
-        if attach_result:
-            return attach_result
+    attach_result = _handle_previous_run(
+        app_data=app_data,
+        scheduler=scheduler,
+        suite=suite,
+        validation=validation,
+        skip_validation=skip_validation,
+        auto_approve=auto_approve,
+    )
+    if attach_result:
+        return attach_result
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
 
     test_names = ", ".join(
         t.get("name") if isinstance(t, dict) else str(t) for t in parsed_tests
     )
-    preview_title = (
-        "CHS Dry Run Preview (No tests will be submitted):"
-        if dry_run
-        else "CHS Execution Preview:"
-    )
+    preview_title = "CHS Execution Preview:"
     console = Console()
     console.print(f"[bold]{preview_title}[/bold]")
     console.print(
@@ -1362,11 +1346,7 @@ def run(
         auto_approve = True
 
     if not auto_approve:
-        prompt_msg = (
-            "Proceed with dry run workspace generation?"
-            if dry_run
-            else "Proceed with execution?"
-        )
+        prompt_msg = "Proceed with execution?"
         if not sys.stdin.isatty():
             logger.debug(prompt_msg)
             raise click.ClickException(
@@ -1432,25 +1412,19 @@ def run(
         },
     )
 
-    if dry_run:
+    if is_tiered:
+        tests_str = ", ".join(active_tier_tests)
         status_msg = (
-            f"[{theme.CHS_HEADER_STYLE}]Setting up cluster execution "
-            f"environment...[/{theme.CHS_HEADER_STYLE}]"
+            f"[{theme.CHS_SUCCESS_STYLE}]Preparing environment and "
+            f"triggering initial health checks: {tests_str}..."
+            f"[/{theme.CHS_SUCCESS_STYLE}]"
         )
     else:
-        if is_tiered:
-            tests_str = ", ".join(active_tier_tests)
-            status_msg = (
-                f"[{theme.CHS_SUCCESS_STYLE}]Preparing environment and "
-                f"triggering initial health checks: {tests_str}..."
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
-            )
-        else:
-            status_msg = (
-                f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
-                f"and submitting tests...[/{theme.CHS_SUCCESS_STYLE}]"
-            )
-    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=not dry_run):
+        status_msg = (
+            f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
+            f"and submitting tests...[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=True):
         with theme.get_progress_spinner(status_msg):
             job_ids = run_action(
                 suite=suite,
@@ -1459,7 +1433,6 @@ def run(
                 workspace_name=workspace_name,
                 workspaces_base_dir=workspaces_base_dir,
                 machine_type=machine_type,
-                dry_run=dry_run,
                 timeout=timeout,
                 deadline=deadline,
                 validation=validation,
@@ -1468,7 +1441,7 @@ def run(
                 active_tests=active_tier_tests if is_tiered else None,
             )
 
-        if not job_ids and not dry_run:
+        if not job_ids:
             raise ex.JobSubmissionFailureException(
                 f"Job submission failed for workspace: {workspace_name}. "
                 "Please check internal.log for details."
@@ -1482,10 +1455,6 @@ def run(
         workspaces_base_dir=workspaces_base_dir,
         job_ids=job_ids,
     )
-
-    if dry_run:
-        logger.debug("Dry run completed. Workspace setup is ready.")
-        return result
 
     logger.debug("Run submitted successfully.")
     logger.debug("Job IDs: %s", ", ".join(job_ids))
