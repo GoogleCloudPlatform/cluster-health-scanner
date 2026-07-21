@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from chs.core.plugin_base import ColumnDef, PluginDetailReport, TableDataModel
 from chs.protos import bill_of_health_pb2 as pb
 from chs.plugins.utils.rendering import extract_node_names
 from chs.utils import theme
@@ -103,17 +104,16 @@ def parse_nccl_context_metadata(ctx_name: str) -> dict[str, float | str]:
         return {"context": ctx_name}
 
 
-def render_nccl_detail(
+def extract_nccl_detail_data(
     title: str,
     resource_column_name: str,
     test_results: list[pb.TestResult],
     get_resource_id_func,
     topology: dict[str, dict[str, list[str]]] | None = None,
-) -> RenderableType:
+) -> PluginDetailReport | None:
+    """Extracts UI-decoupled NCCL detail table data model."""
     if not test_results:
-        return Text(
-            "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
-        )
+        return None
 
     has_thresholds = not all(
         r.result_status == pb.RESULT_STATUS_UNKNOWN for r in test_results
@@ -136,12 +136,22 @@ def render_nccl_detail(
                 include_topology = True
                 break
 
-    table = create_nccl_table(
-        resource_column_name,
-        include_topology=include_topology,
-        has_thresholds=has_thresholds,
+    headers = [
+        ColumnDef("workload", "Workload"),
+        ColumnDef("resource", resource_column_name),
+    ]
+    if include_topology:
+        headers.append(ColumnDef("topology", "Topological Context"))
+    headers.extend(
+        [
+            ColumnDef("peak_bw", "Peak Bandwidth (GB/s)", align="right"),
+            ColumnDef("msg_size", "Msg Size (GB)", align="right"),
+        ]
     )
+    if has_thresholds:
+        headers.append(ColumnDef("validation", "Validation"))
 
+    rows = []
     for res in test_results:
         peak = get_peak_metrics(res.metrics)
         max_bw = peak.max_bw
@@ -164,10 +174,14 @@ def render_nccl_detail(
 
         test_level = res.test_level if res.test_level else "Unknown"
 
-        row = [test_level, resource_id]
+        row_dict = {
+            "workload": test_level,
+            "resource": resource_id,
+            "peak_bw": f"{max_bw:.2f}",
+            "msg_size": max_size,
+        }
         if include_topology:
-            row.append(topo_context)
-        row.extend([f"{max_bw:.2f}", max_size])
+            row_dict["topology"] = topo_context
 
         if has_thresholds:
             validation_status = "N/A"
@@ -185,16 +199,79 @@ def render_nccl_detail(
                     bw_metric.validation_criteria.result_status
                     == pb.RESULT_STATUS_SUCCESS
                 ):
-                    validation_status = "[green]PASS[/]"
+                    validation_status = "PASS"
                 elif (
                     bw_metric.validation_criteria.result_status
                     == pb.RESULT_STATUS_FAILED
                 ):
-                    validation_status = "[red]FAIL[/]"
+                    validation_status = "FAIL"
             else:
                 if res.result_status == pb.RESULT_STATUS_FAILED:
-                    validation_status = "[yellow]ERROR[/]"
-            row.append(validation_status)
+                    validation_status = "ERROR"
+            row_dict["validation"] = validation_status
+
+        rows.append(row_dict)
+
+    table_model = TableDataModel(
+        title=title,
+        headers=headers,
+        rows=rows,
+    )
+
+    test_name = test_results[0].test_name if test_results else "nccl"
+    test_level = test_results[0].test_level if test_results else ""
+
+    return PluginDetailReport(
+        test_name=test_name,
+        test_level=test_level,
+        tables=[table_model],
+    )
+
+
+def render_nccl_detail(
+    title: str,
+    resource_column_name: str,
+    test_results: list[pb.TestResult],
+    get_resource_id_func,
+    topology: dict[str, dict[str, list[str]]] | None = None,
+) -> RenderableType:
+    report = extract_nccl_detail_data(
+        title,
+        resource_column_name,
+        test_results,
+        get_resource_id_func,
+        topology,
+    )
+    if not report or not report.tables:
+        return Text(
+            "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
+        )
+
+    table_data = report.tables[0]
+    include_topology = any(h.key == "topology" for h in table_data.headers)
+    has_thresholds = any(h.key == "validation" for h in table_data.headers)
+
+    table = create_nccl_table(
+        resource_column_name,
+        include_topology=include_topology,
+        has_thresholds=has_thresholds,
+    )
+
+    for r in table_data.rows:
+        row = [r["workload"], r["resource"]]
+        if include_topology:
+            row.append(r.get("topology", "Unknown"))
+        row.extend([r["peak_bw"], r["msg_size"]])
+
+        if has_thresholds:
+            val_status = r.get("validation", "N/A")
+            if val_status == "PASS":
+                val_status = "[green]PASS[/]"
+            elif val_status == "FAIL":
+                val_status = "[red]FAIL[/]"
+            elif val_status == "ERROR":
+                val_status = "[yellow]ERROR[/]"
+            row.append(val_status)
 
         table.add_row(*row)
 

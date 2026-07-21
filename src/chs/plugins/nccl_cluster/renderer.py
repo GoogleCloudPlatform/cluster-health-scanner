@@ -12,13 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from rich.console import RenderableType
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.default_plugin.renderer import DefaultRenderer
-from rich.console import RenderableType
-from chs.plugins.utils.nccl_utils import render_nccl_detail
+from chs.core.plugin_base import PluginDetailReport
+from chs.plugins.utils.nccl_utils import (
+    render_nccl_detail,
+    extract_nccl_detail_data,
+)
 
 
 class NcclClusterRenderer(DefaultRenderer):
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        return extract_nccl_detail_data(
+            "Cluster Detail",
+            "Cluster Metric",
+            test_results,
+            lambda res: "Peak Detected Cluster Bandwidth",
+        )
+
     def render_detail(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
