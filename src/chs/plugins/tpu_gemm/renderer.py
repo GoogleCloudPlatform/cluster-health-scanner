@@ -22,6 +22,7 @@ from chs.protos import bill_of_health_pb2 as pb
 from chs.core.default_plugin.renderer import DefaultRenderer
 from chs.core.plugin_base import ColumnDef, TableDataModel, PluginDetailReport
 from chs.plugins.tpu_gemm.extractor import TpuGemmExtractor
+from chs.plugins.utils.rendering import format_val
 
 
 @dataclass
@@ -131,30 +132,19 @@ class TpuGemmRenderer(DefaultRenderer):
         for context in sorted(parsed_map.keys()):
             items = parsed_map[context]
             for i, item in enumerate(items):
+                mfu_str = (
+                    f"{format_val(item.mfu, precision=1)}%"
+                    if item.mfu is not None
+                    else "N/A"
+                )
                 rows.append(
                     {
                         "sweep_param": context if i == 0 else "",
                         "nodes": item.nodes,
-                        "throughput": (
-                            f"{item.throughput:.2f}"
-                            if item.throughput is not None
-                            else "N/A"
-                        ),
-                        "total_throughput": (
-                            f"{item.total_throughput:.2f}"
-                            if item.total_throughput is not None
-                            else "N/A"
-                        ),
-                        "mfu": (
-                            f"{item.mfu:.1f}%"
-                            if item.mfu is not None
-                            else "N/A"
-                        ),
-                        "step_time": (
-                            f"{item.step_time:.2f}"
-                            if item.step_time is not None
-                            else "N/A"
-                        ),
+                        "throughput": format_val(item.throughput),
+                        "total_throughput": format_val(item.total_throughput),
+                        "mfu": mfu_str,
+                        "step_time": format_val(item.step_time),
                         "total_flops": (
                             f"{item.total_flops:.2e}"
                             if item.total_flops is not None
@@ -169,8 +159,8 @@ class TpuGemmRenderer(DefaultRenderer):
             rows=rows,
         )
 
-        test_name = test_results[0].test_name if test_results else "tpu-gemm"
-        test_level = test_results[0].test_level if test_results else ""
+        test_name = test_results[0].test_name
+        test_level = test_results[0].test_level
 
         return PluginDetailReport(
             test_name=test_name,

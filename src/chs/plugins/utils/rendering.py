@@ -81,3 +81,12 @@ def parse_value(value_proto) -> Any:
     elif value_proto.HasField("bool_value"):
         return value_proto.bool_value
     return value_proto.string_value
+
+
+def format_val(
+    val: float | int | None, precision: int = 2, default: str = "N/A"
+) -> str:
+    """Formats numeric value with precision, or returns default if None."""
+    if val is None:
+        return default
+    return f"{val:.{precision}f}"

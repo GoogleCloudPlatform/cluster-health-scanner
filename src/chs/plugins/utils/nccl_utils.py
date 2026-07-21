@@ -15,7 +15,7 @@
 from dataclasses import dataclass
 from chs.core.plugin_base import ColumnDef, PluginDetailReport, TableDataModel
 from chs.protos import bill_of_health_pb2 as pb
-from chs.plugins.utils.rendering import extract_node_names
+from chs.plugins.utils.rendering import extract_node_names, format_val
 from chs.utils import theme
 from . import validation_renderer
 
@@ -177,7 +177,7 @@ def extract_nccl_detail_data(
         row_dict = {
             "workload": test_level,
             "resource": resource_id,
-            "peak_bw": f"{max_bw:.2f}",
+            "peak_bw": format_val(max_bw),
             "msg_size": max_size,
         }
         if include_topology:
@@ -218,8 +218,8 @@ def extract_nccl_detail_data(
         rows=rows,
     )
 
-    test_name = test_results[0].test_name if test_results else "nccl"
-    test_level = test_results[0].test_level if test_results else ""
+    test_name = test_results[0].test_name
+    test_level = test_results[0].test_level
 
     return PluginDetailReport(
         test_name=test_name,

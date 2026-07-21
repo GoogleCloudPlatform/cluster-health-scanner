@@ -105,8 +105,8 @@ class NvidiaSmiRenderer(DefaultRenderer):
                 )
             )
 
-        test_name = test_results[0].test_name if test_results else "nvidia-smi"
-        test_level = test_results[0].test_level if test_results else ""
+        test_name = test_results[0].test_name
+        test_level = test_results[0].test_level
 
         return PluginDetailReport(
             test_name=test_name,

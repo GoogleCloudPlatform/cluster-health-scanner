@@ -17,7 +17,7 @@ from rich.console import Group
 from rich.text import Text
 from chs.utils import create_styled_table
 from chs.protos import bill_of_health_pb2 as pb
-from chs.plugins.utils.rendering import format_nodes
+from chs.plugins.utils.rendering import format_nodes, format_val
 from chs.core.default_plugin.renderer import DefaultRenderer
 from chs.core.plugin_base import ColumnDef, TableDataModel, PluginDetailReport
 
@@ -65,22 +65,10 @@ class TpuHbmRenderer(DefaultRenderer):
                 rows.append(
                     {
                         "num_elements": f"{r.num_elements:,}",
-                        "tensor_size": (
-                            f"{r.tensor_size:.1f}"
-                            if r.tensor_size is not None
-                            else "N/A"
-                        ),
+                        "tensor_size": format_val(r.tensor_size, precision=1),
                         "dtype": r.dtype,
-                        "bandwidth": (
-                            f"{r.bandwidth:.2f}"
-                            if r.bandwidth is not None
-                            else "N/A"
-                        ),
-                        "time_ms": (
-                            f"{r.time_ms:.3f}"
-                            if r.time_ms is not None
-                            else "N/A"
-                        ),
+                        "bandwidth": format_val(r.bandwidth, precision=2),
+                        "time_ms": format_val(r.time_ms, precision=3),
                     }
                 )
             tables.append(
@@ -91,8 +79,8 @@ class TpuHbmRenderer(DefaultRenderer):
                 )
             )
 
-        test_name = test_results[0].test_name if test_results else "tpu-hbm"
-        test_level = test_results[0].test_level if test_results else ""
+        test_name = test_results[0].test_name
+        test_level = test_results[0].test_level
 
         return PluginDetailReport(
             test_name=test_name,
