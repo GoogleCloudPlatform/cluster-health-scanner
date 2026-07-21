@@ -284,7 +284,8 @@ class TestRambleManager(unittest.TestCase):
                         ["execute_experiment"],
                     ),
                     (
-                        "/tmp/workspace/experiments/nvidia-smi/local/nvidia-smi",
+                        "/tmp/workspace/experiments/nvidia-smi/"
+                        "local/nvidia-smi",
                         [],
                         ["execute_experiment"],
                     ),
@@ -625,6 +626,33 @@ mycriteria:
             manager.archive()
             mock_boh.assert_not_called()
             mock_workspace.assert_not_called()
+
+    def test_is_archived(self):
+        """Test is_archived returns status based on storage provider."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+
+        # When no storage provider is configured, is_archived returns True
+        with mock.patch(
+            "chs.storage.StorageProviderFactory.get_provider_for_run",
+            return_value=None,
+        ):
+            self.assertTrue(manager.is_archived())
+
+        # When storage provider is configured, checks app_data run entry
+        mock_provider = mock.Mock()
+        with mock.patch(
+            "chs.storage.StorageProviderFactory.get_provider_for_run",
+            return_value=mock_provider,
+        ):
+            manager._app_data.get_run = mock.Mock(
+                return_value={"is_archived": True}
+            )
+            self.assertTrue(manager.is_archived())
+
+            manager._app_data.get_run = mock.Mock(
+                return_value={"is_archived": False}
+            )
+            self.assertFalse(manager.is_archived())
 
 
 if __name__ == "__main__":

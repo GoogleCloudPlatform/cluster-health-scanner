@@ -1033,6 +1033,68 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
 
+    @mock.patch("chs.cli.RambleManager")
+    @mock.patch("chs.cli._show_results")
+    @mock.patch("chs.cli.StorageProviderFactory.get_provider_for_run")
+    def test_analyze_action_archival_edge_cases(
+        self, mock_get_provider, mock_show_results, mock_rm_class
+    ):
+        """Test _analyze_action archival shortcutting across storage cases."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws_dir = os.path.join(tmpdir, "run1")
+            os.makedirs(os.path.join(ws_dir, ".ramble-workspace"))
+            boh_path = os.path.join(ws_dir, "bill_of_health.json")
+            with open(boh_path, "w") as f:
+                f.write("{}")
+
+            self.mock_app_data.get_workspaces_dir.return_value = tmpdir
+            self.mock_app_data.resolve_run_id.return_value = "run1"
+
+            mock_rm = mock.MagicMock()
+            mock_rm.path = ws_dir
+            mock_rm.workspace_name = "run1"
+            mock_rm.is_workspace_created = True
+            mock_rm_class.return_value = mock_rm
+
+            # Case 1: Local BoH exists + Storage NOT configured -> Shortcut
+            mock_get_provider.return_value = None
+            mock_rm.is_archived.return_value = True
+
+            cli._analyze_action(self.mock_app_data, "run1")
+            mock_show_results.assert_called_once_with(
+                self.mock_app_data, "run1"
+            )
+            mock_rm.archive.assert_not_called()
+
+            # Reset mocks
+            mock_show_results.reset_mock()
+
+            # Case 2: Local BoH + GCS Storage configured + is_archived=True
+            mock_provider = mock.Mock()
+            mock_get_provider.return_value = mock_provider
+            mock_rm.is_archived.return_value = True
+
+            cli._analyze_action(self.mock_app_data, "run1")
+            mock_show_results.assert_called_once_with(
+                self.mock_app_data, "run1"
+            )
+            mock_rm.archive.assert_not_called()
+
+            # Reset mocks
+            mock_show_results.reset_mock()
+
+            # Case 3: Local BoH + GCS configured + is_archived=False -> Archive
+            mock_rm.is_archived.return_value = False
+            mock_rm.has_bill_of_health.return_value = True
+            mock_rm.archive.return_value = (
+                "gs://bucket/ws.tar.gz",
+                "gs://bucket/boh.json",
+                "gs://bucket/boh.html",
+            )
+
+            cli._analyze_action(self.mock_app_data, "run1")
+            mock_rm.archive.assert_called_once()
+
     @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
     def test_results_command_no_boh_no_storage(self, mock_get_provider_for_run):
         """Test results command when BoH is missing and no storage set."""
@@ -1099,6 +1161,19 @@ class TestCli(unittest.TestCase):
         with self.assertRaises(ValueError):
             with cli.archive_workspace(mock_rm):
                 raise ValueError("test error")
+        mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_keyboard_interrupt(self):
+        """Test archive_workspace on BaseException (e.g. KeyboardInterrupt)."""
+        mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+            "/mock/boh.html",
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            with cli.archive_workspace(mock_rm):
+                raise KeyboardInterrupt()
         mock_rm.archive.assert_called_once()
 
     def test_archive_workspace_context_manager_detached(self):
@@ -1338,7 +1413,8 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         mock_results_viewer.assert_called_once()
-        mock_results_viewer.return_value.show_summary_and_details.assert_called_once_with(
+        viewer_mock = mock_results_viewer.return_value
+        viewer_mock.show_summary_and_details.assert_called_once_with(
             tests=None, resources=None, show_details=False
         )
 
@@ -1349,7 +1425,7 @@ class TestCli(unittest.TestCase):
             ["results", "my_run_id", "--tests", "t1,t2"],
         )
         self.assertEqual(result.exit_code, 0)
-        mock_results_viewer.return_value.show_summary_and_details.assert_called_once_with(
+        viewer_mock.show_summary_and_details.assert_called_once_with(
             tests=["t1", "t2"], resources=None, show_details=False
         )
 
@@ -1360,7 +1436,7 @@ class TestCli(unittest.TestCase):
             ["results", "my_run_id", "--resources", "r1"],
         )
         self.assertEqual(result.exit_code, 0)
-        mock_results_viewer.return_value.show_summary_and_details.assert_called_once_with(
+        viewer_mock.show_summary_and_details.assert_called_once_with(
             tests=None, resources=["r1"], show_details=False
         )
 

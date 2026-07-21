@@ -122,28 +122,48 @@ def _make_clickable_link(path_or_uri: str) -> str:
     return f"[link={href}]{path_or_uri}[/link]"
 
 
-def _archive_and_log(ramble_manager: RambleManager, spinner_label: str) -> None:
+def _archive_and_log(
+    ramble_manager: RambleManager, spinner_label: str | None = None
+) -> None:
     """Archives the workspace and logs the results with a progress spinner."""
     console = Console()
+    if not spinner_label:
+        if ramble_manager.has_bill_of_health():
+            spinner_label = (
+                "[bold blue]Archiving workspace and saving "
+                "Bill of Health...[/bold blue]"
+            )
+        else:
+            spinner_label = "[bold blue]Archiving workspace...[/bold blue]"
+
     with theme.get_progress_spinner(spinner_label):
         ws_path, boh_json_path, boh_html_path = ramble_manager.archive()
     storage_provider = StorageProviderFactory.get_provider_for_run(
         ramble_manager.workspace_name
     )
+    updates = {}
     if ws_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived to: "
             f"{_make_clickable_link(ws_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
+        updates["workspace_uri"] = ws_path
     if boh_json_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
             f"{_make_clickable_link(boh_json_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
+        updates["boh_uri"] = boh_json_path
     if boh_html_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report saved at: "
             f"{_make_clickable_link(boh_html_path)}[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+        updates["boh_html_uri"] = boh_html_path
+    if storage_provider and (ws_path or boh_json_path or boh_html_path):
+        updates["is_archived"] = True
+        ramble_manager._app_data.update_run(
+            ramble_manager.workspace_name, updates
         )
 
 
@@ -156,20 +176,19 @@ def archive_workspace(
         yield
     except ex.ChsDetachedException:
         raise
-    except Exception:
-        _archive_and_log(
-            ramble_manager,
-            "[bold blue]Archiving workspace and saving "
-            "Bill of Health...[/bold blue]",
-        )
+    except BaseException:
+        if ramble_manager.is_workspace_created:
+            try:
+                _archive_and_log(ramble_manager)
+            except Exception as archive_err:
+                logger.warning(
+                    "Failed to archive workspace during error cleanup: %s",
+                    archive_err,
+                )
         raise
     else:
-        if on_success:
-            _archive_and_log(
-                ramble_manager,
-                "[bold blue]Archiving workspace and saving "
-                "Bill of Health...[/bold blue]",
-            )
+        if on_success and ramble_manager.is_workspace_created:
+            _archive_and_log(ramble_manager)
 
 
 @contextmanager
@@ -517,29 +536,35 @@ def _analyze_action(
     if not os.path.exists(ramble_manager.path):
         raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
 
+    workspace_path = pathlib.Path(ramble_manager.path)
+    boh_path = workspace_path / "bill_of_health.json"
+    results_json_path = workspace_path / "results.latest.json"
+
+    run_entry = app_data.get_run(workspace_name) or {}
+    is_tiered = run_entry.get("is_tiered", False)
+    is_boh_final = run_entry.get("is_boh_final", not is_tiered)
+
+    # 1. Check if Bill of Health already exists and workspace is archived
+    if (
+        boh_path.exists()
+        and not validation
+        and is_boh_final
+        and ramble_manager.is_archived()
+    ):
+        logger.debug(
+            "Bill of Health already exists and workspace is archived. "
+            "Showing results directly."
+        )
+        Console().print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Found existing "
+            f"Bill of Health for {run_id}."
+            f"[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+        _show_results(app_data, run_id)
+        return run_id
+
     with archive_workspace(ramble_manager, on_success=True):
         try:
-            workspace_path = pathlib.Path(ramble_manager.path)
-            boh_path = workspace_path / "bill_of_health.json"
-            results_json_path = workspace_path / "results.latest.json"
-
-            run_entry = app_data.get_run(workspace_name) or {}
-            is_tiered = run_entry.get("is_tiered", False)
-            is_boh_final = run_entry.get("is_boh_final", not is_tiered)
-
-            # 1. Check if Bill of Health already exists
-            if boh_path.exists() and not validation and is_boh_final:
-                logger.debug(
-                    "Bill of Health already exists. Showing results directly."
-                )
-                Console().print(
-                    f"[{theme.CHS_SUCCESS_STYLE}]Found existing "
-                    f"Bill of Health for {run_id}."
-                    f"[/{theme.CHS_SUCCESS_STYLE}]"
-                )
-                _show_results(app_data, run_id)
-                return run_id
-
             # 2. If results.latest.json exists (but no BoH), generate BoH
             if results_json_path.exists() and is_boh_final:
                 logger.debug(
@@ -1591,14 +1616,17 @@ def cancel(obj, auto_approve: bool = False) -> None:
             ramble_manager = RambleManager(
                 workspaces_base_dir, workspace_name, run_id=latest_run_id
             )
-            if os.path.exists(ramble_manager.path):
+            if (
+                os.path.exists(ramble_manager.path)
+                and not ramble_manager.is_archived()
+            ):
                 logger.debug(
                     "Archiving the latest workspace after cancellation..."
                 )
                 _archive_and_log(
                     ramble_manager,
-                    "[bold blue]Archiving the latest workspace and saving "
-                    "Bill of Health...[/bold blue]",
+                    "[bold blue]Archiving cancelled "
+                    "run workspace...[/bold blue]",
                 )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         pass

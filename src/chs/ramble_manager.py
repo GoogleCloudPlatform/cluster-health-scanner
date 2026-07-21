@@ -1210,6 +1210,32 @@ class RambleManager:
             return None
         return dest
 
+    def has_bill_of_health(self) -> bool:
+        """Returns True if bill_of_health.json exists in the workspace."""
+        return os.path.exists(os.path.join(self.path, "bill_of_health.json"))
+
+    def is_archived(self) -> bool:
+        """Returns True if workspace has been archived.
+
+        Checks against configured storage provider (if any).
+        """
+        from chs.storage import StorageProviderFactory
+
+        storage_provider = StorageProviderFactory.get_provider_for_run(
+            self.workspace_name
+        )
+        if storage_provider:
+            run_entry = self._app_data.get_run(self.workspace_name) or {}
+            return bool(run_entry.get("is_archived", False))
+        return True
+
+    @property
+    def is_workspace_created(self) -> bool:
+        """Returns True if the workspace directory exists on disk."""
+        return os.path.exists(self.path) and os.path.exists(
+            os.path.join(self.path, ".ramble-workspace")
+        )
+
     def archive(self) -> tuple[str | None, str | None, str | None]:
         """Orchestrates archival of BoH and workspace using active provider.
 
@@ -1221,9 +1247,7 @@ class RambleManager:
         local_json_path = os.path.join(self.path, "bill_of_health.json")
         local_html_path = os.path.join(self.path, "bill_of_health.html")
 
-        if not os.path.exists(self.path) or not os.path.exists(
-            os.path.join(self.path, ".ramble-workspace")
-        ):
+        if not self.is_workspace_created:
             logger.debug(
                 "Workspace %s is not a valid Ramble workspace. "
                 "Skipping archival.",
