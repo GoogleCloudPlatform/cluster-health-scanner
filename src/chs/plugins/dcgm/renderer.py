@@ -18,10 +18,94 @@ from chs.plugins.utils.rendering import extract_node_names
 from rich.text import Text
 from rich.console import Group, RenderableType
 from chs.core.default_plugin.renderer import DefaultRenderer
+from chs.core.plugin_base import ColumnDef, TableDataModel, PluginDetailReport
 from chs.utils import theme
 
 
 class DcgmRenderer(DefaultRenderer):
+    def get_column_schema(self) -> list[ColumnDef]:
+        return [
+            ColumnDef("node", "Node"),
+            ColumnDef("level", "Level"),
+            ColumnDef("test_group", "Test Group"),
+            ColumnDef("status", "Status"),
+        ]
+
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        """Extracts structured DCGM detail data model."""
+        if not test_results:
+            return None
+
+        node_results = defaultdict(list)
+        for result in test_results:
+            for rid in extract_node_names(result.target_resources):
+                node_results[rid].append(result)
+
+        rows = []
+        for node_name, results in sorted(node_results.items()):
+            level_to_metrics = self._get_level_metrics(results)
+            if not level_to_metrics:
+                rows.append(
+                    {
+                        "node": node_name,
+                        "level": "N/A",
+                        "test_group": "N/A",
+                        "status": "No diagnostics found",
+                        "passed_gpus": 0,
+                        "total_gpus": 0,
+                    }
+                )
+            else:
+                first_node_row = True
+                for level, tests in sorted(level_to_metrics.items()):
+                    level_str = level.replace("-", " ")
+                    first_level_row = True
+                    for test_name, metrics in sorted(tests.items()):
+                        passed_gpus = {s for s in metrics["passed"]}
+                        failed_gpus = {s for s in metrics["failed"]}
+                        total = len(passed_gpus) + len(failed_gpus)
+                        if failed_gpus:
+                            failed_str = ", ".join(sorted(failed_gpus))
+                            status_plain = (
+                                f"{len(passed_gpus)}/{total} GPUs passed "
+                                f"({failed_str} failed)"
+                            )
+                        else:
+                            status_plain = f"{total}/{total} GPUs passed"
+
+                        disp_node = node_name if first_node_row else ""
+                        disp_level = level_str if first_level_row else ""
+                        rows.append(
+                            {
+                                "node": disp_node,
+                                "level": disp_level,
+                                "test_group": test_name,
+                                "status": status_plain,
+                                "passed_gpus": len(passed_gpus),
+                                "total_gpus": total,
+                                "failed_gpus": sorted(list(failed_gpus)),
+                            }
+                        )
+                        first_node_row = False
+                        first_level_row = False
+
+        table_model = TableDataModel(
+            title="DCGM",
+            headers=self.get_column_schema(),
+            rows=rows,
+        )
+
+        test_name = test_results[0].test_name if test_results else "dcgm"
+        test_level = test_results[0].test_level if test_results else ""
+
+        return PluginDetailReport(
+            test_name=test_name,
+            test_level=test_level,
+            tables=[table_model],
+        )
+
     def _get_level_metrics(self, results: list[pb.TestResult]) -> dict:
         """Groups sub-tests by level and provides a structured dictionary."""
         level_to_metrics = defaultdict(
@@ -57,6 +141,8 @@ class DcgmRenderer(DefaultRenderer):
                 "No detailed metrics available.", style=theme.CHS_WARNING_STYLE
             )
 
+        report = self.get_detail_data(test_results)
+
         all_dcgm_versions = {
             m.value.string_value
             for r in test_results
@@ -88,55 +174,29 @@ class DcgmRenderer(DefaultRenderer):
                 )
             )
 
-        node_results = defaultdict(list)
-        for result in test_results:
-            for rid in extract_node_names(result.target_resources):
-                node_results[rid].append(result)
-
         table = theme.create_styled_table(
             "Node", "Level", "Test Group", "Status", expand=False
         )
 
-        for node_name, results in sorted(node_results.items()):
-            level_to_metrics = self._get_level_metrics(results)
+        if report and report.tables:
+            table_model = report.tables[0]
+            current_node = None
+            for row in table_model.rows:
+                if (
+                    current_node is not None
+                    and row["node"]
+                    and row["node"] != current_node
+                ):
+                    table.add_section()
+                if row["node"]:
+                    current_node = row["node"]
 
-            first_node_row = True
-            if not level_to_metrics:
                 table.add_row(
-                    node_name,
-                    "N/A",
-                    "N/A",
-                    f"[{theme.CHS_NEUTRAL_STYLE}]No diagnostics found[/]",
+                    row["node"],
+                    row["level"],
+                    row["test_group"],
+                    row["status"],
                 )
-            else:
-                for level, tests in sorted(level_to_metrics.items()):
-                    level_str = level.replace("-", " ")
-                    first_level_row = True
-                    for test_name, metrics in sorted(tests.items()):
-                        passed_gpus = {s for s in metrics["passed"]}
-                        failed_gpus = {s for s in metrics["failed"]}
-                        total = len(passed_gpus) + len(failed_gpus)
-                        if failed_gpus:
-                            failed_str = ", ".join(sorted(failed_gpus))
-                            status_str = (
-                                f"[{theme.CHS_FAILURE_STYLE}]"
-                                f"{len(passed_gpus)}/{total} "
-                                f"GPUs passed ({failed_str} failed)[/]"
-                            )
-                        else:
-                            status_str = (
-                                f"[{theme.CHS_SUCCESS_STYLE}]{total}/{total} "
-                                "GPUs passed[/]"
-                            )
-
-                        table.add_row(
-                            node_name if first_node_row else "",
-                            level_str if first_level_row else "",
-                            test_name,
-                            status_str,
-                        )
-                        first_node_row = False
-                        first_level_row = False
             table.add_section()
 
         val_table = self.render_validation_results(test_results)
