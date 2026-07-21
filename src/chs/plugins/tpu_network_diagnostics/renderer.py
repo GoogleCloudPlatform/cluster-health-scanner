@@ -13,30 +13,77 @@
 # limitations under the License.
 
 from rich.console import Group
-from rich.table import Table
 from rich.text import Text
 from chs.utils import create_styled_table
-from chs.protos import bill_of_health_pb2 as pb
-from chs.plugins.utils.rendering import format_nodes
 from chs.core.default_plugin.renderer import DefaultRenderer
+from chs.core.plugin_base import ColumnDef, PluginDetailReport, TableDataModel
+from chs.plugins.utils.rendering import format_nodes, format_val
+from chs.protos import bill_of_health_pb2 as pb
 
 
 class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
     """Renders details for tpu-network-diagnostics tests."""
 
-    def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
-        """Renders detail tables for network diagnostic tests per node."""
+    def get_column_schema(self) -> list[ColumnDef]:
+        return [
+            ColumnDef("node", "Node Name"),
+            ColumnDef("bandwidth", "Bandwidth (GB/s)", align="right"),
+        ]
+
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        """Extracts structured network diagnostics detail table data model."""
         if not test_results:
-            return Text("No detailed metrics available.", style="yellow")
+            return None
 
         node_bandwidths = self._extract_node_data(test_results)
         if not node_bandwidths:
-            return Text(
-                "No parsed Network Diagnostics metrics found.", style="yellow"
+            return None
+
+        rows = []
+        for node_name in sorted(node_bandwidths.keys()):
+            bandwidth_val = node_bandwidths[node_name]
+            formatted_bandwidth = format_val(bandwidth_val)
+            rows.append(
+                {
+                    "node": node_name,
+                    "bandwidth": formatted_bandwidth,
+                }
             )
 
-        elements = [Text("\nTPU Network Diagnostics Detail", style="bold cyan")]
-        elements.extend(self._build_bandwidth_table(node_bandwidths))
+        table_model = TableDataModel(
+            title="TPU Network Diagnostics Detail",
+            headers=self.get_column_schema(),
+            rows=rows,
+        )
+
+        test_name = test_results[0].test_name
+        test_level = test_results[0].test_level
+
+        return PluginDetailReport(
+            test_name=test_name,
+            test_level=test_level,
+            tables=[table_model],
+        )
+
+    def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
+        """Renders detail tables for network diagnostic tests per node."""
+        report = self.get_detail_data(test_results)
+        if not report or not report.tables:
+            return Text("No detailed metrics available.", style="yellow")
+
+        table_model = report.tables[0]
+        elements = [Text(f"\n{table_model.title}", style="bold cyan")]
+
+        table = create_styled_table(expand=False)
+        table.add_column("Node Name", justify="left")
+        table.add_column("Bandwidth (GB/s)", justify="right")
+
+        for r in table_model.rows:
+            table.add_row(r["node"], r["bandwidth"])
+
+        elements.append(table)
 
         val_table = self.render_validation_results(test_results)
         if val_table:
@@ -79,18 +126,3 @@ class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
                     node_bandwidths[node_name] = bandwidth_val
 
         return node_bandwidths
-
-    def _build_bandwidth_table(
-        self, node_bandwidths: dict[str, float]
-    ) -> list[Table]:
-        """Builds a summary table showing node name vs min bandwidth."""
-        table = create_styled_table(expand=False)
-        table.add_column("Node Name", justify="left")
-        table.add_column("Bandwidth (GB/s)", justify="right")
-
-        for node_name in sorted(node_bandwidths.keys()):
-            bandwidth_val = node_bandwidths[node_name]
-            formatted_bandwidth = f"{bandwidth_val:.2f}"
-            table.add_row(node_name, formatted_bandwidth)
-
-        return [table]
