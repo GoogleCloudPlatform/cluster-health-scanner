@@ -21,7 +21,6 @@ routing, and error handling for various valid and invalid inputs.
 import dataclasses
 import datetime
 import os
-import pathlib
 import shutil
 import tempfile
 import unittest
@@ -433,7 +432,7 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(result.exit_code, 2)
                 self.assertIn(case.expected_output, result.output)
 
-    @mock.patch("chs.cli.analyze_action", autospec=True)
+    @mock.patch("chs.cli._analyze_action", autospec=True)
     @mock.patch("chs.cli.get_scheduler")
     def test_run_command(self, mock_get_scheduler, mock_analyze_action):
         """Test 'run' command."""
@@ -698,7 +697,7 @@ class TestCli(unittest.TestCase):
                     skip_validation=False,
                 )
 
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_active_tier_tests_filtered_by_supported_tests(
         self, mock_analyze_action
     ):
@@ -759,7 +758,7 @@ class TestCli(unittest.TestCase):
                 ["tpu-info", "collectives"],
             )
 
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_raises_validation_error_when_initial_tier_tests_empty(
         self, mock_analyze_action
     ):
@@ -810,7 +809,7 @@ class TestCli(unittest.TestCase):
                 result.output,
             )
 
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_preserves_suite_test_variables(
         self, mock_analyze_action
     ):
@@ -886,7 +885,7 @@ class TestCli(unittest.TestCase):
                 ],
             )
 
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_custom_run_id(self, mock_analyze_action):
         """Test 'run' command with a custom run ID."""
         mock_default_dir = "/mocked/workspaces"
@@ -922,7 +921,7 @@ class TestCli(unittest.TestCase):
             skip_validation=False,
         )
 
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_auto_attach_success(self, mock_analyze_action):
         """Test 'run' command automatically attaches to an active run."""
         self.mock_app_data.get_latest_run_id.side_effect = None
@@ -947,7 +946,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.return_value.suite, "suite1")
 
     @mock.patch("chs.cli.cancel_action")
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_auto_attach_died_mid_submission(
         self, mock_analyze_action, mock_cancel_action
     ):
@@ -970,7 +969,7 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.execute_experiments.assert_called_once()
 
     @mock.patch("chs.cli.cancel_action")
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_auto_attach_completed_run(
         self, mock_analyze_action, mock_cancel_action
     ):
@@ -1021,25 +1020,6 @@ class TestCli(unittest.TestCase):
             str(result.exception),
         )
         self.mock_app_data.get_latest_run_id.assert_not_called()
-
-    def test_analyze_action_exception_handling(self):
-        """Test that analyze_action wraps exceptions in ClickException."""
-        ws_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, ws_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
-
-        run_dir = os.path.join(ws_dir, "some_run_id")
-        os.makedirs(run_dir)
-        self.mock_rm_instance.path = run_dir
-        self.mock_app_data.get_run.return_value = {}
-
-        self.mock_rm_instance.wait_for_jobs.side_effect = (
-            exceptions.ChsAnalysisException("Analysis failed")
-        )
-        result = self.runner.invoke(cli.cli, ["analyze", "some_run_id"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("Analysis failed", result.output)
-        self.mock_rm_instance.archive.assert_called_once()
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
@@ -1181,7 +1161,7 @@ class TestCli(unittest.TestCase):
 
     @mock.patch("chs.cli.detect_scheduler")
     @mock.patch("chs.cli.get_scheduler")
-    @mock.patch("chs.cli.analyze_action", autospec=True)
+    @mock.patch("chs.cli._analyze_action", autospec=True)
     def test_run_command_passes_nodepool_to_scheduler(
         self, mock_analyze_action, mock_get_scheduler, mock_detect_scheduler
     ):
@@ -1229,32 +1209,6 @@ class TestCli(unittest.TestCase):
         ]
         self.assertEqual(len(calls_with_nodepool), 1)
 
-    def test_run_preflight_failure_aborts_before_cancellation(self):
-        """Test preflight check failure aborts before handling previous run."""
-        self.mock_app_data.get_latest_run_id.return_value = "old_run_id"
-        self.mock_app_data.resolve_run_id.return_value = "old_workspace"
-        self.mock_app_data.get_run.return_value = {
-            "submission_complete": False,
-            "scheduler": "kubernetes",
-        }
-        self.mock_scheduler.run_preflight_checks.side_effect = (
-            exceptions.ChsPreflightException(
-                "Missing required cluster dependencies: JobSet."
-            )
-        )
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["run", "--auto-approve"],
-        )
-
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn(
-            "Missing required cluster dependencies: JobSet.", result.output
-        )
-        self.mock_scheduler.has_no_failed_jobs.assert_not_called()
-        self.mock_scheduler.cancel_jobs_by_prefix.assert_not_called()
-
     def test_run_command_heterogeneous_cluster_raises(self):
         """Test `run` command when a heterogeneous cluster is detected."""
         self.mock_scheduler.name = "slurm"
@@ -1272,6 +1226,7 @@ class TestCli(unittest.TestCase):
         self, mock_handle_previous_run
     ):
         """Test validation failures prevent cluster preparation for execution"""
+        mock_handle_previous_run.return_value = None
         self.mock_scheduler.name = "slurm"
         self.mock_scheduler.get_nodes_under_test.return_value = [
             "node1",
@@ -1284,7 +1239,6 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
-        mock_handle_previous_run.assert_not_called()
 
     def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
@@ -1358,136 +1312,6 @@ class TestCli(unittest.TestCase):
 
                 result = self.runner.invoke(cli.cli, case.args_list)
                 self.assertNotEqual(result.exit_code, 0)
-                self.assertIn(case.expected_output, result.output)
-
-    @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    def test_analyze_command_shortcut_boh(self, mock_results_viewer):
-        """Test 'analyze' command shortcut when BoH already exists."""
-        # Create temp workspace
-        workspaces_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, workspaces_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
-
-        # Create BOH file
-        run_dir = os.path.join(workspaces_dir, "my_run_id")
-        os.makedirs(run_dir)
-        boh_path = os.path.join(run_dir, "bill_of_health.json")
-        with open(boh_path, "w") as f:
-            f.write("{}")
-
-        # Configure RambleManager mock instance
-        self.mock_rm_instance.path = os.path.join(workspaces_dir, "my_run_id")
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["analyze", "my_run_id"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-        self.mock_rm_instance.wait_for_jobs.assert_not_called()
-        self.mock_rm_instance.generate_boh.assert_not_called()
-        mock_results_viewer.assert_called_once_with(
-            pathlib.Path(boh_path), boh_uri=None
-        )
-
-    @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    def test_analyze_command_shortcut_results(self, mock_results_viewer):
-        """Test 'analyze' command shortcut when results.latest.json exists."""
-        # Create temp workspace
-        workspaces_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, workspaces_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
-
-        # Create results.latest.json file
-        workspace_dir = os.path.join(workspaces_dir, "my_run_id")
-        os.makedirs(workspace_dir)
-        results_path = os.path.join(workspace_dir, "results.latest.json")
-        with open(results_path, "w") as f:
-            f.write("{}")
-
-        # Configure RambleManager mock instance
-        self.mock_rm_instance.path = workspace_dir
-
-        def mock_generate_boh(results_path, **kwargs):
-            boh_file = os.path.join(workspace_dir, "bill_of_health.json")
-            with open(boh_file, "w") as f:
-                f.write("{}")
-            return workspace_dir
-
-        self.mock_rm_instance.generate_boh.side_effect = mock_generate_boh
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["analyze", "my_run_id"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-        self.mock_rm_instance.wait_for_jobs.assert_not_called()
-        self.mock_rm_instance.generate_boh.assert_called_once_with(
-            results_path, thresholds_path=None, skip_validation=False
-        )
-        mock_results_viewer.assert_called_once()
-
-    @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    def test_analyze_command_full(self, mock_results_viewer):
-        """Test 'analyze' command full path when no results exist yet."""
-        # Create temp workspace
-        workspaces_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, workspaces_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
-
-        # Create empty workspace dir
-        workspace_dir = os.path.join(workspaces_dir, "my_run_id")
-        os.makedirs(workspace_dir)
-
-        # Configure RambleManager mock instance
-        self.mock_rm_instance.path = workspace_dir
-        self.mock_app_data.get_run.return_value = {}
-
-        def mock_analyze_experiments(**kwargs):
-            boh_file = os.path.join(workspace_dir, "bill_of_health.json")
-            with open(boh_file, "w") as f:
-                f.write("{}")
-            return workspace_dir
-
-        self.mock_rm_instance.analyze_experiments.side_effect = (
-            mock_analyze_experiments
-        )
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["analyze", "my_run_id"],
-            standalone_mode=False,
-        )
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"Exception: {result.exception}\nOutput: {result.output}",
-        )
-        self.mock_rm_instance.wait_for_jobs.assert_called_once()
-        self.mock_rm_instance.analyze_experiments.assert_called_once()
-        self.mock_rm_instance.generate_boh.assert_called_once()
-        self.mock_rm_instance.archive.assert_called_once()
-        mock_results_viewer.assert_called_once()
-
-    def test_analyze_command_errors(self):
-        """Test 'analyze' command with invalid flags."""
-        test_cases = [
-            _CommandErrorTestCase(
-                name="empty_run_id",
-                args_list=["analyze", ""],
-                expected_output="cannot be an empty string",
-            ),
-            _CommandErrorTestCase(
-                name="whitespace_run_id",
-                args_list=["analyze", " "],
-                expected_output="cannot be an empty string",
-            ),
-        ]
-        for case in test_cases:
-            with self.subTest(case.name):
-                result = self.runner.invoke(cli.cli, case.args_list)
-                self.assertEqual(result.exit_code, 2)
                 self.assertIn(case.expected_output, result.output)
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
@@ -1762,14 +1586,6 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.set_storage_config.assert_called_once_with(
             {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
         )
-
-    @mock.patch("chs.cli.RambleManager")
-    def test_analyze_command_workspace_not_found(self, mock_rm_cls):
-        """Test analyze command when workspace is not found."""
-        mock_rm_cls.return_value.path = "/non/existent/path"
-        result = self.runner.invoke(cli.cli, ["analyze", "missing_run"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("Workspace 'missing_run' not found", result.output)
 
 
 class TestCliHistory(unittest.TestCase):

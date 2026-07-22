@@ -459,7 +459,7 @@ def run_action(
             ) from e
 
 
-def analyze_action(
+def _analyze_action(
     app_data: ChsAppData,
     run_id: str,
     validation: str | None = None,
@@ -706,7 +706,7 @@ def _show_results(
                     f"Results not found for run '{run_id}'.\n"
                     "This usually happens if the jobs are still running, "
                     "the run was canceled, or the upload failed.\n"
-                    f"Tip: Run 'chs analyze {run_id}' to re-attach to the run "
+                    "Tip: Run 'chs run' to re-attach to any active run "
                     "and check its status."
                 ) from e
             except Exception as e:
@@ -1024,9 +1024,11 @@ def _handle_previous_run(
                 f"Attaching to ongoing/completed run: {latest_run_id}. "
                 f"Run `{cleanup_cmd}` to destroy it."
             )
-            analyze_action(app_data, latest_run_id, validation, skip_validation)
+            _analyze_action(
+                app_data, latest_run_id, validation, skip_validation
+            )
             return RunExecutionResult(
-                suite=suite or "lite",
+                suite=run_entry.get("suite", suite or "lite"),
                 scheduler_name=scheduler,
                 tests=None,
                 workspace_name=workspace_name,
@@ -1157,11 +1159,22 @@ def run(
     """
     app_data = obj["app_data"]
 
+    scheduler = detect_scheduler()
+
+    attach_result = _handle_previous_run(
+        app_data=app_data,
+        scheduler=scheduler,
+        suite=suite,
+        validation=validation,
+        skip_validation=skip_validation,
+        auto_approve=auto_approve,
+    )
+    if attach_result:
+        return attach_result
+
     with theme.get_progress_spinner(
         "Discovering hardware and validating arguments..."
     ):
-        scheduler = detect_scheduler()
-
         scheduler_obj = get_scheduler(
             scheduler,
             nodes=nodes,
@@ -1298,16 +1311,6 @@ def run(
         f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
 
-    attach_result = _handle_previous_run(
-        app_data=app_data,
-        scheduler=scheduler,
-        suite=suite,
-        validation=validation,
-        skip_validation=skip_validation,
-        auto_approve=auto_approve,
-    )
-    if attach_result:
-        return attach_result
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
 
     test_names = ", ".join(
@@ -1471,7 +1474,7 @@ def run(
         )
 
     # Automatically trigger analysis
-    analyze_action(
+    _analyze_action(
         app_data,
         run_id,
         validation=validation,
@@ -1533,59 +1536,6 @@ def _get_run_id_or_prompt(
         raise click.Abort()
 
     return selected
-
-
-@cli.command()
-@handle_chs_exceptions
-@click.argument(
-    "run_id", required=False, callback=validators.validate_non_empty_string
-)
-@click.option(
-    "--validation",
-    help="Path to user-defined thresholds YAML file (overrides workspace copy)",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
-    "--skip-validation",
-    is_flag=True,
-    help="Skip threshold evaluation entirely.",
-)
-@click.pass_obj
-def analyze(
-    obj,
-    run_id: str | None,
-    validation: str | None = None,
-    skip_validation: bool = False,
-) -> str:
-    """Analyze results from a test run.
-
-    If no run_id is provided, you will be prompted to select one.
-
-    \b
-    Args:
-      obj: Click object containing app_data.
-      run_id: The ID of the test run to analyze.
-      thresholds: Path to user-defined thresholds YAML file.
-
-    Returns:
-      The run_id of the analyzed test run.
-    """
-    app_data = obj["app_data"]
-    run_id = _get_run_id_or_prompt(
-        app_data, run_id, prompt_msg="Which run would you like to analyze?"
-    )
-    logger.debug("Analyzing run: %s", run_id)
-
-    if validation:
-        errors = validators.ThresholdsValidator().validate(
-            {"thresholds_path": validation}
-        )
-        if errors:
-            raise ex.ChsValidationError("\n".join(errors))
-
-    return analyze_action(
-        app_data, run_id, validation=validation, skip_validation=skip_validation
-    )
 
 
 @cli.command()

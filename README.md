@@ -302,32 +302,7 @@ Workspace                     Details
 2026-05-04_19.05.29.792632    chs run
 ```
 
-### 6. analyze
-Analyzes results from a test run. If no `RUN_ID` is provided, you will be prompted to select one.
-
-**Arguments:**
-
-- `RUN_ID` (Optional): The ID (Workspace Name) of the run to analyze.
-
-**Options:**
-
-- `--validation`: Path to a user-defined thresholds YAML file to override the workspace copy (optional).
-- `--skip-validation`: Skip threshold evaluation entirely.
-
-**Example:**
-
-```bash
-# Analyze the most recent run
-chs analyze
-
-# Analyze a specific run
-chs analyze sim-a3mega-chs-custom-lplt
-
-# Skip validation during analysis
-chs analyze --skip-validation
-```
-
-### 7. results
+### 6. results
 Shows the generated "Bill of Health" results and metric details for a run. If validation is enabled, this will display two separate tables in the terminal: one for all raw metrics and one strictly for validated metrics. If no `RUN_ID` is provided, you will be prompted to select one.
 
 **Arguments:**
@@ -463,19 +438,18 @@ CHS stores all run data, configurations, and logs in a dedicated `workspaces` di
 CHS expects a standard Ramble installation. It looks for the Ramble setup script (`setup-env.sh`) relative to the installed `chs` package location (typically inside `site-packages/share/ramble`).
 
 ## Validation Thresholds
-CHS utilizes validation thresholds to automatically evaluate if a completed test run meets specific performance or health criteria. During analysis, CHS evaluates the extracted metrics against thresholds and records the outcome in the Bill of Health (`bill_of_health.json`).
+CHS utilizes validation thresholds to automatically evaluate if a completed test run meets specific performance or health criteria. During run execution, CHS evaluates the extracted metrics against thresholds and records the outcome in the Bill of Health (`bill_of_health.json`).
 
 You can configure these thresholds by providing a YAML file containing baseline criteria.
 
 ### Usage and CLI Flags
-**Specify custom thresholds:** Use the `--validation <PATH>` flag during `chs run` or `chs analyze` to specify a custom thresholds YAML file:
+**Specify custom thresholds:** Use the `--validation <PATH>` flag during `chs run` to specify a custom thresholds YAML file:
 
 ```bash
-chs run --validation /path/to/custom_thresholds.yaml
-chs analyze --validation /path/to/custom_thresholds.yaml
+chs run --tests nccl-cluster --validation /path/to/custom_thresholds.yaml
 ```
 
-**Skip validation:** If you want to run tests or analyze results without applying any threshold checks, use the `--skip-validation` flag.
+**Skip validation:** If you want to run tests without applying any threshold checks, use the `--skip-validation` flag.
 
 ```bash
 chs run --skip-validation

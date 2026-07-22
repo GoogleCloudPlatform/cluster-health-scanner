@@ -830,11 +830,10 @@ class RambleManager:
             )
             console.print(
                 "To compile logs and generate results run: "
-                f"[cyan]chs analyze {self._run_id}[/cyan]"
+                "[cyan]chs run[/cyan]"
             )
             console.print(
-                "When completed, view results with: "
-                f"[cyan]chs results {self._run_id}[/cyan]"
+                "When completed, view results with: " "[cyan]chs results[/cyan]"
             )
             console.print(
                 "To cancel execution and cleanup run: [cyan]chs cancel[/cyan]"
@@ -1042,8 +1041,8 @@ class RambleManager:
 
         if not os.path.exists(results_json_path):
             raise ex.ChsException(
-                "chs analyze command failed. Recheck the run id and try "
-                "rerunning the command."
+                "Failed to generate results. Ensure jobs are complete and try "
+                "running 'chs run' again to auto-attach and resume."
             )
         self._cleanup_inputs_dir()
         return results_json_path
