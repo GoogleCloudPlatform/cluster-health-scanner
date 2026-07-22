@@ -364,12 +364,50 @@ def _get_test_name(test: dict[str, Any] | str) -> str:
     return test.get("name") if isinstance(test, dict) else str(test)
 
 
+def _validate_cli_args(
+    suite: str | None,
+    tests: str | None,
+    nodes: str | None = None,
+    nodelists: str | None = None,
+    nodepools: str | None = None,
+    partitions: str | None = None,
+    validation: str | None = None,
+) -> None:
+    """Validates core CLI arguments (suite, thresholds) before scheduler
+    detection.
+
+    Args:
+      suite: Suite name, or None.
+      tests: Comma-separated list of tests, or None.
+      nodes: Comma-separated list of individual nodes, or None.
+      nodelists: Slurm node list pattern, or None.
+      nodepools: Kubernetes node pools, or None.
+      partitions: Slurm partitions, or None.
+      validation: Path to thresholds validation file, or None.
+
+    Raises:
+      ex.ChsValidationError: If validation fails.
+    """
+    cli_validator = validators.CliArgsValidator()
+    errors = cli_validator.validate(
+        {
+            "tests": tests,
+            "suite": suite,
+            "nodes": nodes,
+            "nodelists": nodelists,
+            "nodepools": nodepools,
+            "partitions": partitions,
+            "thresholds_path": validation,
+        }
+    )
+    if errors:
+        raise ex.ChsValidationError("\n".join(errors))
+
+
 def _validate_run_args(
     scheduler: str,
     detected_machine_types: list[str],
     tests: str | None,
-    suite: str | None,
-    validation: str | None = None,
 ) -> None:
     """Validates core run arguments against supported lists.
 
@@ -377,8 +415,6 @@ def _validate_run_args(
       scheduler: Name of the scheduler.
       detected_machine_types: List of detected machine types.
       tests: Comma-separated list of tests, or None.
-      suite: Suite name, or None.
-      validation: Path to thresholds validation file, or None.
 
     Raises:
       ex.ChsValidationError: If validation fails.
@@ -400,9 +436,7 @@ def _validate_run_args(
         {
             "scheduler": scheduler,
             "machine_type": machine_type,
-            "suite": suite,
             "tests": _parse_str_to_list(tests),
-            "thresholds_path": validation,
         }
     )
     if errors:
@@ -1021,7 +1055,7 @@ def _handle_previous_run(
     app_data: ChsAppData,
     scheduler: str,
     suite: str | None,
-    validation: bool,
+    validation: str | None,
     skip_validation: bool,
     auto_approve: bool,
 ) -> RunExecutionResult | None:
@@ -1214,6 +1248,16 @@ def run(
     """
     app_data = obj["app_data"]
 
+    _validate_cli_args(
+        suite=suite,
+        tests=tests,
+        nodes=nodes,
+        nodelists=nodelists,
+        nodepools=nodepools,
+        partitions=partitions,
+        validation=validation,
+    )
+
     scheduler = detect_scheduler()
 
     attach_result = _handle_previous_run(
@@ -1253,9 +1297,7 @@ def run(
                 "Failed to detect machine type of some nodes"
             )
 
-        _validate_run_args(
-            scheduler, detected_machine_types, tests, suite, validation
-        )
+        _validate_run_args(scheduler, detected_machine_types, tests)
 
         nodes_under_test = scheduler_obj.filter_partial_tpu_slices(
             nodes_under_test

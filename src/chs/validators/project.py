@@ -19,9 +19,7 @@ from typing import Any
 from chs.validators.base import Validator
 from chs.validators.machine_type import MachineTypeValidator
 from chs.validators.scheduler import SchedulerValidator
-from chs.validators.suite import SuiteValidator
 from chs.validators.tests import TestsValidator
-from chs.validators.thresholds import ThresholdsValidator
 
 
 class ProjectConfigValidator(Validator):
@@ -36,9 +34,7 @@ class ProjectConfigValidator(Validator):
         validators = [
             SchedulerValidator(),
             MachineTypeValidator(),
-            SuiteValidator(),
             TestsValidator(),
-            ThresholdsValidator(),
         ]
         self.validators = validators
 

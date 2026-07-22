@@ -38,6 +38,7 @@ from chs.utils.tests import TestsMap as _TestsMap
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
 MOCK_WORKSPACE_NAME = "20230101-120000_mockcluster-suite1-mockhash"
+MOCK_CUSTOM_WORKSPACE_NAME = "20230101-120000_mockcluster-custom-mockhash"
 
 
 @dataclasses.dataclass
@@ -493,16 +494,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1,t2",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -512,16 +511,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -531,16 +528,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1,",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -550,16 +545,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     ",t1",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -569,16 +562,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1,,t2",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -588,16 +579,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1, t2 ",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -607,16 +596,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1, t2 ,t3 ",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -676,7 +663,7 @@ class TestCli(unittest.TestCase):
                 self.mock_app_data.get_workspaces_dir.assert_called()
                 self.mock_rm_cls.assert_any_call(
                     mock_default_dir,
-                    MOCK_WORKSPACE_NAME,
+                    case.expected_return.workspace_name,
                     run_id=f"mockcluster-{case.expected_return.suite}-mockhash",
                 )
                 self.mock_rm_instance.create_workspace.assert_called_once()
