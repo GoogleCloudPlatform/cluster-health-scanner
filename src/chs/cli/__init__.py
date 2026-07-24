@@ -423,6 +423,7 @@ def _validate_cli_args(
 
 def _validate_run_args(
     scheduler: str,
+    scheduler_obj: BaseScheduler,
     detected_machine_types: list[str],
     tests: str | None,
 ) -> None:
@@ -430,6 +431,7 @@ def _validate_run_args(
 
     Args:
       scheduler: Name of the scheduler.
+      scheduler_obj: Resolved scheduler instance.
       detected_machine_types: List of detected machine types.
       tests: Comma-separated list of tests, or None.
 
@@ -457,6 +459,7 @@ def _validate_run_args(
     errors = validator.validate(
         {
             "scheduler": scheduler,
+            "scheduler_obj": scheduler_obj,
             "machine_type": machine_type,
             "tests": _parse_str_to_list(tests),
         }
@@ -1315,14 +1318,15 @@ def run(
             partitions=partitions,
         )
 
-        nodes_under_test = scheduler_obj.get_nodes_under_test()
-        if not nodes_under_test:
+        resolved_raw_nodes = scheduler_obj.resolve_raw_nodes()
+
+        if not resolved_raw_nodes:
             raise ex.NoNodesProvidedException("No nodes provided to run on.")
 
         preflights.run_platform_preflights()
 
         detected_machine_types = scheduler_obj.detect_nodes_hardware(
-            nodes_under_test
+            resolved_raw_nodes
         )
 
         if not detected_machine_types or "unknown" in detected_machine_types:
@@ -1330,14 +1334,15 @@ def run(
                 "Failed to detect machine type of some nodes"
             )
 
-        _validate_run_args(scheduler, detected_machine_types, tests)
-
-        nodes_under_test = scheduler_obj.filter_partial_tpu_slices(
-            nodes_under_test
+        _validate_run_args(
+            scheduler, scheduler_obj, detected_machine_types, tests
         )
+
+        nodes_under_test = scheduler_obj.get_nodes_under_test()
+
         if not nodes_under_test:
             raise ex.NoNodesProvidedException(
-                "No valid nodes remain after TPU slice validation."
+                "No valid nodes remain available for testing."
             )
 
         machine_type = detected_machine_types[0]

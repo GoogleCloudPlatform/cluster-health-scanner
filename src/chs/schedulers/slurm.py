@@ -81,6 +81,7 @@ class SlurmScheduler(BaseScheduler):
         self.nodelists_arg = nodelists
         self.partitions_arg = partitions
         self._resolved_nodes: list[str] | None = None
+        self._resolved_raw_nodes: list[str] | None = None
 
     def _resolve_project_id(self, node: str) -> str:
         """Resolves GCP project ID from GCP application default credentials."""
@@ -179,9 +180,9 @@ class SlurmScheduler(BaseScheduler):
                 f"Unexpected error during network discovery: {e}"
             ) from e
 
-    def get_nodes_under_test(self) -> list[str]:
-        if self._resolved_nodes is not None:
-            return self._resolved_nodes
+    def resolve_raw_nodes(self) -> list[str]:
+        if self._resolved_raw_nodes is not None:
+            return self._resolved_raw_nodes
 
         if (
             bool(self.nodes_arg)
@@ -189,17 +190,17 @@ class SlurmScheduler(BaseScheduler):
             + bool(self.partitions_arg)
         ) > 1:
             raise click.UsageError(
-                "Only one of --nodes, --nodelists, or "
-                "--partitions can be provided."
+                "Only one of --nodes, --nodelists, or --partitions can be "
+                "provided."
             )
 
+        raw_nodes = []
         if self.nodes_arg:
-            self._resolved_nodes = [
+            raw_nodes = [
                 n.strip() for n in self.nodes_arg.split(",") if n.strip()
             ]
-            return self._resolved_nodes
 
-        if self.nodelists_arg:
+        elif self.nodelists_arg:
             try:
                 output = subprocess.run(
                     ["scontrol", "show", "hostname", self.nodelists_arg],
@@ -208,37 +209,64 @@ class SlurmScheduler(BaseScheduler):
                     capture_output=True,
                     timeout=5,
                 ).stdout.strip()
-                self._resolved_nodes = [n for n in output.split("\n") if n]
-                return self._resolved_nodes
+                raw_nodes = [n for n in output.split("\n") if n]
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 raise ex.ChsSchedulerException(
                     f"Failed to expand nodelists: {e}"
                 ) from e
 
-        sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
-        if self.partitions_arg:
-            sinfo_cmd.extend(["-p", self.partitions_arg])
+        else:
+            sinfo_cmd = ["sinfo", "-e", "-N", "-h", "-o", "%N"]
+            if self.partitions_arg:
+                sinfo_cmd.extend(["-p", self.partitions_arg])
+            try:
+                output = subprocess.run(
+                    sinfo_cmd, text=True, check=True, capture_output=True
+                ).stdout.strip()
+                raw_nodes = [
+                    line.strip() for line in output.split("\n") if line.strip()
+                ]
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                raise ex.ChsSchedulerException(
+                    f"Failed to get raw nodes: {e}"
+                ) from e
+
+        self._resolved_raw_nodes = raw_nodes
+        return self._resolved_raw_nodes
+
+    def get_nodes_under_test(self) -> list[str]:
+        if self._resolved_nodes is not None:
+            return self._resolved_nodes
+
+        raw_nodes = self.resolve_raw_nodes()
+        if not raw_nodes:
+            self._resolved_nodes = []
+            return []
 
         try:
             output = subprocess.run(
-                sinfo_cmd,
+                ["sinfo", "-e", "-t", "idle", "-N", "-h", "-o", "%N"],
                 text=True,
                 check=True,
                 capture_output=True,
             ).stdout.strip()
+            idle_nodes = set(
+                line.strip() for line in output.split("\n") if line.strip()
+            )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             raise ex.ChsSchedulerException(
                 f"Failed to get free nodes: {e}"
             ) from e
 
-        if not output:
-            return []
+        busy_nodes = set(raw_nodes) - idle_nodes
+        if busy_nodes:
+            logger.info(
+                "Nodes %s busy. Skipping running diagnostics.",
+                ", ".join(sorted(busy_nodes)),
+            )
 
-        all_nodes = [
-            line.strip() for line in output.split("\n") if line.strip()
-        ]
-
-        self._resolved_nodes = all_nodes
+        valid_nodes = [node for node in raw_nodes if node in idle_nodes]
+        self._resolved_nodes = valid_nodes
         return self._resolved_nodes
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:

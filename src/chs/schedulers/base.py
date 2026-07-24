@@ -131,17 +131,14 @@ class BaseScheduler(abc.ABC):
             json.dump(self.get_topology(), f)
 
     @abc.abstractmethod
+    def resolve_raw_nodes(self) -> list[str]:
+        """Resolves raw targeted nodes based on CLI arguments purely."""
+        pass
+
+    @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:
         """Determine which nodes to test based on provided parameters."""
         pass
-
-    def filter_partial_tpu_slices(self, nodes: list[str]) -> list[str]:
-        """Filters out nodes that belong to partial TPU slices.
-
-        By default, returns the nodes unmodified for schedulers/hardware that
-        do not have strict TPU slice requirements.
-        """
-        return nodes
 
     @abc.abstractmethod
     def write_ramble_config(

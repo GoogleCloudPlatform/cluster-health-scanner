@@ -124,8 +124,9 @@ class TestCli(unittest.TestCase):
         self.mock_detect_scheduler.return_value = "slurm"
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodelists_arg = None
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
-        self.mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
         self.mock_scheduler.has_no_failed_jobs.return_value = False
         self.mock_scheduler.get_active_job_names.return_value = []
         self.mock_scheduler.detect_nodes_hardware.return_value = [
@@ -449,8 +450,9 @@ class TestCli(unittest.TestCase):
         def get_scheduler_side_effect(name, **kwargs):
             s = mock.Mock()
             s.name = name
+            s.nodes_arg = None
+            s.nodelists_arg = None
             s.get_nodes_under_test.return_value = ["node1"]
-            s.filter_partial_tpu_slices.return_value = ["node1"]
             s.has_no_failed_jobs.return_value = False
             s.get_active_job_names.return_value = []
             s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
@@ -1310,7 +1312,7 @@ class TestCli(unittest.TestCase):
         with self.assertRaisesRegex(
             exceptions.ChsValidationError, "No valid machine types"
         ):
-            cli._validate_run_args("slurm", [], "test1")
+            cli._validate_run_args("slurm", self.mock_scheduler, [], "test1")
 
     def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
