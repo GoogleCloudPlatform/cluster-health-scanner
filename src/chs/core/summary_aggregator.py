@@ -20,9 +20,9 @@ import datetime
 from dataclasses import dataclass, field
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
-from chs.utils import lifecycle
 from chs.utils.app_data import ChsAppData
 from chs.utils.tests import get_plugin_to_test_map
+from chs.plugins.utils.validation_analyzer import parse_threshold
 
 
 @dataclass
@@ -39,17 +39,21 @@ class TestGroupSummary:
     canonical_name: str
     test_level: str
     met_threshold: int
-    below_threshold: int
+    unmet_threshold: int
     failed_to_execute: int
     denominator: int
     entity_noun: str
     group_has_no_thresholds: bool
     explicit_skip_validation: bool
-    below_threshold_resources: list[str]
+    unmet_threshold_resources: list[str]
     missing_metrics: int
     missing_metrics_resources: list[str]
     display_name: str
     failed_to_execute_resources: list[str] = field(default_factory=list)
+    target_criteria: str = ""
+    timeout_count: int = 0
+    deadline_count: int = 0
+    cancelled_count: int = 0
 
 
 @dataclass
@@ -58,8 +62,8 @@ class RunSummaryData:
     submission_time: str
     total_nodes: int
     test_summaries: list[TestGroupSummary]
-    errors_and_warnings: list[HardErrorEvent]
-    has_tests_or_resources_filter: bool
+    errors_and_warnings: list[HardErrorEvent] = field(default_factory=list)
+    has_tests_or_resources_filter: bool = False
 
 
 def filter_test_results(
@@ -170,7 +174,7 @@ def aggregate_boh_summary(
 
     for (canonical_name, test_level), results in grouped_results.items():
         met_threshold = 0
-        below_threshold = 0
+        unmet_threshold = 0
 
         group_all_unknown = all(
             r.result_status == pb.RESULT_STATUS_UNKNOWN for r in results
@@ -222,22 +226,31 @@ def aggregate_boh_summary(
 
         test_nodes_count = len(test_nodes)
         is_pairwise = "pairwise" in canonical_name.lower()
-        below_threshold_resources = []
+        unmet_threshold_resources = []
         missing_metrics_resources = []
         failed_to_execute_resources = []
         missing_metrics = 0
         failed_threshold = False
         failed_to_execute = 0
-        for res in results:
-            has_real_metrics = any(
-                not (
-                    m.key.endswith("Error Detected")
-                    or m.key.endswith("Failure Detected")
-                    or "Warning" in m.key
-                )
-                for m in res.metrics
-            )
+        timeout_count = 0
+        deadline_count = 0
+        cancelled_count = 0
+        target_criteria = ""
 
+        for res in results:
+            for m in res.metrics:
+                if (
+                    m.HasField("validation_criteria")
+                    and m.validation_criteria.name
+                ):
+                    vc = m.validation_criteria
+                    t_str = parse_threshold(vc)
+                    unit_str = f" {m.unit}" if m.unit else ""
+                    target_criteria = f"Target: {vc.name} {t_str}{unit_str}"
+                    break
+            if target_criteria:
+                break
+        for res in results:
             failed_threshold = False
             for m in res.metrics:
                 if (
@@ -254,6 +267,14 @@ def aggregate_boh_summary(
                 pb.RESULT_STATUS_DEADLINE,
                 pb.RESULT_STATUS_CANCELLED,
             ):
+                cnt = 1 if is_pairwise else max(1, len(res.target_resources))
+                if res.result_status == pb.RESULT_STATUS_TIMEOUT:
+                    timeout_count += cnt
+                elif res.result_status == pb.RESULT_STATUS_DEADLINE:
+                    deadline_count += cnt
+                elif res.result_status == pb.RESULT_STATUS_CANCELLED:
+                    cancelled_count += cnt
+
                 if is_pairwise and len(res.target_resources) == 2:
                     failed_to_execute_resources.append(
                         f"{res.target_resources[0].node_name} <-> "
@@ -265,15 +286,15 @@ def aggregate_boh_summary(
             else:
                 count = 1 if is_pairwise else len(res.target_resources)
                 if failed_threshold:
-                    below_threshold += count
+                    unmet_threshold += count
                     if is_pairwise and len(res.target_resources) == 2:
-                        below_threshold_resources.append(
+                        unmet_threshold_resources.append(
                             f"{res.target_resources[0].node_name} <-> "
                             f"{res.target_resources[1].node_name}"
                         )
                     else:
                         for t in res.target_resources:
-                            below_threshold_resources.append(t.node_name)
+                            unmet_threshold_resources.append(t.node_name)
                 else:
                     missing_metrics += count
                     if is_pairwise and len(res.target_resources) == 2:
@@ -285,30 +306,10 @@ def aggregate_boh_summary(
                         for t in res.target_resources:
                             missing_metrics_resources.append(t.node_name)
 
-            if (
-                not has_real_metrics
-                and res.result_status
-                in lifecycle.TIME_EXCEEDED_PB_STATUSES.values()
-            ):
-                status_name = pb.ResultStatus.Name(res.result_status)
-                status_clean = status_name.replace("RESULT_STATUS_", "")
-                for t in res.target_resources:
-                    errors_and_warnings.append(
-                        HardErrorEvent(
-                            type="FAIL",
-                            category=f"Status: {status_clean}",
-                            message=(
-                                "Test exceeded time limits or was " "cancelled."
-                            ),
-                            node=t.node_name,
-                            test=display_name,
-                        )
-                    )
-
         entity_noun = "pairs" if is_pairwise else "nodes"
         denominator = len(results) if is_pairwise else test_nodes_count
         failed_to_execute = (
-            denominator - met_threshold - below_threshold - missing_metrics
+            denominator - met_threshold - unmet_threshold - missing_metrics
         )
 
         test_summaries.append(
@@ -316,17 +317,21 @@ def aggregate_boh_summary(
                 canonical_name=canonical_name,
                 test_level=test_level,
                 met_threshold=met_threshold,
-                below_threshold=below_threshold,
+                unmet_threshold=unmet_threshold,
                 failed_to_execute=failed_to_execute,
                 denominator=denominator,
                 entity_noun=entity_noun,
                 group_has_no_thresholds=group_has_no_thresholds,
                 explicit_skip_validation=explicit_skip_validation,
-                below_threshold_resources=below_threshold_resources,
+                unmet_threshold_resources=unmet_threshold_resources,
                 missing_metrics=missing_metrics,
                 missing_metrics_resources=missing_metrics_resources,
                 display_name=display_name,
                 failed_to_execute_resources=failed_to_execute_resources,
+                target_criteria=target_criteria,
+                timeout_count=timeout_count,
+                deadline_count=deadline_count,
+                cancelled_count=cancelled_count,
             )
         )
 

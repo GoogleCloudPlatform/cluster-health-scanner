@@ -39,6 +39,7 @@ class TpuHbmRenderer(DefaultRenderer):
 
     def get_column_schema(self) -> list[ColumnDef]:
         return [
+            ColumnDef("node", "Node", align="left"),
             ColumnDef("num_elements", "Elements", align="right"),
             ColumnDef("tensor_size", "Tensor Size (MB)", align="right"),
             ColumnDef("dtype", "Dtype", align="left"),
@@ -64,6 +65,7 @@ class TpuHbmRenderer(DefaultRenderer):
             for r in node_results:
                 rows.append(
                     {
+                        "node": node,
                         "num_elements": f"{r.num_elements:,}",
                         "tensor_size": format_val(r.tensor_size, precision=1),
                         "dtype": r.dtype,
@@ -73,7 +75,7 @@ class TpuHbmRenderer(DefaultRenderer):
                 )
             tables.append(
                 TableDataModel(
-                    title=f"Node: {node}",
+                    title=f"TPU HBM Bandwidth Detail ({node})",
                     headers=self.get_column_schema(),
                     rows=rows,
                 )

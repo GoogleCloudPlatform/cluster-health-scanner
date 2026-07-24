@@ -40,7 +40,7 @@ def test_nccl_cluster_renderer_without_errors():
     output = capture.get()
     print(f"DEBUG OUTPUT:\n{output}")
 
-    assert "Cluster Detail" in output
+    assert "NCCL Cluster Detail" in output
     assert "Peak Detected Cluster Bandwidth" in output
     assert "120.50" in output
     assert "Detected Errors/Warnings" not in output

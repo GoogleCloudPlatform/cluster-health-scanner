@@ -28,7 +28,7 @@ class NcclSingleNodeRenderer(DefaultRenderer):
         self, test_results: list[pb.TestResult]
     ) -> PluginDetailReport | None:
         return extract_nccl_detail_data(
-            "Single Node Detail",
+            "NCCL Single Node Detail",
             "Node",
             test_results,
             lambda res: (
@@ -42,7 +42,7 @@ class NcclSingleNodeRenderer(DefaultRenderer):
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
         return render_nccl_detail(
-            "Single Node Detail",
+            "NCCL Single Node Detail",
             "Node",
             test_results,
             lambda res: (

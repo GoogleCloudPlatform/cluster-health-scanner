@@ -86,8 +86,6 @@ def create_nccl_table(
         table.add_column("Topological Context")
     table.add_column("Peak Bandwidth (GB/s)", justify="right")
     table.add_column("Msg Size (GB)", justify="right")
-    if has_thresholds:
-        table.add_column("Validation")
     return table
 
 
@@ -148,8 +146,6 @@ def extract_nccl_detail_data(
             ColumnDef("msg_size", "Msg Size (GB)", align="right"),
         ]
     )
-    if has_thresholds:
-        headers.append(ColumnDef("validation", "Validation"))
 
     rows = []
     for res in test_results:
@@ -175,6 +171,7 @@ def extract_nccl_detail_data(
         test_level = res.test_level if res.test_level else "Unknown"
 
         row_dict = {
+            "node": resource_id,
             "workload": test_level,
             "resource": resource_id,
             "peak_bw": format_val(max_bw),

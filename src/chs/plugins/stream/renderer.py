@@ -41,6 +41,7 @@ class StreamRenderer(DefaultRenderer):
 
     def get_column_schema(self) -> list[ColumnDef]:
         return [
+            ColumnDef("node", "Node"),
             ColumnDef("device_id", "Device"),
             ColumnDef("copy_rate", "Copy (GB/s)", align="right"),
             ColumnDef("scale_rate", "Scale (GB/s)", align="right"),
@@ -76,6 +77,7 @@ class StreamRenderer(DefaultRenderer):
             for item in items:
                 rows.append(
                     {
+                        "node": node,
                         "device_id": str(item.device_id),
                         "copy_rate": format_val(item.copy_rate),
                         "scale_rate": format_val(item.scale_rate),
@@ -86,7 +88,7 @@ class StreamRenderer(DefaultRenderer):
 
             tables.append(
                 TableDataModel(
-                    title=f"Node: {node}{peak_str}",
+                    title=f"STREAM Performance Detail ({node}){peak_str}",
                     headers=self.get_column_schema(),
                     rows=rows,
                 )

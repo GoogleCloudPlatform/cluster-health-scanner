@@ -27,7 +27,7 @@ class NcclClusterRenderer(DefaultRenderer):
         self, test_results: list[pb.TestResult]
     ) -> PluginDetailReport | None:
         return extract_nccl_detail_data(
-            "Cluster Detail",
+            "NCCL Cluster Detail",
             "Cluster Metric",
             test_results,
             lambda res: "Peak Detected Cluster Bandwidth",
@@ -37,7 +37,7 @@ class NcclClusterRenderer(DefaultRenderer):
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
         return render_nccl_detail(
-            "Cluster Detail",
+            "NCCL Cluster Detail",
             "Cluster Metric",
             test_results,
             lambda res: "Peak Detected Cluster Bandwidth",

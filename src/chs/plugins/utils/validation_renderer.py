@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
 from rich.console import RenderableType, Group
 from rich.text import Text
 from chs.protos import bill_of_health_pb2 as pb
@@ -39,6 +40,7 @@ def _parse_status(
 
 def render_validation_results(
     test_results: list[pb.TestResult],
+    plugin_manager: Any = None,
 ) -> RenderableType | None:
     """Renders tables showing only the metrics that have validation criteria.
 
@@ -49,7 +51,9 @@ def render_validation_results(
         A Rich Renderable (Group of Tables) if validation criteria are present,
         otherwise None.
     """
-    groups = validation_analyzer.extract_validation_data(test_results)
+    groups = validation_analyzer.extract_validation_data(
+        test_results, plugin_manager=plugin_manager
+    )
     if not groups:
         return None
 

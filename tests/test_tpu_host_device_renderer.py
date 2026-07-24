@@ -48,8 +48,7 @@ class TestTpuHostDeviceRenderer(unittest.TestCase):
         output = capture.get()
         print(f"DEBUG OUTPUT:\n{output}")
 
-        self.assertIn("Host-Device I/O Bandwidth Detail", output)
-        self.assertIn("Node: node-1", output)
+        self.assertIn("Host-Device I/O Bandwidth Detail (node-1)", output)
         self.assertIn("1024", output)
         self.assertIn("15.60", output)
         self.assertIn("16.20", output)

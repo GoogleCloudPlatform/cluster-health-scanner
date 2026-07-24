@@ -158,7 +158,7 @@ class ResultsViewer:
             else:
                 total_nodes = summary.denominator
                 evaluated_nodes = (
-                    summary.met_threshold + summary.below_threshold
+                    summary.met_threshold + summary.unmet_threshold
                 )
 
                 if evaluated_nodes > 0:
@@ -185,29 +185,29 @@ class ResultsViewer:
                     )
 
                 if (
-                    summary.below_threshold > 0
-                    and summary.below_threshold_resources
+                    summary.unmet_threshold > 0
+                    and summary.unmet_threshold_resources
                 ):
-                    below_threshold_unique = sorted(
-                        list(set(summary.below_threshold_resources))
+                    unmet_threshold_unique = sorted(
+                        list(set(summary.unmet_threshold_resources))
                     )
-                    if len(below_threshold_unique) > 5:
+                    if len(unmet_threshold_unique) > 5:
                         self.console.print(
                             f"    - {summary.entity_noun.title()} That "
                             "Didn't Meet Threshold (First 5):"
                         )
-                        for node in below_threshold_unique[:5]:
+                        for node in unmet_threshold_unique[:5]:
                             self.console.print(f"      * {node}")
                         self.console.print(
                             f"      ... and "
-                            f"{len(below_threshold_unique) - 5} more."
+                            f"{len(unmet_threshold_unique) - 5} more."
                         )
                     else:
                         self.console.print(
                             f"    - {summary.entity_noun.title()} That "
                             "Didn't Meet Threshold:"
                         )
-                        for node in below_threshold_unique:
+                        for node in unmet_threshold_unique:
                             self.console.print(f"      * {node}")
 
                 if (

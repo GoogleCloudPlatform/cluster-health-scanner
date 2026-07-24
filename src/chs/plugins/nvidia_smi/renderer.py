@@ -105,8 +105,8 @@ class NvidiaSmiRenderer(DefaultRenderer):
                 )
             )
 
-        test_name = test_results[0].test_name
-        test_level = test_results[0].test_level
+        test_name = test_results[0].test_name if test_results else "nvidia-smi"
+        test_level = test_results[0].test_level if test_results else ""
 
         return PluginDetailReport(
             test_name=test_name,
@@ -232,15 +232,15 @@ class NvidiaSmiRenderer(DefaultRenderer):
                         node_data[nodes]["summary"]["Driver Version"] = val
         return node_data
 
-    def _build_summary_table(self, node_data: dict, has_thresholds: bool):
+    def _build_summary_table(
+        self, node_data: dict, has_thresholds: bool = False
+    ):
         """Builds the summary table for all nodes."""
         summary_table = create_styled_table(expand=False)
         summary_table.add_column("Node", overflow="fold")
         summary_table.add_column("Driver Version")
         summary_table.add_column("CUDA Version")
         summary_table.add_column("GPU Count", justify="right")
-        if has_thresholds:
-            summary_table.add_column("Validation")
 
         for node, data in node_data.items():
             row = [
@@ -249,8 +249,6 @@ class NvidiaSmiRenderer(DefaultRenderer):
                 data["summary"]["CUDA Version"],
                 data["summary"]["GPU Count"],
             ]
-            if has_thresholds:
-                row.append(data["summary"].get("Validation", "N/A"))
             summary_table.add_row(*row)
         return summary_table
 

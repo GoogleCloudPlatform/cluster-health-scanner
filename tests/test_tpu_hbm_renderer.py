@@ -53,8 +53,7 @@ class TestTpuHbmRenderer(unittest.TestCase):
         output = capture.get()
         print(f"DEBUG OUTPUT:\n{output}")
 
-        self.assertIn("TPU HBM Bandwidth Detail", output)
-        self.assertIn("Node: node-1", output)
+        self.assertIn("TPU HBM Bandwidth Detail (node-1)", output)
         self.assertIn("134,217,728", output)  # formatted with commas
         self.assertIn("512.0", output)
         self.assertIn("float32", output)

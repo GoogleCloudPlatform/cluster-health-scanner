@@ -37,6 +37,7 @@ class TpuHostDeviceRenderer(DefaultRenderer):
 
     def get_column_schema(self) -> list[ColumnDef]:
         return [
+            ColumnDef("node", "Node", align="left"),
             ColumnDef("size_mib", "Size (MiB)", align="right"),
             ColumnDef("h2d", "H2D Bandwidth (GB/s)", align="right"),
             ColumnDef("d2h", "D2H Bandwidth (GB/s)", align="right"),
@@ -62,6 +63,7 @@ class TpuHostDeviceRenderer(DefaultRenderer):
                 d2h_str = format_val(r.d2h)
                 rows.append(
                     {
+                        "node": node,
                         "size_mib": str(r.size_mib),
                         "h2d": h2d_str,
                         "d2h": d2h_str,
@@ -69,7 +71,7 @@ class TpuHostDeviceRenderer(DefaultRenderer):
                 )
             tables.append(
                 TableDataModel(
-                    title=f"Node: {node}",
+                    title=f"Host-Device I/O Bandwidth Detail ({node})",
                     headers=self.get_column_schema(),
                     rows=rows,
                 )

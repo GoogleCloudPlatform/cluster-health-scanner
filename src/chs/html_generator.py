@@ -18,8 +18,11 @@ import json
 import os
 from typing import Any
 
+from chs.core.plugin_manager import PluginManager
 from chs.core.summary_aggregator import aggregate_boh_summary
+from chs.plugins.utils.validation_analyzer import extract_validation_data
 from chs.protos import bill_of_health_pb2 as pb
+from chs.utils.tests import get_all_supported_tests_details
 
 DEFAULT_TEMPLATE_PATH = os.path.join(
     os.path.dirname(__file__), "templates", "boh_template.html"
@@ -47,6 +50,15 @@ class HtmlReportGenerator:
             for t in tr.target_resources:
                 all_nodes.add(t.node_name)
 
+        def _extract_nodes(resources: list[str]) -> set[str]:
+            res = set()
+            for r in resources:
+                for n in r.split("<->"):
+                    n_clean = n.strip()
+                    if n_clean:
+                        res.add(n_clean)
+            return res
+
         degraded_nodes = set()
         missing_metrics_nodes = set()
         for ts in summary.test_summaries:
@@ -54,9 +66,15 @@ class HtmlReportGenerator:
                 not ts.group_has_no_thresholds
                 and not ts.explicit_skip_validation
             ):
-                degraded_nodes.update(ts.below_threshold_resources)
-                missing_metrics_nodes.update(ts.missing_metrics_resources)
-                missing_metrics_nodes.update(ts.failed_to_execute_resources)
+                degraded_nodes.update(
+                    _extract_nodes(ts.unmet_threshold_resources)
+                )
+                missing_metrics_nodes.update(
+                    _extract_nodes(ts.missing_metrics_resources)
+                )
+                missing_metrics_nodes.update(
+                    _extract_nodes(ts.failed_to_execute_resources)
+                )
 
         missing_metrics_only = missing_metrics_nodes - degraded_nodes
 
@@ -99,6 +117,212 @@ class HtmlReportGenerator:
             if "skip_validation" in boh.metadata.fields
             else False
         )
+        test_descriptions = {}
+        for t in get_all_supported_tests_details():
+            desc = t.get("description", "")
+            if t.get("name"):
+                test_descriptions[t["name"]] = desc
+            if t.get("plugin_name"):
+                test_descriptions[t["plugin_name"]] = desc
+
+        test_suite_breakdown = []
+        for ts in summary.test_summaries:
+            description = test_descriptions.get(ts.canonical_name, "")
+            evaluated_nodes = ts.met_threshold + ts.unmet_threshold
+            if ts.explicit_skip_validation:
+                ratio_str = "Validation skipped"
+                status_badge = "SKIPPED"
+                badge_style = "badge-slate"
+            elif ts.group_has_no_thresholds:
+                ratio_str = (
+                    f"Executed on {ts.denominator} {ts.entity_noun} (No"
+                    " thresholds set)"
+                )
+                status_badge = "EXECUTED"
+                badge_style = "badge-info"
+            else:
+                if evaluated_nodes == ts.denominator:
+                    ratio_str = (
+                        f"{ts.met_threshold} / {ts.denominator}"
+                        f" {ts.entity_noun} met threshold"
+                    )
+                elif evaluated_nodes > 0:
+                    ratio_str = (
+                        f"{ts.met_threshold} / {evaluated_nodes} evaluated"
+                        f" {ts.entity_noun} met threshold ({ts.denominator}"
+                        " total)"
+                    )
+                else:
+                    ratio_str = (
+                        f"0 / {ts.denominator} {ts.entity_noun} evaluated"
+                        f" against thresholds ({ts.denominator} total)"
+                    )
+
+                if ts.unmet_threshold > 0:
+                    status_badge = f"{ts.unmet_threshold} DEGRADED"
+                    badge_style = "badge-degraded"
+                elif ts.timeout_count > 0:
+                    status_badge = f"{ts.timeout_count} TIMEOUT"
+                    badge_style = "badge-failed"
+                elif ts.deadline_count > 0:
+                    status_badge = f"{ts.deadline_count} DEADLINE"
+                    badge_style = "badge-failed"
+                elif ts.failed_to_execute > 0:
+                    status_badge = f"{ts.failed_to_execute} FAILED TO EXECUTE"
+                    badge_style = "badge-failed"
+                elif ts.missing_metrics > 0:
+                    status_badge = f"{ts.missing_metrics} MISSING METRICS"
+                    badge_style = "badge-slate"
+                else:
+                    status_badge = "PASSED"
+                    badge_style = "badge-success"
+
+            test_suite_breakdown.append(
+                {
+                    "display_name": ts.display_name,
+                    "description": description,
+                    "ratio_str": ratio_str,
+                    "target_criteria": ts.target_criteria,
+                    "status_badge": status_badge,
+                    "badge_style": badge_style,
+                    "unmet_threshold_resources": ts.unmet_threshold_resources,
+                    "missing_metrics_resources": ts.missing_metrics_resources,
+                    "failed_to_execute_resources": (
+                        ts.failed_to_execute_resources
+                    ),
+                }
+            )
+
+        nodes_with_errors = {
+            e.node for e in summary.errors_and_warnings if e.node
+        }
+
+        node_insights = []
+        for node in sorted(all_nodes):
+            node_tests = []
+            node_has_unmet_threshold = False
+            node_has_missing_metrics = False
+            node_has_exec_error = False
+
+            for tr in boh.test_results:
+                target_nodes = {t.node_name for t in tr.target_resources}
+                if node in target_nodes:
+                    display_name = (
+                        f"{tr.test_name} ({tr.test_level})"
+                        if tr.test_level
+                        else tr.test_name
+                    )
+                    has_unmet_metric = any(
+                        m.HasField("validation_criteria")
+                        and m.validation_criteria.result_status
+                        == pb.RESULT_STATUS_FAILED
+                        for m in tr.metrics
+                    )
+                    if has_unmet_metric:
+                        node_has_unmet_threshold = True
+
+                    if tr.result_status == pb.RESULT_STATUS_TIMEOUT:
+                        status_str = "✕ TIMEOUT"
+                        is_met = False
+                        node_has_exec_error = True
+                    elif tr.result_status == pb.RESULT_STATUS_DEADLINE:
+                        status_str = "✕ DEADLINE"
+                        is_met = False
+                        node_has_exec_error = True
+                    elif tr.result_status == pb.RESULT_STATUS_CANCELLED:
+                        status_str = "✕ CANCELLED"
+                        is_met = False
+                        node_has_exec_error = True
+                    elif has_unmet_metric:
+                        status_str = "✕ DID NOT MEET THRESHOLD"
+                        is_met = False
+                    elif tr.result_status == pb.RESULT_STATUS_FAILED:
+                        status_str = "✕ FAILED TO EXECUTE"
+                        is_met = False
+                        node_has_exec_error = True
+                    else:
+                        has_val_criteria = any(
+                            m.HasField("validation_criteria")
+                            and m.validation_criteria.name
+                            for m in tr.metrics
+                        )
+                        has_metrics = any(
+                            not (
+                                m.key.endswith("Error Detected")
+                                or m.key.endswith("Failure Detected")
+                                or "Warning" in m.key
+                            )
+                            for m in tr.metrics
+                        )
+                        if not has_val_criteria and has_metrics:
+                            status_str = "• EXECUTED (No thresholds set)"
+                            is_met = False
+                        elif has_metrics:
+                            status_str = "✓ MET THRESHOLD"
+                            is_met = True
+                        else:
+                            status_str = "✕ MISSING METRICS"
+                            is_met = False
+                            node_has_missing_metrics = True
+
+                    node_tests.append(
+                        {
+                            "display_name": display_name,
+                            "status_str": status_str,
+                            "is_met": is_met,
+                        }
+                    )
+
+            if node_has_unmet_threshold:
+                node_status = "DEGRADED"
+                node_badge_style = "badge-degraded"
+            elif node_has_exec_error or node_has_missing_metrics:
+                node_status = "INCOMPLETE"
+                node_badge_style = "badge-slate"
+            else:
+                node_status = "HEALTHY"
+                node_badge_style = "badge-success"
+
+            node_insights.append(
+                {
+                    "node_name": node,
+                    "status": node_status,
+                    "badge_style": node_badge_style,
+                    "has_potential_errors": node in nodes_with_errors,
+                    "has_threshold_breach": node_has_unmet_threshold,
+                    "is_healthy": (node_status == "HEALTHY"),
+                    "tests": node_tests,
+                }
+            )
+
+        plugin_manager = PluginManager()
+        detailed_reports = self._extract_detailed_reports(boh, plugin_manager)
+
+        validation_groups = extract_validation_data(
+            boh.test_results, plugin_manager=plugin_manager
+        )
+        validation_tables = [
+            {
+                "test_name": vg.test_name,
+                "test_level": vg.test_level,
+                "status_summary": vg.status_summary,
+                "nodes_str": vg.nodes_str,
+                "rows": [
+                    {
+                        "target": r.target,
+                        "metric": r.metric,
+                        "value": r.value,
+                        "formatted_value": r.formatted_value,
+                        "unit": r.unit,
+                        "threshold": r.threshold,
+                        "status": r.status,
+                        "status_style": r.status_style,
+                    }
+                    for r in vg.rows
+                ],
+            }
+            for vg in validation_groups
+        ]
 
         return {
             "metadata": {
@@ -118,7 +342,71 @@ class HtmlReportGenerator:
                 "total_test_suites": len(summary.test_summaries),
                 "potential_errors_count": len(summary.errors_and_warnings),
             },
+            "test_suite_breakdown": test_suite_breakdown,
+            "potential_errors_list": [
+                {
+                    "type": e.type,
+                    "category": e.category,
+                    "message": e.message,
+                    "node": e.node,
+                    "test": e.test,
+                }
+                for e in summary.errors_and_warnings
+            ],
+            "node_insights": node_insights,
+            "detailed_reports": detailed_reports,
+            "validation_tables": validation_tables,
         }
+
+    def _extract_detailed_reports(
+        self, boh: pb.BillOfHealth, plugin_manager: PluginManager
+    ) -> list[dict[str, Any]]:
+        """Helper to extract structured detailed reports from plugins."""
+        detailed_reports = []
+        grouped_results: dict[tuple[str, str], list[pb.TestResult]] = {}
+        for result in boh.test_results:
+            canonical_name = plugin_manager.resolve_test_name(result.test_name)
+            key = (canonical_name or result.test_name, result.test_level)
+            grouped_results.setdefault(key, []).append(result)
+
+        for (canonical_name, test_level), results in grouped_results.items():
+            plugin = plugin_manager.get_plugin(canonical_name)
+            detail_report = plugin.get_detail_data(results)
+            if detail_report and detail_report.tables:
+                tables_data = [
+                    {
+                        "title": table.title,
+                        "headers": [
+                            {"key": c.key, "label": c.label, "align": c.align}
+                            for c in table.headers
+                        ],
+                        "rows": table.rows,
+                    }
+                    for table in detail_report.tables
+                ]
+                raw_name = results[0].test_name
+                display_name = (
+                    f"{raw_name} ({test_level})" if test_level else raw_name
+                )
+                target_nodes = sorted(
+                    {
+                        t.node_name
+                        for res in results
+                        for t in res.target_resources
+                    }
+                )
+
+                detailed_reports.append(
+                    {
+                        "test_name": raw_name,
+                        "test_level": test_level,
+                        "display_name": display_name,
+                        "canonical_name": canonical_name,
+                        "target_nodes": target_nodes,
+                        "tables": tables_data,
+                    }
+                )
+        return detailed_reports
 
     def render_html(
         self,

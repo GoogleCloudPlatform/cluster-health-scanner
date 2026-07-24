@@ -41,6 +41,7 @@ class TpuCollectivesRenderer(DefaultRenderer):
 
     def get_column_schema(self) -> list[ColumnDef]:
         return [
+            ColumnDef("node", "Node", align="left"),
             ColumnDef("operation", "Operation"),
             ColumnDef("matrix_dim", "Matrix Dim"),
             ColumnDef("dtype", "Dtype"),
@@ -149,6 +150,7 @@ class TpuCollectivesRenderer(DefaultRenderer):
                     op_column = item.op_type if i == 0 else ""
                     rows.append(
                         {
+                            "node": display_node,
                             "operation": op_column,
                             "matrix_dim": item.matrix_dim,
                             "dtype": item.dtype,
@@ -156,9 +158,14 @@ class TpuCollectivesRenderer(DefaultRenderer):
                         }
                     )
 
+            title_level = f" ({test_level})" if test_level else ""
+            table_title = (
+                f"TPU Collectives{title_level} "
+                f"Bandwidth Detail ({display_node})"
+            )
             tables.append(
                 TableDataModel(
-                    title=f"Target Resource(s): {display_node}",
+                    title=table_title,
                     headers=self.get_column_schema(),
                     rows=rows,
                 )

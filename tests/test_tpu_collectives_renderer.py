@@ -63,7 +63,10 @@ class TestTpuCollectivesRenderer(unittest.TestCase):
         print(f"DEBUG OUTPUT (all_gather):\n{output}")
 
         self.assertIn("TPU Collectives Performance Summary", output)
-        self.assertIn("Target Resource(s): node-1, node-2", output)
+        self.assertIn(
+            "TPU Collectives (all_gather) Bandwidth Detail (node-1, node-2)",
+            output,
+        )
         self.assertIn("all_gather", output)
         self.assertIn("8", output)
         self.assertIn("float32", output)
@@ -100,8 +103,12 @@ class TestTpuCollectivesRenderer(unittest.TestCase):
         print(f"DEBUG OUTPUT (single-node):\n{output}")
 
         self.assertIn("TPU Collectives Single Node Performance Summary", output)
-        self.assertIn("Target Resource(s): node-1", output)
-        self.assertIn("Target Resource(s): node-2", output)
+        self.assertIn(
+            "TPU Collectives (all_gather) Bandwidth Detail (node-1)", output
+        )
+        self.assertIn(
+            "TPU Collectives (all_gather) Bandwidth Detail (node-2)", output
+        )
         self.assertIn("all_gather", output)
         self.assertIn("7.92", output)
         self.assertIn("8.12", output)

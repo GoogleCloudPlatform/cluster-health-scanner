@@ -84,7 +84,9 @@ def parse_status(
 
 
 def extract_validation_data(
-    test_results: list[pb.TestResult], max_display_nodes: int = 5
+    test_results: list[pb.TestResult],
+    max_display_nodes: int = 5,
+    plugin_manager: Any = None,
 ) -> list[ValidationGroupData]:
     """Extracts structured validation results independently of UI formatting."""
     if not test_results or not has_validation_criteria(test_results):
@@ -99,6 +101,22 @@ def extract_validation_data(
     for (test_name, test_level), group in grouped_results.items():
         if not has_validation_criteria(group):
             continue
+
+        if plugin_manager:
+            plugin = plugin_manager.get_plugin(test_name)
+            if hasattr(plugin, "_filter_validation_results"):
+                sorted_nodes = sorted(
+                    list(
+                        {
+                            target.node_name
+                            for res in group
+                            for target in res.target_resources
+                        }
+                    )
+                )
+                group = plugin._filter_validation_results(group, sorted_nodes)
+                if not group or not has_validation_criteria(group):
+                    continue
 
         all_success = all(
             res.result_status == pb.RESULT_STATUS_SUCCESS for res in group

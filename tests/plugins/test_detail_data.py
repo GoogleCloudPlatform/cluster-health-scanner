@@ -105,6 +105,7 @@ def test_stream_renderer_get_detail_data():
     assert report is not None
     assert report.test_name == "stream"
     assert len(report.tables) == 1
+    assert report.tables[0].rows[0]["node"] == "node-1"
     assert report.tables[0].rows[0]["copy_rate"] == "950.50"
 
 
@@ -141,6 +142,7 @@ def test_tpu_hbm_renderer_get_detail_data():
     assert report is not None
     assert report.test_name == "tpu-hbm"
     assert len(report.tables) == 1
+    assert report.tables[0].rows[0]["node"] == "node-1"
     assert report.tables[0].rows[0]["bandwidth"] == "280.50"
 
 
@@ -157,6 +159,7 @@ def test_tpu_host_device_renderer_get_detail_data():
     assert report is not None
     assert report.test_name == "tpu-host-device"
     assert len(report.tables) == 1
+    assert report.tables[0].rows[0]["node"] == "node-1"
     assert report.tables[0].rows[0]["h2d"] == "15.60"
 
 
@@ -191,6 +194,7 @@ def test_tpu_collectives_renderer_get_detail_data():
     assert report is not None
     assert report.test_name == "tpu-collectives"
     assert len(report.tables) == 1
+    assert report.tables[0].rows[0]["node"] == "node-1"
     assert report.tables[0].rows[0]["bandwidth"] == "111.01"
 
 

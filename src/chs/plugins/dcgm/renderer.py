@@ -58,10 +58,8 @@ class DcgmRenderer(DefaultRenderer):
                     }
                 )
             else:
-                first_node_row = True
                 for level, tests in sorted(level_to_metrics.items()):
                     level_str = level.replace("-", " ")
-                    first_level_row = True
                     for test_name, metrics in sorted(tests.items()):
                         passed_gpus = {s for s in metrics["passed"]}
                         failed_gpus = {s for s in metrics["failed"]}
@@ -75,12 +73,10 @@ class DcgmRenderer(DefaultRenderer):
                         else:
                             status_plain = f"{total}/{total} GPUs passed"
 
-                        disp_node = node_name if first_node_row else ""
-                        disp_level = level_str if first_level_row else ""
                         rows.append(
                             {
-                                "node": disp_node,
-                                "level": disp_level,
+                                "node": node_name,
+                                "level": level_str,
                                 "test_group": test_name,
                                 "status": status_plain,
                                 "passed_gpus": len(passed_gpus),
@@ -88,8 +84,6 @@ class DcgmRenderer(DefaultRenderer):
                                 "failed_gpus": sorted(list(failed_gpus)),
                             }
                         )
-                        first_node_row = False
-                        first_level_row = False
 
         table_model = TableDataModel(
             title="DCGM",
