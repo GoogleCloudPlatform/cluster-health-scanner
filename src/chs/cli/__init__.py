@@ -436,6 +436,11 @@ def _validate_run_args(
     Raises:
       ex.ChsValidationError: If validation fails.
     """
+    if not detected_machine_types:
+        raise ex.ChsValidationError(
+            "No valid machine types detected on cluster nodes."
+        )
+
     homogeneity_validator = validators.HomogeneityValidator()
     errors = homogeneity_validator.validate(
         {

@@ -1305,6 +1305,13 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
 
+    def test_validate_run_args_empty_machine_types(self):
+        """Test _validate_run_args raises validation error on empty types."""
+        with self.assertRaisesRegex(
+            exceptions.ChsValidationError, "No valid machine types"
+        ):
+            cli._validate_run_args("slurm", [], "test1")
+
     def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
         ws_dir = tempfile.mkdtemp()
