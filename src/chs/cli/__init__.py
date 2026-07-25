@@ -327,7 +327,7 @@ def list_action(
     """
     logger.debug(
         "list_action called with: suites=%r, tests=%r, schedulers=%r, "
-        "machine_types=%r, suite=%r, machine_type=%r",
+        "machine_types=%r, suite=%r, machine_type=%r, accelerator_type=%r",
         suites,
         tests,
         schedulers,
