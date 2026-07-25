@@ -87,7 +87,8 @@ def handle_chs_exceptions(f):
     return wrapper
 
 
-def _setup_workspace_logger(workspace_path: str) -> None:
+@contextmanager
+def _setup_workspace_logger(workspace_path: str):
     """Configures a file handler to save all DEBUG logs to the workspace."""
     debug_log_path = os.path.join(workspace_path, "debug.txt")
     root_logger = logging.getLogger()
@@ -95,22 +96,38 @@ def _setup_workspace_logger(workspace_path: str) -> None:
         getattr(h, "baseFilename", "") == debug_log_path
         for h in root_logger.handlers
     ):
+        yield
         return
 
     os.makedirs(workspace_path, exist_ok=True)
     file_handler = logging.FileHandler(debug_log_path)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)-8s: %(message)s", "%Y-%m-%d %H:%M:%S"
+
+    original_root_level = root_logger.level
+    modified_handlers = []
+
+    try:
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)-8s: %(message)s", "%Y-%m-%d %H:%M:%S"
+            )
         )
-    )
-    root_logger.addHandler(file_handler)
-    if root_logger.level > logging.DEBUG:
-        root_logger.setLevel(logging.DEBUG)
-        for handler in root_logger.handlers:
-            if handler != file_handler and handler.level == logging.NOTSET:
-                handler.setLevel(logging.INFO)
+        root_logger.addHandler(file_handler)
+
+        if root_logger.level > logging.DEBUG:
+            root_logger.setLevel(logging.DEBUG)
+            for handler in root_logger.handlers:
+                if handler != file_handler and handler.level == logging.NOTSET:
+                    handler.setLevel(logging.INFO)
+                    modified_handlers.append(handler)
+
+        yield
+    finally:
+        root_logger.removeHandler(file_handler)
+        file_handler.close()
+        root_logger.setLevel(original_root_level)
+        for handler in modified_handlers:
+            handler.setLevel(logging.NOTSET)
 
 
 def _make_clickable_link(path_or_uri: str) -> str:
@@ -490,51 +507,50 @@ def run_action(
         workspaces_base_dir, workspace_name, run_id=run_id
     )
 
-    _setup_workspace_logger(ramble_manager.path)
+    with _setup_workspace_logger(ramble_manager.path):
+        with archive_workspace(ramble_manager, on_success=False):
+            try:
+                if scheduler_obj:
+                    workspace_config_dir = os.path.join(
+                        ramble_manager.path, "configs"
+                    )
+                    tests = scheduler_obj.setup_scheduler_resources(
+                        workspace_config_dir=workspace_config_dir,
+                        tests=tests,
+                        machine_type=machine_type,
+                        workspace_name=workspace_name,
+                    )
 
-    with archive_workspace(ramble_manager, on_success=False):
-        try:
-            if scheduler_obj:
-                workspace_config_dir = os.path.join(
-                    ramble_manager.path, "configs"
-                )
-                tests = scheduler_obj.setup_scheduler_resources(
-                    workspace_config_dir=workspace_config_dir,
-                    tests=tests,
+                ramble_manager.create_workspace()
+                if not skip_validation:
+                    ramble_manager.copy_thresholds(validation)
+
+                ramble_manager.add_custom_repository()
+                ramble_manager.configure_workspace(
+                    scheduler_obj,
+                    tests,
                     machine_type=machine_type,
-                    workspace_name=workspace_name,
+                    timeout=timeout,
+                    deadline=deadline,
                 )
+                ramble_manager.setup_workspace()
 
-            ramble_manager.create_workspace()
-            if not skip_validation:
-                ramble_manager.copy_thresholds(validation)
+                scheduler_obj.apply_scheduler_resources()
 
-            ramble_manager.add_custom_repository()
-            ramble_manager.configure_workspace(
-                scheduler_obj,
-                tests,
-                machine_type=machine_type,
-                timeout=timeout,
-                deadline=deadline,
-            )
-            ramble_manager.setup_workspace()
-
-            scheduler_obj.apply_scheduler_resources()
-
-            job_ids = ramble_manager.execute_experiments(
-                tier=1, active_tests=active_tests
-            )
-            if not job_ids:
-                raise ex.JobSubmissionFailureException(
-                    f"Job submission failed for workspace: {workspace_name}. "
-                    "Please check internal.log in the workspace directory "
-                    "for details."
+                job_ids = ramble_manager.execute_experiments(
+                    tier=1, active_tests=active_tests
                 )
-            return job_ids
-        except (OSError, subprocess.CalledProcessError) as e:
-            raise ex.ChsExecutionException(
-                f"CHS execution failed: {e!r}"
-            ) from e
+                if not job_ids:
+                    raise ex.JobSubmissionFailureException(
+                        f"Job submission failed for workspace: "
+                        f"{workspace_name}. Please check internal.log in "
+                        "the workspace directory for details."
+                    )
+                return job_ids
+            except (OSError, subprocess.CalledProcessError) as e:
+                raise ex.ChsExecutionException(
+                    f"CHS execution failed: {e!r}"
+                ) from e
 
 
 def _analyze_action(
@@ -565,138 +581,58 @@ def _analyze_action(
         workspaces_base_dir, workspace_name, run_id=run_id
     )
 
-    _setup_workspace_logger(ramble_manager.path)
-
-    if not os.path.exists(ramble_manager.path):
-        raise ex.WorkspaceNotFoundException(f"Workspace '{run_id}' not found.")
-
-    workspace_path = pathlib.Path(ramble_manager.path)
-    boh_path = workspace_path / "bill_of_health.json"
-    results_json_path = workspace_path / "results.latest.json"
-
-    run_entry = app_data.get_run(workspace_name) or {}
-    is_tiered = run_entry.get("is_tiered", False)
-    is_boh_final = run_entry.get("is_boh_final", not is_tiered)
-
-    # 1. Check if Bill of Health already exists and workspace is archived
-    if (
-        boh_path.exists()
-        and not validation
-        and is_boh_final
-        and ramble_manager.is_archived()
-    ):
-        logger.debug(
-            "Bill of Health already exists and workspace is archived. "
-            "Showing results directly."
-        )
-        Console().print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Found existing "
-            f"Bill of Health for {run_id}."
-            f"[/{theme.CHS_SUCCESS_STYLE}]"
-        )
-        _show_results(app_data, run_id)
-        return run_id
-
-    with archive_workspace(ramble_manager, on_success=True):
-        try:
-            # 2. If results.latest.json exists (but no BoH), generate BoH
-            if results_json_path.exists() and is_boh_final:
-                logger.debug(
-                    "Found results from this run. Generating Bill of Health..."
-                )
-                with theme.get_progress_spinner(
-                    "Generating Bill of Health and cleaning up..."
-                ):
-                    ramble_manager.generate_boh(
-                        str(results_json_path),
-                        thresholds_path=validation,
-                        skip_validation=skip_validation,
-                    )
-                    try:
-                        ramble_manager.cancel_experiments()
-                        logger.debug("Cleaned up jobs for run %s", run_id)
-                    except (
-                        ex.ChsException,
-                        subprocess.CalledProcessError,
-                    ) as e:
-                        logger.warning(
-                            "Failed to cleanup tests after analysis: %s", e
-                        )
-                Console().print(
-                    f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
-                    "and CHS resources cleaned up."
-                    f"[/{theme.CHS_SUCCESS_STYLE}]"
-                )
-                _show_results(app_data, run_id, suppress_boh_uri=True)
-                return run_id
-
-            # 3. If neither exists, wait for jobs and then analyze
-            suite_name = run_entry.get("suite")
-            suite_cfg = load_suite(suite_name) if is_tiered else {}
-            tier_manager = (
-                TierManager(suite_cfg.get("tests", [])) if is_tiered else None
+    with _setup_workspace_logger(ramble_manager.path):
+        if not os.path.exists(ramble_manager.path):
+            raise ex.WorkspaceNotFoundException(
+                f"Workspace '{run_id}' not found."
             )
 
-            while not run_entry.get("is_boh_final", False):
-                active_tier = run_entry.get("active_tier", 1)
-                active_tier_tests_raw = run_entry.get("active_tier_tests") or []
-                active_tier_tests = set(
-                    t.get("name") if isinstance(t, dict) else t
-                    for t in active_tier_tests_raw
-                )
+        workspace_path = pathlib.Path(ramble_manager.path)
+        boh_path = workspace_path / "bill_of_health.json"
+        results_json_path = workspace_path / "results.latest.json"
 
-                if tier_manager:
-                    tier_manager.fast_forward_to_tier(active_tier)
+        run_entry = app_data.get_run(workspace_name) or {}
+        is_tiered = run_entry.get("is_tiered", False)
+        is_boh_final = run_entry.get("is_boh_final", not is_tiered)
 
-                logger.debug("Waiting for tier %s jobs...", active_tier)
-                ramble_manager.wait_for_jobs(
-                    app_data=app_data, tier=active_tier if is_tiered else None
-                )
+        # 1. Check if Bill of Health already exists and workspace is archived
+        if (
+            boh_path.exists()
+            and not validation
+            and is_boh_final
+            and ramble_manager.is_archived()
+        ):
+            logger.debug(
+                "Bill of Health already exists and workspace is archived. "
+                "Showing results directly."
+            )
+            Console().print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Found existing "
+                f"Bill of Health for {run_id}."
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+            _show_results(app_data, run_id)
+            return run_id
 
-                if is_tiered and active_tier == 1:
-                    spinner_msg = "Analyzing initial health checks..."
-                elif is_tiered:
-                    spinner_msg = "Analyzing follow-up diagnostics..."
-                else:
-                    spinner_msg = "Analyzing logs..."
-
-                with theme.get_progress_spinner(spinner_msg):
-                    results_path = ramble_manager.analyze_experiments()
-                    boh_dir = ramble_manager.generate_boh(
-                        results_path,
-                        thresholds_path=validation,
-                        skip_validation=skip_validation,
+        with archive_workspace(ramble_manager, on_success=True):
+            try:
+                # 2. If results.latest.json exists (but no BoH), generate BoH
+                if results_json_path.exists() and is_boh_final:
+                    logger.debug(
+                        "Found results from this run. Generating Bill "
+                        "of Health..."
                     )
-                Console().print(
-                    f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
-                    f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
-                )
-
-                next_tests = None
-                if tier_manager:
-                    boh_file = os.path.join(boh_dir, "bill_of_health.json")
-                    tier_results, hard_failures_present = (
-                        parse_tier_results_from_boh(boh_file, active_tier_tests)
-                    )
-                    if hard_failures_present:
-                        Console().print(
-                            f"[{theme.CHS_WARNING_STYLE}]Hard failure "
-                            "detected. Halting follow-up diagnostic tiers."
-                            f"[/{theme.CHS_WARNING_STYLE}]"
-                        )
-                        next_tests = None
-                    else:
-                        next_tests = tier_manager.get_next_tier_tests(
-                            tier_results
-                        )
-
-                if not next_tests:
                     with theme.get_progress_spinner(
-                        "Cleaning up CHS resources..."
+                        "Generating Bill of Health and cleaning up..."
                     ):
+                        ramble_manager.generate_boh(
+                            str(results_json_path),
+                            thresholds_path=validation,
+                            skip_validation=skip_validation,
+                        )
                         try:
                             ramble_manager.cancel_experiments()
-                            logger.debug("Cleaned up tests for run %s", run_id)
+                            logger.debug("Cleaned up jobs for run %s", run_id)
                         except (
                             ex.ChsException,
                             subprocess.CalledProcessError,
@@ -704,33 +640,125 @@ def _analyze_action(
                             logger.warning(
                                 "Failed to cleanup jobs after analysis: %s", e
                             )
-
-                    run_entry["is_boh_final"] = True
-                    app_data.update_run(workspace_name, run_entry)
                     Console().print(
-                        f"[{theme.CHS_SUCCESS_STYLE}]All checks completed. "
-                        "Bill of Health generated."
+                        f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
+                        "and CHS resources cleaned up."
                         f"[/{theme.CHS_SUCCESS_STYLE}]"
                     )
-                    break
+                    _show_results(app_data, run_id, suppress_boh_uri=True)
+                    return run_id
 
-                _submit_next_tier(
-                    app_data,
-                    ramble_manager,
-                    run_entry,
-                    workspace_name,
-                    active_tier + 1,
-                    list(next_tests),
-                    tier_results=tier_results,
+                # 3. If neither exists, wait for jobs and then analyze
+                suite_name = run_entry.get("suite")
+                suite_cfg = load_suite(suite_name) if is_tiered else {}
+                tier_manager = (
+                    TierManager(suite_cfg.get("tests", []))
+                    if is_tiered
+                    else None
                 )
 
-            _show_results(app_data, run_id, suppress_boh_uri=True)
-        except (OSError, subprocess.CalledProcessError) as e:
-            raise ex.ChsAnalysisException(
-                f"CHS analysis failed for run_id={run_id}: {e!r}"
-            ) from e
-        else:
-            return run_id
+                while not run_entry.get("is_boh_final", False):
+                    active_tier = run_entry.get("active_tier", 1)
+                    active_tier_tests_raw = (
+                        run_entry.get("active_tier_tests") or []
+                    )
+                    active_tier_tests = set(
+                        t.get("name") if isinstance(t, dict) else t
+                        for t in active_tier_tests_raw
+                    )
+
+                    if tier_manager:
+                        tier_manager.fast_forward_to_tier(active_tier)
+
+                    logger.debug("Waiting for tier %s jobs...", active_tier)
+                    ramble_manager.wait_for_jobs(
+                        app_data=app_data,
+                        tier=active_tier if is_tiered else None,
+                    )
+
+                    if is_tiered and active_tier == 1:
+                        spinner_msg = "Analyzing initial health checks..."
+                    elif is_tiered:
+                        spinner_msg = "Analyzing follow-up diagnostics..."
+                    else:
+                        spinner_msg = "Analyzing logs..."
+
+                    with theme.get_progress_spinner(spinner_msg):
+                        results_path = ramble_manager.analyze_experiments()
+                        boh_dir = ramble_manager.generate_boh(
+                            results_path,
+                            thresholds_path=validation,
+                            skip_validation=skip_validation,
+                        )
+                    Console().print(
+                        f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
+                        f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
+                    )
+
+                    next_tests = None
+                    if tier_manager:
+                        boh_file = os.path.join(boh_dir, "bill_of_health.json")
+                        tier_results, hard_failures_present = (
+                            parse_tier_results_from_boh(
+                                boh_file, active_tier_tests
+                            )
+                        )
+                        if hard_failures_present:
+                            Console().print(
+                                f"[{theme.CHS_WARNING_STYLE}]Hard failure "
+                                "detected. Halting follow-up diagnostic tiers."
+                                f"[/{theme.CHS_WARNING_STYLE}]"
+                            )
+                            next_tests = None
+                        else:
+                            next_tests = tier_manager.get_next_tier_tests(
+                                tier_results
+                            )
+
+                    if not next_tests:
+                        with theme.get_progress_spinner(
+                            "Cleaning up CHS resources..."
+                        ):
+                            try:
+                                ramble_manager.cancel_experiments()
+                                logger.debug(
+                                    "Cleaned up jobs for run %s", run_id
+                                )
+                            except (
+                                ex.ChsException,
+                                subprocess.CalledProcessError,
+                            ) as e:
+                                logger.warning(
+                                    "Failed to cleanup jobs after analysis: %s",
+                                    e,
+                                )
+
+                        run_entry["is_boh_final"] = True
+                        app_data.update_run(workspace_name, run_entry)
+                        Console().print(
+                            f"[{theme.CHS_SUCCESS_STYLE}]All checks completed. "
+                            "Bill of Health generated."
+                            f"[/{theme.CHS_SUCCESS_STYLE}]"
+                        )
+                        break
+
+                    _submit_next_tier(
+                        app_data,
+                        ramble_manager,
+                        run_entry,
+                        workspace_name,
+                        active_tier + 1,
+                        list(next_tests),
+                        tier_results=tier_results,
+                    )
+
+                _show_results(app_data, run_id, suppress_boh_uri=True)
+            except (OSError, subprocess.CalledProcessError) as e:
+                raise ex.ChsAnalysisException(
+                    f"CHS analysis failed for run_id={run_id}: {e!r}"
+                ) from e
+            else:
+                return run_id
 
 
 def _show_results(
