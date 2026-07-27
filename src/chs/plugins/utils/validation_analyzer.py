@@ -24,6 +24,7 @@ from . import rendering
 @dataclass
 class ValidationRowData:
     target: str
+    target_nodes: list[str]
     metric: str
     value: Any
     formatted_value: str
@@ -39,6 +40,7 @@ class ValidationGroupData:
     test_level: str
     status_summary: str  # "green", "red", "yellow"
     targets: list[pb.TargetResource]
+    target_nodes: list[str]
     nodes_str: str
     rows: list[ValidationRowData]
 
@@ -85,7 +87,7 @@ def parse_status(
 
 def extract_validation_data(
     test_results: list[pb.TestResult],
-    max_display_nodes: int = 5,
+    max_display_nodes: int | None = None,
     plugin_manager: Any = None,
 ) -> list[ValidationGroupData]:
     """Extracts structured validation results independently of UI formatting."""
@@ -138,10 +140,14 @@ def extract_validation_data(
                 unique_targets[target.SerializeToString()] = target
         all_targets = list(unique_targets.values())
 
-        nodes_str = rendering.format_nodes(all_targets[:max_display_nodes])
-        if len(all_targets) > max_display_nodes:
-            more_cnt = len(all_targets) - max_display_nodes
-            nodes_str += f", ... and {more_cnt} more"
+        if max_display_nodes is not None and max_display_nodes > 0:
+            display_targets = all_targets[:max_display_nodes]
+            nodes_str = rendering.format_nodes(display_targets)
+            if len(all_targets) > max_display_nodes:
+                more_cnt = len(all_targets) - max_display_nodes
+                nodes_str += f", ... and {more_cnt} more"
+        else:
+            nodes_str = rendering.format_nodes(all_targets)
 
         rows = []
         for res in group:
@@ -167,6 +173,9 @@ def extract_validation_data(
                 rows.append(
                     ValidationRowData(
                         target=target_str,
+                        target_nodes=rendering.extract_node_names(
+                            res.target_resources
+                        ),
                         metric=metric.key,
                         value=metric_value,
                         formatted_value=metric_value_2f,
@@ -183,6 +192,7 @@ def extract_validation_data(
                 test_level=test_level,
                 status_summary=border_color,
                 targets=all_targets,
+                target_nodes=rendering.extract_node_names(all_targets),
                 nodes_str=nodes_str,
                 rows=rows,
             )

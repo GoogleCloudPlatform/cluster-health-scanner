@@ -346,10 +346,12 @@ class HtmlReportGenerator:
                 "test_name": vg.test_name,
                 "test_level": vg.test_level,
                 "status_summary": vg.status_summary,
+                "target_nodes": vg.target_nodes,
                 "nodes_str": vg.nodes_str,
                 "rows": [
                     {
                         "target": r.target,
+                        "target_nodes": r.target_nodes,
                         "metric": r.metric,
                         "value": r.value,
                         "formatted_value": r.formatted_value,

@@ -256,18 +256,44 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
       });
     }
 
-    function formatNodeListSummary(str) {
-      if (!str) return '-';
-      const sStr = String(str);
-      const parts = sStr.split(',').map(s => s.trim()).filter(Boolean);
+    function showGlobalNodeTooltip(e, text) {
+      const el = document.getElementById('globalNodeTooltip');
+      if (!el) return;
+      el.innerHTML = text;
+      el.classList.remove('hidden');
+      const rect = e.currentTarget.getBoundingClientRect();
+      const tooltipRect = el.getBoundingClientRect();
+      let top = rect.top - tooltipRect.height - 8;
+      if (top < 10) top = rect.bottom + 8;
+      let left = rect.left;
+      if (left + tooltipRect.width > window.innerWidth - 10) {
+        left = window.innerWidth - tooltipRect.width - 10;
+      }
+      if (left < 10) left = 10;
+      el.style.top = `${top}px`;
+      el.style.left = `${left}px`;
+    }
+
+    function hideGlobalNodeTooltip() {
+      const el = document.getElementById('globalNodeTooltip');
+      if (el) el.classList.add('hidden');
+    }
+
+    function formatNodeListSummary(input) {
+      if (!input) return '-';
+      let parts;
+      if (Array.isArray(input)) {
+        parts = input;
+      } else {
+        const sStr = String(input);
+        parts = sStr.split(',').map(s => s.trim()).filter(Boolean);
+      }
       if (parts.length > 2) {
         const formattedList = parts.join(', ');
-        return `<span class="relative group/node inline-flex items-center">` +
-          `<span class="cursor-help underline decoration-dotted text-slate-700 font-medium">Cluster (${parts.length} nodes)</span>` +
-          `<span class="pointer-events-none absolute bottom-full left-0 mb-1 hidden group-hover/node:block w-72 max-h-48 overflow-y-auto p-2 bg-slate-900/95 text-white text-[10px] font-mono rounded shadow-xl z-50 leading-relaxed whitespace-normal break-words">${formattedList}</span>` +
-          `</span>`;
+        const safeText = formattedList.replace(/"/g, '&quot;');
+        return `<span class="cursor-help underline decoration-dotted text-slate-700 font-medium" onmouseenter="showGlobalNodeTooltip(event, '${safeText}')" onmouseleave="hideGlobalNodeTooltip()">${parts.length} nodes</span>`;
       }
-      return sStr;
+      return Array.isArray(input) ? input.join(', ') : String(input);
     }
 
     let currentStatusFilter = 'breaches';
@@ -498,7 +524,6 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
             if (!matchNode) return false;
           }
 
-          const rowNodes = r.target.replace(/\([^)]*\)/g, '').split(/[\s,<>]+/).map(n => n.trim()).filter(Boolean);
           const statusUpper = (r.status || '').toUpperCase();
           const rowIsFail = isBreachStatus(r.status);
           const rowIsErr = statusUpper.includes('ERROR') || statusUpper.includes('TIMEOUT') || statusUpper.includes('DEADLINE') || statusUpper.includes('CANCELLED') || statusUpper.includes('UNKNOWN');
@@ -511,6 +536,14 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
 
         if (matchingRows.length === 0) return;
 
+        const activeNodesSet = new Set();
+        matchingRows.forEach(r => {
+          const nodes = r.target_nodes || (r.target ? r.target.replace(/\([^)]*\)/g, '').split(/[\s,<>]+/).map(n => n.trim()).filter(Boolean) : []);
+          nodes.forEach(n => activeNodesSet.add(n));
+        });
+        const activeNodesList = Array.from(activeNodesSet);
+        const headerNodesInput = activeNodesList.length > 0 ? activeNodesList : (table.target_nodes || table.nodes_str);
+
         const summaryBadgeClass = table.status_summary === 'green'
           ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
           : table.status_summary === 'red'
@@ -522,7 +555,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
             <div class="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
               <div class="flex items-center gap-2">
                 <span class="font-bold text-slate-900 text-sm">Validation Results: ${table.test_name} (${table.test_level})</span>
-                <span class="text-xs text-slate-500 font-mono">[${formatNodeListSummary(table.nodes_str)}]</span>
+                <span class="text-xs text-slate-500 font-mono">[${formatNodeListSummary(headerNodesInput)}]</span>
               </div>
               <span class="shrink-0 inline-block text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider border ${summaryBadgeClass}">
                 ${table.status_summary === 'green' ? 'MET' : table.status_summary === 'red' ? 'NOT MET' : 'PARTIALLY MET'}
@@ -549,7 +582,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
                       : 'text-amber-700 bg-amber-50 border-amber-200';
                     return `
                       <tr class="hover:bg-slate-50/80 transition">
-                        <td class="px-3 py-2 text-left text-slate-700">${formatNodeListSummary(r.target)}</td>
+                        <td class="px-3 py-2 text-left text-slate-700">${formatNodeListSummary(r.target_nodes || r.target)}</td>
                         <td class="px-3 py-2 text-left font-medium text-slate-900">${r.metric}</td>
                         <td class="px-3 py-2 text-right font-bold text-slate-900">${r.formatted_value}</td>
                         <td class="px-3 py-2 text-left text-slate-500">${r.unit || '-'}</td>
@@ -864,5 +897,6 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
 
     initPart1();
   </script>
+  <div id="globalNodeTooltip" class="fixed hidden z-[9999] p-3 bg-slate-900/95 text-white text-xs font-mono rounded shadow-2xl max-w-lg max-h-80 overflow-y-auto leading-relaxed whitespace-normal break-words pointer-events-none border border-slate-700/50"></div>
 </body>
 </html>

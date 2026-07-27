@@ -43,6 +43,8 @@ def test_validation_analyzer_extraction():
     group = groups[0]
     assert group.test_name == "tpu-gemm"
     assert len(group.rows) == 1
+    assert group.target_nodes == ["node-1"]
+    assert group.rows[0].target_nodes == ["node-1"]
     assert group.rows[0].metric == "Throughput"
     assert group.rows[0].status == "MET"
     assert group.rows[0].threshold == ">= 100"
@@ -64,3 +66,32 @@ def test_boh_summary_aggregator():
     assert summary.total_nodes == 1
     assert len(summary.test_summaries) == 1
     assert summary.test_summaries[0].met_threshold == 1
+
+
+def test_validation_analyzer_no_truncation():
+    res = pb.TestResult(
+        test_name="tpu-collectives",
+        test_level="all_gather",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    for i in range(1, 33):
+        res.target_resources.add(node_name=f"node-{i}")
+    m = res.metrics.add(key="Peak Bandwidth (median)", unit="GB/s")
+    m.value.number_value = 160.0
+    crit = m.validation_criteria
+    crit.name = "peak_bw_check"
+    crit.comparator = pb.Comparator.COMPARATOR_GTE
+    crit.expected_value.number_value = 150.0
+    crit.result_status = pb.RESULT_STATUS_SUCCESS
+
+    groups_default = extract_validation_data([res])
+    assert len(groups_default) == 1
+    assert len(groups_default[0].target_nodes) == 32
+    assert groups_default[0].target_nodes[0] == "node-1"
+    assert "node-32" in groups_default[0].nodes_str
+    assert "... and" not in groups_default[0].nodes_str
+
+    groups_truncated = extract_validation_data([res], max_display_nodes=5)
+    assert len(groups_truncated) == 1
+    assert "node-32" not in groups_truncated[0].nodes_str
+    assert "... and 27 more" in groups_truncated[0].nodes_str

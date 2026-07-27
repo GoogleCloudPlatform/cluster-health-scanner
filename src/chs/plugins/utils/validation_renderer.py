@@ -52,7 +52,7 @@ def render_validation_results(
         otherwise None.
     """
     groups = validation_analyzer.extract_validation_data(
-        test_results, plugin_manager=plugin_manager
+        test_results, max_display_nodes=5, plugin_manager=plugin_manager
     )
     if not groups:
         return None
