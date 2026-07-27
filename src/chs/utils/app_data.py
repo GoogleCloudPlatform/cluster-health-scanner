@@ -24,6 +24,8 @@ import os
 import pathlib
 from typing import Any
 
+from chs.utils import file_utils
+
 import chs.exceptions as ex
 import platformdirs
 from chs.utils.lifecycle import JobStatus
@@ -85,7 +87,7 @@ class ChsAppData:
     def _save_json(self, file_path: pathlib.Path, data: dict[str, Any]) -> None:
         """Saves dictionary data to a JSON file."""
         try:
-            with open(file_path, "w") as f:
+            with file_utils.atomic_open(file_path, "w") as f:
                 json.dump(data, f, indent=2)
         except OSError as e:
             logger.warning("Failed to write to data file %s: %s", file_path, e)

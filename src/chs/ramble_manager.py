@@ -44,6 +44,7 @@ from chs import exceptions as ex
 from chs import resources
 from chs.boh_generator import BOHGenerator
 from chs.html_generator import HtmlReportGenerator
+from chs.utils import file_utils
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 from chs.storage import StorageProviderFactory
@@ -1008,7 +1009,7 @@ class RambleManager:
                 if "ramble_status.json" in files:
                     status_path = os.path.join(root, "ramble_status.json")
                     try:
-                        with open(status_path, "w") as f:
+                        with file_utils.atomic_open(status_path, "w") as f:
                             json.dump({"experiment_status": "SETUP"}, f)
                     except OSError as e:
                         logger.warning(
@@ -1094,7 +1095,7 @@ class RambleManager:
         logger.debug("Bill of Health generated successfully.")
 
         boh_path = workspace_dir / "bill_of_health.json"
-        with open(boh_path, "w") as f:
+        with file_utils.atomic_open(boh_path, "w") as f:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
         try:
