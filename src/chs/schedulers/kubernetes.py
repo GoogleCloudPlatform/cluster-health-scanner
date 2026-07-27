@@ -144,6 +144,8 @@ class KubernetesScheduler(BaseScheduler):
                     e,
                 )
                 self.kueue_supported = False
+                self._jobset_labels_yaml = ""
+                self._suspend_jobset = "false"
                 return (
                     KubernetesPreflightChecker(
                         self
