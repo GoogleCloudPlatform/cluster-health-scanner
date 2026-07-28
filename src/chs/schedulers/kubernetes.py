@@ -642,7 +642,6 @@ class KubernetesScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
-        timeout: int | None = None,
         deadline: int | None = None,
         run_id: str | None = None,
         images_dir: str | None = None,
@@ -684,10 +683,10 @@ class KubernetesScheduler(BaseScheduler):
         variables["tests"] = tests or []
         variables["default_interface_name"] = default_interface_name
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
-        variables["timeout"] = timeout if self.kueue_supported else deadline
-        variables["deadline"] = deadline
-
+        variables["suspend_jobset"] = self.kueue_supported
         variables["chs_run_id"] = run_id
+        if deadline is not None:
+            variables["deadline"] = deadline
 
         variables["kubernetes_namespace"] = CHS_NAMESPACE
 

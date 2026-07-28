@@ -146,7 +146,6 @@ class BaseScheduler(abc.ABC):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
-        timeout: int | None = None,
         deadline: int | None = None,
         run_id: str | None = None,
         images_dir: str | None = None,
@@ -157,7 +156,6 @@ class BaseScheduler(abc.ABC):
           workspace_config_dir: Directory to write the config file to.
           tests: List of tests to run.
           machine_type: The machine type of the cluster nodes.
-          timeout: The timeout for the job in seconds.
           deadline: The deadline for the job in seconds.
           run_id: The user-facing run ID.
         """

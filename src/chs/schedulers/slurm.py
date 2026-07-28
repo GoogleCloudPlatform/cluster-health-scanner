@@ -369,10 +369,9 @@ class SlurmScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
-        timeout: int | None = None,
         deadline: int | None = None,
-        images_dir: str | None = None,
         run_id: str | None = None,
+        images_dir: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -401,8 +400,9 @@ class SlurmScheduler(BaseScheduler):
         variables["tests"] = tests or []
         variables["container_dir"] = images_dir_value
         variables["tcp_interfaces"] = tcp_interfaces_str
-        variables["timeout"] = timeout
-        variables["deadline"] = deadline
+
+        if deadline is not None:
+            variables["deadline"] = deadline
 
         variables["chs_run_id"] = run_id
 

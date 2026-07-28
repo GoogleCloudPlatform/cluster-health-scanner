@@ -188,6 +188,30 @@ class Chs(ExecutableApplication):
             if test.variables:
                 test_vars.update(test.variables)
 
+            suite_deadline = self.expander.expand_var_name(
+                "deadline", typed=True
+            )
+            effective_timeout = None
+            if suite_deadline:
+                try:
+                    effective_timeout = int(suite_deadline)
+                except (ValueError, TypeError):
+                    pass
+
+            test_timeout = test_vars.get("timeout")
+            if test_timeout:
+                try:
+                    test_timeout = int(test_timeout)
+                    if effective_timeout is not None:
+                        effective_timeout = min(effective_timeout, test_timeout)
+                    else:
+                        effective_timeout = test_timeout
+                except (ValueError, TypeError):
+                    pass
+
+            if effective_timeout is not None:
+                test_vars["timeout"] = effective_timeout
+
             if test.name in [
                 "nccl-cluster",
                 "nccl-pairwise",

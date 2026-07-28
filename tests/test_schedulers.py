@@ -395,7 +395,7 @@ ramble:
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
     )
-    def test_write_ramble_config_with_timeout(self, mock_filter, mock_logger):
+    def test_write_ramble_config_with_deadline(self, mock_filter, mock_logger):
         """Test write_ramble_config injects timeout and deadline."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -413,7 +413,7 @@ ramble:
     default_interface_name: {default_interface_name}
     all_interfaces_json: |
       {all_interfaces_json}
-    timeout: {timeout}
+
     deadline: {deadline}
 """)
 
@@ -434,7 +434,6 @@ ramble:
                     workspace_config_dir,
                     ["test1"],
                     "a3-megagpu-8g",
-                    timeout=600,
                     deadline=1800,
                 )
 
@@ -445,7 +444,6 @@ ramble:
             data = yaml.safe_load(f)
 
         variables = data["ramble"]["variables"]
-        self.assertEqual(variables["timeout"], 1800)
         self.assertEqual(variables["deadline"], 1800)
 
     @mock.patch("subprocess.run")

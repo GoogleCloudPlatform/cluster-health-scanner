@@ -352,7 +352,6 @@ class TestRambleManager(unittest.TestCase):
             workspace_config_dir=mock.ANY,
             tests=None,
             machine_type="a3-high",
-            timeout=None,
             deadline=None,
             run_id=None,
             images_dir="/tmp/images",

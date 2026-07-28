@@ -476,7 +476,6 @@ def run_action(
     workspace_name: str,
     workspaces_base_dir: str,
     machine_type: str,
-    timeout: int | None = None,
     deadline: int | None = None,
     validation: str | None = None,
     skip_validation: bool = False,
@@ -493,7 +492,6 @@ def run_action(
       workspaces_base_dir: The base directory for workspaces.
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
       dry_run: Set up the workspace but do not execute experiments.
-      timeout: The timeout for the job in seconds.
       deadline: The deadline for the job in seconds.
       thresholds: Path to user-defined thresholds YAML file.
 
@@ -538,7 +536,6 @@ def run_action(
                     scheduler_obj,
                     tests,
                     machine_type=machine_type,
-                    timeout=timeout,
                     deadline=deadline,
                 )
                 ramble_manager.setup_workspace()
@@ -550,9 +547,10 @@ def run_action(
                 )
                 if not job_ids:
                     raise ex.JobSubmissionFailureException(
-                        f"Job submission failed for workspace: "
-                        f"{workspace_name}. Please check internal.log in "
-                        "the workspace directory for details."
+                        f"Job submission failed for "
+                        f"workspace: {workspace_name}. "
+                        "Please check internal.log in the workspace directory "
+                        "for details."
                     )
                 return job_ids
             except (OSError, subprocess.CalledProcessError) as e:
@@ -1347,7 +1345,6 @@ def run(
 
         machine_type = detected_machine_types[0]
 
-        timeout = resources.DEFAULT_TIMEOUT
         deadline = resources.DEFAULT_DEADLINE
         is_tiered = False
         active_tier_tests = None
@@ -1405,17 +1402,11 @@ def run(
                 )
 
             try:
-                timeout = int(suite_cfg.get("timeout"))
+                deadline = int(
+                    suite_cfg.get("deadline", resources.DEFAULT_DEADLINE)
+                )
             except (ValueError, TypeError):
-                pass  # nothing to do here, as the default value will be used
-
-            try:
-                deadline = int(suite_cfg.get("deadline"))
-            except (ValueError, TypeError):
-                pass  # nothing to do here, as the default value will be used
-
-            timeout = max(timeout, resources.DEFAULT_TIMEOUT)
-            deadline = max(deadline, timeout + 600)
+                deadline = resources.DEFAULT_DEADLINE
 
             test_names = [t.get("name") for t in resolved_tests]
             logger.debug(
@@ -1425,13 +1416,38 @@ def run(
             parsed_tests = resolved_tests
         else:
             parsed_tests_strs = _parse_str_to_list(tests)
-            parsed_tests = (
-                [{"name": t} for t in parsed_tests_strs]
-                if parsed_tests_strs
-                else []
-            )
-            if not suite:
-                suite = "custom"
+
+            suites_to_search = utils.suites.get_all_suites()
+            suite = "custom"
+
+            parsed_tests = []
+            for t_name in parsed_tests_strs or []:
+                test_cfg = None
+                for s_name in suites_to_search:
+                    try:
+                        s_cfg = load_suite(s_name)
+                        for t in s_cfg.get("tests", []):
+                            if t.get("name") == t_name:
+                                test_cfg = dict(t)
+                                break
+                    except ex.SuiteNotFoundException:
+                        continue
+                    if test_cfg:
+                        break
+
+                if test_cfg:
+                    parsed_tests.append(test_cfg)
+                else:
+                    parsed_tests.append({"name": t_name})
+
+            if suite != "custom":
+                try:
+                    s_cfg = load_suite(suite)
+                    deadline = int(
+                        s_cfg.get("deadline", resources.DEFAULT_DEADLINE)
+                    )
+                except (ValueError, TypeError, ex.SuiteNotFoundException):
+                    pass
 
         logger.debug("Running preflight checks")
         parsed_tests = scheduler_obj.run_preflight_checks(parsed_tests)
@@ -1573,7 +1589,6 @@ def run(
                 workspace_name=workspace_name,
                 workspaces_base_dir=workspaces_base_dir,
                 machine_type=machine_type,
-                timeout=timeout,
                 deadline=deadline,
                 validation=validation,
                 skip_validation=skip_validation,
@@ -1583,7 +1598,8 @@ def run(
 
         if not job_ids:
             raise ex.JobSubmissionFailureException(
-                f"Job submission failed for workspace: {workspace_name}. "
+                f"Job submission failed for "
+                f"workspace: {workspace_name}. "
                 "Please check internal.log for details."
             )
 
