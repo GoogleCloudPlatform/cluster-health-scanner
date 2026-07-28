@@ -1131,6 +1131,85 @@ class TestBOHGenerator(unittest.TestCase):
             pb.RESULT_STATUS_FAILED,
         )
 
+    def test_split_test_result_per_node_prefix_isolation(self):
+        """Test per-node splitting isolates node-1 from node-10 metrics."""
+        test_result = pb.TestResult(test_name="tpu-info")
+        test_result.target_resources.add(node_name="node-1")
+        test_result.target_resources.add(node_name="node-10")
+        test_result.target_resources.add(node_name="node-100")
+
+        # Global metric (null context) - should be present in all
+        m_global = pb.Metric(key="Global Metric")
+        m_global.metadata.fields["context"].string_value = "null"
+        test_result.metrics.append(m_global)
+
+        # Metric for node-10 via context
+        m_node10_ctx = pb.Metric(key="Node 10 Ctx Metric")
+        m_node10_ctx.metadata.fields["context"].string_value = "Node node-10"
+        test_result.metrics.append(m_node10_ctx)
+
+        # Metric for my-node-1 (hyphenated prefix - should NOT match node-1)
+        m_mynode1_ctx = pb.Metric(key="My Node 1 Ctx Metric")
+        m_mynode1_ctx.metadata.fields["context"].string_value = "Node my-node-1"
+        test_result.metrics.append(m_mynode1_ctx)
+
+        # Metric for node-1-pool (hyphenated suffix - should NOT match node-1)
+        m_node1pool_ctx = pb.Metric(key="Node 1 Pool Ctx Metric")
+        m_node1pool_ctx.metadata.fields[
+            "context"
+        ].string_value = "Node node-1-pool"
+        test_result.metrics.append(m_node1pool_ctx)
+
+        # Metric for node-100 via explicit node metadata
+        m_node100_meta = pb.Metric(key="Node 100 Meta Metric")
+        m_node100_meta.metadata.fields["node"].string_value = "node-100"
+        m_node100_meta.metadata.fields["context"].string_value = "Node node-100"
+        test_result.metrics.append(m_node100_meta)
+
+        # Metric for node-10 via explicit node metadata with null context
+        m_node10_meta_null_ctx = pb.Metric(key="Node 10 Meta Null Ctx Metric")
+        m_node10_meta_null_ctx.metadata.fields["node"].string_value = "node-10"
+        m_node10_meta_null_ctx.metadata.fields["context"].string_value = "null"
+        test_result.metrics.append(m_node10_meta_null_ctx)
+
+        # Metric for node-1
+        m_node1_ctx = pb.Metric(key="Node 1 Ctx Metric")
+        m_node1_ctx.metadata.fields[
+            "context"
+        ].string_value = "node-1,1024,float32"
+        test_result.metrics.append(m_node1_ctx)
+
+        generator = BOHGenerator(self.test_json_path)
+        split = generator._split_test_result_per_node(test_result)
+
+        self.assertEqual(len(split), 3)
+
+        # node-1 checks
+        node1_keys = [m.key for m in split[0].metrics]
+        self.assertIn("Global Metric", node1_keys)
+        self.assertIn("Node 1 Ctx Metric", node1_keys)
+        self.assertNotIn("Node 10 Ctx Metric", node1_keys)
+        self.assertNotIn("My Node 1 Ctx Metric", node1_keys)
+        self.assertNotIn("Node 1 Pool Ctx Metric", node1_keys)
+        self.assertNotIn("Node 100 Meta Metric", node1_keys)
+        self.assertNotIn("Node 10 Meta Null Ctx Metric", node1_keys)
+
+        # node-10 checks
+        node10_keys = [m.key for m in split[1].metrics]
+        self.assertIn("Global Metric", node10_keys)
+        self.assertIn("Node 10 Ctx Metric", node10_keys)
+        self.assertIn("Node 10 Meta Null Ctx Metric", node10_keys)
+        self.assertNotIn("Node 1 Ctx Metric", node10_keys)
+        self.assertNotIn("Node 100 Meta Metric", node10_keys)
+
+        # node-100 checks
+        node100_keys = [m.key for m in split[2].metrics]
+        self.assertIn("Global Metric", node100_keys)
+        self.assertIn("Node 100 Meta Metric", node100_keys)
+        self.assertNotIn("Node 1 Ctx Metric", node100_keys)
+        self.assertNotIn("Node 10 Ctx Metric", node100_keys)
+        self.assertNotIn("Node 10 Meta Null Ctx Metric", node100_keys)
+
 
 if __name__ == "__main__":
     unittest.main()

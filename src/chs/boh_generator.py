@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+import re
 import chs.core.plugin_manager
 from typing import Any
 import uuid
@@ -195,11 +196,27 @@ class BOHGenerator:
             )
 
             node_metrics = []
+            target_name = target.node_name.strip()
+            pattern = (
+                r"(?<![a-zA-Z0-9_-])"
+                + re.escape(target_name)
+                + r"(?![a-zA-Z0-9_-])"
+            )
+
             for metric in node_result.metrics:
                 ctx = ""
                 if "context" in metric.metadata.fields:
-                    ctx = metric.metadata.fields["context"].string_value
-                if not ctx or ctx == "null" or target.node_name in ctx:
+                    ctx = metric.metadata.fields["context"].string_value.strip()
+
+                if "node" in metric.metadata.fields:
+                    metric_node = metric.metadata.fields[
+                        "node"
+                    ].string_value.strip()
+                    if metric_node == target_name:
+                        node_metrics.append(metric)
+                elif not ctx or ctx == "null":
+                    node_metrics.append(metric)
+                elif re.search(pattern, ctx):
                     node_metrics.append(metric)
 
             node_result.ClearField("metrics")
