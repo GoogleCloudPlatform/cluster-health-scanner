@@ -1051,11 +1051,16 @@ class TestSchedulerDetection(unittest.TestCase):
         scheduler = detect_scheduler()
         self.assertEqual(scheduler, "kubernetes")
 
+    @mock.patch("subprocess.run")
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {}, clear=True)
-    def test_detect_kubernetes_out_of_cluster(self, mock_exists, mock_which):
+    def test_detect_kubernetes_out_of_cluster(
+        self, mock_exists, mock_which, mock_run
+    ):
         """Test K8s detected out-of-cluster if kubeconfig exists."""
+        # Mock subprocess.run to return a context
+        mock_run.return_value.stdout = "test-context"
         # Slurm not found, kubectl found
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
 
@@ -1069,13 +1074,50 @@ class TestSchedulerDetection(unittest.TestCase):
 
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {}, clear=True)
+    def test_detect_kubernetes_missing_kubectl(self, mock_exists, mock_which):
+        """Test K8s detection fails fast if kubectl is missing."""
+        mock_exists.side_effect = lambda p: p == os.path.expanduser(
+            "~/.kube/config"
+        )
+        mock_which.return_value = False
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "Missing required executable: kubectl"
+        ):
+            detect_scheduler()
+
+    @mock.patch("subprocess.run")
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {}, clear=True)
+    def test_detect_kubernetes_missing_context(
+        self, mock_exists, mock_which, mock_run
+    ):
+        """Test K8s detection fails if no active context is set."""
+        mock_exists.side_effect = lambda p: p == os.path.expanduser(
+            "~/.kube/config"
+        )
+        mock_which.side_effect = lambda cmd: cmd == "kubectl"
+        mock_run.return_value.stdout = ""
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "no active kubectl context is set"
+        ):
+            detect_scheduler()
+
+    @mock.patch("subprocess.run")
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {"KUBECONFIG": "/some/path"})
     def test_detect_kubernetes_out_of_cluster_env(
-        self, mock_exists, mock_which
+        self, mock_exists, mock_which, mock_run
     ):
         """Test K8s detected out-of-cluster if KUBECONFIG env is set and
         file exists.
         """
+        # Mock subprocess.run to return a context
+        mock_run.return_value.stdout = "test-context"
         # Slurm not found, kubectl found
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
         mock_exists.side_effect = lambda p: p == "/some/path"
@@ -1083,13 +1125,16 @@ class TestSchedulerDetection(unittest.TestCase):
         scheduler = detect_scheduler()
         self.assertEqual(scheduler, "kubernetes")
 
+    @mock.patch("subprocess.run")
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {"KUBECONFIG": "/path1:/path2"})
     def test_detect_kubernetes_out_of_cluster_env_multi(
-        self, mock_exists, mock_which
+        self, mock_exists, mock_which, mock_run
     ):
         """Test K8s detected if KUBECONFIG has multiple paths and one exists."""
+        # Mock subprocess.run to return a context
+        mock_run.return_value.stdout = "test-context"
         # Slurm not found, kubectl found
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
         # /path2 exists, /path1 does not
