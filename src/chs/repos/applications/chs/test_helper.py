@@ -299,6 +299,33 @@ podAntiAffinity:
                 if slice_topo:
                     slice_vars["tpu_topology"] = slice_topo
 
+                is_dynamic_slice = slice_id in variables.get(
+                    "tpu_dynamic_pools", []
+                )
+                if is_dynamic_slice:
+                    old_annotations = slice_vars.get(
+                        "jobset_annotations_yaml", ""
+                    ).strip()
+                    new_annotations = "alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-tpu-slice"
+                    slice_vars["jobset_annotations_yaml"] = (
+                        f"{old_annotations}\\n{new_annotations}"
+                        if old_annotations
+                        else new_annotations
+                    )
+
+                    topo = slice_vars.get("tpu_topology")
+                    new_annotations = (
+                        f'cloud.google.com/gke-tpu-slice-topology: "{topo}"'
+                    )
+                    old_annotations = slice_vars.get(
+                        "pod_annotations_yaml", ""
+                    ).strip()
+                    slice_vars["pod_annotations_yaml"] = (
+                        f"{old_annotations}\\n{new_annotations}"
+                        if old_annotations
+                        else new_annotations
+                    )
+
                 if len(tpu_slices) == 1:
                     slice_exp_name = experiment_name
                 else:

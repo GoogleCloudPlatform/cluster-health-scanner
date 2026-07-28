@@ -17,6 +17,7 @@
 import urllib.request
 import importlib.resources as pkg_resources
 import json
+import time
 import logging
 import os
 import re
@@ -48,6 +49,9 @@ class TpuSliceData:
     )
     node_to_pool: dict[str, str] = field(default_factory=dict)
     pool_to_topology: dict[str, str] = field(default_factory=dict)
+    dynamic_slice_partitions: dict[str, str] = field(default_factory=dict)
+    pool_to_accelerator: dict[str, str] = field(default_factory=dict)
+    all_tpu_nodes: set[str] = field(default_factory=set)
 
 
 def boolean_representer(dumper, data):
@@ -57,6 +61,10 @@ def boolean_representer(dumper, data):
 yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
+
+_PARTITION_STATE_REGEX = re.compile(
+    r"cloud\.google\.com/gke-tpu-partition-(.+)-state"
+)
 
 
 class KubernetesScheduler(BaseScheduler):
@@ -434,6 +442,22 @@ class KubernetesScheduler(BaseScheduler):
 
         return busy_nodes
 
+    def _purge_unhealthy_pool_data(
+        self,
+        unhealthy_nodepool: str,
+        tpu_nodepools: dict,
+        node_to_nodepool: dict,
+        pool_to_topology: dict,
+        dynamic_slice_partitions: dict,
+        pool_to_accelerator: dict,
+    ) -> None:
+        """Purges unhealthy pool data from dictionaries."""
+        for node in tpu_nodepools.pop(unhealthy_nodepool, []):
+            node_to_nodepool.pop(node, None)
+        pool_to_topology.pop(unhealthy_nodepool, None)
+        dynamic_slice_partitions.pop(unhealthy_nodepool, None)
+        pool_to_accelerator.pop(unhealthy_nodepool, None)
+
     def _get_tpu_slices(self) -> TpuSliceData:
         """Returns TPU pools mapping and node-to-pool mapping."""
         if self._tpu_slice_data:
@@ -446,7 +470,7 @@ class KubernetesScheduler(BaseScheduler):
                         "get",
                         "nodes",
                         "-l",
-                        "cloud.google.com/gke-tpu-topology",
+                        "cloud.google.com/gke-tpu-accelerator",
                         "-o",
                         "json",
                     ]
@@ -461,9 +485,14 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to get node labels for TPU topology: {e}"
             ) from e
 
+        all_tpu_nodes = set()
         tpu_nodepools: dict[str, list[str]] = defaultdict(list)
         node_to_nodepool: dict[str, str] = {}
         pool_to_topology: dict[str, str] = {}
+        dynamic_slice_partitions: dict[str, str] = {}
+        pool_to_accelerator: dict[str, str] = {}
+
+        unhealthy_pools = set()
 
         for node in node_data.get("items", []):
             node_name = node.get("metadata", {}).get("name")
@@ -471,19 +500,82 @@ class KubernetesScheduler(BaseScheduler):
                 continue
 
             labels = node.get("metadata", {}).get("labels", {})
+            tpu_type = labels.get("cloud.google.com/gke-tpu-accelerator")
+            if tpu_type:
+                all_tpu_nodes.add(node_name)
+
             nodepool = labels.get("cloud.google.com/gke-nodepool")
+            if not nodepool:
+                continue
+
+            accelerator_mode = labels.get(
+                "cloud.google.com/gke-accelerator-topology-mode"
+            )
             topology = labels.get("cloud.google.com/gke-tpu-topology")
 
-            if nodepool:
-                node_to_nodepool[node_name] = nodepool
-                tpu_nodepools[nodepool].append(node_name)
-                if topology and nodepool not in pool_to_topology:
-                    pool_to_topology[nodepool] = topology
+            if accelerator_mode == "PROVISION_ONLY":
+                matched_shape = None
+                matched_state = None
+                for key, val in labels.items():
+                    m = _PARTITION_STATE_REGEX.match(key)
+                    if m:
+                        matched_shape = m.group(1)
+                        matched_state = val
+                        break
+
+                if matched_shape and matched_state == "HEALTHY":
+                    if nodepool not in unhealthy_pools:
+                        tpu_nodepools[nodepool].append(node_name)
+                        node_to_nodepool[node_name] = nodepool
+                        pool_to_topology[nodepool] = matched_shape
+                        partition_id = labels.get(
+                            f"cloud.google.com/gke-tpu-partition-{matched_shape}-id"
+                        )
+                        if partition_id:
+                            dynamic_slice_partitions[nodepool] = partition_id
+                        if tpu_type:
+                            pool_to_accelerator[nodepool] = tpu_type
+                else:
+                    unhealthy_pools.add(nodepool)
+                    self._purge_unhealthy_pool_data(
+                        nodepool,
+                        tpu_nodepools,
+                        node_to_nodepool,
+                        pool_to_topology,
+                        dynamic_slice_partitions,
+                        pool_to_accelerator,
+                    )
+            else:
+                if not topology:
+                    unhealthy_pools.add(nodepool)
+                    self._purge_unhealthy_pool_data(
+                        nodepool,
+                        tpu_nodepools,
+                        node_to_nodepool,
+                        pool_to_topology,
+                        dynamic_slice_partitions,
+                        pool_to_accelerator,
+                    )
+                else:
+                    if nodepool not in unhealthy_pools:
+                        tpu_nodepools[nodepool].append(node_name)
+                        node_to_nodepool[node_name] = nodepool
+                        if topology and nodepool not in pool_to_topology:
+                            pool_to_topology[nodepool] = topology
+
+        if unhealthy_pools:
+            logger.warning(
+                "Dropped unhealthy dynamic TPU pools: %s",
+                ", ".join(unhealthy_pools),
+            )
 
         self._tpu_slice_data = TpuSliceData(
             pools=tpu_nodepools,
             node_to_pool=node_to_nodepool,
             pool_to_topology=pool_to_topology,
+            dynamic_slice_partitions=dynamic_slice_partitions,
+            pool_to_accelerator=pool_to_accelerator,
+            all_tpu_nodes=all_tpu_nodes,
         )
         return self._tpu_slice_data
 
@@ -553,6 +645,14 @@ class KubernetesScheduler(BaseScheduler):
             pool = topology.node_to_pool.get(node)
             if pool:
                 requested_tpu_slices[pool].add(node)
+            elif node in topology.all_tpu_nodes:
+                # TPU node and exists without its nodepool/slice mapping
+                logger.warning(
+                    "Dropping TPU node '%s' because its slice is unhealthy "
+                    "or malformed.",
+                    node,
+                )
+                continue
             else:
                 gpu_nodes.add(node)
 
@@ -695,12 +795,20 @@ class KubernetesScheduler(BaseScheduler):
             variables["tpu_slices"] = tpu_slices
 
             slice_data = self._get_tpu_slices()
-            slice_topologies = {}
-            for slice_id in tpu_slices:
-                topo = slice_data.pool_to_topology.get(slice_id)
-                if topo:
-                    slice_topologies[slice_id] = topo
+
+            slice_topologies = {
+                pool: slice_data.pool_to_topology[pool]
+                for pool in tpu_slices
+                if pool in slice_data.pool_to_topology
+            }
             variables["tpu_slice_topologies"] = slice_topologies
+
+            dynamic_pools = [
+                pool
+                for pool in tpu_slices
+                if pool in slice_data.dynamic_slice_partitions
+            ]
+            variables["tpu_dynamic_pools"] = dynamic_pools
 
         if self._jobset_labels_yaml:
             variables["jobset_labels_yaml"] = self._jobset_labels_yaml
@@ -973,8 +1081,158 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to parse GKE jobset.yaml at {jobset_file}: {e}"
             ) from e
 
+    def _cleanup_dynamic_slices(self) -> None:
+        """Deletes dynamic TPU slices created by CHS."""
+        try:
+            self._run_kubectl(
+                [
+                    "delete",
+                    "slices.accelerator.gke.io",
+                    "-A",
+                    "-l",
+                    "created-by=chs",
+                    "--ignore-not-found",
+                ]
+            )
+        except subprocess.CalledProcessError as e:
+            logger.warning("Failed to delete dynamic slices: %s", e)
+
+    def _wait_for_slices_active(self, timeout_sec: int = 300) -> None:
+        """Waits for dynamically provisioned slices to become ACTIVE."""
+        start_time = time.time()
+        while time.time() - start_time < timeout_sec:
+            try:
+                output = self._run_kubectl(
+                    [
+                        "get",
+                        "slice",
+                        "-l",
+                        "created-by=chs",
+                        "-o",
+                        "json",
+                        "--ignore-not-found",
+                    ]
+                )
+                if not output:
+                    time.sleep(10)
+                    continue
+                slices_json = json.loads(output)
+                items = slices_json.get("items", [])
+                if not items:
+                    time.sleep(10)
+                    continue
+
+                statuses = []
+                for slice_item in items:
+                    conditions = (
+                        slice_item.get("status", {}).get("conditions", [])
+                        if slice_item.get("status")
+                        else []
+                    )
+                    ready_cond = next(
+                        (c for c in conditions if c.get("type") == "Ready"),
+                        {},
+                    )
+                    statuses.append(ready_cond.get("reason"))
+
+                if statuses and all(s == "ACTIVE" for s in statuses):
+                    return
+
+                failed_reasons = {
+                    "FAILED",
+                    "SliceCreationFailed",
+                    "ACTIVE_DEGRADED",
+                    "INCOMPLETE",
+                }
+                found_failure = next(
+                    (s for s in statuses if s in failed_reasons), None
+                )
+                if found_failure:
+                    logger.error(
+                        "Slice provisioning failed with status: %s",
+                        found_failure,
+                    )
+                    raise ChsSchedulerException(
+                        f"Slice provisioning failed, status: {found_failure}"
+                    )
+            except (
+                subprocess.CalledProcessError,
+                json.JSONDecodeError,
+            ) as e:
+                logger.debug("Failed to check status for dynamic slices: %s", e)
+                pass
+            time.sleep(10)
+
+        raise ChsSchedulerException(
+            "Timed out waiting for dynamic slices to become ACTIVE."
+        )
+
+    def _provision_dynamic_slices(
+        self, target_pools: dict[str, list[str]]
+    ) -> None:
+        """Provisions and waits for dynamic TPU slices."""
+        if not (
+            self._tpu_slice_data
+            and self._tpu_slice_data.dynamic_slice_partitions
+            and self.workspace_config_dir
+        ):
+            return
+
+        slice_yaml_path = os.path.join(
+            self.workspace_config_dir, "chs-slices.yaml"
+        )
+        all_slices_yaml = ""
+        template_path = pkg_resources.files("chs.schedulers").joinpath(
+            "slice.yaml.tpl"
+        )
+        try:
+            with pkg_resources.as_file(template_path) as p:
+                with open(p, "r") as f:
+                    template_str = f.read()
+        except OSError as e:
+            raise ChsSchedulerException(f"Failed to read slice template: {e}")
+
+        for (
+            pool_name,
+            partition_id,
+        ) in self._tpu_slice_data.dynamic_slice_partitions.items():
+            if pool_name not in target_pools:
+                continue
+            tpu_type = self._tpu_slice_data.pool_to_accelerator.get(
+                pool_name, ""
+            )
+            shape = self._tpu_slice_data.pool_to_topology.get(pool_name, "")
+
+            slice_name = f"chs-slice-{pool_name}"[:63].rstrip("-.")
+            rendered = template_str.format(
+                slice_name=slice_name,
+                tpu_type=tpu_type,
+                shape=shape,
+                partition_id=partition_id,
+            )
+            if all_slices_yaml:
+                all_slices_yaml += "---\n"
+            all_slices_yaml += rendered
+
+        if all_slices_yaml:
+            with open(slice_yaml_path, "w") as f:
+                f.write(all_slices_yaml)
+
+            self._run_kubectl(["apply", "-f", slice_yaml_path])
+
+            self._wait_for_slices_active(300)
+
     def apply_scheduler_resources(self) -> None:
         """Applies generated scheduler resources to the cluster."""
+        self._cleanup_dynamic_slices()
+
+        target_pools = {}
+        nodes = self.get_nodes_under_test()
+        if nodes:
+            target_pools = self._group_nodes_by_slice(nodes)
+
+        self._provision_dynamic_slices(target_pools)
+
         self._ensure_namespace_exists()
         if self.kueue_supported:
             kueue_mgr = KueueManager(self)
@@ -983,6 +1241,8 @@ class KubernetesScheduler(BaseScheduler):
     def cleanup_scheduler_resources(self) -> None:
         """Cleans up scheduler-specific resources like Kueue
         configurations statelessly."""
+
+        self._cleanup_dynamic_slices()
 
         kueue_mgr = KueueManager(self)
         try:
@@ -1035,6 +1295,7 @@ class KubernetesScheduler(BaseScheduler):
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all JobSets matching the specified prefix natively."""
         logger.debug("Attempting native cancel for prefix: %s", prefix)
+        self._cleanup_dynamic_slices()
         # Match the sanitized prefix as a substring in the JobSet name.
         sanitized_match = prefix.replace("_", "-").replace(".", "-").lower()
 

@@ -846,7 +846,7 @@ ramble:
         mock_run.return_value.stdout = "chs-job1-ssh"
         scheduler.cleanup_scheduler_resources()
 
-        args = mock_run.call_args_list[4][0][0]
+        args = mock_run.call_args_list[5][0][0]
         self.assertIn("delete", args)
         self.assertIn("secrets", args)
         self.assertIn("chs-job1-ssh", args)
@@ -1021,6 +1021,47 @@ ramble:
         scheduler = KubernetesScheduler(nodes="node1,node2")
         nodes = scheduler.get_nodes_under_test()
         self.assertEqual(nodes, ["node1", "node2"])
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_cleanup_dynamic_slices(self, mock_kubectl, mock_logger):
+        scheduler = KubernetesScheduler()
+        scheduler._cleanup_dynamic_slices()
+        mock_kubectl.assert_called_once_with(
+            [
+                "delete",
+                "slices.accelerator.gke.io",
+                "-A",
+                "-l",
+                "created-by=chs",
+                "--ignore-not-found",
+            ]
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("time.time", side_effect=[0, 1])
+    def test_wait_for_slices_active_success(
+        self, mock_time, mock_kubectl, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        mock_kubectl.return_value = (
+            '{"items": [{"status": {"conditions": '
+            '[{"type": "Ready", "reason": "ACTIVE"}]}}]}'
+        )
+        scheduler._wait_for_slices_active()
+        mock_kubectl.assert_called_once()
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("time.time", side_effect=[0, 1])
+    def test_wait_for_slices_active_failed(
+        self, mock_time, mock_kubectl, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        mock_kubectl.return_value = (
+            '{"items": [{"status": {"conditions": '
+            '[{"type": "Ready", "reason": "FAILED"}]}}]}'
+        )
+        with self.assertRaises(ChsSchedulerException):
+            scheduler._wait_for_slices_active()
 
 
 class TestSchedulerDetection(unittest.TestCase):
