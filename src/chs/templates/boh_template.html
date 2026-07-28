@@ -470,8 +470,8 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
             <div class="space-y-1.5">
               ${displayTests.map(t => `
                 <div class="px-2.5 py-1.5 rounded bg-slate-50 border border-slate-200/60 flex items-center justify-between gap-2 text-xs">
-                  <span class="text-slate-800 font-medium truncate">${t.display_name}</span>
-                  <span class="${t.is_met ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'} text-[11px] shrink-0">
+                  <span class="text-slate-800 font-medium flex-1 break-words whitespace-normal">${t.display_name}</span>
+                  <span class="${t.is_met ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'} text-[11px] shrink-0 whitespace-nowrap">
                     ${t.status_str}
                   </span>
                 </div>
