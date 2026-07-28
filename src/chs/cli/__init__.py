@@ -1465,6 +1465,12 @@ def run(
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
 
     scheduled_tests = active_tier_tests if active_tier_tests else parsed_tests
+    if not scheduled_tests:
+        raise ex.ChsValidationError(
+            "No valid tests remaining to schedule after preflight checks. "
+            "Please verify your environment and test dependencies."
+        )
+
     test_names = ", ".join(
         t.get("name") if isinstance(t, dict) else str(t)
         for t in scheduled_tests

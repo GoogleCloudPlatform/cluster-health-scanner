@@ -47,7 +47,7 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             self.assertTrue(kueue_supported)
 
     def test_check_crds_installed_version_invalid(self):
-        """Test that 'nccl-cluster' is removed if Kueue version < 0.14.5."""
+        """Test 'nccl-cluster' and TPU tests are removed if Kueue is old."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
             "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
@@ -55,7 +55,11 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
         version_output = "registry.k8s.io/kueue/kueue:v0.13.0"
         with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [crd_output, version_output]
-            tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
+            tests = [
+                {"name": "nccl-cluster"},
+                {"name": "tpu-info"},
+                {"name": "nvidia-smi"},
+            ]
             filtered, kueue_supported = self.checker.check(tests)
             self.assertEqual(filtered, [{"name": "nvidia-smi"}])
             self.assertFalse(kueue_supported)

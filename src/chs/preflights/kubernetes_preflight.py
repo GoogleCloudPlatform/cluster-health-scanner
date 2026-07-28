@@ -22,6 +22,7 @@ from typing import Any
 from packaging.version import InvalidVersion, Version
 
 from chs.exceptions import ChsPreflightException
+from chs.utils.tests import get_tests_by_accelerator_type
 
 logger = logging.getLogger(__name__)
 
@@ -165,19 +166,28 @@ class KubernetesPreflightChecker:
     ) -> list[dict[str, Any]] | None:
         """Filters out tests that require Kueue."""
         filtered_tests = tests or []
-        if any(
-            (t.get("name") if isinstance(t, dict) else t) == "nccl-cluster"
-            for t in filtered_tests
-        ):
+
+        tpu_tests = set(get_tests_by_accelerator_type("tpu"))
+        tests_to_skip = {"nccl-cluster"}.union(tpu_tests)
+
+        skipped_tests = []
+        remaining_tests = []
+        for t in filtered_tests:
+            name_lower = (
+                t.get("name") if isinstance(t, dict) else str(t)
+            ).lower()
+            if name_lower in tests_to_skip:
+                skipped_tests.append(name_lower)
+            else:
+                remaining_tests.append(t)
+
+        if skipped_tests:
             logger.warning(
-                "Kueue is uninstalled or wrong version. "
-                "Skipping 'nccl-cluster' test."
+                "Kueue is uninstalled or wrong version. Skipping tests: %s",
+                ", ".join(skipped_tests),
             )
-        return [
-            t
-            for t in filtered_tests
-            if (t.get("name") if isinstance(t, dict) else t) != "nccl-cluster"
-        ]
+
+        return remaining_tests
 
     def _run_kubectl(self, args: list[str]) -> str:
         """Runs a kubectl command and returns filtered output."""
