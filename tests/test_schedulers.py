@@ -846,7 +846,7 @@ ramble:
         mock_run.return_value.stdout = "chs-job1-ssh"
         scheduler.cleanup_scheduler_resources()
 
-        args = mock_run.call_args_list[5][0][0]
+        args = mock_run.call_args_list[6][0][0]
         self.assertIn("delete", args)
         self.assertIn("secrets", args)
         self.assertIn("chs-job1-ssh", args)
@@ -1024,15 +1024,46 @@ ramble:
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_cleanup_dynamic_slices(self, mock_kubectl, mock_logger):
+        mock_kubectl.return_value = "slices.accelerator.gke.io"
+        scheduler = KubernetesScheduler()
+        scheduler._cleanup_dynamic_slices()
+        mock_kubectl.assert_has_calls(
+            [
+                mock.call(
+                    [
+                        "get",
+                        "crd",
+                        "slices.accelerator.gke.io",
+                        "--ignore-not-found",
+                    ]
+                ),
+                mock.call(
+                    [
+                        "delete",
+                        "slices.accelerator.gke.io",
+                        "-A",
+                        "-l",
+                        "created-by=chs",
+                        "--ignore-not-found",
+                    ]
+                ),
+            ]
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_cleanup_dynamic_slices_crd_not_found(
+        self,
+        mock_kubectl,
+        mock_logger,
+    ):
+        mock_kubectl.return_value = ""
         scheduler = KubernetesScheduler()
         scheduler._cleanup_dynamic_slices()
         mock_kubectl.assert_called_once_with(
             [
-                "delete",
+                "get",
+                "crd",
                 "slices.accelerator.gke.io",
-                "-A",
-                "-l",
-                "created-by=chs",
                 "--ignore-not-found",
             ]
         )

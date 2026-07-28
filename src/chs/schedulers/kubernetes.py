@@ -1084,6 +1084,17 @@ class KubernetesScheduler(BaseScheduler):
     def _cleanup_dynamic_slices(self) -> None:
         """Deletes dynamic TPU slices created by CHS."""
         try:
+            crd_check = self._run_kubectl(
+                [
+                    "get",
+                    "crd",
+                    "slices.accelerator.gke.io",
+                    "--ignore-not-found",
+                ]
+            )
+            if not crd_check.strip():
+                return
+
             self._run_kubectl(
                 [
                     "delete",

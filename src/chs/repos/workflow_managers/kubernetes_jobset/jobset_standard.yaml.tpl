@@ -8,7 +8,7 @@ metadata:
 spec:
   {suspend_section}
   failurePolicy:
-    maxRestarts: 1
+    maxRestarts: 0
   ttlSecondsAfterFinished: 86400
   network:
     enableDNSHostnames: true
