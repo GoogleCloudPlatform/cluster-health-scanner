@@ -14,12 +14,15 @@
 
 """Validation utilities for CHS."""
 
-import click
 import re
+
+import click
 
 
 def validate_non_empty_string(
-    ctx: click.Context, param: click.Parameter, value: str | None
+    ctx: click.Context,
+    param: click.Parameter,
+    value: tuple[str, ...] | str | None,
 ) -> str | None:
     """Validates that a provided string value is not empty.
 
@@ -36,6 +39,13 @@ def validate_non_empty_string(
     """
     if value is None:
         return None
+
+    if isinstance(value, tuple):
+        if not value:
+            return None
+        cleaned = [v.strip() for v in value if v and v.strip()]
+        value = ",".join(cleaned)
+
     stripped_value = value.strip()
     if not stripped_value:
         raise click.BadParameter(

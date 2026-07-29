@@ -1590,7 +1590,7 @@ class TestCli(unittest.TestCase):
     def test_main(self, mock_cli):
         """Test main entry point."""
         cli.main()
-        mock_cli.assert_called_once_with(obj={})
+        mock_cli.assert_called_once_with(args=None, obj={})
 
     def test_results_command_no_previous_runs(self):
         """Test results command when no previous runs exist."""

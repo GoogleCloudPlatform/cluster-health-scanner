@@ -43,19 +43,18 @@ from chs import (
     detect_scheduler,
     exceptions as ex,
     get_scheduler,
-    load_suite,
     is_suite_tiered,
+    load_suite,
     preflights,
     resources,
     utils,
     validators,
 )
-
 from chs.boh_generator import parse_tier_results_from_boh
+from chs.cli import list_formatting
+from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
-from chs.storage import StorageProviderFactory
-from chs.cli import list_formatting
 
 logger = logging.getLogger(__name__)
 
@@ -1204,6 +1203,7 @@ def _handle_previous_run(
 @click.option(
     "--tests",
     "-t",
+    multiple=True,
     help=(
         "Comma-separated list of individual hardware and network "
         "benchmarks (e.g., 'nccl-cluster', 'gemm')"
@@ -1212,21 +1212,25 @@ def _handle_previous_run(
 )
 @click.option(
     "--nodes",
+    multiple=True,
     help="Comma-separated list of individual nodes to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodelists",
+    multiple=True,
     help="Slurm nodelists to run on (e.g., node-[1-3],node-[4-5])",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodepools",
+    multiple=True,
     help="Kubernetes node pools to run on",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--partitions",
+    multiple=True,
     help="Slurm partitions to run on",
     callback=validators.validate_non_empty_string,
 )
@@ -1746,12 +1750,14 @@ def cancel(obj, auto_approve: bool = False) -> None:
 @click.option(
     "--tests",
     "-t",
+    multiple=True,
     help="Comma-separated list of test names to show details for.",
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--resources",
     "-r",
+    multiple=True,
     help="Comma-separated list of resource names to show details for.",
     callback=validators.validate_non_empty_string,
 )
@@ -1927,11 +1933,11 @@ def remove_storage(ctx: click.Context) -> None:
     click.echo("Storage configuration removed.")
 
 
-def main() -> None:
+def main(args: list[str] | None = None) -> None:
     """Main entry point for the CHS CLI."""
 
     logger.debug("CHS CLI starting...")
     try:
-        cli(obj={})
+        cli(args=args, obj={})
     finally:
         logger.debug("CHS CLI finished.")

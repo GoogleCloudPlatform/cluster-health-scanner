@@ -19,21 +19,41 @@ execution to the CHS application library.
 """
 
 import logging
+import sys
+
+from rich.logging import RichHandler
 
 from chs import cli
 
 
-from rich.logging import RichHandler
+def _normalize_argv(argv: list[str]) -> list[str]:
+    if not argv:
+        return argv
+    new_argv = [argv[0]]
+    for token in argv[1:]:
+        if token.startswith("-"):
+            new_argv.append(token)
+            continue
+        previous = new_argv[-1]
+        if not previous.startswith("-") and (
+            previous.endswith(",") or token.startswith(",")
+        ):
+            new_argv[-1] = previous + token
+        else:
+            new_argv.append(token)
+    return new_argv
 
 
 def main():
+    normalized_argv = _normalize_argv(sys.argv)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
         datefmt="[%X]",
         handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
     )
-    cli.main()
+    cli.main(args=normalized_argv[1:])
 
 
 if __name__ == "__main__":
