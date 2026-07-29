@@ -154,7 +154,9 @@ def _archive_and_log(
             spinner_label = "[bold blue]Archiving workspace...[/bold blue]"
 
     with theme.get_progress_spinner(spinner_label):
-        ws_path, boh_json_path, boh_html_path = ramble_manager.archive()
+        ws_path, boh_json_path, boh_html_path, all_uploads_succeeded = (
+            ramble_manager.archive()
+        )
     storage_provider = StorageProviderFactory.get_provider_for_run(
         ramble_manager.workspace_name
     )
@@ -177,7 +179,7 @@ def _archive_and_log(
             f"{_make_clickable_link(boh_html_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
         updates["boh_html_uri"] = boh_html_path
-    if storage_provider and (ws_path or boh_json_path or boh_html_path):
+    if storage_provider and all_uploads_succeeded:
         updates["is_archived"] = True
         ramble_manager._app_data.update_run(
             ramble_manager.workspace_name, updates

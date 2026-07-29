@@ -1107,8 +1107,12 @@ class RambleManager:
 
         return str(workspace_dir)
 
-    def _upload_boh(self, provider) -> tuple[str | None, str | None]:
-        """Uploads Bill of Health (JSON and HTML) using the provider."""
+    def _upload_boh(self, provider) -> tuple[str | None, str | None, bool]:
+        """Uploads the Bill of Health JSON and HTML files.
+
+        Returns:
+            A tuple of (json_destination, html_destination, success).
+        """
         boh_path = os.path.join(self.path, "bill_of_health.json")
         html_path = os.path.join(self.path, "bill_of_health.html")
 
@@ -1117,29 +1121,40 @@ class RambleManager:
                 "Bill of Health file %s does not exist. Skipping BOH archival.",
                 boh_path,
             )
-            return None, None
+            return None, None, True
 
         logger.debug("Uploading Bill of Health...")
         boh_json_dest = None
         boh_html_dest = None
+        upload_success = True
+
         try:
             boh_json_dest = f"bills_of_health/{self._workspace_name}.json"
             provider.upload_file(boh_path, boh_json_dest)
+        except Exception as e:
+            logger.debug("Failed to archive Bill of Health JSON: %s", e)
+            upload_success = False
 
-            if os.path.exists(html_path):
+        if os.path.exists(html_path):
+            try:
                 boh_html_dest = f"bills_of_health/{self._workspace_name}.html"
                 provider.upload_file(html_path, boh_html_dest)
                 logger.debug(
                     "Interactive health report uploaded successfully to %s",
                     boh_html_dest,
                 )
+            except Exception as e:
+                logger.debug("Failed to archive Bill of Health HTML: %s", e)
+                upload_success = False
 
+        if upload_success:
             logger.debug("Bill of Health uploaded successfully.")
-            return boh_json_dest, boh_html_dest
-        except Exception as e:
-            raise ex.ChsArchiveException(
-                f"Failed to archive Bill of Health: {e}"
-            ) from e
+
+        return boh_json_dest, boh_html_dest, upload_success
+
+    def _get_archive_dir(self) -> str:
+        """Returns the local workspace archive directory."""
+        return os.path.join(self.path, "archive")
 
     def _upload_workspace(self, provider) -> str | None:
         """Archives workspace locally and uploads using the provider."""
@@ -1170,7 +1185,7 @@ class RambleManager:
             )
 
             # Scan for the generated tarball
-            archive_dir = pathlib.Path(self.path) / "archive"
+            archive_dir = pathlib.Path(self._get_archive_dir())
             archives = list(archive_dir.glob("*.tar.gz")) + list(
                 archive_dir.glob("*.tgz")
             )
@@ -1234,14 +1249,17 @@ class RambleManager:
             os.path.join(self.path, ".ramble-workspace")
         )
 
-    def archive(self) -> tuple[str | None, str | None, str | None]:
+    def archive(self) -> tuple[str | None, str | None, str | None, bool]:
         """Orchestrates archival of BoH and workspace using active provider.
 
         Returns:
-            A tuple of (workspace_uri, json_boh_uri, html_boh_uri). Returns
-            local paths if no storage provider is configured.
+            A tuple of (workspace_uri, json_boh_uri, html_boh_uri,
+                        all_uploads_succeeded). Returns local paths if no
+            storage provider is configured.
         """
-        local_ws_path = f"{self.path}.tar.gz"
+        local_ws_path = os.path.join(
+            self._get_archive_dir(), f"{self._workspace_name}.tar.gz"
+        )
         local_json_path = os.path.join(self.path, "bill_of_health.json")
         local_html_path = os.path.join(self.path, "bill_of_health.html")
 
@@ -1251,7 +1269,7 @@ class RambleManager:
                 "Skipping archival.",
                 self.path,
             )
-            return None, None, None
+            return None, None, None, False
 
         try:
             provider = StorageProviderFactory.get_provider_for_run(
@@ -1271,23 +1289,20 @@ class RambleManager:
                 local_ws_path if os.path.exists(local_ws_path) else None,
                 local_json_path if os.path.exists(local_json_path) else None,
                 local_html_path if os.path.exists(local_html_path) else None,
+                False,
             )
 
-        boh_json_dest, boh_html_dest = None, None
+        all_uploads_succeeded = True
+        boh_json_dest, boh_html_dest, boh_success = self._upload_boh(provider)
         ws_dest = None
-        try:
-            boh_json_dest, boh_html_dest = self._upload_boh(provider)
-        except ex.ChsArchiveException as e:
-            # If BoH upload fails, we still want to proceed with archiving
-            # the workspace and returning the local paths.
-            logger.debug("Failed to upload Bill of Health: %s", e)
+        if not boh_success:
+            logger.debug("Failed to upload Bill of Health.")
+            all_uploads_succeeded = False
 
-        try:
-            ws_dest = self._upload_workspace(provider)
-        except ex.ChsArchiveException as e:
-            # If workspace upload fails, we don't crash and can still
-            # return the local workspace paths.
-            logger.debug("Failed to upload workspace: %s", e)
+        ws_dest = self._upload_workspace(provider)
+        if not ws_dest:
+            logger.debug("Failed to upload workspace archive.")
+            all_uploads_succeeded = False
 
         return (
             provider.get_uri(ws_dest)
@@ -1299,6 +1314,7 @@ class RambleManager:
             provider.get_uri(boh_html_dest)
             if boh_html_dest
             else (local_html_path if os.path.exists(local_html_path) else None),
+            all_uploads_succeeded,
         )
 
     def _cleanup_inputs_dir(self) -> None:

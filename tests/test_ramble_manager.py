@@ -22,7 +22,6 @@ import sysconfig
 import tempfile
 import unittest
 from unittest import mock
-from chs.exceptions import ChsArchiveException
 from chs.ramble_manager import RambleManager
 from chs.exceptions import ChsException
 
@@ -517,7 +516,7 @@ mycriteria:
         )
 
     def test_upload_boh_failure(self):
-        """Test _upload_boh raises ChsArchiveException on provider failure."""
+        """Test _upload_boh returns success=False on provider failure."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         self.mock_os_path_exists.side_effect = (
             lambda p: True
@@ -526,8 +525,10 @@ mycriteria:
         )
         mock_provider = mock.Mock()
         mock_provider.upload_file.side_effect = Exception("Upload failed")
-        with self.assertRaises(ChsArchiveException):
-            manager._upload_boh(mock_provider)
+        json_dest, html_dest, upload_success = manager._upload_boh(
+            mock_provider
+        )
+        self.assertFalse(upload_success)
 
     def test_upload_workspace_success(self):
         """Test _upload_workspace archives and calls provider.upload_file."""
@@ -600,7 +601,9 @@ mycriteria:
                 return_value=mock_provider,
             ),
             mock.patch.object(
-                manager, "_upload_boh", return_value=("dest_json", "dest_html")
+                manager,
+                "_upload_boh",
+                return_value=("dest_json", "dest_html", True),
             ) as mock_boh,
             mock.patch.object(manager, "_upload_workspace") as mock_workspace,
         ):

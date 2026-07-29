@@ -108,6 +108,7 @@ class TestCli(unittest.TestCase):
             "mock_ws_path",
             "mock_json_path",
             "mock_html_path",
+            True,
         )
 
         self.mock_dt = self.enterContext(
@@ -1079,6 +1080,7 @@ class TestCli(unittest.TestCase):
                 "gs://bucket/ws.tar.gz",
                 "gs://bucket/boh.json",
                 "gs://bucket/boh.html",
+                True,
             )
 
             cli._analyze_action(self.mock_app_data, "run1")
@@ -1134,6 +1136,7 @@ class TestCli(unittest.TestCase):
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
             "/mock/boh.html",
+            True,
         )
         with cli.archive_workspace(mock_rm):
             pass
@@ -1146,6 +1149,7 @@ class TestCli(unittest.TestCase):
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
             "/mock/boh.html",
+            True,
         )
         with self.assertRaises(ValueError):
             with cli.archive_workspace(mock_rm):
@@ -1159,6 +1163,7 @@ class TestCli(unittest.TestCase):
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
             "/mock/boh.html",
+            True,
         )
         with self.assertRaises(KeyboardInterrupt):
             with cli.archive_workspace(mock_rm):
@@ -1179,6 +1184,8 @@ class TestCli(unittest.TestCase):
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
+            None,
+            False,
         )
         mock_rm.archive.side_effect = exceptions.ChsArchiveException("boh fail")
         with self.assertRaises(exceptions.ChsArchiveException):
