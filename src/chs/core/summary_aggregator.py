@@ -173,6 +173,19 @@ def aggregate_boh_summary(
     test_summaries = []
 
     for (canonical_name, test_level), results in grouped_results.items():
+        plugin = pm.get_plugin(canonical_name)
+        if plugin and hasattr(plugin, "_filter_validation_results"):
+            sorted_nodes = sorted(
+                list(
+                    {
+                        target.node_name
+                        for res in results
+                        for target in res.target_resources
+                    }
+                )
+            )
+            results = plugin._filter_validation_results(results, sorted_nodes)
+
         met_threshold = 0
         unmet_threshold = 0
 

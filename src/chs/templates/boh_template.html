@@ -503,15 +503,8 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
           const rowIsFail = isBreachStatus(r.status);
           const rowIsErr = statusUpper.includes('ERROR') || statusUpper.includes('TIMEOUT') || statusUpper.includes('DEADLINE') || statusUpper.includes('CANCELLED') || statusUpper.includes('UNKNOWN');
 
-          if (currentStatusFilter === 'breaches') {
-            const hasNodeTestBreach = rowNodes.some(n => nodeTestStatusMap[`${n}|${displayName}`]?.has_breach || nodeTestStatusMap[`${n}|${table.test_name}`]?.has_breach);
-            if (!rowIsFail && !hasNodeTestBreach) return false;
-          }
-          if (currentStatusFilter === 'errors') {
-            const hasNodeTestError = rowNodes.some(n => nodeTestErrorSet.has(`${n}|${displayName}`) || nodeTestErrorSet.has(`${n}|${table.test_name}`) || nodeTestStatusMap[`${n}|${displayName}`]?.has_error);
-            if (!hasNodeTestError) return false;
-          }
-          if (currentStatusFilter === 'healthy' && (statusUpper.includes('NOT MET') || (!statusUpper.includes('MET') && !statusUpper.includes('PASS')))) return false;
+          if ((currentStatusFilter === 'breaches' && !rowIsFail) || (currentStatusFilter === 'errors' && !rowIsErr)) return false;
+          if (currentStatusFilter === 'healthy' && !statusUpper.includes('MET') && !statusUpper.includes('PASS')) return false;
 
           return true;
         });

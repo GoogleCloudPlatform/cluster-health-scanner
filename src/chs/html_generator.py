@@ -43,6 +43,7 @@ class HtmlReportGenerator:
         """Converts BillOfHealth protobuf into pure-Python JSON-serializable
         dictionary."""
         run_info = run_info or {}
+        plugin_manager = PluginManager()
         summary = aggregate_boh_summary(boh)
 
         all_nodes = set()
@@ -212,36 +213,71 @@ class HtmlReportGenerator:
             for tr in boh.test_results:
                 target_nodes = {t.node_name for t in tr.target_resources}
                 if node in target_nodes:
-                    display_name = (
-                        f"{tr.test_name} ({tr.test_level})"
-                        if tr.test_level
-                        else tr.test_name
+                    canonical_name = plugin_manager.resolve_test_name(
+                        tr.test_name
                     )
+                    plugin = plugin_manager.get_plugin(canonical_name)
+                    has_custom_filter = bool(
+                        plugin and hasattr(plugin, "_filter_validation_results")
+                    )
+
+                    eval_tr = tr
+                    if has_custom_filter:
+                        sorted_nodes = sorted(list(target_nodes))
+                        filtered_list = plugin._filter_validation_results(
+                            [tr], sorted_nodes
+                        )
+                        if filtered_list:
+                            eval_tr = filtered_list[0]
+
+                    display_name = (
+                        f"{canonical_name} ({tr.test_level})"
+                        if tr.test_level
+                        else canonical_name
+                    )
+
+                    if has_custom_filter:
+                        node_metrics = list(eval_tr.metrics)
+                    else:
+                        node_metrics = []
+                        for m in eval_tr.metrics:
+                            ctx = m.metadata.fields.get("context")
+                            if ctx and ctx.string_value:
+                                ctx_str = ctx.string_value
+                                if any(
+                                    t_node in ctx_str for t_node in target_nodes
+                                ):
+                                    if node not in ctx_str:
+                                        continue
+                            node_metrics.append(m)
+
                     has_unmet_metric = any(
                         m.HasField("validation_criteria")
                         and m.validation_criteria.result_status
                         == pb.RESULT_STATUS_FAILED
-                        for m in tr.metrics
+                        for m in node_metrics
                     )
                     if has_unmet_metric:
                         node_has_unmet_threshold = True
 
-                    if tr.result_status == pb.RESULT_STATUS_TIMEOUT:
+                    res_status = eval_tr.result_status
+
+                    if res_status == pb.RESULT_STATUS_TIMEOUT:
                         status_str = "✕ TIMEOUT"
                         is_met = False
                         node_has_exec_error = True
-                    elif tr.result_status == pb.RESULT_STATUS_DEADLINE:
+                    elif res_status == pb.RESULT_STATUS_DEADLINE:
                         status_str = "✕ DEADLINE"
                         is_met = False
                         node_has_exec_error = True
-                    elif tr.result_status == pb.RESULT_STATUS_CANCELLED:
+                    elif res_status == pb.RESULT_STATUS_CANCELLED:
                         status_str = "✕ CANCELLED"
                         is_met = False
                         node_has_exec_error = True
                     elif has_unmet_metric:
                         status_str = "✕ DID NOT MEET THRESHOLD"
                         is_met = False
-                    elif tr.result_status == pb.RESULT_STATUS_FAILED:
+                    elif res_status == pb.RESULT_STATUS_FAILED:
                         status_str = "✕ FAILED TO EXECUTE"
                         is_met = False
                         node_has_exec_error = True
@@ -249,7 +285,7 @@ class HtmlReportGenerator:
                         has_val_criteria = any(
                             m.HasField("validation_criteria")
                             and m.validation_criteria.name
-                            for m in tr.metrics
+                            for m in node_metrics
                         )
                         has_metrics = any(
                             not (
@@ -257,7 +293,7 @@ class HtmlReportGenerator:
                                 or m.key.endswith("Failure Detected")
                                 or "Warning" in m.key
                             )
-                            for m in tr.metrics
+                            for m in node_metrics
                         )
                         if not has_val_criteria and has_metrics:
                             status_str = "• EXECUTED (No thresholds set)"
@@ -300,7 +336,6 @@ class HtmlReportGenerator:
                 }
             )
 
-        plugin_manager = PluginManager()
         detailed_reports = self._extract_detailed_reports(boh, plugin_manager)
 
         validation_groups = extract_validation_data(
