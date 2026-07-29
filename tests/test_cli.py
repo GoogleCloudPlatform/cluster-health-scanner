@@ -166,6 +166,10 @@ class TestCli(unittest.TestCase):
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.resolve_run_id.side_effect = lambda x: x
+        self.mock_app_data.get_storage_config.return_value = {
+            "type": "gcs",
+            "gcs": {"bucket_name": "test_bucket"},
+        }
 
         self.mock_get_cluster_name = self.enterContext(
             mock.patch(
@@ -1697,6 +1701,7 @@ class TestCli(unittest.TestCase):
             "Storage configured and validated successfully.", result.output
         )
 
+    @unittest.skip("Local path storage configuration is temporarily disabled")
     @mock.patch("chs.storage.StorageProviderFactory.get_provider")
     def test_configure_storage_path(self, mock_get_provider):
         """Test 'configure storage path' command."""
@@ -1735,9 +1740,9 @@ class TestCli(unittest.TestCase):
         mock_provider = mock.Mock()
         mock_get_provider.return_value = mock_provider
 
-        # Input: 1 (GCS), my-bucket
+        # Input: my-bucket
         result = self.runner.invoke(
-            cli.cli, ["configure", "storage"], input="1\nmy-bucket\n"
+            cli.cli, ["configure", "storage"], input="my-bucket\n"
         )
         self.assertEqual(result.exit_code, 0)
         self.mock_app_data.set_storage_config.assert_called_once_with(

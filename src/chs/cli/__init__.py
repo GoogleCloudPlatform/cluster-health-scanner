@@ -178,6 +178,18 @@ def _archive_and_log(
             f"{_make_clickable_link(boh_html_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
         updates["boh_html_uri"] = boh_html_path
+
+    if not all_uploads_succeeded:
+        console.print(
+            f"[{theme.CHS_ERROR_STYLE}]Upload to GCS failed for some files, "
+            f"check the local paths above.[/{theme.CHS_ERROR_STYLE}]"
+        )
+        console.print(
+            f"[{theme.CHS_NEUTRAL_STYLE}]Tip:  If mounted, Check your "
+            f"docker host volume mount to access the local files for the "
+            f"same.[/{theme.CHS_NEUTRAL_STYLE}]"
+        )
+
     if storage_provider and all_uploads_succeeded:
         updates["is_archived"] = True
         ramble_manager._app_data.update_run(
@@ -417,6 +429,16 @@ def _validate_cli_args(
     )
     if errors:
         raise ex.ChsValidationError("\n".join(errors))
+
+
+def _validate_storage(app_data: ChsAppData) -> None:
+    """Validates that GCS storage is configured."""
+    storage_config = app_data.get_storage_config()
+    if not storage_config or storage_config.get("type") != "gcs":
+        raise ex.ChsValidationError(
+            "GCS storage must be configured to run CHS. "
+            "Please configure GCS using 'chs configure storage gcs'."
+        )
 
 
 def _validate_run_args(
@@ -1261,6 +1283,8 @@ def run(
         partitions=partitions,
     )
 
+    _validate_storage(app_data)
+
     scheduler = detect_scheduler()
 
     attach_result = _handle_previous_run(
@@ -1807,24 +1831,23 @@ def _validate_and_save_storage(app_data: ChsAppData, config: dict) -> None:
 
 def _interactive_configure_storage(app_data: ChsAppData) -> None:
     """Guided flow for storage configuration."""
-    click.echo("Select storage type:")
-    click.echo("  [1] GCS")
-    click.echo("  [2] Path")
-    choice = click.prompt("Choice", type=int, default=1)
-
-    if choice == 1:
-        bucket_name = click.prompt("Enter GCS bucket name")
-        if bucket_name.lower().startswith("gs://"):
-            bucket_name = bucket_name[5:]
-        config = {"type": "gcs", "gcs": {"bucket_name": bucket_name}}
-    elif choice == 2:
-        path = click.prompt("Enter target directory path (absolute)")
-        config = {"type": "path", "path": {"path": path}}
-    else:
-        raise click.ClickException(
-            "Invalid choice. Please select [1] for GCS Bucket or [2] for"
-            " Local Path."
-        )
+    # Temporarily bypassing storage type selection to mandate GCS storage
+    # click.echo("Select storage type:")
+    # click.echo("  [1] GCS")
+    # click.echo("  [2] Path")
+    # choice = click.prompt("Choice", type=int, default=1)
+    #
+    # if choice == 1:
+    click.echo("Configuring GCS storage...")
+    bucket_name = click.prompt("Enter GCS bucket name")
+    if bucket_name.lower().startswith("gs://"):
+        bucket_name = bucket_name[5:]
+    config = {"type": "gcs", "gcs": {"bucket_name": bucket_name}}
+    # elif choice == 2:
+    #     path = click.prompt("Enter target directory path (absolute)")
+    #     config = {"type": "path", "path": {"path": path}}
+    # else:
+    #     raise click.ClickException("Invalid choice.")
 
     _validate_and_save_storage(app_data, config)
 
@@ -1860,17 +1883,19 @@ def configure_gcs(ctx: click.Context, bucket_name: str | None) -> None:
     _validate_and_save_storage(app_data, config)
 
 
-@configure_storage.command("path")
-@click.argument("path", required=False)
-@click.pass_context
-def configure_path(ctx: click.Context, path: str | None) -> None:
-    """Configure Local Path storage."""
-    app_data = ctx.obj["app_data"]
-    if not path:
-        path = click.prompt("Enter target directory path (absolute)")
-
-    config = {"type": "path", "path": {"path": path}}
-    _validate_and_save_storage(app_data, config)
+# Temporarily disabled to mandate GCS storage.
+# Uncomment to re-enable local path storage configuration.
+# @configure_storage.command("path")
+# @click.argument("path", required=False)
+# @click.pass_context
+# def configure_path(ctx: click.Context, path: str | None) -> None:
+#     """Configure Local Path storage."""
+#     app_data = ctx.obj["app_data"]
+#     if not path:
+#         path = click.prompt("Enter target directory path (absolute)")
+#
+#     config = {"type": "path", "path": {"path": path}}
+#     _validate_and_save_storage(app_data, config)
 
 
 @configure_storage.command("show")
