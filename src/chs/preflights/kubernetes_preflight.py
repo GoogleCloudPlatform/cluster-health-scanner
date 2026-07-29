@@ -14,6 +14,7 @@
 
 """Kubernetes preflight checker and cleaner."""
 
+import json
 import logging
 import re
 import subprocess
@@ -27,6 +28,10 @@ from chs.utils.tests import get_tests_by_accelerator_type
 logger = logging.getLogger(__name__)
 
 
+JOBSET_CRD_NAME = "jobsets.jobset.sigs.k8s.io"
+KUEUE_CRD_NAME = "kueues.kueue.sigs.k8s.io"
+
+
 class KubernetesPreflightChecker:
     """Checks for JobSet and Kueue CRDs on Kubernetes.
 
@@ -34,7 +39,7 @@ class KubernetesPreflightChecker:
     filter tests based on the missing CRDs.
     """
 
-    def __init__(self, scheduler=None):
+    def __init__(self, scheduler: Any | None = None) -> None:
         self.scheduler = scheduler
 
     def check(
@@ -72,16 +77,20 @@ class KubernetesPreflightChecker:
                 "Found %d CRDs installed on the cluster.", len(installed_crds)
             )
             return installed_crds
-        except subprocess.CalledProcessError as e:
+        except (
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ) as e:
             raise ChsPreflightException(
                 f"Failed to query cluster CRDs: {e}"
             ) from e
 
     def _check_jobset(self, installed_crds: list[str]) -> None:
-        """Checks if JobSet CRD is installed.
+        """Checks if JobSet CRD is installed and deployment is healthy.
 
         Raises:
-            ChsPreflightException: If JobSet CRD is missing.
+            ChsPreflightException: If JobSet CRD is missing or unavailable.
         """
         if not any("jobset" in crd for crd in installed_crds):
             raise ChsPreflightException(
@@ -89,6 +98,59 @@ class KubernetesPreflightChecker:
                 "Please install them before continuing. "
                 "Reference: https://github.com/kubernetes-sigs/jobset"
             )
+
+        self._check_jobset_deployment_health()
+
+    def _is_deployment_healthy(self, dep: dict[str, Any]) -> bool:
+        """Returns True if deployment has >0 replicas and is Available."""
+        status = dep.get("status", {})
+        available_replicas = status.get("availableReplicas") or 0
+        conditions = status.get("conditions", [])
+        is_available = any(
+            c.get("type") == "Available" and c.get("status") == "True"
+            for c in conditions
+        )
+        return available_replicas > 0 and is_available
+
+    def _check_jobset_deployment_health(self) -> None:
+        """Verifies that JobSet controller deployment is in Available state."""
+        deployments = self._discover_deployments("jobset")
+        if not deployments:
+            logger.debug(
+                "JobSet deployment status could not be verified via preflight. "
+                "Proceeding lazily to job submission phase."
+            )
+            return
+
+        if not any(self._is_deployment_healthy(dep) for dep in deployments):
+            raise ChsPreflightException(
+                "JobSet CRD is installed, but the JobSet controller "
+                "deployment is NOT in an Available state. "
+                "Please check controller health."
+            )
+
+    def _discover_deployments(self, app_name: str) -> list[dict[str, Any]]:
+        """Discovers controller deployments cluster-wide using app label."""
+        try:
+            output = self._run_kubectl(
+                [
+                    "get",
+                    "deployment",
+                    "-A",
+                    "-l",
+                    f"app.kubernetes.io/name={app_name}",
+                    "-o",
+                    "json",
+                ]
+            )
+            return json.loads(output).get("items", [])
+        except (
+            subprocess.CalledProcessError,
+            json.JSONDecodeError,
+            FileNotFoundError,
+            subprocess.TimeoutExpired,
+        ):
+            return []
 
     def _check_kueue(self, installed_crds: list[str]) -> bool:
         """Checks if Kueue CRD is installed and version is compatible.
@@ -99,24 +161,89 @@ class KubernetesPreflightChecker:
         if not self._check_kueue_crd_exists(installed_crds):
             return False
 
+        deployments = self._discover_deployments("kueue")
+        if deployments:
+            healthy_dep = self._get_healthy_kueue_deployment(deployments)
+            if not healthy_dep:
+                logger.warning(
+                    "Kueue controller deployment is NOT in an Available state. "
+                    "Skipping 'nccl-cluster' test."
+                )
+                return False
+            version = self._extract_version_from_deployment(healthy_dep)
+            if version:
+                return self._is_kueue_version_supported(version)
+            return False
+
         version = self._get_kueue_version()
-        if not version:
-            return False
+        if version:
+            return self._is_kueue_version_supported(version)
 
-        if not self._is_kueue_version_supported(version):
-            return False
-
-        return True
+        return False
 
     def _check_kueue_crd_exists(self, installed_crds: list[str]) -> bool:
         """Checks if Kueue CRD exists in the list of installed CRDs."""
         return any("kueue" in crd for crd in installed_crds)
 
+    def _get_healthy_kueue_deployment(
+        self, deployments: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """Finds the first healthy Available deployment."""
+        for dep in deployments:
+            if self._is_deployment_healthy(dep):
+                return dep
+        return None
+
+    def _extract_version_from_deployment(
+        self, healthy_dep: dict[str, Any]
+    ) -> str | None:
+        """Extracts version string from deployment labels or container image."""
+        labels = healthy_dep.get("metadata", {}).get("labels", {})
+        version_label = labels.get("app.kubernetes.io/version") or labels.get(
+            "version"
+        )
+        if version_label:
+            match = re.match(
+                r"^v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?(?:\+[a-zA-Z0-9.]+)?)$",
+                version_label,
+            )
+            if match:
+                return match.group(1)
+
+        containers = (
+            healthy_dep.get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("containers", [])
+        )
+        target_container = None
+        for container in containers:
+            image = str(container.get("image") or "").lower()
+            name = str(container.get("name") or "").lower()
+            if "kueue" in image or name == "manager":
+                target_container = container
+                break
+
+        if not target_container and containers:
+            target_container = containers[0]
+
+        if target_container:
+            image_output = str(target_container.get("image") or "")
+            if image_output:
+                return self._parse_version_string(image_output)
+        return None
+
     def _get_kueue_version(self) -> str | None:
-        """Retrieves the Kueue version string from the deployment."""
+        """Retrieves Kueue version string from cluster deployment."""
         logger.debug("Checking version compatibility")
         try:
-            image_output = self._run_kubectl(
+            deployments = self._discover_deployments("kueue")
+            if deployments:
+                healthy_dep = self._get_healthy_kueue_deployment(deployments)
+                if healthy_dep:
+                    return self._extract_version_from_deployment(healthy_dep)
+
+            output = self._run_kubectl(
                 [
                     "get",
                     "deployment",
@@ -124,25 +251,34 @@ class KubernetesPreflightChecker:
                     "kueue-system",
                     "kueue-controller-manager",
                     "-o",
-                    "jsonpath={.spec.template.spec.containers[0].image}",
+                    "json",
                 ]
             )
-            match = re.search(
-                r":v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)(?:@sha256:[a-fA-F0-9]{64})?$",
-                image_output,
-            )
-            if match:
-                version = match.group(1)
-                logger.debug("Found Kueue version: v%s", version)
-                return version
-            else:
-                logger.warning(
-                    "Could not parse Kueue version from image: %s. "
-                    "Skipping 'nccl-cluster' test.",
-                    image_output,
-                )
-        except (subprocess.CalledProcessError, ValueError):
-            logger.warning("Could not parse or retrieve Kueue version.")
+            if output:
+                try:
+                    dep_json = json.loads(output)
+                    return self._extract_version_from_deployment(dep_json)
+                except json.JSONDecodeError:
+                    return self._parse_version_string(output)
+            return None
+        except (
+            subprocess.SubprocessError,
+            FileNotFoundError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+    def _parse_version_string(self, text: str) -> str | None:
+        """Helper to parse SemVer from image or version text."""
+        match = re.search(
+            r":v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?(?:\+[a-zA-Z0-9.]+)?)(?:@sha256:[a-fA-F0-9]{64})?$",
+            text,
+        )
+        if match:
+            version = match.group(1)
+            logger.debug("Found Kueue version: v%s", version)
+            return version
         return None
 
     def _is_kueue_version_supported(self, version: str) -> bool:
@@ -165,14 +301,15 @@ class KubernetesPreflightChecker:
         self, tests: list[dict[str, Any]] | None
     ) -> list[dict[str, Any]] | None:
         """Filters out tests that require Kueue."""
-        filtered_tests = tests or []
+        if tests is None:
+            return None
 
         tpu_tests = set(get_tests_by_accelerator_type("tpu"))
         tests_to_skip = {"nccl-cluster"}.union(tpu_tests)
 
         skipped_tests = []
         remaining_tests = []
-        for t in filtered_tests:
+        for t in tests:
             name_lower = (
                 t.get("name") if isinstance(t, dict) else str(t)
             ).lower()
