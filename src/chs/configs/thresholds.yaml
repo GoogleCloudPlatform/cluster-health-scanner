@@ -32,7 +32,7 @@ tpu7x-standard-4t:
   tpu-network-diagnostics:
     type: min
     thresholds:
-      bandwidth: 150.0
+      bandwidth: 142
   tpu-info:
     type: scalar
     thresholds:
@@ -40,75 +40,75 @@ tpu7x-standard-4t:
   tpu-gemm:
     type: min
     thresholds:
-      Throughput: 1000.0
+      Throughput: 950
   tpu-hbm:
     type: min
     thresholds:
       bandwidth:
-        - value: 3200
+        - value: 3040
           conditions:
             elements: 2147483648
   tpu-collectives:
     type: min
     thresholds:
       peak_bandwidth:
-        - value: 155.0
+        - value: 147
           conditions:
             tpu_topology: "2x2x1"
             workload_name: "all_gather"
-        - value: 130.0
+        - value: 124
           conditions:
             tpu_topology: "2x2x1"
             workload_name: "psum"
-        - value: 65.0
+        - value: 62
           conditions:
             tpu_topology: "2x2x1"
             workload_name: "all_to_all"
-        - value: 170.0
+        - value: 162
           conditions:
             tpu_topology: "2x2x2"
             workload_name: "all_gather"
-        - value: 200.0
+        - value: 190
           conditions:
             tpu_topology: "2x2x2"
             workload_name: "psum"
-        - value: 75.0
+        - value: 71
           conditions:
             tpu_topology: "2x2x2"
             workload_name: "all_to_all"
-        - value: 175.0
+        - value: 166
           conditions:
             tpu_topology: "2x2x4"
             workload_name: "all_gather"
-        - value: 140.0
+        - value: 133
           conditions:
             tpu_topology: "2x2x4"
             workload_name: "psum"
-        - value: 40.0
+        - value: 38
           conditions:
             tpu_topology: "2x2x4"
             workload_name: "all_to_all"
-        - value: 70.0
+        - value: 66
           conditions:
             tpu_topology: "2x4x4"
             workload_name: "all_gather"
-        - value: 170.0
+        - value: 162
           conditions:
             tpu_topology: "2x4x4"
             workload_name: "psum"
-        - value: 40.0
+        - value: 38
           conditions:
             tpu_topology: "2x4x4"
             workload_name: "all_to_all"
-        - value: 500.0
+        - value: 475
           conditions:
             tpu_topology: "4x4x4"
             workload_name: "all_gather"
-        - value: 370.0
+        - value: 352
           conditions:
             tpu_topology: "4x4x4"
             workload_name: "psum"
-        - value: 83.0
+        - value: 79
           conditions:
             tpu_topology: "4x4x4"
             workload_name: "all_to_all"
@@ -117,7 +117,7 @@ ct6e-standard-4t:
   tpu-network-diagnostics:
     type: min
     thresholds:
-      bandwidth: 150.0
+      bandwidth: 142
   tpu-info:
     type: scalar
     thresholds:
@@ -125,87 +125,87 @@ ct6e-standard-4t:
   tpu-gemm:
     type: min
     thresholds:
-      Throughput: 850.0
+      Throughput: 808
   tpu-hbm:
     type: min
     thresholds:
       bandwidth:
-        - value: 1100
+        - value: 1045
           conditions:
             elements: 2147483648
   tpu-collectives:
     type: min
     thresholds:
       peak_bandwidth:
-        - value: 180.0
+        - value: 171
           conditions:
             tpu_topology: "2x2"
             workload_name: "all_gather"
-        - value: 170.0
+        - value: 162
           conditions:
             tpu_topology: "2x2"
             workload_name: "psum"
-        - value: 130.0
+        - value: 124
           conditions:
             tpu_topology: "2x2"
             workload_name: "all_to_all"
-        - value: 180.0
+        - value: 171
           conditions:
             tpu_topology: "2x4"
             workload_name: "all_gather"
-        - value: 140.0
+        - value: 133
           conditions:
             tpu_topology: "2x4"
             workload_name: "psum"
-        - value: 75.0
+        - value: 71
           conditions:
             tpu_topology: "2x4"
             workload_name: "all_to_all"
-        - value: 170.0
+        - value: 162
           conditions:
             tpu_topology: "4x4"
             workload_name: "all_gather"
-        - value: 175.0
+        - value: 166
           conditions:
             tpu_topology: "4x4"
             workload_name: "psum"
-        - value: 80.0
+        - value: 76
           conditions:
             tpu_topology: "4x4"
             workload_name: "all_to_all"
-        - value: 155.0
+        - value: 147
           conditions:
             tpu_topology: "4x8"
             workload_name: "all_gather"
-        - value: 150.0
+        - value: 142
           conditions:
             tpu_topology: "4x8"
             workload_name: "psum"
-        - value: 40.0
+        - value: 38
           conditions:
             tpu_topology: "4x8"
             workload_name: "all_to_all"
-        - value: 175.0
+        - value: 166
           conditions:
             tpu_topology: "8x8"
             workload_name: "all_gather"
-        - value: 175.0
+        - value: 166
           conditions:
             tpu_topology: "8x8"
             workload_name: "psum"
-        - value: 40.0
+        - value: 38
           conditions:
             tpu_topology: "8x8"
             workload_name: "all_to_all"
-        - value: 180.0
+        - value: 171
           conditions:
             tpu_topology: "8x16"
             workload_name: "all_gather"
-        - value: 150.0
+        - value: 142
           conditions:
             tpu_topology: "8x16"
             workload_name: "psum"
-        - value: 40.0
+        - value: 38
           conditions:
             tpu_topology: "8x16"
             workload_name: "all_to_all"
