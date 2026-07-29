@@ -231,14 +231,6 @@ class TestValidators(unittest.TestCase):
         errors = v.validate({"suite": "lite"})
         self.assertEqual(len(errors), 0)
 
-    def test_cli_args_validator_invalid_thresholds(self):
-        v = validators.CliArgsValidator()
-        errors = v.validate(
-            {"suite": "lite", "thresholds_path": "/nonexistent/thresholds.yaml"}
-        )
-        self.assertEqual(len(errors), 1)
-        self.assertTrue(any("Thresholds file not found" in e for e in errors))
-
     def test_thresholds_validator_valid(self):
         import tempfile
         import yaml

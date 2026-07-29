@@ -90,7 +90,6 @@ class BOHGenerator:
                     raise FileNotFoundError(
                         f"Explicit thresholds file not found at {path}"
                     )
-                logger.warning("Thresholds file not found at %s", path)
 
         internal_path = os.path.join(
             os.path.dirname(__file__), "configs", "thresholds.yaml"

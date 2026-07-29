@@ -684,8 +684,6 @@ class TestCli(unittest.TestCase):
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data,
                     f"mockcluster-{case.expected_return.suite}-mockhash",
-                    validation=None,
-                    skip_validation=False,
                 )
 
     @mock.patch("chs.cli._analyze_action")
@@ -908,8 +906,6 @@ class TestCli(unittest.TestCase):
         mock_analyze_action.assert_called_once_with(
             self.mock_app_data,
             expected_run_id,
-            validation=None,
-            skip_validation=False,
         )
 
     @mock.patch("chs.cli._analyze_action")
@@ -930,8 +926,6 @@ class TestCli(unittest.TestCase):
         mock_analyze_action.assert_called_once_with(
             self.mock_app_data,
             "latest_run",
-            None,
-            False,
         )
         self.assertEqual(result.return_value.workspace_name, "latest_run")
         self.assertEqual(result.return_value.suite, "suite1")

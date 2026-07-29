@@ -226,15 +226,6 @@ tests:
       - scheduler: kubernetes
         machine_type: ct6e-standard-4t
 
-  - name: tpu-collectives-single-node
-    plugin_name: tpu-collectives-single-node
-    category: "Network & Collectives"
-    description: "Single node collectives testing"
-    platforms:
-      - scheduler: kubernetes
-        machine_type: tpu7x-standard-4t
-      - scheduler: kubernetes
-        machine_type: ct6e-standard-4t
 
   - name: tpu-network-diagnostics
     category: "Network & Collectives"

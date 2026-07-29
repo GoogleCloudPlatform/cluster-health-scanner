@@ -389,9 +389,8 @@ def _validate_cli_args(
     nodelists: str | None = None,
     nodepools: str | None = None,
     partitions: str | None = None,
-    validation: str | None = None,
 ) -> None:
-    """Validates core CLI arguments (suite, thresholds) before scheduler
+    """Validates core CLI arguments (suite) before scheduler
     detection.
 
     Args:
@@ -401,7 +400,6 @@ def _validate_cli_args(
       nodelists: Slurm node list pattern, or None.
       nodepools: Kubernetes node pools, or None.
       partitions: Slurm partitions, or None.
-      validation: Path to thresholds validation file, or None.
 
     Raises:
       ex.ChsValidationError: If validation fails.
@@ -415,7 +413,6 @@ def _validate_cli_args(
             "nodelists": nodelists,
             "nodepools": nodepools,
             "partitions": partitions,
-            "thresholds_path": validation,
         }
     )
     if errors:
@@ -478,8 +475,6 @@ def run_action(
     workspaces_base_dir: str,
     machine_type: str,
     deadline: int | None = None,
-    validation: str | None = None,
-    skip_validation: bool = False,
     run_id: str | None = None,
     active_tests: list[str] | None = None,
 ) -> list[str] | None:
@@ -494,7 +489,6 @@ def run_action(
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
       dry_run: Set up the workspace but do not execute experiments.
       deadline: The deadline for the job in seconds.
-      thresholds: Path to user-defined thresholds YAML file.
 
     Returns:
       A list of submitted job IDs.
@@ -529,8 +523,6 @@ def run_action(
                     )
 
                 ramble_manager.create_workspace()
-                if not skip_validation:
-                    ramble_manager.copy_thresholds(validation)
 
                 ramble_manager.add_custom_repository()
                 ramble_manager.configure_workspace(
@@ -563,16 +555,12 @@ def run_action(
 def _analyze_action(
     app_data: ChsAppData,
     run_id: str,
-    validation: str | None = None,
-    skip_validation: bool = False,
 ) -> str:
     """Analyzes results from a specific test run.
 
     Args:
       app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
-      validation: Path to user-defined thresholds YAML file.
-      skip_validation: Whether to skip generating validation criteria.
 
     Returns:
       The run_id of the analyzed test run.
@@ -603,12 +591,7 @@ def _analyze_action(
         is_boh_final = run_entry.get("is_boh_final", not is_tiered)
 
         # 1. Check if Bill of Health already exists and workspace is archived
-        if (
-            boh_path.exists()
-            and not validation
-            and is_boh_final
-            and ramble_manager.is_archived()
-        ):
+        if boh_path.exists() and is_boh_final and ramble_manager.is_archived():
             logger.debug(
                 "Bill of Health already exists and workspace is archived. "
                 "Showing results directly."
@@ -634,8 +617,6 @@ def _analyze_action(
                     ):
                         ramble_manager.generate_boh(
                             str(results_json_path),
-                            thresholds_path=validation,
-                            skip_validation=skip_validation,
                         )
                         try:
                             ramble_manager.cancel_experiments()
@@ -694,8 +675,6 @@ def _analyze_action(
                         results_path = ramble_manager.analyze_experiments()
                         boh_dir = ramble_manager.generate_boh(
                             results_path,
-                            thresholds_path=validation,
-                            skip_validation=skip_validation,
                         )
                     Console().print(
                         f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
@@ -1090,8 +1069,6 @@ def _handle_previous_run(
     app_data: ChsAppData,
     scheduler: str,
     suite: str | None,
-    validation: str | None,
-    skip_validation: bool,
     auto_approve: bool,
 ) -> RunExecutionResult | None:
     """Checks for a previous run, optionally attaches to it, or cleans up."""
@@ -1148,9 +1125,7 @@ def _handle_previous_run(
                 f"Attaching to ongoing/completed run: {latest_run_id}. "
                 f"Run `{cleanup_cmd}` to destroy it."
             )
-            _analyze_action(
-                app_data, latest_run_id, validation, skip_validation
-            )
+            _analyze_action(app_data, latest_run_id)
             return RunExecutionResult(
                 suite=run_entry.get("suite", suite or "lite"),
                 scheduler_name=scheduler,
@@ -1241,19 +1216,6 @@ def _handle_previous_run(
     help="Automatically confirm execution preview without prompting.",
 )
 @click.option(
-    "--validation",
-    help=(
-        "Path to user-defined thresholds YAML file (optional). "
-        "See src/chs/configs/thresholds.yaml for template."
-    ),
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
-    "--skip-validation",
-    is_flag=True,
-    help="Skip threshold evaluation entirely.",
-)
-@click.option(
     "--run-id",
     help="Custom run ID for this execution.",
     callback=validators.validate_run_id,
@@ -1269,8 +1231,6 @@ def run(
     nodepools: str | None,
     partitions: str | None,
     auto_approve: bool = False,
-    validation: str | None = None,
-    skip_validation: bool = False,
     run_id: str | None = None,
 ) -> RunExecutionResult:
     """Command to run a test suite.
@@ -1295,7 +1255,6 @@ def run(
         nodelists=nodelists,
         nodepools=nodepools,
         partitions=partitions,
-        validation=validation,
     )
 
     scheduler = detect_scheduler()
@@ -1304,8 +1263,6 @@ def run(
         app_data=app_data,
         scheduler=scheduler,
         suite=suite,
-        validation=validation,
-        skip_validation=skip_validation,
         auto_approve=auto_approve,
     )
     if attach_result:
@@ -1602,8 +1559,6 @@ def run(
                 workspaces_base_dir=workspaces_base_dir,
                 machine_type=machine_type,
                 deadline=deadline,
-                validation=validation,
-                skip_validation=skip_validation,
                 run_id=run_id,
                 active_tests=active_tier_tests if is_tiered else None,
             )
@@ -1642,8 +1597,6 @@ def run(
     _analyze_action(
         app_data,
         run_id,
-        validation=validation,
-        skip_validation=skip_validation,
     )
 
     return result
