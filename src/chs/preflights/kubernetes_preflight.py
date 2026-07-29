@@ -28,8 +28,6 @@ from chs.utils.tests import get_tests_by_accelerator_type
 logger = logging.getLogger(__name__)
 
 
-JOBSET_CRD_NAME = "jobsets.jobset.sigs.k8s.io"
-KUEUE_CRD_NAME = "kueues.kueue.sigs.k8s.io"
 MIN_KUEUE_VERSION = "0.14.5"
 
 
@@ -119,19 +117,13 @@ class KubernetesPreflightChecker:
     def _check_jobset_deployment_health(self) -> None:
         """Verifies that JobSet controller deployment is in Available state."""
         deployments = self._discover_deployments("jobset")
-        if not deployments:
-            logger.debug(
-                "JobSet deployment status could not be verified via preflight. "
-                "Proceeding lazily to job submission phase."
-            )
-            return
-
-        if not any(self._is_deployment_healthy(dep) for dep in deployments):
-            raise ChsPreflightException(
+        if not deployments or not any(
+            self._is_deployment_healthy(dep) for dep in deployments
+        ):
+            logger.warning(
                 "JobSet CRD is installed, but the JobSet controller "
                 "deployment is NOT in an Available state. "
-                "Please check controller health with "
-                "'kubectl get deployment -A -l app.kubernetes.io/name=jobset'."
+                "Please check controller health."
             )
 
     def _discover_deployments(self, app_name: str) -> list[dict[str, Any]]:

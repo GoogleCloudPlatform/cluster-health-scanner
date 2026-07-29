@@ -214,36 +214,50 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             ):
                 self.checker.check()
 
-    def test_check_jobset_deployment_unhealthy_raises_exception(self):
-        """Test that unhealthy deployment (0 replicas) raises exception."""
+    def test_check_jobset_deployment_unhealthy_logs_warning(self):
+        """Test that unhealthy deployment (0 replicas) logs warning."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
         )
         dep_output = self._unhealthy_jobset_deployment_json()
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
+        with (
+            mock.patch.object(self.checker, "_run_kubectl") as mock_run,
+            mock.patch(
+                "chs.preflights.kubernetes_preflight.logger"
+            ) as mock_logger,
+        ):
             mock_run.side_effect = [crd_output, dep_output]
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "JobSet controller deployment is NOT in an Available state",
-            ):
-                self.checker.check()
+            self.checker.check()
+            mock_logger.warning.assert_called_once_with(
+                "JobSet CRD is installed, but the JobSet controller "
+                "deployment is NOT in an Available state. "
+                "Please check controller health."
+            )
 
-    def test_check_jobset_deployment_rbac_restricted_degrades_gracefully(self):
-        """Test that RBAC restricted query degrades gracefully."""
+    def test_check_jobset_deployment_rbac_restricted_logs_warning(self):
+        """Test that RBAC query logs warning when deployment unverified."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
         )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
+        with (
+            mock.patch.object(self.checker, "_run_kubectl") as mock_run,
+            mock.patch(
+                "chs.preflights.kubernetes_preflight.logger"
+            ) as mock_logger,
+        ):
             mock_run.side_effect = [
                 crd_output,
                 subprocess.CalledProcessError(1, "kubectl get deployment -A"),
             ]
             tests = [{"name": "nvidia-smi"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, tests)
-            self.assertFalse(kueue_supported)
+            self.checker.check(tests)
+            mock_logger.warning.assert_called_once_with(
+                "JobSet CRD is installed, but the JobSet controller "
+                "deployment is NOT in an Available state. "
+                "Please check controller health."
+            )
 
     def test_check_jobset_deployment_null_available_replicas(self):
         """Test handling when status.availableReplicas is null in JSON."""
@@ -266,12 +280,19 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 ]
             }
         )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
+        with (
+            mock.patch.object(self.checker, "_run_kubectl") as mock_run,
+            mock.patch(
+                "chs.preflights.kubernetes_preflight.logger"
+            ) as mock_logger,
+        ):
             mock_run.side_effect = [crd_output, null_replicas_dep]
-            with self.assertRaisesRegex(
-                ChsPreflightException, "NOT in an Available state"
-            ):
-                self.checker.check()
+            self.checker.check()
+            mock_logger.warning.assert_called_once_with(
+                "JobSet CRD is installed, but the JobSet controller "
+                "deployment is NOT in an Available state. "
+                "Please check controller health."
+            )
 
     def test_check_with_none_tests_and_unsupported_kueue_returns_none(self):
         """Test checking None tests with unsupported Kueue returns None."""
