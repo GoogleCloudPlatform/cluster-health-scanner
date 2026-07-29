@@ -147,18 +147,18 @@ class BOHGenerator:
 
     def _evaluate_metric_conditions(
         self,
-        metric: pb.Metric,
+        metric: pb.Metric | None,
         conditions: dict[str, Any],
         aliases: dict[str, str],
         ramble_vars: dict[str, Any] = None,
     ) -> bool:
-        """Evaluates all conditions for a metric within its context."""
+        """Evaluates conditions against run variables and metric context."""
         if not conditions:
             return True
 
         metric_context = (
             metric.metadata.fields["context"].string_value
-            if "context" in metric.metadata.fields
+            if metric and "context" in metric.metadata.fields
             else ""
         )
         context_parts = (
@@ -177,7 +177,7 @@ class BOHGenerator:
                     expected_condition_value
                 ):
                     return False
-            else:
+            elif metric is not None:
                 if str(expected_condition_value) not in context_parts:
                     return False
         return True
@@ -277,9 +277,18 @@ class BOHGenerator:
                     threshold_value = threshold_config
                     conditions = {}
 
+                if not self._evaluate_metric_conditions(
+                    None, conditions, aliases, ramble_vars
+                ):
+                    continue
+
                 flattened_thresholds.append(
                     (metric_name, threshold_value, conditions)
                 )
+
+        if not flattened_thresholds:
+            test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            return
 
         if comp_type == "relative":
             for th_key, th_val, conditions in flattened_thresholds:
@@ -302,6 +311,7 @@ class BOHGenerator:
                     achieved_metric_found = False
                     for m in test_result.metrics:
                         if m.key == ach_key:
+                            achieved_metric_found = True
                             if not self._evaluate_metric_conditions(
                                 m,
                                 conditions,
@@ -309,7 +319,6 @@ class BOHGenerator:
                                 ramble_vars,
                             ):
                                 continue
-                            achieved_metric_found = True
                             ach_val = (
                                 m.value.number_value
                                 if m.value.HasField("number_value")
@@ -403,6 +412,13 @@ class BOHGenerator:
 
                 if not found_metric:
                     overall_success = False
+
+        if overall_success and not any(
+            m.HasField("validation_criteria") for m in test_result.metrics
+        ):
+            test_result.result_status = pb.RESULT_STATUS_UNKNOWN
+            return
+
         test_result.result_status = (
             pb.RESULT_STATUS_SUCCESS
             if overall_success

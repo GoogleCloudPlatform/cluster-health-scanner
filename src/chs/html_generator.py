@@ -134,12 +134,17 @@ class HtmlReportGenerator:
                 status_badge = "SKIPPED"
                 badge_style = "badge-slate"
             elif ts.group_has_no_thresholds:
+                executed_count = ts.denominator - ts.failed_to_execute
                 ratio_str = (
-                    f"Executed on {ts.denominator} {ts.entity_noun} (No"
-                    " thresholds set)"
+                    f"{executed_count} / {ts.denominator} {ts.entity_noun}"
+                    " executed (No thresholds set)"
                 )
-                status_badge = "EXECUTED"
-                badge_style = "badge-info"
+                if ts.failed_to_execute > 0:
+                    status_badge = f"{ts.failed_to_execute} FAILED TO EXECUTE"
+                    badge_style = "badge-failed"
+                else:
+                    status_badge = "EXECUTED"
+                    badge_style = "badge-info"
             else:
                 if evaluated_nodes == ts.denominator:
                     ratio_str = (

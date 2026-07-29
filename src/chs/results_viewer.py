@@ -150,9 +150,10 @@ class ResultsViewer:
                     "(Validation skipped)"
                 )
             elif summary.group_has_no_thresholds:
+                executed_count = summary.denominator - summary.failed_to_execute
                 self.console.print(
-                    f"  • {summary.display_name:<30} : Executed on "
-                    f"{summary.denominator} {summary.entity_noun} "
+                    f"  • {summary.display_name:<30} : {executed_count} / "
+                    f"{summary.denominator} {summary.entity_noun} executed "
                     "(No thresholds set)"
                 )
             else:

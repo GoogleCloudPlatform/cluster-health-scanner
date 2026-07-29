@@ -283,6 +283,8 @@ def aggregate_boh_summary(
                 else:
                     for t in res.target_resources:
                         failed_to_execute_resources.append(t.node_name)
+            elif res.result_status == pb.RESULT_STATUS_UNKNOWN:
+                pass
             else:
                 count = 1 if is_pairwise else len(res.target_resources)
                 if failed_threshold:
@@ -308,9 +310,24 @@ def aggregate_boh_summary(
 
         entity_noun = "pairs" if is_pairwise else "nodes"
         denominator = len(results) if is_pairwise else test_nodes_count
-        failed_to_execute = (
-            denominator - met_threshold - unmet_threshold - missing_metrics
-        )
+        if group_has_no_thresholds:
+            failed_to_execute = 0
+            for r in results:
+                if len(r.metrics) == 0:
+                    cnt = 1 if is_pairwise else max(1, len(r.target_resources))
+                    failed_to_execute += cnt
+                    if is_pairwise and len(r.target_resources) == 2:
+                        failed_to_execute_resources.append(
+                            f"{r.target_resources[0].node_name} <-> "
+                            f"{r.target_resources[1].node_name}"
+                        )
+                    else:
+                        for t in r.target_resources:
+                            failed_to_execute_resources.append(t.node_name)
+        else:
+            failed_to_execute = (
+                denominator - met_threshold - unmet_threshold - missing_metrics
+            )
 
         test_summaries.append(
             TestGroupSummary(

@@ -1210,6 +1210,160 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertNotIn("Node 10 Ctx Metric", node100_keys)
         self.assertNotIn("Node 10 Meta Null Ctx Metric", node100_keys)
 
+    def test_generate_tpu_collectives_unconfigured_topology_unknown(self):
+        """Test unconfigured topology results in UNKNOWN status."""
+        thresholds_data = {
+            "default": {
+                "tpu-collectives": {
+                    "type": "min",
+                    "thresholds": {
+                        "peak_bandwidth": [
+                            {
+                                "value": 155.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(
+            self.test_dir.name, "thresh_unconfigured.yaml"
+        )
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "all_gather",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "8x8x8",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_UNKNOWN)
+
+        from chs.core.summary_aggregator import aggregate_boh_summary
+
+        summary_data = aggregate_boh_summary(report, self.test_json_path)
+        self.assertIsNotNone(summary_data)
+        self.assertEqual(len(summary_data.test_summaries), 1)
+        ts = summary_data.test_summaries[0]
+        self.assertTrue(ts.group_has_no_thresholds)
+        self.assertEqual(ts.met_threshold, 0)
+        self.assertEqual(ts.failed_to_execute, 0)
+
+    def test_generate_tpu_collectives_removed_workload_threshold_unknown(self):
+        """Test removed workload thresholds result in UNKNOWN status."""
+        thresholds_data = {
+            "default": {
+                "tpu-collectives": {
+                    "type": "min",
+                    "thresholds": {
+                        "peak_bandwidth": [
+                            {
+                                "value": 155.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ],
+                        "some_other_metric_for_all_gather": [
+                            {
+                                "value": 100.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ],
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(
+            self.test_dir.name, "thresh_removed_workload.yaml"
+        )
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "psum",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "2x2x1",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_UNKNOWN)
+
+        from chs.core.summary_aggregator import aggregate_boh_summary
+
+        summary_data = aggregate_boh_summary(report, self.test_json_path)
+        self.assertIsNotNone(summary_data)
+        self.assertEqual(len(summary_data.test_summaries), 1)
+        ts = summary_data.test_summaries[0]
+        self.assertTrue(ts.group_has_no_thresholds)
+        self.assertEqual(ts.missing_metrics, 0)
+        self.assertEqual(ts.met_threshold, 0)
+        self.assertEqual(ts.failed_to_execute, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
