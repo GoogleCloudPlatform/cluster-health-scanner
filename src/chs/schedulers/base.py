@@ -58,7 +58,12 @@ class BaseScheduler(abc.ABC):
                 unique_types.add(machine_type)
                 self.node_to_instance_id[node] = instance_info["instance_id"]
             else:
-                logger.warning(f"Could not retrieve GCE info for node {node}")
+                logger.warning(
+                    "Could not retrieve GCE metadata for node '%s'. Machine"
+                    " type defaulted to 'unknown'. Ensure Compute Viewer IAM"
+                    " permissions if running on GKE/GCE.",
+                    node,
+                )
                 unique_types.add("unknown")
 
         return sorted(list(unique_types))

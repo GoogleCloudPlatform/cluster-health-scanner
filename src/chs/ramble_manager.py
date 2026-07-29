@@ -1216,9 +1216,10 @@ class RambleManager:
 
         except Exception as e:
             logger.warning(
-                "Non-fatal failure while archiving and uploading "
-                "the workspace: %s",
+                "Failed to archive and upload workspace to remote storage: %s. "
+                "Local test results under '%s' remain intact.",
                 e,
+                self.path,
             )
             return None
         return dest

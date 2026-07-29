@@ -12,7 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Custom exceptions for the Cluster Health Scanner."""
+import subprocess
+
+
+def format_subprocess_error(e: Exception) -> str:
+    """Formats an exception into a clean, detailed error message for CLI output.
+
+    Combines command context with stderr/stdout for CalledProcessError,
+    or falls back to str(e).
+    """
+    if isinstance(e, subprocess.CalledProcessError):
+        raw_output = e.stderr if e.stderr is not None else e.stdout
+        if isinstance(raw_output, bytes):
+            raw_output = raw_output.decode("utf-8", errors="replace")
+        output = (raw_output or "").strip()
+        if output:
+            cmd_str = str(e).rstrip(".")
+            return f"{cmd_str}: {output}"
+        return str(e)
+    return str(e)
 
 
 class ChsException(Exception):

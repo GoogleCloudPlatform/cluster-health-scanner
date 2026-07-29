@@ -548,7 +548,7 @@ def run_action(
                 return job_ids
             except (OSError, subprocess.CalledProcessError) as e:
                 raise ex.ChsExecutionException(
-                    f"CHS execution failed: {e!r}"
+                    f"CHS execution failed: {ex.format_subprocess_error(e)}"
                 ) from e
 
 
@@ -740,9 +740,11 @@ def _analyze_action(
 
                 _show_results(app_data, run_id, suppress_boh_uri=True)
             except (OSError, subprocess.CalledProcessError) as e:
+                err_msg = ex.format_subprocess_error(e)
                 raise ex.ChsAnalysisException(
-                    f"CHS analysis failed for run_id={run_id}: {e!r}"
+                    f"CHS analysis failed for run_id={run_id}: {err_msg}"
                 ) from e
+
             else:
                 return run_id
 
@@ -1099,7 +1101,9 @@ def _handle_previous_run(
 
         try:
             if scheduler_instance.has_no_failed_jobs():
-                logger.warning("The cluster still has healthy CHS tests.")
+                logger.warning(
+                    "An active CHS run is already executing on this cluster."
+                )
                 has_no_failed_jobs = True
         except ex.NoActiveJobsException:
             safe_cancel_action(
@@ -1291,8 +1295,11 @@ def run(
         )
 
         if not detected_machine_types or "unknown" in detected_machine_types:
+            nodes_str = ", ".join(resolved_raw_nodes)
             raise ex.MachineTypeDiscoveryException(
-                "Failed to detect machine type of some nodes"
+                f"Failed to detect machine type for nodes ({nodes_str}). "
+                "Ensure nodes are Ready and GCE/Kubernetes node provider "
+                "information is accessible."
             )
 
         _validate_run_args(
@@ -1430,8 +1437,7 @@ def run(
     scheduled_tests = active_tier_tests if active_tier_tests else parsed_tests
     if not scheduled_tests:
         raise ex.ChsValidationError(
-            "No valid tests remaining to schedule after preflight checks. "
-            "Please verify your environment and test dependencies."
+            "No valid tests can be scheduled on this cluster."
         )
 
     test_names = ", ".join(
@@ -1815,7 +1821,10 @@ def _interactive_configure_storage(app_data: ChsAppData) -> None:
         path = click.prompt("Enter target directory path (absolute)")
         config = {"type": "path", "path": {"path": path}}
     else:
-        raise click.ClickException("Invalid choice.")
+        raise click.ClickException(
+            "Invalid choice. Please select [1] for GCS Bucket or [2] for"
+            " Local Path."
+        )
 
     _validate_and_save_storage(app_data, config)
 

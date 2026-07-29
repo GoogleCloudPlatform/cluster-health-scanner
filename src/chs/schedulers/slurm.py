@@ -283,8 +283,10 @@ class SlurmScheduler(BaseScheduler):
             credentials, project = google.auth.default()
             if not project:
                 logger.warning(
-                    "Could not determine GCP project. "
-                    "Skipping topology discovery."
+                    "Could not determine GCP project via Application Default"
+                    " Credentials. GCE topology discovery skipped. Set"
+                    " 'GOOGLE_CLOUD_PROJECT' or run 'gcloud auth"
+                    " application-default login'."
                 )
                 return {}
 
@@ -461,7 +463,11 @@ class SlurmScheduler(BaseScheduler):
 
             return True
         except FileNotFoundError:
-            logger.warning("sacct command not found. Cannot check job status.")
+            logger.warning(
+                "Slurm CLI tool 'sacct' was not found in PATH. Please ensure"
+                " Slurm client utilities (sacct/scancel) are installed and"
+                " available in your PATH."
+            )
         return False
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
@@ -552,11 +558,16 @@ class SlurmScheduler(BaseScheduler):
                     "scancel returned non-zero exit code: %s", result.stderr
                 )
         except FileNotFoundError:
-            logger.warning("scancel command not found. Cannot cancel jobs.")
+            logger.warning(
+                "Slurm CLI tool 'scancel' was not found in PATH. Please ensure"
+                " Slurm client utilities (sacct/scancel) are installed and"
+                " available in your PATH."
+            )
         except (OSError, subprocess.SubprocessError) as e:
-            logger.error("Failed to cancel jobs. Error: %s", e)
+            err_msg = ex.format_subprocess_error(e)
+            logger.error("Failed to cancel jobs: %s", err_msg)
             raise ex.ChsCancellationException(
-                f"Failed to cancel jobs: {e}"
+                f"Failed to cancel jobs: {err_msg}"
             ) from e
 
     def get_active_job_names(self) -> list[str]:

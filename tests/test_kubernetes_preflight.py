@@ -311,7 +311,7 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 ChsPreflightException,
-                "Failed to query cluster CRDs:",
+                "Failed to query cluster CRDs via kubectl:",
             ):
                 self.checker.check()
 

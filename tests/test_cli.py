@@ -22,6 +22,7 @@ import dataclasses
 import datetime
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from typing import Any
@@ -797,6 +798,86 @@ class TestCli(unittest.TestCase):
                 "No supported initial health checks found in suite",
                 result.output,
             )
+
+    def test_run_action_called_process_error_includes_stderr(self):
+        """Test run_action formats CalledProcessError with stderr."""
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, **kwargs: tests
+        )
+        err = subprocess.CalledProcessError(
+            1,
+            ["kubectl", "create", "namespace", "chs"],
+            stderr="Error from server (Forbidden): namespaces 'chs' forbidden",
+        )
+        mock_scheduler.apply_scheduler_resources.side_effect = err
+
+        with self.assertRaises(exceptions.ChsExecutionException) as ctx:
+            cli.run_action(
+                suite="custom",
+                scheduler_obj=mock_scheduler,
+                tests=[{"name": "tpu-info"}],
+                workspace_name="test_ws",
+                workspaces_base_dir="/tmp/test_ws",
+                machine_type="tpu7x-standard-4t",
+            )
+        self.assertIn(
+            "CHS execution failed: Command '['kubectl', 'create', 'namespace',"
+            " 'chs']' returned non-zero exit status 1: Error from server"
+            " (Forbidden): namespaces 'chs' forbidden",
+            str(ctx.exception),
+        )
+
+    def test_format_subprocess_error_helper(self):
+        """Test format_subprocess_error formats command & output."""
+        err_with_stderr = subprocess.CalledProcessError(
+            1,
+            ["kubectl", "get", "crd"],
+            stderr="Error from server (Forbidden)",
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_with_stderr),
+            "Command '['kubectl', 'get', 'crd']' returned non-zero exit status"
+            " 1: Error from server (Forbidden)",
+        )
+
+        err_with_stdout = subprocess.CalledProcessError(
+            1,
+            ["gcloud", "auth"],
+            output="Invalid credentials",
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_with_stdout),
+            "Command '['gcloud', 'auth']' returned non-zero exit status 1:"
+            " Invalid credentials",
+        )
+
+        err_without_output = subprocess.CalledProcessError(
+            1,
+            ["ls", "/nonexistent"],
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_without_output),
+            "Command '['ls', '/nonexistent']' returned non-zero exit status 1.",
+        )
+
+        err_with_bytes_stderr = subprocess.CalledProcessError(
+            1,
+            ["kubectl", "apply"],
+            stderr=b"Permission denied error\n",
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_with_bytes_stderr),
+            "Command '['kubectl', 'apply']' returned non-zero exit status 1:"
+            " Permission denied error",
+        )
+
+        generic_err = ValueError("Something went wrong")
+        self.assertEqual(
+            exceptions.format_subprocess_error(generic_err),
+            "Something went wrong",
+        )
 
     @mock.patch("chs.cli._analyze_action")
     def test_run_command_preserves_suite_test_variables(

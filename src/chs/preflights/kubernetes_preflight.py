@@ -22,7 +22,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from chs.exceptions import ChsPreflightException
+from chs.exceptions import ChsPreflightException, format_subprocess_error
 from chs.utils.tests import get_tests_by_accelerator_type
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 JOBSET_CRD_NAME = "jobsets.jobset.sigs.k8s.io"
 KUEUE_CRD_NAME = "kueues.kueue.sigs.k8s.io"
+MIN_KUEUE_VERSION = "0.14.5"
 
 
 class KubernetesPreflightChecker:
@@ -77,13 +78,16 @@ class KubernetesPreflightChecker:
                 "Found %d CRDs installed on the cluster.", len(installed_crds)
             )
             return installed_crds
-        except (
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            subprocess.TimeoutExpired,
-        ) as e:
+        except FileNotFoundError as e:
             raise ChsPreflightException(
-                f"Failed to query cluster CRDs: {e}"
+                "Kubernetes CLI tool 'kubectl' was not found in PATH. "
+                "Please ensure kubectl is installed and configured "
+                "to connect to your cluster."
+            ) from e
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            msg = format_subprocess_error(e)
+            raise ChsPreflightException(
+                f"Failed to query cluster CRDs via kubectl: {msg}"
             ) from e
 
     def _check_jobset(self, installed_crds: list[str]) -> None:
@@ -126,7 +130,8 @@ class KubernetesPreflightChecker:
             raise ChsPreflightException(
                 "JobSet CRD is installed, but the JobSet controller "
                 "deployment is NOT in an Available state. "
-                "Please check controller health."
+                "Please check controller health with "
+                "'kubectl get deployment -A -l app.kubernetes.io/name=jobset'."
             )
 
     def _discover_deployments(self, app_name: str) -> list[dict[str, Any]]:
@@ -166,8 +171,10 @@ class KubernetesPreflightChecker:
             healthy_dep = self._get_healthy_kueue_deployment(deployments)
             if not healthy_dep:
                 logger.warning(
-                    "Kueue controller deployment is NOT in an Available state. "
-                    "Skipping 'nccl-cluster' test."
+                    "Kueue controller deployment is NOT in an Available "
+                    "state. Please check controller health with "
+                    "'kubectl get deployment -A -l "
+                    "app.kubernetes.io/name=kueue'."
                 )
                 return False
             version = self._extract_version_from_deployment(healthy_dep)
@@ -284,12 +291,13 @@ class KubernetesPreflightChecker:
     def _is_kueue_version_supported(self, version: str) -> bool:
         """Validates if the installed Kueue version is supported."""
         try:
-            if Version(version) < Version("0.14.5"):
+            if Version(version) < Version(MIN_KUEUE_VERSION):
                 logger.warning(
                     "Kueue version %s not supported. "
-                    "Minimum supported version is v0.14.5. "
+                    "Minimum supported version is v%s. "
                     "Reference for upgrading: https://kueue.sigs.k8s.io/docs/installation/#upgrading",
                     version,
+                    MIN_KUEUE_VERSION,
                 )
                 return False
             return True
@@ -320,8 +328,12 @@ class KubernetesPreflightChecker:
 
         if skipped_tests:
             logger.warning(
-                "Kueue is uninstalled or wrong version. Skipping tests: %s",
+                "Kueue is missing or incompatible (requires v%s+). "
+                "Skipping tests: %s. Ensure Kueue v%s+ is installed: "
+                "https://kueue.sigs.k8s.io/docs/installation/",
+                MIN_KUEUE_VERSION,
                 ", ".join(skipped_tests),
+                MIN_KUEUE_VERSION,
             )
 
         return remaining_tests

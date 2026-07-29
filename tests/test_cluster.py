@@ -14,61 +14,68 @@
 
 """Tests for cluster name utilities."""
 
-import pytest
-from chs.utils.cluster import sanitize_dns_1123, get_sanitized_cluster_name
-from chs.exceptions import ClusterDiscoveryException
+import unittest
 from unittest import mock
 
+from chs.exceptions import ClusterDiscoveryException
+from chs.utils.cluster import get_sanitized_cluster_name, sanitize_dns_1123
 
-def test_sanitize_dns_1123():
-    # Test simple lowercasing and stripping
-    assert sanitize_dns_1123("Simple-Name") == "simple-name"
 
-    # Test spaces and underscores to dashes
-    assert sanitize_dns_1123("my_cluster name") == "my-cluster-name"
+class TestCluster(unittest.TestCase):
+    """Tests cluster name sanitization and retrieval."""
 
-    # Test non-alphanumeric stripping
-    assert sanitize_dns_1123("cluster@name!") == "clustername"
-    assert sanitize_dns_1123("cluster_name_$$$") == "cluster-name"
+    def test_sanitize_dns_1123(self):
+        # Test simple lowercasing and stripping
+        self.assertEqual(sanitize_dns_1123("Simple-Name"), "simple-name")
 
-    # Test truncation
-    assert (
-        sanitize_dns_1123(
-            "very-long-cluster-name-that-exceeds-limit", max_length=15
+        # Test spaces and underscores to dashes
+        self.assertEqual(
+            sanitize_dns_1123("my_cluster name"), "my-cluster-name"
         )
-        == "very-long-clust"
-    )
 
-    # Test trailing dashes strip after truncation
-    assert (
-        sanitize_dns_1123("production_gpu_slice!!!", max_length=15)
-        == "production-gpu"
-    )
+        # Test non-alphanumeric stripping
+        self.assertEqual(sanitize_dns_1123("cluster@name!"), "clustername")
+        self.assertEqual(sanitize_dns_1123("cluster_name_$$$"), "cluster-name")
 
-    # Test leading/trailing dashes strip
-    assert sanitize_dns_1123("-my-cluster-") == "my-cluster"
+        # Test truncation
+        self.assertEqual(
+            sanitize_dns_1123(
+                "very-long-cluster-name-that-exceeds-limit", max_length=15
+            ),
+            "very-long-clust",
+        )
 
-    # Test empty result
-    assert sanitize_dns_1123("!!!") == ""
+        # Test trailing dashes strip after truncation
+        self.assertEqual(
+            sanitize_dns_1123("production_gpu_slice!!!", max_length=15),
+            "production-gpu",
+        )
 
+        # Test leading/trailing dashes strip
+        self.assertEqual(sanitize_dns_1123("-my-cluster-"), "my-cluster")
 
-def test_get_sanitized_cluster_name():
-    mock_scheduler = mock.Mock()
+        # Test empty result
+        self.assertEqual(sanitize_dns_1123("!!!"), "")
 
-    # Case 1: Name found
-    mock_scheduler.get_cluster_name.return_value = "GKE_cluster_123!!!"
-    assert get_sanitized_cluster_name(mock_scheduler) == "gke-cluster-123"
+    def test_get_sanitized_cluster_name(self):
+        mock_scheduler = mock.Mock()
 
-    # Case 2: Name not found (raises ClusterDiscoveryException)
-    mock_scheduler.get_cluster_name.return_value = None
-    with pytest.raises(
-        ClusterDiscoveryException, match="Failed to retrieve cluster name"
-    ):
-        get_sanitized_cluster_name(mock_scheduler)
+        # Case 1: Name found
+        mock_scheduler.get_cluster_name.return_value = "GKE_cluster_123!!!"
+        self.assertEqual(
+            get_sanitized_cluster_name(mock_scheduler), "gke-cluster-123"
+        )
 
-    # Case 3: Name is empty after sanitization
-    mock_scheduler.get_cluster_name.return_value = "!!!"
-    with pytest.raises(
-        ClusterDiscoveryException, match="could not be sanitized"
-    ):
-        get_sanitized_cluster_name(mock_scheduler)
+        # Case 2: Name not found (raises ClusterDiscoveryException)
+        mock_scheduler.get_cluster_name.return_value = None
+        with self.assertRaisesRegex(
+            ClusterDiscoveryException, "Failed to retrieve cluster name"
+        ):
+            get_sanitized_cluster_name(mock_scheduler)
+
+        # Case 3: Name is empty after sanitization
+        mock_scheduler.get_cluster_name.return_value = "!!!"
+        with self.assertRaisesRegex(
+            ClusterDiscoveryException, "could not be sanitized"
+        ):
+            get_sanitized_cluster_name(mock_scheduler)

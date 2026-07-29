@@ -35,6 +35,7 @@ from chs.exceptions import (
     ChsSchedulerException,
     KueueException,
     NoActiveJobsException,
+    format_subprocess_error,
 )
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
@@ -249,7 +250,9 @@ class KubernetesScheduler(BaseScheduler):
                 ["delete", "namespace", CHS_NAMESPACE, "--ignore-not-found"]
             )
         except Exception as e:
-            logger.warning("Failed to delete namespace: %s", e)
+            logger.warning(
+                "Failed to delete namespace: %s", format_subprocess_error(e)
+            )
 
     def _run_kubectl(
         self,
@@ -301,7 +304,9 @@ class KubernetesScheduler(BaseScheduler):
             else:
                 logger.debug("No CHS SSH secrets found to delete.")
         except Exception as e:
-            logger.warning("Failed to delete secrets: %s", e)
+            logger.warning(
+                "Failed to delete secrets: %s", format_subprocess_error(e)
+            )
 
     def _group_nodes_by_slice(
         self, node_names: list[str]
