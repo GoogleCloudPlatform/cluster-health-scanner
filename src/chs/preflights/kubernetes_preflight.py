@@ -98,7 +98,7 @@ class KubernetesPreflightChecker:
             raise ChsPreflightException(
                 "Missing required cluster dependencies: JobSet. "
                 "Please install them before continuing. "
-                "Reference: https://github.com/kubernetes-sigs/jobset"
+                "Reference: https://jobset.sigs.k8s.io/docs/installation/"
             )
 
         self._check_jobset_deployment_health()

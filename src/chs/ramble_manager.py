@@ -830,16 +830,8 @@ class RambleManager:
             console = Console()
             console.print(
                 "\n[yellow]Detached from active run. "
-                "Tests will continue executing on the cluster.[/yellow]"
-            )
-            console.print(
-                "To compile logs and generate results run: "
-                "[cyan]chs run[/cyan]"
-            )
-            console.print(
-                "When completed, view results with: " "[cyan]chs results[/cyan]"
-            )
-            console.print(
+                "Tests will continue executing on the cluster.[/yellow]\n"
+                "To attach to the ongoing run, run: [cyan]chs run[/cyan]\n"
                 "To cancel execution and cleanup run: [cyan]chs cancel[/cyan]"
             )
             raise ex.ChsDetachedException()

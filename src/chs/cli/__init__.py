@@ -1086,8 +1086,8 @@ def _check_for_foreign_runs(app_data: ChsAppData, scheduler: str) -> None:
         raise click.ClickException(
             "A CHS run is already in progress on this cluster by "
             "another user. Please try again later.\n"
-            "If you believe this is stale, run `chs cancel` to forcefully "
-            "destroy it."
+            "If you believe this is stale, run `chs cancel` to "
+            "terminate it."
         )
 
 
@@ -1151,7 +1151,7 @@ def _handle_previous_run(
             logger.warning(
                 "Parallel runs are not supported. "
                 f"Attaching to ongoing/completed run: {latest_run_id}. "
-                f"Run `{cleanup_cmd}` to destroy it."
+                f"Run `{cleanup_cmd}` to terminate it."
             )
             _analyze_action(app_data, latest_run_id)
             return RunExecutionResult(
