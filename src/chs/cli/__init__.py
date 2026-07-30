@@ -129,12 +129,17 @@ def _setup_workspace_logger(workspace_path: str):
             handler.setLevel(logging.NOTSET)
 
 
-def _make_clickable_link(path_or_uri: str) -> str:
+def _get_href_link(path_or_uri: str) -> str:
     href = path_or_uri
     if path_or_uri.startswith("gs://"):
         href = path_or_uri.replace(
             "gs://", "https://storage.cloud.google.com/", 1
         )
+    return href
+
+
+def _make_clickable_link(path_or_uri: str) -> str:
+    href = _get_href_link(path_or_uri)
     return f"[link={href}]{path_or_uri}[/link]"
 
 
@@ -160,24 +165,21 @@ def _archive_and_log(
         ramble_manager.workspace_name
     )
     updates = {}
-    if ws_path and storage_provider:
-        console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Workspace archived to: "
-            f"{_make_clickable_link(ws_path)}[/{theme.CHS_SUCCESS_STYLE}]"
-        )
-        updates["workspace_uri"] = ws_path
-    if boh_json_path and storage_provider:
-        console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-            f"{_make_clickable_link(boh_json_path)}[/{theme.CHS_SUCCESS_STYLE}]"
-        )
-        updates["boh_uri"] = boh_json_path
     if boh_html_path and storage_provider:
         console.print(
             f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report saved at: "
             f"{_make_clickable_link(boh_html_path)}[/{theme.CHS_SUCCESS_STYLE}]"
         )
         updates["boh_html_uri"] = boh_html_path
+    if boh_json_path and storage_provider:
+        console.print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
+            f"{_make_clickable_link(boh_json_path)}[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+        updates["boh_uri"] = boh_json_path
+    if ws_path and storage_provider:
+        logger.debug(f"Workspace archived to: {_get_href_link(ws_path)}")
+        updates["workspace_uri"] = ws_path
 
     if not all_uploads_succeeded:
         console.print(
