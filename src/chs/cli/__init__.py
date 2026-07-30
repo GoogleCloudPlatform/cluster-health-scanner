@@ -183,8 +183,8 @@ def _archive_and_log(
 
     if not all_uploads_succeeded:
         console.print(
-            f"[{theme.CHS_ERROR_STYLE}]Upload to GCS failed for some files, "
-            f"check the local paths above.[/{theme.CHS_ERROR_STYLE}]"
+            f"[{theme.CHS_FAILURE_STYLE}]Upload to GCS failed for some files, "
+            f"check the local paths above.[/{theme.CHS_FAILURE_STYLE}]"
         )
         console.print(
             f"[{theme.CHS_NEUTRAL_STYLE}]Tip:  If mounted, Check your "
