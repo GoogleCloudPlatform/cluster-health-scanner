@@ -33,6 +33,7 @@ from chs.schedulers.base import BaseScheduler
 from chs.utils.kueue import KueueManager
 from chs.exceptions import (
     ChsSchedulerException,
+    ChsValidationError,
     KueueException,
     NoActiveJobsException,
     format_subprocess_error,
@@ -79,6 +80,14 @@ class KubernetesScheduler(BaseScheduler):
         nodepools: str | None = None,
     ):
         super().__init__()
+
+        if nodelists or partitions:
+            raise ChsValidationError(
+                "The --nodelists and --partitions flags are Slurm-specific and "
+                "cannot be used with the Kubernetes scheduler. Please use "
+                "--nodes or --nodepools instead."
+            )
+
         self.nodes_arg = nodes
         self.nodepools_arg = nodepools
         self._resolved_nodes: list[str] | None = None
@@ -88,16 +97,6 @@ class KubernetesScheduler(BaseScheduler):
         self.kueue_supported: bool = False
         self._jobset_labels_yaml: str = ""
         self._suspend_jobset: str = "false"
-        if nodelists:
-            logger.warning(
-                "nodelists argument is ignored for Kubernetes scheduler."
-                " Did you want to use nodes or nodepools?"
-            )
-        if partitions:
-            logger.warning(
-                "partitions argument is ignored for Kubernetes scheduler."
-                " Did you want to use nodes or nodepools?"
-            )
 
     def _resolve_project_id(self, node: str) -> str:
         """Resolves GCP project ID from Kubernetes node providerID."""

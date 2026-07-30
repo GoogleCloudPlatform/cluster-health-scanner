@@ -75,8 +75,17 @@ class SlurmScheduler(BaseScheduler):
         nodes: str | None = None,
         nodelists: str | None = None,
         partitions: str | None = None,
+        nodepools: str | None = None,
     ):
         super().__init__()
+
+        if nodepools:
+            raise ex.ChsValidationError(
+                "The --nodepools flag is Kubernetes-specific and cannot be "
+                "used with the Slurm scheduler. Please use --nodes, "
+                "--nodelists, or --partitions instead."
+            )
+
         self.nodes_arg = nodes
         self.nodelists_arg = nodelists
         self.partitions_arg = partitions

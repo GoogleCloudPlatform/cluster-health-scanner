@@ -31,11 +31,14 @@ def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
             nodes=kwargs.get("nodes"),
             nodelists=kwargs.get("nodelists"),
             partitions=kwargs.get("partitions"),
+            nodepools=kwargs.get("nodepools"),
         )
     if scheduler == "kubernetes":
         return KubernetesScheduler(
             nodes=kwargs.get("nodes"),
             nodepools=kwargs.get("nodepools"),
+            nodelists=kwargs.get("nodelists"),
+            partitions=kwargs.get("partitions"),
         )
     raise ex.UnsupportedSchedulerException(
         f"Unsupported scheduler: {scheduler}"
