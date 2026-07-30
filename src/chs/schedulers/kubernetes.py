@@ -1321,7 +1321,6 @@ class KubernetesScheduler(BaseScheduler):
                 ["get", "jobset", "-o", "name"], namespaced=True
             )
             if not output:
-                self._delete_namespace()
                 return
 
             job_ids = []
@@ -1339,8 +1338,6 @@ class KubernetesScheduler(BaseScheduler):
                 self.cancel_jobs(job_ids)
             else:
                 logger.debug("No matching JobSets found for %s.", prefix)
-
-            self._delete_namespace()
         except FileNotFoundError:
             logger.warning(
                 "kubectl command not found. Cannot perform native cancel."

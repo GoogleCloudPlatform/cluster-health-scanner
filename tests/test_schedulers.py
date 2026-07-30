@@ -1068,6 +1068,32 @@ ramble:
             ]
         )
 
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._delete_namespace"
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler."
+        "_cleanup_dynamic_slices"
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_cancel_jobs_by_prefix_does_not_delete_namespace(
+        self,
+        mock_run_kubectl,
+        mock_cleanup_slices,
+        mock_delete_ns,
+        mock_logger,
+    ):
+        mock_run_kubectl.return_value = (
+            "jobset/chs-test-job1\njobset/chs-test-job2"
+        )
+        scheduler = KubernetesScheduler()
+        with mock.patch.object(scheduler, "cancel_jobs") as mock_cancel_jobs:
+            scheduler.cancel_jobs_by_prefix("chs-test")
+            mock_cancel_jobs.assert_called_once_with(
+                ["chs-test-job1", "chs-test-job2"]
+            )
+            mock_delete_ns.assert_not_called()
+
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     @mock.patch("time.time", side_effect=[0, 1])
     def test_wait_for_slices_active_success(
