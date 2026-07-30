@@ -120,7 +120,7 @@ class KubernetesPreflightChecker:
         if not deployments or not any(
             self._is_deployment_healthy(dep) for dep in deployments
         ):
-            logger.warning(
+            raise ChsPreflightException(
                 "JobSet CRD is installed, but the JobSet controller "
                 "deployment is NOT in an Available state. "
                 "Please check controller health."

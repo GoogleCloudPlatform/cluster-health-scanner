@@ -214,50 +214,40 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             ):
                 self.checker.check()
 
-    def test_check_jobset_deployment_unhealthy_logs_warning(self):
-        """Test that unhealthy deployment (0 replicas) logs warning."""
+    def test_check_jobset_deployment_unhealthy_raises_exception(self):
+        """Test that unhealthy deployment (0 replicas) raises exception."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
         )
         dep_output = self._unhealthy_jobset_deployment_json()
-        with (
-            mock.patch.object(self.checker, "_run_kubectl") as mock_run,
-            mock.patch(
-                "chs.preflights.kubernetes_preflight.logger"
-            ) as mock_logger,
-        ):
+        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [crd_output, dep_output]
-            self.checker.check()
-            mock_logger.warning.assert_called_once_with(
+            with self.assertRaisesRegex(
+                ChsPreflightException,
                 "JobSet CRD is installed, but the JobSet controller "
-                "deployment is NOT in an Available state. "
-                "Please check controller health."
-            )
+                "deployment is NOT in an Available state",
+            ):
+                self.checker.check()
 
-    def test_check_jobset_deployment_rbac_restricted_logs_warning(self):
-        """Test that RBAC query logs warning when deployment unverified."""
+    def test_check_jobset_deployment_rbac_restricted_raises_exception(self):
+        """Test that RBAC query raises exception when deployment unverified."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
         )
-        with (
-            mock.patch.object(self.checker, "_run_kubectl") as mock_run,
-            mock.patch(
-                "chs.preflights.kubernetes_preflight.logger"
-            ) as mock_logger,
-        ):
+        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [
                 crd_output,
                 subprocess.CalledProcessError(1, "kubectl get deployment -A"),
             ]
             tests = [{"name": "nvidia-smi"}]
-            self.checker.check(tests)
-            mock_logger.warning.assert_called_once_with(
+            with self.assertRaisesRegex(
+                ChsPreflightException,
                 "JobSet CRD is installed, but the JobSet controller "
-                "deployment is NOT in an Available state. "
-                "Please check controller health."
-            )
+                "deployment is NOT in an Available state",
+            ):
+                self.checker.check(tests)
 
     def test_check_jobset_deployment_null_available_replicas(self):
         """Test handling when status.availableReplicas is null in JSON."""
@@ -280,19 +270,14 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 ]
             }
         )
-        with (
-            mock.patch.object(self.checker, "_run_kubectl") as mock_run,
-            mock.patch(
-                "chs.preflights.kubernetes_preflight.logger"
-            ) as mock_logger,
-        ):
+        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
             mock_run.side_effect = [crd_output, null_replicas_dep]
-            self.checker.check()
-            mock_logger.warning.assert_called_once_with(
+            with self.assertRaisesRegex(
+                ChsPreflightException,
                 "JobSet CRD is installed, but the JobSet controller "
-                "deployment is NOT in an Available state. "
-                "Please check controller health."
-            )
+                "deployment is NOT in an Available state",
+            ):
+                self.checker.check()
 
     def test_check_with_none_tests_and_unsupported_kueue_returns_none(self):
         """Test checking None tests with unsupported Kueue returns None."""
