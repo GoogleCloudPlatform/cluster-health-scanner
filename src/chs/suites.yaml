@@ -86,10 +86,3 @@ suites:
     trigger_condition:
       DEGRADED: [tpu-collectives]
       ERROR: [tpu-collectives]
-- name: burn-in
-  est_time: ">2 hours"
-  description: "Heavy stress testing."
-  tests:
-  - name: dcgm
-    variables:
-      diag_level: [4]

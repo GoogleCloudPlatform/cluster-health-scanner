@@ -198,7 +198,7 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch(
                 "chs.utils.suites.get_all_suites",
-                return_value=["lite", "standard", "burn-in", "suite1", "s1"],
+                return_value=["lite", "standard", "suite1", "s1"],
             )
         )
         self.enterContext(

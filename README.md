@@ -152,7 +152,7 @@ Lists available resources (suites, tests, schedulers)
 
 **Options:**
 
-- `--suites`: List available test suites (pre-configured bundles of tests designed for specific use-cases, like 'lite' or 'burn-in').
+- `--suites`: List available test suites (pre-configured bundles of tests designed for specific use-cases, like 'lite' or 'standard').
 - `--tests`: List individual hardware and network benchmarks (e.g., `nccl-cluster`, `gemm`).
 - `--schedulers`: List available workload managers (e.g., `kubernetes`, `slurm`).
 - `--from-suite <SUITE_NAME>`: Filter tests to only show those belonging to a specific suite (requires `--tests`).
@@ -187,9 +187,9 @@ Executes a test suite on a specified cluster.
 
 **Arguments:**
 
-- `--suite` / `-s`: Name of the test suite to run (pre-configured bundles of tests designed for specific use-cases, like 'lite' or 'burn-in').
+- `--suite` / `-s`: Name of the test suite to run (pre-configured bundles of tests designed for specific use-cases, like 'lite' or 'standard').
   - Default: `lite`.
-  - Supported values: `lite`, `standard`, `burn-in`.
+  - Supported values: `lite`, `standard`.
 - `--tests` / `-t`: Comma-separated list of individual hardware and network benchmarks (e.g., `nccl-cluster`, `gemm`).
   - Default (if not provided): Loads tests from the selected suite.
   - Supported values: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`, `tpu-info`, `hbm`, `host-device`, `collectives`, `collectives-single-node`.
@@ -230,8 +230,6 @@ Below are the details of the supported test suites and the tests included in eac
 - **standard**: Comprehensive health check.
   - Included GPU tests: `nvidia-smi`, `dcgm`, `stream`, `nccl-cluster`, `nccl-pairwise`
   - Included TPU tests: `tpu-info`, `collectives`
-- **burn-in**: Focused on stress testing.
-  - Included GPU tests: `dcgm` (with higher diagnostic levels)
 
 #### Examples:
 

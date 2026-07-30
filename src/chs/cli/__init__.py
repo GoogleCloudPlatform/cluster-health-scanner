@@ -994,7 +994,7 @@ def list_suites() -> bool:
     """List available test suites.
 
     Test suites are pre-configured bundles of tests designed for specific
-    use-cases, like 'lite' or 'burn-in'.
+    use-cases, like 'lite' or 'standard'.
     """
     return list_action(suites=True)
 
@@ -1199,7 +1199,7 @@ def _handle_previous_run(
     "-s",
     help=(
         "Name of the test suite to run (pre-configured bundles of tests "
-        "designed for specific use-cases, like 'lite' or 'burn-in')"
+        "designed for specific use-cases, like 'lite' or 'standard')"
     ),
     callback=validators.validate_non_empty_string,
 )
