@@ -1103,7 +1103,7 @@ class TestBOHGenerator(unittest.TestCase):
                             "foms": [
                                 {
                                     "name": "Bandwidth (median)",
-                                    "value": 150.0,
+                                    "value": 140.0,
                                     "units": "GB/s",
                                 }
                             ],
@@ -1125,7 +1125,7 @@ class TestBOHGenerator(unittest.TestCase):
             (m for m in res.metrics if m.key == "Peak Bandwidth (median)"), None
         )
         self.assertIsNotNone(peak_metric)
-        self.assertEqual(peak_metric.value.number_value, 150.0)
+        self.assertEqual(peak_metric.value.number_value, 140.0)
         self.assertEqual(
             peak_metric.validation_criteria.result_status,
             pb.RESULT_STATUS_FAILED,
@@ -1363,6 +1363,21 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(ts.missing_metrics, 0)
         self.assertEqual(ts.met_threshold, 0)
         self.assertEqual(ts.failed_to_execute, 0)
+
+    def test_tpu_test_names_prefix(self):
+        """Ensure TPU-related tests in thresholds.yaml have 'tpu-' prefix."""
+        generator = BOHGenerator(self.test_json_path)
+        thresholds = generator._load_thresholds()
+        for machine_type, tests in thresholds.items():
+            if machine_type == "default":
+                continue
+            for test_name in tests:
+                if "tpu" in test_name.lower():
+                    msg = (
+                        f"TPU test '{test_name}' under '{machine_type}' "
+                        "must start with 'tpu-' prefix."
+                    )
+                    self.assertTrue(test_name.startswith("tpu-"), msg)
 
 
 if __name__ == "__main__":
