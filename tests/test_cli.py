@@ -1423,6 +1423,35 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
 
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    @mock.patch("chs.cli.get_scheduler")
+    def test_run_command_execution_preview_shows_full_cluster_name(
+        self, mock_get_scheduler, mock_analyze_action
+    ):
+        """Test that the full cluster name is printed in execution preview."""
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.get_cluster_name.return_value = (
+            "full-cluster-name-123456"
+        )
+        mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
+        mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
+        mock_scheduler.has_no_failed_jobs.return_value = False
+        mock_scheduler.get_active_job_names.return_value = []
+        mock_scheduler.run_preflight_checks.return_value = [{"name": "test1"}]
+        mock_scheduler.setup_scheduler_resources.return_value = [
+            {"name": "test1"}
+        ]
+        mock_get_scheduler.return_value = mock_scheduler
+
+        result = self.runner.invoke(
+            cli.cli, ["run", "--suite", "suite1", "--auto-approve"]
+        )
+
+        self.assertIn("full-cluster-name-123456", result.output)
+        self.assertIn("Target Cluster", result.output)
+
     def test_validate_run_args_empty_machine_types(self):
         """Test _validate_run_args raises validation error on empty types."""
         with self.assertRaisesRegex(

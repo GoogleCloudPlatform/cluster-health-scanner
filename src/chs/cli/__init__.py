@@ -1606,6 +1606,7 @@ def run(
     )
 
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
+    full_cluster_name = scheduler_obj.get_cluster_name()
 
     scheduled_tests = active_tier_tests if active_tier_tests else parsed_tests
     if not scheduled_tests:
@@ -1621,7 +1622,7 @@ def run(
     console = Console()
     console.print(f"[bold]{preview_title}[/bold]")
     console.print(
-        f"  Target Cluster:    [{theme.CHS_HEADER_STYLE}]{cluster_name}"
+        f"  Target Cluster:    [{theme.CHS_HEADER_STYLE}]{full_cluster_name}"
         f"[/{theme.CHS_HEADER_STYLE}]"
     )
     console.print(
