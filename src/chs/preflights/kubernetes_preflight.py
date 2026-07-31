@@ -123,7 +123,8 @@ class KubernetesPreflightChecker:
             raise ChsPreflightException(
                 "JobSet CRD is installed, but the JobSet controller "
                 "deployment is NOT in an Available state. "
-                "Please check controller health."
+                "Please check controller health by running: "
+                '`kubectl get deployment -A -l "app.kubernetes.io/name=jobset"`'
             )
 
     def _discover_deployments(self, app_name: str) -> list[dict[str, Any]]:
