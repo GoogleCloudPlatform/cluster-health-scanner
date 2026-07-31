@@ -111,8 +111,8 @@ class KubernetesScheduler(BaseScheduler):
             return match.group(1)
         except Exception as e:
             raise ChsSchedulerException(
-                f"Failed to resolve project ID from node: {e}"
-            )
+                f"Failed to resolve project ID from node '{node}': {e}"
+            ) from e
 
     def run_preflight_checks(
         self,
@@ -596,6 +596,14 @@ class KubernetesScheduler(BaseScheduler):
             raw_nodes = [
                 n.strip() for n in self.nodes_arg.split(",") if n.strip()
             ]
+            try:
+                self._run_kubectl(["get", "node"] + raw_nodes)
+            except subprocess.CalledProcessError as e:
+                err_msg = format_subprocess_error(e)
+                raise ChsSchedulerException(
+                    f"One or more targeted nodes not found in the cluster. "
+                    f"Please verify the nodes exist.\nDetails: {err_msg}"
+                ) from e
         else:
             try:
                 args = ["get", "nodes"]

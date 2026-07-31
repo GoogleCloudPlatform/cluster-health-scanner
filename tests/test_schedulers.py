@@ -244,8 +244,9 @@ class TestKubernetesScheduler(unittest.TestCase):
         return_value=set(),
     )
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_get_nodes_under_test(
-        self, mock_tpu_slices, mock_busy, mock_logger
+        self, mock_run_kubectl, mock_tpu_slices, mock_busy, mock_logger
     ):
         """Test get_nodes_under_test returns parsed nodes."""
         mock_tpu_slices.return_value = TpuSliceData(
@@ -285,14 +286,40 @@ class TestKubernetesScheduler(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     def test_resolve_raw_nodes_precedence(self, mock_run, mock_logger):
-        """Test nodes arg takes precedence over nodepools."""
+        """Test nodes arg overrides nodepools, and executes validation."""
         scheduler = KubernetesScheduler(
             nodes="node-1",
             nodepools="pool-1",
         )
+        mock_run.return_value.returncode = 0
         nodes = scheduler.resolve_raw_nodes()
         self.assertEqual(nodes, ["node-1"])
-        mock_run.assert_not_called()
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("kubectl", cmd)
+        self.assertIn("get", cmd)
+        self.assertIn("node", cmd)
+        self.assertIn("node-1", cmd)
+
+    @mock.patch("subprocess.run")
+    def test_resolve_raw_nodes_invalid(self, mock_run, mock_logger):
+        """Test resolve_raw_nodes errors if provided nodes don't exist."""
+        scheduler = KubernetesScheduler(
+            nodes="invalid-node",
+        )
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            "kubectl get node invalid-node",
+            stderr=b'Error (NotFound): nodes "invalid-node" not found',
+        )
+
+        with self.assertRaises(ex.ChsSchedulerException) as cm:
+            scheduler.resolve_raw_nodes()
+
+        self.assertIn(
+            "One or more targeted nodes not found in the cluster.",
+            str(cm.exception),
+        )
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",

@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import subprocess
+import click
+
+logger = logging.getLogger(__name__)
 
 
 def format_subprocess_error(e: Exception) -> str:
@@ -33,8 +37,14 @@ def format_subprocess_error(e: Exception) -> str:
     return str(e)
 
 
-class ChsException(Exception):
+class ChsException(click.ClickException):
     """Base exception class for all CHS-related errors."""
+
+    def __init__(self, message: str = ""):
+        super().__init__(message)
+
+    def show(self, file=None):
+        logger.error(self.format_message())
 
 
 class ChsValidationError(ChsException):

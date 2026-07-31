@@ -98,6 +98,16 @@ class TestCli(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.runner = CliRunner()
+
+        def patched_logger_error(msg, *args, **kwargs):
+            click.echo(msg, err=True)
+
+        self.mock_logger_error = mock.patch(
+            "chs.exceptions.logger.error", side_effect=patched_logger_error
+        )
+        self.mock_logger_error.start()
+        self.addCleanup(self.mock_logger_error.stop)
+
         self.mock_rm_cls = self.enterContext(
             mock.patch("chs.cli.RambleManager", autospec=True)
         )
@@ -1815,6 +1825,15 @@ class TestCliHistory(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.runner = testing.CliRunner()
+
+        def patched_logger_error(msg, *args, **kwargs):
+            click.echo(msg, err=True)
+
+        self.mock_logger_error = mock.patch(
+            "chs.exceptions.logger.error", side_effect=patched_logger_error
+        )
+        self.mock_logger_error.start()
+        self.addCleanup(self.mock_logger_error.stop)
         self.mock_app_data_cls = self.enterContext(
             mock.patch("chs.cli.ChsAppData", autospec=True)
         )

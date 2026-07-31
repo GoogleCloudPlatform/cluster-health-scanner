@@ -82,8 +82,6 @@ def handle_chs_exceptions(f):
             return f(*args, **kwargs)
         except ex.ChsDetachedException:
             raise click.exceptions.Exit(0)
-        except ex.ChsException as e:
-            raise click.ClickException(str(e)) from e
 
     return wrapper
 
@@ -1459,7 +1457,30 @@ def run(
         resolved_raw_nodes = scheduler_obj.resolve_raw_nodes()
 
         if not resolved_raw_nodes:
-            raise ex.NoNodesProvidedException("No nodes provided to run on.")
+            target_type = ""
+            target_value = ""
+            for name, value in [
+                ("nodes", nodes),
+                ("nodelists", nodelists),
+                ("nodepools", nodepools),
+                ("partitions", partitions),
+            ]:
+                if value:
+                    target_type = name
+                    target_value = value
+                    break
+
+            if target_value:
+                error_msg = (
+                    f"No nodes found for testing in the requested "
+                    f"{target_type} ('{target_value}')."
+                )
+            else:
+                error_msg = (
+                    "No target flags were provided, and the cluster "
+                    "currently has no nodes available for testing."
+                )
+            raise ex.NoNodesProvidedException(error_msg)
 
         preflights.run_platform_preflights()
 
