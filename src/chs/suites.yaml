@@ -15,7 +15,7 @@
 suites:
 - name: lite
   est_time: "~5 mins"
-  description: "Quick health check (eg. nvidia-smi, dcgm, gemm)."
+  description: "Quick health check."
   deadline: 600
   tests:
   - name: nvidia-smi
@@ -46,7 +46,7 @@ suites:
       message_size_multiplier: 2
 - name: standard
   est_time: "~30 mins"
-  description: "Thorough network & collective testing (eg. nccl, collectives)."
+  description: "Thorough network & collective testing."
   deadline: 2400
   tests:
   - name: nvidia-smi

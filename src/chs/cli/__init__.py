@@ -34,6 +34,7 @@ from typing import Any
 import click
 import questionary
 from rich.console import Console
+from rich.text import Text
 
 from chs import (
     BaseScheduler,
@@ -51,6 +52,7 @@ from chs import (
     validators,
 )
 from chs.boh_generator import parse_tier_results_from_boh
+from chs.cli import help_command_text
 from chs.cli import list_formatting
 from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
@@ -354,8 +356,20 @@ def list_action(
     show_all = not (suites or tests or schedulers or machine_types)
     console = Console()
 
-    if suites or show_all:
-        console.print(list_formatting.get_suites_renderable())
+    if not accelerator_type:
+        console.print(
+            Text(
+                "(Hint: Append the `--tpu` or `--gpu` flags to easily "
+                "filter results by accelerator)",
+                style="dim",
+            )
+        )
+        console.print()
+
+    if machine_types or show_all:
+        console.print(
+            list_formatting.get_machine_types_renderable(accelerator_type)
+        )
         console.print()
 
     if tests or show_all:
@@ -365,12 +379,12 @@ def list_action(
             console.print(r)
         console.print()
 
-    if schedulers or show_all:
-        console.print(list_formatting.get_schedulers_renderable())
+    if suites or show_all:
+        console.print(list_formatting.get_suites_renderable(accelerator_type))
         console.print()
 
-    if machine_types or show_all:
-        console.print(list_formatting.get_machine_types_renderable())
+    if schedulers or show_all:
+        console.print(list_formatting.get_schedulers_renderable())
         console.print()
 
     return show_all
@@ -982,21 +996,59 @@ def cli(ctx: click.Context, verbose: bool) -> None:
 
 
 @cli.group(name="list", invoke_without_command=True)
+@click.option(
+    "--tpu", is_flag=True, help="Filter list for TPU-related resources."
+)
+@click.option(
+    "--gpu", is_flag=True, help="Filter list for GPU-related resources."
+)
 @click.pass_context
-def list_command(ctx: click.Context) -> bool | None:
-    """Lists available resources."""
+def list_command(ctx: click.Context, tpu: bool, gpu: bool) -> bool | None:
+    """Lists available resources.
+
+    \b
+    Examples:
+      # List all resources (tests, suites, etc.)
+      chs list
+
+    \b
+      # Filter all resources to only show TPU-compatible ones
+      chs list --tpu
+
+    \b
+      # Filter all resources to only show GPU-compatible ones
+      chs list --gpu
+    """
+    ctx.ensure_object(dict)
+    if tpu and gpu:
+        raise click.UsageError("Cannot specify both --tpu and --gpu.")
+
+    ctx.obj["accelerator_type"] = "tpu" if tpu else ("gpu" if gpu else None)
+
     if ctx.invoked_subcommand is None:
-        return list_action()
+        return list_action(accelerator_type=ctx.obj["accelerator_type"])
 
 
 @list_command.command(name="suites")
-def list_suites() -> bool:
+@click.option(
+    "--tpu", is_flag=True, help="Filter list for TPU-related resources."
+)
+@click.option(
+    "--gpu", is_flag=True, help="Filter list for GPU-related resources."
+)
+@click.pass_context
+def list_suites(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     """List available test suites.
 
     Test suites are pre-configured bundles of tests designed for specific
     use-cases, like 'lite' or 'standard'.
     """
-    return list_action(suites=True)
+    if tpu and gpu:
+        raise click.UsageError("Cannot specify both --tpu and --gpu.")
+    accel = (
+        "tpu" if tpu else ("gpu" if gpu else ctx.obj.get("accelerator_type"))
+    )
+    return list_action(suites=True, accelerator_type=accel)
 
 
 @list_command.command(name="tests")
@@ -1011,10 +1063,42 @@ def list_suites() -> bool:
     help="Filter tests by machine type",
     callback=validators.validate_non_empty_string,
 )
-def list_tests(suite: str | None, machine_type: str | None) -> bool:
+@click.option(
+    "--tpu", is_flag=True, help="Filter list for TPU-related resources."
+)
+@click.option(
+    "--gpu", is_flag=True, help="Filter list for GPU-related resources."
+)
+@click.pass_context
+def list_tests(
+    ctx: click.Context,
+    suite: str | None,
+    machine_type: str | None,
+    tpu: bool,
+    gpu: bool,
+) -> bool:
     """List individual hardware and network benchmarks.
 
-    For example: 'nccl-cluster', 'gemm'.
+    \b
+    Examples:
+      # List all available tests
+      chs list tests
+
+    \b
+      # List tests that are part of the 'lite' suite
+      chs list tests --suite=lite
+
+    \b
+      # List all tests that run on TPUs
+      chs list tests --tpu
+
+    \b
+      # List TPU tests inside the 'standard' suite
+      chs list tests --tpu --suite=standard
+
+    \b
+      # Filter tests by a specific machine type
+      chs list tests --machine-type=tpu7x-standard-4t
     """
     if machine_type:
         supported_mts = utils.tests.get_all_supported_machine_types()
@@ -1024,43 +1108,66 @@ def list_tests(suite: str | None, machine_type: str | None) -> bool:
                 f"Supported types are: {', '.join(supported_mts)}"
             )
 
-    return list_action(tests=True, suite=suite, machine_type=machine_type)
+    if tpu and gpu:
+        raise click.UsageError("Cannot specify both --tpu and --gpu.")
+    accel = (
+        "tpu" if tpu else ("gpu" if gpu else ctx.obj.get("accelerator_type"))
+    )
+
+    if machine_type and accel:
+        if accel == "tpu" and not resources.is_tpu(machine_type):
+            raise click.UsageError(
+                f"Machine type '{machine_type}' does not appear to be a TPU. "
+                "Cannot use with --tpu."
+            )
+        if accel == "gpu" and not resources.is_gpu(machine_type):
+            raise click.UsageError(
+                f"Machine type '{machine_type}' does not appear to be a GPU. "
+                "Cannot use with --gpu."
+            )
+
+    return list_action(
+        tests=True,
+        suite=suite,
+        machine_type=machine_type,
+        accelerator_type=accel,
+    )
 
 
 @list_command.command(name="schedulers")
-def list_schedulers() -> bool:
+@click.option(
+    "--tpu", is_flag=True, help="Filter list for TPU-related resources."
+)
+@click.option(
+    "--gpu", is_flag=True, help="Filter list for GPU-related resources."
+)
+@click.pass_context
+def list_schedulers(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     """List available schedulers."""
-    return list_action(schedulers=True)
+    if tpu and gpu:
+        raise click.UsageError("Cannot specify both --tpu and --gpu.")
+    accel = (
+        "tpu" if tpu else ("gpu" if gpu else ctx.obj.get("accelerator_type"))
+    )
+    return list_action(schedulers=True, accelerator_type=accel)
 
 
 @list_command.command(name="machine-types")
-def list_machine_types() -> bool:
+@click.option(
+    "--tpu", is_flag=True, help="Filter list for TPU-related resources."
+)
+@click.option(
+    "--gpu", is_flag=True, help="Filter list for GPU-related resources."
+)
+@click.pass_context
+def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     """List available machine types."""
-    return list_action(machine_types=True)
-
-
-@list_command.group(name="tpu")
-def list_tpu() -> None:
-    """List TPU-related resources."""
-    pass
-
-
-@list_tpu.command(name="tests")
-def list_tpu_tests() -> bool:
-    """List individual TPU tests."""
-    return list_action(tests=True, accelerator_type="tpu")
-
-
-@list_command.group(name="gpu")
-def list_gpu() -> None:
-    """List GPU-related resources."""
-    pass
-
-
-@list_gpu.command(name="tests")
-def list_gpu_tests() -> bool:
-    """List individual GPU tests."""
-    return list_action(tests=True, accelerator_type="gpu")
+    if tpu and gpu:
+        raise click.UsageError("Cannot specify both --tpu and --gpu.")
+    accel = (
+        "tpu" if tpu else ("gpu" if gpu else ctx.obj.get("accelerator_type"))
+    )
+    return list_action(machine_types=True, accelerator_type=accel)
 
 
 def _check_for_foreign_runs(app_data: ChsAppData, scheduler: str) -> None:
@@ -1192,60 +1299,83 @@ def _handle_previous_run(
     return None
 
 
-@cli.command()
+@cli.command(epilog=help_command_text.generate_run_epilog())
+@help_command_text.style_run_docstring
 @handle_chs_exceptions
 @click.option(
     "--suite",
     "-s",
-    help=(
-        "Name of the test suite to run (pre-configured bundles of tests "
-        "designed for specific use-cases, like 'lite' or 'standard')"
-    ),
+    help=help_command_text.get_suite_help(),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--tests",
     "-t",
     multiple=True,
-    help=(
-        "Comma-separated list of individual hardware and network "
-        "benchmarks (e.g., 'nccl-cluster', 'gemm')"
-    ),
+    help=help_command_text.get_tests_help(),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodes",
     multiple=True,
-    help="Comma-separated list of individual nodes to run on",
+    help=(
+        "Comma-separated list of individual nodes to run the tests on (e.g., "
+        "node-1,node-2).\n\n"
+        f"{click.style('Note:', fg='yellow', bold=True)} Individual nodes are "
+        "NOT supported for TPUs. Please use --nodepools instead."
+        "\n\n "
+    ),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodelists",
     multiple=True,
-    help="Slurm nodelists to run on (e.g., node-[1-3],node-[4-5])",
+    help=(
+        "Slurm nodelist pattern representing the nodes to target (e.g., "
+        "node-[1-3],node-[4-5]).\n\n"
+        "Only valid when running CHS against a Slurm scheduler environment."
+        "\n\n "
+    ),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodepools",
     multiple=True,
-    help="Kubernetes node pools to run on",
+    help=(
+        "Comma-separated list of Kubernetes node pools to target.\n\n"
+        "This is the recommended and required way to target TPU resources."
+        "\n\n "
+    ),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--partitions",
     multiple=True,
-    help="Slurm partitions to run on",
+    help=(
+        "Comma-separated list of Slurm partitions to run the tests on.\n\n"
+        "The system will resolve all active nodes under these partitions."
+        "\n\n "
+    ),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--auto-approve",
     "-y",
     is_flag=True,
-    help="Automatically confirm execution preview without prompting.",
+    help=(
+        "Automatically confirm the execution preview phase without prompting "
+        "the user. Useful for automated scripts and CI environments."
+        "\n\n "
+    ),
 )
 @click.option(
     "--run-id",
-    help="Custom run ID for this execution.",
+    help=(
+        "Custom run ID for this CHS execution. If omitted, a unique identifier "
+        "based on the cluster name and suite (e.g., cluster-name-lite-hash) "
+        "will be automatically generated."
+        "\n\n "
+    ),
     callback=validators.validate_run_id,
 )
 @click.pass_obj
@@ -1261,18 +1391,35 @@ def run(
     auto_approve: bool = False,
     run_id: str | None = None,
 ) -> RunExecutionResult:
-    """Command to run a test suite.
+    """Run tests or a suite on the specified cluster hardware.
 
-    Args:
-      suite: Name of the test suite to run.
-      tests: Comma-separated list of specific tests to run (optional).
-      nodes: Comma-separated list of individual nodes to run on.
-      nodelists: Slurm node list pattern to run on (e.g., node-[1-3]).
-      nodepools: Kubernetes node pools to run on.
-      partitions: Slurm partitions to run on.
+    Submits a set of diagnostic or benchmark tests (or a predefined suite)
+    to run across your selected Kubernetes or Slurm nodes. It creates
+    isolated workspaces, executes the jobs, and generates a unified
+    Bill of Health.
 
-    Returns:
-      A RunExecutionResult object containing details of the run.
+    Note: We only support targeting resources of a single machine type. Mixed
+    hardware targets within a single run are not currently supported.
+
+    \b
+    Tests vs Suite:
+      - --tests: Run a custom list of individual benchmarks (e.g., tpu-info,
+        tpu-collectives)
+      - --suite: Run a pre-packaged bundle of tests. Defaults to the 'lite'
+        suite if neither flag is provided.
+
+    \b
+    Examples:
+      # Run the default 'lite' suite on specific Kubernetes TPU nodepools
+      chs run --nodepools=tpu-pool-1,tpu-pool-2
+
+    \b
+      # Run specific TPU diagnostics on targeted nodepools
+      chs run --tests=hbm,tpu-collectives --nodepools=tpu-pool-1
+
+    \b
+      # Run full standard validation suite across TPU nodepools
+      chs run --suite=standard --nodepools=tpu-pool-1
     """
     app_data = obj["app_data"]
 

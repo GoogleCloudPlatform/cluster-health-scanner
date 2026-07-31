@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import logging
 from typing import Any
 
+from chs import resources
 from chs.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
@@ -38,12 +39,25 @@ def get_all_supported_tests_details() -> list[dict[str, Any]]:
     return data.get("tests", [])
 
 
-def get_all_supported_machine_types() -> list[str]:
+def get_all_supported_machine_types(
+    accelerator_type: str | None = None,
+) -> list[str]:
     """Derives list of all supported machine types from tests.yaml."""
     tests_map = get_tests_map()
     machine_types = set()
     for scheduler in tests_map.data:
         machine_types.update(tests_map.data[scheduler].keys())
+
+    if accelerator_type:
+        accel_lower = accelerator_type.lower()
+        filtered_machine_types = set()
+        for mt in machine_types:
+            if accel_lower == "tpu" and resources.is_tpu(mt):
+                filtered_machine_types.add(mt)
+            elif accel_lower == "gpu" and resources.is_gpu(mt):
+                filtered_machine_types.add(mt)
+        machine_types = filtered_machine_types
+
     return sorted(list(machine_types))
 
 
@@ -115,10 +129,9 @@ def get_tests_by_accelerator_type(accelerator_type: str) -> list[str]:
     accel_lower = accelerator_type.lower()
     for scheduler in tests_map.data:
         for machine_type, machine_tests in tests_map.data[scheduler].items():
-            mt_lower = machine_type.lower()
-            if accel_lower == "tpu" and ("tpu" in mt_lower or "ct" in mt_lower):
+            if accel_lower == "tpu" and resources.is_tpu(machine_type):
                 tests.update(machine_tests)
-            elif accel_lower == "gpu" and "gpu" in mt_lower:
+            elif accel_lower == "gpu" and resources.is_gpu(machine_type):
                 tests.update(machine_tests)
     return sorted(list(tests))
 

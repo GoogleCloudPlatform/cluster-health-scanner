@@ -313,7 +313,7 @@ class TestCli(unittest.TestCase):
             _ListCommandTestCase(
                 name="suites",
                 args_list=["list", "suites"],
-                expected_kwargs={"suites": True},
+                expected_kwargs={"suites": True, "accelerator_type": None},
             ),
             _ListCommandTestCase(
                 name="tests",
@@ -322,22 +322,46 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": None,
                     "machine_type": None,
+                    "accelerator_type": None,
                 },
             ),
             _ListCommandTestCase(
                 name="schedulers",
                 args_list=["list", "schedulers"],
-                expected_kwargs={"schedulers": True},
+                expected_kwargs={"schedulers": True, "accelerator_type": None},
             ),
             _ListCommandTestCase(
                 name="machine_types",
                 args_list=["list", "machine-types"],
-                expected_kwargs={"machine_types": True},
+                expected_kwargs={
+                    "machine_types": True,
+                    "accelerator_type": None,
+                },
+            ),
+            _ListCommandTestCase(
+                name="tpu_suites",
+                args_list=["list", "suites", "--tpu"],
+                expected_kwargs={"suites": True, "accelerator_type": "tpu"},
+            ),
+            _ListCommandTestCase(
+                name="gpu_tests",
+                args_list=["list", "tests", "--gpu"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": None,
+                    "machine_type": None,
+                    "accelerator_type": "gpu",
+                },
+            ),
+            _ListCommandTestCase(
+                name="all_tpu",
+                args_list=["list", "--tpu"],
+                expected_kwargs={"accelerator_type": "tpu"},
             ),
             _ListCommandTestCase(
                 name="all",
                 args_list=["list"],
-                expected_kwargs={},
+                expected_kwargs={"accelerator_type": None},
             ),
             _ListCommandTestCase(
                 name="suite",
@@ -346,6 +370,7 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": "suite1",
                     "machine_type": None,
+                    "accelerator_type": None,
                 },
             ),
             _ListCommandTestCase(
@@ -355,6 +380,7 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": "suite1,",
                     "machine_type": None,
+                    "accelerator_type": None,
                 },
             ),
             _ListCommandTestCase(
@@ -364,6 +390,7 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": ",suite1",
                     "machine_type": None,
+                    "accelerator_type": None,
                 },
             ),
             _ListCommandTestCase(
@@ -373,6 +400,7 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": "suite1,,suite2",
                     "machine_type": None,
+                    "accelerator_type": None,
                 },
             ),
             _ListCommandTestCase(
@@ -387,6 +415,7 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": "suite1, suite2 ,suite3",
                     "machine_type": None,
+                    "accelerator_type": None,
                 },
             ),
             _ListCommandTestCase(
@@ -401,6 +430,7 @@ class TestCli(unittest.TestCase):
                     "tests": True,
                     "suite": None,
                     "machine_type": "a3-ultragpu-8g",
+                    "accelerator_type": None,
                 },
             ),
         ]

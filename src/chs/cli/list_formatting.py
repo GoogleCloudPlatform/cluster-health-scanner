@@ -17,26 +17,55 @@ from typing import Any
 
 from rich.console import Group
 from rich.text import Text
+from rich.padding import Padding
 
 from chs import utils
 from chs.utils import theme
 from chs.utils.suites import load_suite
 
 
-def get_suites_renderable() -> Any:
+def get_suites_renderable(accelerator_type: str | None = None) -> Any:
     """Returns renderable for available suites."""
     suites_list = utils.suites.get_all_suites_details()
     if suites_list:
         table = theme.create_styled_table(
-            "Name", "Est. Time", "Description", expand=False
+            "Name", "Est. Time", "Description", "Tests", expand=False
         )
+
+        supported_tests = None
+        if accelerator_type:
+            supported_tests = utils.tests.get_tests_by_accelerator_type(
+                accelerator_type
+            )
+
+        has_suites = False
         for s in suites_list:
             name = s.get("name", "")
             est_time = s.get("est_time", "N/A")
             desc = s.get("description", "")
-            table.add_row(name, est_time, desc)
+            tests_val = s.get("tests", [])
+            test_names = [
+                t.get("name") if isinstance(t, dict) else t for t in tests_val
+            ]
 
-        return Group(Text("Available Test Suites:", style="bold cyan"), table)
+            if supported_tests is not None:
+                test_names = [t for t in test_names if t in supported_tests]
+
+            if not test_names and supported_tests is not None:
+                continue
+
+            has_suites = True
+            tests_str = ", ".join(test_names)
+            table.add_row(name, est_time, desc, tests_str)
+
+        if not has_suites:
+            if accelerator_type:
+                return (
+                    f"No suites found matching accelerator: {accelerator_type}."
+                )
+            return "No suites found."
+
+        return Group(Text("Supported Test Suites:", style="bold cyan"), table)
     return "No suites found."
 
 
@@ -77,12 +106,12 @@ def get_tests_renderables(
         if suite:
             renderables.append(
                 Text(
-                    f"Available Tests for suite '{suite}':",
+                    f"Supported Tests for suite '{suite}':",
                     style="bold cyan",
                 )
             )
         else:
-            renderables.append(Text("Available Tests:", style="bold cyan"))
+            renderables.append(Text("Supported Tests:", style="bold cyan"))
 
         if tests_flag:
             hints = []
@@ -122,7 +151,7 @@ def get_tests_renderables(
             grouped[cat].append(t)
 
         for cat in sorted(grouped.keys()):
-            renderables.append(Text(f"\n{cat}", style="bold"))
+            renderables.append(Text(f"\n  {cat}", style="italic"))
             table = theme.create_styled_table(
                 "Name", "Description", expand=False
             )
@@ -130,7 +159,7 @@ def get_tests_renderables(
                 name = t.get("name", "")
                 desc = t.get("description", "")
                 table.add_row(name, desc)
-            renderables.append(table)
+            renderables.append(Padding(table, (0, 0, 0, 2)))
 
         return renderables
     return ["No tests found."]
@@ -147,9 +176,11 @@ def get_schedulers_renderable() -> Any:
     return "No schedulers found."
 
 
-def get_machine_types_renderable() -> Any:
+def get_machine_types_renderable(accelerator_type: str | None = None) -> Any:
     """Returns renderable for available machine types."""
-    machine_types_list = utils.tests.get_all_supported_machine_types()
+    machine_types_list = utils.tests.get_all_supported_machine_types(
+        accelerator_type
+    )
     if machine_types_list:
         table = theme.create_styled_table("Name", expand=False)
         for m in machine_types_list:
