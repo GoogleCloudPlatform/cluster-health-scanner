@@ -1126,6 +1126,7 @@ class RambleManager:
         except Exception as e:
             logger.debug("Failed to archive Bill of Health JSON: %s", e)
             upload_success = False
+            boh_json_dest = None
 
         if os.path.exists(html_path):
             try:
@@ -1138,6 +1139,7 @@ class RambleManager:
             except Exception as e:
                 logger.debug("Failed to archive Bill of Health HTML: %s", e)
                 upload_success = False
+                boh_html_dest = None
 
         if upload_success:
             logger.debug("Bill of Health uploaded successfully.")
