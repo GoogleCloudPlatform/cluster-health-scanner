@@ -138,6 +138,8 @@ class TestRambleManager(unittest.TestCase):
 
         expected_cmd = [
             "bash",
+            "-eo",
+            "pipefail",
             "-c",
             f'export RAMBLE_PYTHON="{sys.executable}" && '
             f'source {expected_script_path} && exec "$@"',
@@ -185,7 +187,7 @@ class TestRambleManager(unittest.TestCase):
         self.assertIn("ramble", cmd)
         self.assertIn("workspace", cmd)
         self.assertIn("setup", cmd)
-        self.assertIn(f"source {expected_script_path}", cmd[2])
+        self.assertIn(f"source {expected_script_path}", cmd[4])
         # Verify env contains TQDM_DISABLE
         self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
         _, kwargs = self.mock_run.call_args
@@ -243,7 +245,14 @@ class TestRambleManager(unittest.TestCase):
         args, kwargs = self.mock_run.call_args
         cmd = args[0]
         self.assertEqual(
-            cmd, ["bash", os.path.join(manager.path, "all_experiments")]
+            cmd,
+            [
+                "bash",
+                "-eo",
+                "pipefail",
+                "-c",
+                os.path.join(manager.path, "all_experiments"),
+            ],
         )
         self.assertIsNone(kwargs.get("env"))
 

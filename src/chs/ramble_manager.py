@@ -143,7 +143,7 @@ class RambleManager:
             "Sourcing %s before running command.",
             self._ramble_setup_script,
         )
-        return ["bash", "-c", command_str, "bash"] + cmd
+        return ["bash", "-eo", "pipefail", "-c", command_str, "bash"] + cmd
 
     def _execute_shell_command(
         self,
@@ -205,21 +205,26 @@ class RambleManager:
 
                 if check and completed_process.returncode != 0:
                     msg = (
-                        f"Command failed with exit code "
-                        f"{completed_process.returncode}. "
-                        f"See {log_file_path} for details."
+                        "Command failed with exit code "
+                        f"{completed_process.returncode}."
                     )
+
+                    if completed_process.stderr:
+                        msg += f"\n{completed_process.stderr.strip()}"
+                    elif completed_process.stdout:
+                        msg += f"\n{completed_process.stdout.strip()}"
+
                     if error_context:
                         msg = f"{error_context}. {msg}"
                     raise ex.ChsException(msg)
 
                 return completed_process
 
+        except ex.ChsException:
+            raise
+
         except Exception as e:
-            msg = (
-                f"Failed to execute command: {e}. "
-                f"See {log_file_path} for details."
-            )
+            msg = f"Failed to execute command: {e}."
             if error_context:
                 msg = f"{error_context}: {msg}"
             raise ex.ChsException(msg)
@@ -399,9 +404,9 @@ class RambleManager:
         if not active_tests:
             logger.debug("Running experiments via all_experiments script...")
             self._execute_shell_command(
-                cmd=["bash", cmd_script],
+                cmd=["bash", "-eo", "pipefail", "-c", cmd_script],
                 capture_output=True,
-                error_context="Failed to execute all_experiments script",
+                error_context="Failed to submit diagnostic jobsets",
             )
         else:
             logger.debug(
@@ -412,8 +417,11 @@ class RambleManager:
             self._execute_shell_command(
                 cmd=[
                     "bash",
+                    "-eo",
+                    "pipefail",
                     "-c",
-                    f"grep -E '{test_pattern}' {cmd_script} | bash",
+                    f"grep -E '{test_pattern}' {cmd_script} | "
+                    "bash -eo pipefail",
                 ],
                 capture_output=True,
                 error_context="Failed to execute selected experiments",

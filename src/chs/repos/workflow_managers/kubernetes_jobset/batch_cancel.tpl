@@ -1,4 +1,5 @@
 #!/bin/bash
+set -eo pipefail
 if [ "{application_name}" = "chs" ]; then
     exit 0
 fi
