@@ -44,7 +44,8 @@ sys.modules["spack"] = MagicMock()
 sys.modules["spack.util.spack_yaml"] = MagicMock()
 
 from chs.repos.applications.chs.test_helper import TestHelper as _TestHelper  # noqa: E402
-from chs.repos.applications.chs.application import Chs, is_tpu  # noqa: E402
+from chs.repos.applications.chs.application import Chs  # noqa: E402
+from chs.resources import is_tpu  # noqa: E402
 
 
 @dataclasses.dataclass

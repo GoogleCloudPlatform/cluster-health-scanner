@@ -134,11 +134,3 @@ def get_tests_by_accelerator_type(accelerator_type: str) -> list[str]:
             elif accel_lower == "gpu" and resources.is_gpu(machine_type):
                 tests.update(machine_tests)
     return sorted(list(tests))
-
-
-def get_plugin_to_test_map() -> dict[str, str]:
-    """Derives mapping from registered plugin name to suite test name."""
-    return {
-        test.get("plugin_name", test["name"]): test["name"]
-        for test in _load_tests().get("tests", [])
-    }

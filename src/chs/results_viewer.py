@@ -27,7 +27,6 @@ from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
 from chs.plugins.utils import rendering
 from chs.utils import lifecycle
-from chs.utils.tests import get_plugin_to_test_map  # noqa: F401
 from chs.core.summary_aggregator import (
     RunSummaryData,
     aggregate_boh_summary,

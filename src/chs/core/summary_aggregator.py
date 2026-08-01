@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs.utils.app_data import ChsAppData
-from chs.utils.tests import get_plugin_to_test_map
 from chs.plugins.utils.validation_analyzer import parse_threshold
 
 
@@ -71,21 +70,13 @@ def filter_test_results(
     tests: list[str] | None = None,
     resources: list[str] | None = None,
 ) -> list[pb.TestResult]:
-    import sys
-
-    rv = sys.modules.get("chs.results_viewer")
-    if rv and hasattr(rv, "get_plugin_to_test_map"):
-        plugin_map = rv.get_plugin_to_test_map()
-    else:
-        plugin_map = get_plugin_to_test_map()
     filtered_results = []
     for result in boh.test_results:
         match_tests = True
         match_resources = True
 
         if tests:
-            base_name = plugin_map.get(result.test_name, result.test_name)
-            match_tests = any(t in (result.test_name, base_name) for t in tests)
+            match_tests = result.test_name in tests
         if resources:
             match_resources = False
             for target in result.target_resources:

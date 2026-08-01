@@ -22,10 +22,12 @@ suites:
   - name: dcgm
     variables:
       diag_level: [2]
-  - name: gemm
+  - name: tpu-gemm
     workloads: [check]
     variables:
       timeout: 180
+  - name: gemm
+    workloads: [check]
   - name: nccl-single-node
     workloads: [all-gather, all-reduce]
     variables:
@@ -34,7 +36,7 @@ suites:
   - name: tpu-info
     variables:
       timeout: 120
-  - name: hbm
+  - name: tpu-hbm
     variables:
       timeout: 300
   - name: tpu-collectives
@@ -67,13 +69,14 @@ suites:
   - name: tpu-info
     variables:
       timeout: 120
-  - name: hbm
+  - name: tpu-hbm
     variables:
       timeout: 300
-  - name: gemm
+  - name: tpu-gemm
     variables:
       timeout: 180
-  - name: host-device
+  - name: gemm
+  - name: tpu-host-device
     variables:
       timeout: 600
   - name: tpu-collectives

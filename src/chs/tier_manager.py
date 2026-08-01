@@ -101,7 +101,7 @@ class TierManager:
         The current implementation acts as a pure OR gate. A test will trigger
         if *any* of the conditions specified in the trigger_condition are met.
         For example, if trigger_condition is:
-        {"DEGRADED": ["gemm"], "ERROR": ["hbm"]},
+        {"DEGRADED": ["tpu-gemm"], "ERROR": ["tpu-hbm"]},
         the test will run if gemm is DEGRADED OR hbm is ERROR.
         This design currently suits a "fail-fast" use case. To implement AND
         conditions (e.g., run only if both A and B fail), this logic would

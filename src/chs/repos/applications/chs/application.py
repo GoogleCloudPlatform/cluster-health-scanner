@@ -29,7 +29,6 @@ sys.path.append(config_dir)
 
 from test_helper import TestHelper
 from ramble.appkit import *
-from chs.resources import is_tpu
 
 logger = logging.getLogger(__name__)
 
@@ -305,13 +304,7 @@ class Chs(ExecutableApplication):
                     application_name, "local", context
                 )
             elif test.name == "gemm":
-                machine_type = self.expander.expand_var_name(
-                    "machine_type", typed=True
-                )
-                is_tpu_machine = is_tpu(machine_type)
-                application_name = (
-                    "tpu-gemm" if is_tpu_machine else "nvidia-gemm"
-                )
+                application_name = "nvidia-gemm"
                 workloads = test.workloads if test.workloads else ["check"]
 
                 for workload in workloads:
@@ -320,24 +313,34 @@ class Chs(ExecutableApplication):
                     )
                     local_vars = deepcopy(test_vars)
                     local_vars["job_name"] = experiment_name
-                    if is_tpu_machine:
-                        contexts = TestHelper.tpu_gemm_test(
-                            local_vars, experiment_name, deepcopy(configs)
-                        )
-                        for context in contexts:
-                            self.experiment_set.render_chained_experiments(
-                                application_name,
-                                workload,
-                                context,
-                            )
-                    else:
-                        context = TestHelper.gemm_test(
-                            local_vars, experiment_name, deepcopy(configs)
-                        )
+
+                    context = TestHelper.gemm_test(
+                        local_vars, experiment_name, deepcopy(configs)
+                    )
+                    self.experiment_set.render_chained_experiments(
+                        application_name, workload, context
+                    )
+            elif test.name == "tpu-gemm":
+                application_name = "tpu-gemm"
+                workloads = test.workloads if test.workloads else ["check"]
+
+                for workload in workloads:
+                    experiment_name = (
+                        f"{base_prefix}-{application_name}-{workload}"
+                    )
+                    local_vars = deepcopy(test_vars)
+                    local_vars["job_name"] = experiment_name
+
+                    contexts = TestHelper.tpu_gemm_test(
+                        local_vars, experiment_name, deepcopy(configs)
+                    )
+                    for context in contexts:
                         self.experiment_set.render_chained_experiments(
-                            application_name, workload, context
+                            application_name,
+                            workload,
+                            context,
                         )
-            elif test.name == "hbm":
+            elif test.name == "tpu-hbm":
                 application_name = "tpu-hbm"
                 experiment_name = f"{base_prefix}-{application_name}"
 
@@ -351,7 +354,7 @@ class Chs(ExecutableApplication):
                     self.experiment_set.render_chained_experiments(
                         application_name, "check", context
                     )
-            elif test.name == "host-device":
+            elif test.name == "tpu-host-device":
                 application_name = "tpu-host-device"
                 experiment_name = f"{base_prefix}-{application_name}"
 
