@@ -511,8 +511,11 @@ class TestCli(unittest.TestCase):
                 *args,
                 **kwargs: tests
             )
+            mock_manager.attach_mock(s, "scheduler")
             return s
 
+        mock_manager = mock.Mock()
+        mock_manager.attach_mock(self.mock_rm_instance, "rm")
         mock_get_scheduler.side_effect = get_scheduler_side_effect
 
         test_cases = [
@@ -716,6 +719,20 @@ class TestCli(unittest.TestCase):
                 )
                 self.mock_rm_instance.create_workspace.assert_called_once()
                 self.mock_rm_instance.configure_workspace.assert_called_once()
+
+                apply_idx = mock_manager.mock_calls.index(
+                    mock.call.scheduler.apply_scheduler_resources()
+                )
+                create_idx = mock_manager.mock_calls.index(
+                    mock.call.rm.create_workspace()
+                )
+                config_idx = -1
+                for i, c in enumerate(mock_manager.mock_calls):
+                    if c[0] == "rm.configure_workspace":
+                        config_idx = i
+                        break
+                self.assertLess(apply_idx, create_idx)
+                self.assertLess(create_idx, config_idx)
                 args, kwargs = (
                     self.mock_rm_instance.configure_workspace.call_args
                 )
@@ -730,6 +747,7 @@ class TestCli(unittest.TestCase):
                     self.mock_app_data,
                     f"mockcluster-{case.expected_return.suite}-mockhash",
                 )
+                mock_manager.reset_mock()
 
     @mock.patch("chs.cli._analyze_action")
     def test_run_command_active_tier_tests_filtered_by_supported_tests(

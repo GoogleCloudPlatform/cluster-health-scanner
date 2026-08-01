@@ -4,6 +4,7 @@ metadata:
   name: {slice_name}
   labels:
     created-by: chs
+    chs-nodepool: {pool_name}
 spec:
   type: {tpu_type}
   topology: {shape}

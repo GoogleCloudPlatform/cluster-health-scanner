@@ -1035,7 +1035,8 @@ ramble:
                         "-l",
                         "created-by=chs",
                         "--ignore-not-found",
-                    ]
+                    ],
+                    timeout=300,
                 ),
             ]
         )
@@ -1091,11 +1092,14 @@ ramble:
     ):
         scheduler = KubernetesScheduler()
         mock_kubectl.return_value = (
-            '{"items": [{"status": {"conditions": '
+            '{"items": [{"metadata": {"labels": {"chs-nodepool": "mypool"}}, '
+            '"status": {"conditions": '
             '[{"type": "Ready", "reason": "ACTIVE"}]}}]}'
         )
-        scheduler._wait_for_slices_active()
+        success, failed = scheduler._wait_for_slices_active(["mypool"])
         mock_kubectl.assert_called_once()
+        self.assertEqual(success, ["mypool"])
+        self.assertEqual(failed, [])
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     @mock.patch("time.time", side_effect=[0, 1])
@@ -1104,11 +1108,178 @@ ramble:
     ):
         scheduler = KubernetesScheduler()
         mock_kubectl.return_value = (
-            '{"items": [{"status": {"conditions": '
+            '{"items": [{"metadata": {"labels": {"chs-nodepool": "mypool"}}, '
+            '"status": {"conditions": '
             '[{"type": "Ready", "reason": "FAILED"}]}}]}'
         )
+        success, failed = scheduler._wait_for_slices_active(["mypool"])
+        mock_kubectl.assert_called_once()
+        self.assertEqual(success, [])
+        self.assertEqual(failed, ["mypool"])
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("time.time", side_effect=[0, 10, 310])
+    def test_wait_for_slices_active_timeout(
+        self, mock_time, mock_kubectl, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        mock_kubectl.return_value = (
+            '{"items": [{"metadata": {"labels": {"chs-nodepool": "mypool"}}, '
+            '"status": {"conditions": '
+            '[{"type": "Ready", "reason": "CREATING"}]}}]}'
+        )
+        success, failed = scheduler._wait_for_slices_active(
+            ["mypool"], timeout_sec=300
+        )
+        self.assertEqual(success, [])
+        self.assertEqual(failed, ["mypool"])
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._ensure_namespace_exists"
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._provision_dynamic_slices"
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
+        return_value=["node1"],
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
+        return_value={"mypool": ["node1"]},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._cleanup_dynamic_slices"
+    )
+    def test_apply_scheduler_resources_failed_nodepools(
+        self,
+        mock_cleanup,
+        mock_group,
+        mock_get_nodes,
+        mock_provision,
+        mock_ensure_ns,
+        mock_logger,
+    ):
+        scheduler = KubernetesScheduler()
+        scheduler.kueue_supported = False
+        scheduler._resolved_nodes = ["node1"]
+        from chs.schedulers.kubernetes import TpuSliceData
+
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools={"mypool": ["node1"]},
+            node_to_pool={"node1": "mypool"},
+            pool_to_topology={"mypool": "2x2"},
+            dynamic_slice_partitions={"mypool": "mypool-partition"},
+            pool_to_accelerator={"mypool": "tpu-v4-podslice"},
+        )
+        mock_provision.return_value = ([], ["mypool"])
         with self.assertRaises(ChsSchedulerException):
-            scheduler._wait_for_slices_active()
+            scheduler.apply_scheduler_resources()
+
+        self.assertEqual(scheduler._resolved_nodes, [])
+        self.assertNotIn("mypool", scheduler._tpu_slice_data.pools)
+        self.assertNotIn("mypool", scheduler._tpu_slice_data.pool_to_topology)
+        self.assertNotIn("node1", scheduler._tpu_slice_data.node_to_pool)
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_already_fulfilled_partitions_success(
+        self, mock_kubectl, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        mock_kubectl.return_value = json.dumps(
+            {
+                "items": [
+                    {
+                        "metadata": {"name": "slice1"},
+                        "spec": {"partitionIds": ["part-1"]},
+                    },
+                    {
+                        "metadata": {
+                            "name": "slice2",
+                            "deletionTimestamp": "2023-10-01T00:00:00Z",
+                        },
+                        "spec": {"partitionIds": ["part-2"]},
+                    },
+                    {
+                        "metadata": {"name": "slice3"},
+                        "spec": {"partitionIds": ["part-3", "part-4"]},
+                    },
+                ]
+            }
+        )
+        fulfilled = scheduler._get_already_fulfilled_partitions()
+        self.assertCountEqual(fulfilled, ["part-1", "part-3", "part-4"])
+        mock_kubectl.assert_called_once_with(
+            ["get", "slice", "-A", "-o", "json", "--ignore-not-found"]
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_already_fulfilled_partitions_error(
+        self, mock_kubectl, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        mock_kubectl.side_effect = subprocess.SubprocessError("error")
+        fulfilled = scheduler._get_already_fulfilled_partitions()
+        self.assertEqual(fulfilled, set())
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions"
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_provision_dynamic_slices_all_fulfilled(
+        self, mock_kubectl, mock_wait, mock_get_fulfilled, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        target_pools = {"pool1": ["node1"]}
+        from chs.schedulers.kubernetes import TpuSliceData
+
+        scheduler.workspace_config_dir = "/tmp"
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools=target_pools,
+            node_to_pool={"node1": "pool1"},
+            pool_to_topology={"pool1": "2x2"},
+            dynamic_slice_partitions={"pool1": "part1"},
+            pool_to_accelerator={"pool1": "tpu-v4-podslice"},
+        )
+        mock_get_fulfilled.return_value = {"part1"}
+        success, failed = scheduler._provision_dynamic_slices(target_pools)
+        self.assertEqual(success, ["pool1"])
+        self.assertEqual(failed, [])
+        mock_kubectl.assert_not_called()
+        mock_wait.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions"
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_provision_dynamic_slices_none_fulfilled(
+        self, mock_kubectl, mock_wait, mock_get_fulfilled, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        target_pools = {"pool1": ["node1"]}
+        from chs.schedulers.kubernetes import TpuSliceData
+
+        scheduler.workspace_config_dir = self.tmp_dir
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools=target_pools,
+            node_to_pool={"node1": "pool1"},
+            pool_to_topology={"pool1": "2x2"},
+            dynamic_slice_partitions={"pool1": "part1"},
+            pool_to_accelerator={"pool1": "tpu-v4-podslice"},
+        )
+        mock_get_fulfilled.return_value = set()
+        mock_wait.return_value = (["pool1"], [])
+        success, failed = scheduler._provision_dynamic_slices(target_pools)
+        self.assertEqual(success, ["pool1"])
+        self.assertEqual(failed, [])
+        mock_kubectl.assert_called_once()
+        mock_wait.assert_called_once_with(["pool1"], 300)
 
 
 class TestSchedulerDetection(unittest.TestCase):

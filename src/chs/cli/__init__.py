@@ -557,6 +557,7 @@ def run_action(
                         machine_type=machine_type,
                         workspace_name=workspace_name,
                     )
+                    scheduler_obj.apply_scheduler_resources()
 
                 ramble_manager.create_workspace()
 
@@ -568,8 +569,6 @@ def run_action(
                     deadline=deadline,
                 )
                 ramble_manager.setup_workspace()
-
-                scheduler_obj.apply_scheduler_resources()
 
                 job_ids = ramble_manager.execute_experiments(
                     tier=1, active_tests=active_tests

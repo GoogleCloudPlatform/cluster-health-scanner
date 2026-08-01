@@ -1099,14 +1099,25 @@ class KubernetesScheduler(BaseScheduler):
                     "-l",
                     "created-by=chs",
                     "--ignore-not-found",
-                ]
+                ],
+                timeout=300,
             )
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             logger.warning("Failed to delete dynamic slices: %s", e)
 
-    def _wait_for_slices_active(self, timeout_sec: int = 300) -> None:
-        """Waits for dynamically provisioned slices to become ACTIVE."""
+    def _wait_for_slices_active(
+        self, expected_nodepools: list[str], timeout_sec: int = 300
+    ) -> tuple[list[str], list[str]]:
+        """Waits for dynamically provisioned slices to reach terminal states."""
         start_time = time.time()
+        slice_terminal_statuses = {}
+        failed_reasons = {
+            "FAILED",
+            "SliceCreationFailed",
+            "ACTIVE_DEGRADED",
+            "INCOMPLETE",
+        }
+
         while time.time() - start_time < timeout_sec:
             try:
                 output = self._run_kubectl(
@@ -1129,8 +1140,15 @@ class KubernetesScheduler(BaseScheduler):
                     time.sleep(10)
                     continue
 
-                statuses = []
                 for slice_item in items:
+                    nodepool = (
+                        slice_item.get("metadata", {})
+                        .get("labels", {})
+                        .get("chs-nodepool")
+                    )
+                    if not nodepool:
+                        continue
+
                     conditions = (
                         slice_item.get("status", {}).get("conditions", [])
                         if slice_item.get("status")
@@ -1140,50 +1158,67 @@ class KubernetesScheduler(BaseScheduler):
                         (c for c in conditions if c.get("type") == "Ready"),
                         {},
                     )
-                    statuses.append(ready_cond.get("reason"))
+                    reason = ready_cond.get("reason")
 
-                if statuses and all(s == "ACTIVE" for s in statuses):
-                    return
+                    if reason == "ACTIVE" or reason in failed_reasons:
+                        slice_terminal_statuses[nodepool] = reason
 
-                failed_reasons = {
-                    "FAILED",
-                    "SliceCreationFailed",
-                    "ACTIVE_DEGRADED",
-                    "INCOMPLETE",
-                }
-                found_failure = next(
-                    (s for s in statuses if s in failed_reasons), None
-                )
-                if found_failure:
-                    logger.error(
-                        "Slice provisioning failed with status: %s",
-                        found_failure,
-                    )
-                    raise ChsSchedulerException(
-                        f"Slice provisioning failed, status: {found_failure}"
-                    )
+                if len(slice_terminal_statuses) >= len(expected_nodepools):
+                    break
+
             except (
-                subprocess.CalledProcessError,
+                subprocess.SubprocessError,
                 json.JSONDecodeError,
             ) as e:
                 logger.debug("Failed to check status for dynamic slices: %s", e)
                 pass
             time.sleep(10)
 
-        raise ChsSchedulerException(
-            "Timed out waiting for dynamic slices to become ACTIVE."
-        )
+        success_nodepools = [
+            pool
+            for pool, status in slice_terminal_statuses.items()
+            if status == "ACTIVE"
+        ]
+        failed_nodepools = [
+            pool for pool in expected_nodepools if pool not in success_nodepools
+        ]
+        return success_nodepools, failed_nodepools
+
+    def _get_already_fulfilled_partitions(self) -> set[str]:
+        """Returns partition IDs of all currently existing slices to prevent
+        conflicts.
+        """
+        fulfilled = set()
+        try:
+            output = self._run_kubectl(
+                ["get", "slice", "-A", "-o", "json", "--ignore-not-found"]
+            )
+            if output:
+                slices = json.loads(output).get("items", [])
+                for s in slices:
+                    if s.get("metadata", {}).get("deletionTimestamp"):
+                        continue
+                    partition_ids = s.get("spec", {}).get("partitionIds", [])
+                    for pid in partition_ids:
+                        fulfilled.add(pid)
+        except subprocess.SubprocessError as e:
+            logger.debug("Could not retrieve existing slices: %s", e)
+        return fulfilled
 
     def _provision_dynamic_slices(
         self, target_pools: dict[str, list[str]]
-    ) -> None:
+    ) -> tuple[list[str], list[str]]:
         """Provisions and waits for dynamic TPU slices."""
         if not (
             self._tpu_slice_data
             and self._tpu_slice_data.dynamic_slice_partitions
             and self.workspace_config_dir
         ):
-            return
+            return [], []
+
+        fulfilled_partitions = self._get_already_fulfilled_partitions()
+        pools_to_provision = []
+        already_fulfilled_pools = []
 
         slice_yaml_path = os.path.join(
             self.workspace_config_dir, "chs-slices.yaml"
@@ -1205,6 +1240,12 @@ class KubernetesScheduler(BaseScheduler):
         ) in self._tpu_slice_data.dynamic_slice_partitions.items():
             if pool_name not in target_pools:
                 continue
+
+            if partition_id in fulfilled_partitions:
+                already_fulfilled_pools.append(pool_name)
+                continue
+
+            pools_to_provision.append(pool_name)
             tpu_type = self._tpu_slice_data.pool_to_accelerator.get(
                 pool_name, ""
             )
@@ -1213,6 +1254,7 @@ class KubernetesScheduler(BaseScheduler):
             slice_name = f"chs-slice-{pool_name}"[:63].rstrip("-.")
             rendered = template_str.format(
                 slice_name=slice_name,
+                pool_name=pool_name,
                 tpu_type=tpu_type,
                 shape=shape,
                 partition_id=partition_id,
@@ -1225,9 +1267,19 @@ class KubernetesScheduler(BaseScheduler):
             with open(slice_yaml_path, "w") as f:
                 f.write(all_slices_yaml)
 
-            self._run_kubectl(["apply", "-f", slice_yaml_path])
+            try:
+                self._run_kubectl(["apply", "-f", slice_yaml_path])
+            except subprocess.SubprocessError as e:
+                raise ChsSchedulerException(
+                    f"Failed to apply dynamic slice configuration: {e}"
+                ) from e
 
-            self._wait_for_slices_active(300)
+            success, failed = self._wait_for_slices_active(
+                pools_to_provision, 300
+            )
+            return success + already_fulfilled_pools, failed
+
+        return already_fulfilled_pools, []
 
     def apply_scheduler_resources(self) -> None:
         """Applies generated scheduler resources to the cluster."""
@@ -1238,7 +1290,38 @@ class KubernetesScheduler(BaseScheduler):
         if nodes:
             target_pools = self._group_nodes_by_slice(nodes)
 
-        self._provision_dynamic_slices(target_pools)
+        _, failed_nodepools = self._provision_dynamic_slices(target_pools)
+
+        if failed_nodepools and self._tpu_slice_data:
+            nodes_to_remove = set()
+            for nodepool in failed_nodepools:
+                nodes_to_remove.update(target_pools.get(nodepool, []))
+                self._purge_unhealthy_pool_data(
+                    nodepool,
+                    self._tpu_slice_data.pools,
+                    self._tpu_slice_data.node_to_pool,
+                    self._tpu_slice_data.pool_to_topology,
+                    self._tpu_slice_data.dynamic_slice_partitions,
+                    self._tpu_slice_data.pool_to_accelerator,
+                )
+
+            if self._resolved_nodes is not None:
+                self._resolved_nodes = [
+                    n for n in self._resolved_nodes if n not in nodes_to_remove
+                ]
+
+                if not self._resolved_nodes:
+                    raise ChsSchedulerException(
+                        "All targeted dynamic slices failed to provision: "
+                        f"{', '.join(failed_nodepools)}."
+                    )
+
+            logger.warning(
+                "Dynamic slice provisioning failed for nodepools: %s. "
+                "Tests will skip these and run on the remaining active "
+                "slices.",
+                ", ".join(failed_nodepools),
+            )
 
         self._ensure_namespace_exists()
         if self.kueue_supported:
