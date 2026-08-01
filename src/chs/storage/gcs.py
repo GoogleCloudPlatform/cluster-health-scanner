@@ -95,18 +95,20 @@ class GcsStorageProvider(StorageProvider):
         except gcp_ex.NotFound as e:
             raise ChsValidationError(
                 f"GCS bucket '{self.bucket_name}' not found. "
-                f"Please verify the bucket name. "
+                f"Please verify the bucket name or run the following "
+                f"command to create it:\n"
+                f"  gcloud storage buckets create gs://{self.bucket_name}\n\n"
                 f"Details: {e}"
             ) from e
         except gcp_ex.Forbidden as e:
             raise ChsValidationError(
                 f"Access denied: Write permission missing for GCS bucket "
-                f"'{self.bucket_name}'. "
+                f"'{self.bucket_name}'.\n"
                 f"Details: {e}"
             ) from e
         except (gcp_ex.GoogleAPICallError, Exception) as e:
             raise ChsValidationError(
-                f"Failed to access GCS bucket '{self.bucket_name}'. "
+                f"Failed to access GCS bucket '{self.bucket_name}'.\n"
                 f"Details: {e}"
             ) from e
 

@@ -216,6 +216,7 @@ class TestGcsStorageProvider(unittest.TestCase):
         self.assertIn(
             "not found. Please verify the bucket name", str(ctx.exception)
         )
+        self.assertIn("gcloud storage buckets create", str(ctx.exception))
         mock_blob.delete.assert_not_called()
 
     @mock.patch("chs.storage.gcs.storage.Client")
