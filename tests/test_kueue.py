@@ -98,7 +98,7 @@ class TestKueueManager(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(
-            KueueException, "ensure you have cluster-level permissions"
+            KueueException, "Failed to create ResourceFlavors"
         ):
             self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
 

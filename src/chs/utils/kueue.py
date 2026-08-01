@@ -71,10 +71,9 @@ class KueueManager:
             self._run_kubectl(["apply", "-f", kueue_config_path])
         except subprocess.CalledProcessError as e:
             raise KueueException(
-                "Failed to apply Kueue configuration. Please ensure you have "
-                "cluster-level permissions to create ResourceFlavors and "
-                "ClusterQueues, or namespace-level permissions for "
-                f"LocalQueues. Details: {e.stderr}"
+                "Failed to create ResourceFlavors, ClusterQueues, and/or "
+                "LocalQueues. Details: "
+                f"{e.stderr}"
             ) from e
 
         logger.debug(

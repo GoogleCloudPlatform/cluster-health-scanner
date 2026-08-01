@@ -19,6 +19,7 @@ from typing import Any
 from chs.validators.base import Validator
 from chs.validators.conflict import ConflictValidator
 from chs.validators.suite import SuiteValidator
+from chs.validators.tests import TestsValidator
 
 
 class CliArgsValidator(Validator):
@@ -31,6 +32,7 @@ class CliArgsValidator(Validator):
         self.validators: list[Validator] = [
             ConflictValidator(),
             SuiteValidator(),
+            TestsValidator(),
         ]
 
     def validate(self, config: dict[str, Any]) -> list[str]:

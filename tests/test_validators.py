@@ -203,7 +203,7 @@ class TestValidators(unittest.TestCase):
 
     def test_cli_args_validator_conflict_suite_and_tests(self):
         v = validators.CliArgsValidator()
-        errors = v.validate({"suite": "lite", "tests": "my-test"})
+        errors = v.validate({"suite": "lite", "tests": ["nvidia-smi"]})
         self.assertEqual(len(errors), 1)
         self.assertTrue(any("Cannot specify both" in e for e in errors))
 

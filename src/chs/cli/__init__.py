@@ -433,7 +433,7 @@ def _validate_cli_args(
     cli_validator = validators.CliArgsValidator()
     errors = cli_validator.validate(
         {
-            "tests": tests,
+            "tests": _parse_str_to_list(tests),
             "suite": suite,
             "nodes": nodes,
             "nodelists": nodelists,
@@ -939,7 +939,8 @@ def safe_cancel_action(
     console = Console()
 
     spinner_text = (
-        "[bold blue]Setting up cluster environment...[/bold blue]"
+        "[bold blue]Checking for and cleaning up stale "
+        "CHS resources...[/bold blue]"
         if is_setup
         else (
             "[bold red]Canceling all active CHS tests and "
@@ -948,8 +949,8 @@ def safe_cancel_action(
     )
 
     success_text = (
-        f"[{theme.CHS_SUCCESS_STYLE}]Successfully prepared the cluster."
-        f"[/{theme.CHS_SUCCESS_STYLE}]"
+        f"[{theme.CHS_SUCCESS_STYLE}]Stale CHS resources cleaned "
+        f"up.[/{theme.CHS_SUCCESS_STYLE}]"
         if is_setup
         else f"[{theme.CHS_SUCCESS_STYLE}]Successfully canceled all "
         f"active CHS resources.[/{theme.CHS_SUCCESS_STYLE}]"
@@ -1421,31 +1422,23 @@ def run(
     """
     app_data = obj["app_data"]
 
-    _validate_cli_args(
-        suite=suite,
-        tests=tests,
-        nodes=nodes,
-        nodelists=nodelists,
-        nodepools=nodepools,
-        partitions=partitions,
-    )
-
-    _validate_storage(app_data)
-
-    scheduler = detect_scheduler()
-
-    attach_result = _handle_previous_run(
-        app_data=app_data,
-        scheduler=scheduler,
-        suite=suite,
-        auto_approve=auto_approve,
-    )
-    if attach_result:
-        return attach_result
-
     with theme.get_progress_spinner(
         "Discovering hardware and validating arguments..."
     ):
+        _validate_cli_args(
+            suite=suite,
+            tests=tests,
+            nodes=nodes,
+            nodelists=nodelists,
+            nodepools=nodepools,
+            partitions=partitions,
+        )
+
+        _validate_storage(app_data)
+
+        preflights.run_platform_preflights()
+
+        scheduler = detect_scheduler()
         scheduler_obj = get_scheduler(
             scheduler,
             nodes=nodes,
@@ -1481,8 +1474,6 @@ def run(
                     "currently has no nodes available for testing."
                 )
             raise ex.NoNodesProvidedException(error_msg)
-
-        preflights.run_platform_preflights()
 
         detected_machine_types = scheduler_obj.detect_nodes_hardware(
             resolved_raw_nodes
@@ -1625,6 +1616,15 @@ def run(
         f"[{theme.CHS_SUCCESS_STYLE}]Validation and hardware discovery "
         f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
+
+    attach_result = _handle_previous_run(
+        app_data=app_data,
+        scheduler=scheduler,
+        suite=suite,
+        auto_approve=auto_approve,
+    )
+    if attach_result:
+        return attach_result
 
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
     full_cluster_name = scheduler_obj.get_cluster_name()
