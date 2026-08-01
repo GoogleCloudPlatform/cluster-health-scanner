@@ -41,7 +41,24 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                         "metadata": {
                             "name": "jobset-controller-manager",
                             "namespace": "jobset-system",
-                            "labels": {"app.kubernetes.io/name": "jobset"},
+                            "labels": {
+                                "app.kubernetes.io/name": "jobset",
+                                "app.kubernetes.io/version": "v0.7.2",
+                            },
+                        },
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "image": (
+                                                "registry.k8s.io/jobset/jobset:"
+                                                "v0.7.2"
+                                            )
+                                        }
+                                    ]
+                                }
+                            }
                         },
                         "status": {
                             "availableReplicas": 1,
@@ -99,7 +116,24 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                         "metadata": {
                             "name": "jobset-controller-manager",
                             "namespace": "jobset-system",
-                            "labels": {"app.kubernetes.io/name": "jobset"},
+                            "labels": {
+                                "app.kubernetes.io/name": "jobset",
+                                "app.kubernetes.io/version": "v0.7.2",
+                            },
+                        },
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [
+                                        {
+                                            "image": (
+                                                "registry.k8s.io/jobset/jobset:"
+                                                "v0.7.2"
+                                            )
+                                        }
+                                    ]
+                                }
+                            }
                         },
                         "status": {
                             "availableReplicas": 0,
@@ -168,7 +202,7 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             self.assertTrue(kueue_supported)
 
     def test_check_crds_installed_version_invalid(self):
-        """Test 'nccl-cluster' and TPU tests are removed if Kueue is old."""
+        """Test that invalid Kueue version raises exception."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
             "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
@@ -182,12 +216,13 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 {"name": "tpu-info"},
                 {"name": "nvidia-smi"},
             ]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, [{"name": "nvidia-smi"}])
-            self.assertFalse(kueue_supported)
+            with self.assertRaisesRegex(
+                ChsPreflightException, "Kueue is missing or incompatible"
+            ):
+                self.checker.check(tests)
 
-    def test_check_kueue_deployment_unhealthy_filters_tests(self):
-        """Test that unhealthy Kueue deployment filters out tests."""
+    def test_check_kueue_deployment_unhealthy_raises_exception(self):
+        """Test that unhealthy Kueue deployment raises exception."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
             "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
@@ -201,16 +236,17 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 {"name": "tpu-info"},
                 {"name": "nvidia-smi"},
             ]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, [{"name": "nvidia-smi"}])
-            self.assertFalse(kueue_supported)
+            with self.assertRaisesRegex(
+                ChsPreflightException, "Kueue is missing or incompatible"
+            ):
+                self.checker.check(tests)
 
     def test_check_crds_missing_raises_exception(self):
         """Test that missing JobSet causes it to fail fast."""
         with mock.patch.object(self.checker, "_run_kubectl", return_value=""):
             with self.assertRaisesRegex(
                 ChsPreflightException,
-                "Missing required cluster dependencies: JobSet",
+                "JobSet is missing or incompatible",
             ):
                 self.checker.check()
 
@@ -279,8 +315,8 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             ):
                 self.checker.check()
 
-    def test_check_with_none_tests_and_unsupported_kueue_returns_none(self):
-        """Test checking None tests with unsupported Kueue returns None."""
+    def test_check_with_none_tests_and_unsupported_kueue_raises_exception(self):
+        """Test checking None tests with unsupported Kueue raises exception."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
@@ -289,12 +325,13 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
         with mock.patch.object(
             self.checker, "_run_kubectl", side_effect=[crd_output, dep_output]
         ):
-            filtered, kueue_supported = self.checker.check(None)
-            self.assertIsNone(filtered)
-            self.assertFalse(kueue_supported)
+            with self.assertRaisesRegex(
+                ChsPreflightException, "Kueue is missing or incompatible"
+            ):
+                self.checker.check(None)
 
-    def test_check_kueue_missing_filters_tests(self):
-        """Test that missing Kueue causes nccl-cluster to be filtered out."""
+    def test_check_kueue_missing_raises_exception(self):
+        """Test that missing Kueue raises exception."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
@@ -304,9 +341,10 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             self.checker, "_run_kubectl", side_effect=[crd_output, dep_output]
         ):
             tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, [{"name": "nvidia-smi"}])
-            self.assertFalse(kueue_supported)
+            with self.assertRaisesRegex(
+                ChsPreflightException, "Kueue is missing or incompatible"
+            ):
+                self.checker.check(tests)
 
     def test_check_crds_query_failure_raises_exception(self):
         """Test that Error when getting CRDs raises ChsPreflightException."""
@@ -321,8 +359,8 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             ):
                 self.checker.check()
 
-    def test_check_version_unparsed_tag_filters_tests(self):
-        """Test unparsed tag (:latest) filters out Kueue tests."""
+    def test_check_version_unparsed_tag_passes(self):
+        """Test unparsed tag (:latest) passes."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
             "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
@@ -336,49 +374,12 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 kueue_dep,
             ]
             tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, [{"name": "nvidia-smi"}])
-            self.assertFalse(kueue_supported)
+            result_tests, supported = self.checker.check(tests)
+            self.assertEqual(result_tests, tests)
+            self.assertTrue(supported)
 
-    def test_check_version_from_deployment_label(self):
-        """Test parsing Kueue version from app.kubernetes.io/version label."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
-        )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        kueue_dep_labeled = json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {
-                            "name": "kueue-controller-manager",
-                            "namespace": "kueue-system",
-                            "labels": {
-                                "app.kubernetes.io/name": "kueue",
-                                "app.kubernetes.io/version": "v0.14.5",
-                            },
-                        },
-                        "status": {
-                            "availableReplicas": 1,
-                            "conditions": [
-                                {"type": "Available", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep, kueue_dep_labeled]
-            tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, tests)
-            self.assertTrue(kueue_supported)
-
-    def test_check_without_nccl_cluster_returns_tests_unchanged(self):
-        """Test that test filtering returns all tests if no 'nccl-cluster'."""
+    def test_check_without_kueue_raises_exception(self):
+        """Test that missing Kueue raises exception even for non-Kueue tests."""
         crd_output = (
             "customresourcedefinition.apiextensions.k8s.io/"
             "jobsets.jobset.sigs.k8s.io"
@@ -388,9 +389,10 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             self.checker, "_run_kubectl", side_effect=[crd_output, jobset_dep]
         ):
             tests = [{"name": "nvidia-smi"}, {"name": "dcgm"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, tests)
-            self.assertFalse(kueue_supported)
+            with self.assertRaisesRegex(
+                ChsPreflightException, "Kueue is missing or incompatible"
+            ):
+                self.checker.check(tests)
 
     def test_check_with_none_tests_returns_none(self):
         """Test that checking without tests returns None."""
@@ -453,7 +455,9 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 }
             }
         }
-        version = self.checker._extract_version_from_deployment(dep)
+        version = self.checker._extract_version_from_deployment(
+            dep, app_name="kueue"
+        )
         self.assertEqual(version, "0.14.5")
 
     def test_get_kueue_version_timeout(self):
@@ -487,11 +491,11 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
         self.assertTrue(self.checker._is_kueue_version_supported("0.14.6-rc1"))
 
     def test_is_kueue_version_supported_invalid(self):
-        """Test invalid Kueue version formats."""
-        self.assertFalse(
+        """Test invalid Kueue version formats are assumed supported."""
+        self.assertTrue(
             self.checker._is_kueue_version_supported("invalid-version")
         )
-        self.assertFalse(self.checker._is_kueue_version_supported("latest"))
+        self.assertTrue(self.checker._is_kueue_version_supported("latest"))
 
     def test_check_version_with_multicontainer_sidecar(self):
         """Test container selection skips kube-rbac-proxy at container 0."""

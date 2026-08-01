@@ -138,28 +138,12 @@ class KubernetesScheduler(BaseScheduler):
         os.makedirs(workspace_config_dir, exist_ok=True)
 
         if self.kueue_supported:
-            try:
-                nodes = self.get_nodes_under_test()
-                kueue_mgr = KueueManager(self)
-                self._jobset_labels_yaml = kueue_mgr.generate_configs(
-                    workspace_config_dir, machine_type, nodes or []
-                )
-                self._suspend_jobset = "true"
-            except KueueException as e:
-                logger.warning(
-                    "Failed to setup Kueue resources: %s. "
-                    "Falling back to standard scheduling without Kueue.",
-                    e,
-                )
-                self.kueue_supported = False
-                self._jobset_labels_yaml = ""
-                self._suspend_jobset = "false"
-                return (
-                    KubernetesPreflightChecker(
-                        self
-                    )._filter_tests_without_kueue(tests)
-                    or []
-                )
+            nodes = self.get_nodes_under_test()
+            kueue_mgr = KueueManager(self)
+            self._jobset_labels_yaml = kueue_mgr.generate_configs(
+                workspace_config_dir, machine_type, nodes or []
+            )
+            self._suspend_jobset = "true"
 
         return tests
 

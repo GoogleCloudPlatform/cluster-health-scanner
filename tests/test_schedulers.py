@@ -510,43 +510,6 @@ ramble:
         )
         self.assertEqual(scheduler._suspend_jobset, "true")
 
-    @mock.patch("subprocess.run")
-    @mock.patch("chs.schedulers.kubernetes.KueueManager")
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
-        return_value=["node1"],
-    )
-    def test_setup_scheduler_resources_kueue_fallback(
-        self, mock_validate, mock_kueue_mgr_class, mock_run, mock_logger
-    ):
-        """Test setup_scheduler_resources falls back if Kueue setup fails."""
-        from chs.exceptions import KueueException
-
-        scheduler = KubernetesScheduler(
-            nodes="node1",
-        )
-        scheduler.kueue_supported = True
-        self.mock_app_data.get_run.return_value = {"kueue_supported": True}
-
-        mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
-        mock_kueue_mgr_instance.generate_configs.side_effect = KueueException(
-            "setup failed"
-        )
-
-        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
-
-        tests = scheduler.setup_scheduler_resources(
-            workspace_config_dir,
-            [{"name": "nccl-cluster"}, {"name": "test1"}],
-            "a3-megagpu-8g",
-            workspace_name="ws1",
-        )
-
-        self.assertEqual(tests, [{"name": "test1"}])
-        self.assertFalse(scheduler.kueue_supported)
-        self.assertEqual(scheduler._jobset_labels_yaml, "")
-        self.assertEqual(scheduler._suspend_jobset, "false")
-
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
