@@ -1405,7 +1405,7 @@ def run(
 
     \b
       # Run specific TPU diagnostics on targeted nodepools
-      chs run --tests=hbm,tpu-collectives --nodepools=tpu-pool-1
+      chs run --tests=tpu-hbm,tpu-collectives --nodepools=tpu-pool-1
 
     \b
       # Run full standard validation suite across TPU nodepools
