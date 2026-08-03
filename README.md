@@ -301,16 +301,12 @@ Workspace                     Details
 ```
 
 ### 6. results
-Shows the generated "Bill of Health" results and metric details for a run. If validation is enabled, this will display two separate tables in the terminal: one for all raw metrics and one strictly for validated metrics. If no `RUN_ID` is provided, you will be prompted to select one.
+Shows the generated "Bill of Health" results summary and interactive report link for a run. If no `RUN_ID` is provided, you will be prompted to select one.
 
 **Arguments:**
 
 - `RUN_ID` (Optional): The ID (Workspace Name) of the run to view.
 
-**Options:**
-
-- `--tests` / `-t`: Comma-separated list of test names to show details for.
-- `--resources` / `-r`: Comma-separated list of resource names to show details for.
 
 **Example:**
 
@@ -320,9 +316,6 @@ chs results
 
 # View the Bill of Health for a specific run
 chs results sim-a3mega-chs-custom-lplt
-
-# View details for specific tests
-chs results --tests nccl-cluster,gemm
 ```
 
 **Output Directory Structure & Archiving:**

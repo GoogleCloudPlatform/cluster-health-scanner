@@ -787,12 +787,9 @@ def _analyze_action(
 def _show_results(
     app_data: ChsAppData,
     run_id: str | None = None,
-    tests: str | None = None,
-    resources: str | None = None,
-    details: bool = False,
     suppress_boh_uri: bool = False,
 ) -> None:
-    """Shows the Bill of Health summary and optional details."""
+    """Shows the Bill of Health summary."""
     workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
     if not run_id:
         run_id = app_data.get_latest_run_id()
@@ -857,12 +854,7 @@ def _show_results(
     else:
         viewer = ResultsViewer(boh_path, boh_uri=boh_uri)
 
-    parsed_tests = _parse_str_to_list(tests)
-    parsed_resources = _parse_str_to_list(resources)
-
-    viewer.show_summary_and_details(
-        tests=parsed_tests, resources=parsed_resources, show_details=details
-    )
+    viewer.show_summary_and_details()
 
 
 def cancel_action(scheduler_name: str | None = None) -> None:
@@ -1900,32 +1892,10 @@ def cancel(obj, auto_approve: bool = False) -> None:
 @click.argument(
     "run_id", required=False, callback=validators.validate_non_empty_string
 )
-@click.option(
-    "--tests",
-    "-t",
-    multiple=True,
-    help="Comma-separated list of test names to show details for.",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
-    "--resources",
-    "-r",
-    multiple=True,
-    help="Comma-separated list of resource names to show details for.",
-    callback=validators.validate_non_empty_string,
-)
-@click.option(
-    "--details",
-    is_flag=True,
-    help="Print raw metric tables.",
-)
 @click.pass_obj
 def results(
     obj,
     run_id: str | None,
-    tests: str | None,
-    resources: str | None,
-    details: bool,
 ) -> None:
     """Show Bill of Health results for a run.
 
@@ -1933,7 +1903,7 @@ def results(
     """
     app_data = obj["app_data"]
     run_id = _get_run_id_or_prompt(app_data, run_id)
-    _show_results(app_data, run_id, tests, resources, details=details)
+    _show_results(app_data, run_id)
 
 
 @cli.command()

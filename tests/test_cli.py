@@ -1583,31 +1583,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_results_viewer.assert_called_once()
         viewer_mock = mock_results_viewer.return_value
-        viewer_mock.show_summary_and_details.assert_called_once_with(
-            tests=None, resources=None, show_details=False
-        )
-
-        # Test with tests flag
-        mock_results_viewer.reset_mock()
-        result = self.runner.invoke(
-            cli.cli,
-            ["results", "my_run_id", "--tests", "t1,t2"],
-        )
-        self.assertEqual(result.exit_code, 0)
-        viewer_mock.show_summary_and_details.assert_called_once_with(
-            tests=["t1", "t2"], resources=None, show_details=False
-        )
-
-        # Test with resources flag
-        mock_results_viewer.reset_mock()
-        result = self.runner.invoke(
-            cli.cli,
-            ["results", "my_run_id", "--resources", "r1"],
-        )
-        self.assertEqual(result.exit_code, 0)
-        viewer_mock.show_summary_and_details.assert_called_once_with(
-            tests=None, resources=["r1"], show_details=False
-        )
+        viewer_mock.show_summary_and_details.assert_called_once_with()
 
     def test_results_command_no_run_id(self):
         """Test 'results' command without run_id."""

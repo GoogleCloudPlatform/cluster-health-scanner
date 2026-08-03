@@ -17,7 +17,6 @@
 import logging
 import os
 import json
-from collections import defaultdict
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
@@ -102,25 +101,18 @@ class ResultsViewer:
 
     def _aggregate_summary_data(
         self,
-        tests: list[str] | None = None,
-        resources: list[str] | None = None,
     ) -> RunSummaryData | None:
         """Extracts and normalizes data into a structured format."""
         return aggregate_boh_summary(
             boh=self.boh,
             boh_path=self.boh_path,
-            tests=tests,
-            resources=resources,
             plugin_manager=self.plugin_manager,
         )
 
     def show_summary_and_details(
         self,
-        tests: list[str] | None = None,
-        resources: list[str] | None = None,
-        show_details: bool = False,
     ) -> None:
-        summary_data = self._aggregate_summary_data(tests, resources)
+        summary_data = self._aggregate_summary_data()
         if not summary_data:
             return
 
@@ -139,176 +131,8 @@ class ResultsViewer:
         self.console.print(
             f"Nodes under test: {summary_data.total_nodes} nodes"
         )
-        self.console.print("\nTest Suite Breakdown:")
 
-        for summary in summary_data.test_summaries:
-            if summary.explicit_skip_validation:
-                self.console.print(
-                    f"  • {summary.display_name:<30} : Executed on "
-                    f"{summary.denominator} {summary.entity_noun} "
-                    "(Validation skipped)"
-                )
-            elif summary.group_has_no_thresholds:
-                executed_count = summary.denominator - summary.failed_to_execute
-                self.console.print(
-                    f"  • {summary.display_name:<30} : {executed_count} / "
-                    f"{summary.denominator} {summary.entity_noun} executed "
-                    "(No thresholds set)"
-                )
-            else:
-                total_nodes = summary.denominator
-                evaluated_nodes = (
-                    summary.met_threshold + summary.unmet_threshold
-                )
-
-                if evaluated_nodes > 0:
-                    if evaluated_nodes == total_nodes:
-                        self.console.print(
-                            f"  • {summary.display_name:<30} : "
-                            f"{summary.met_threshold} / "
-                            f"{total_nodes} {summary.entity_noun} "
-                            "met the threshold"
-                        )
-                    else:
-                        self.console.print(
-                            f"  • {summary.display_name:<30} : "
-                            f"{summary.met_threshold} / "
-                            f"{evaluated_nodes} evaluated "
-                            f"{summary.entity_noun} "
-                            f"met the threshold ({total_nodes} total)"
-                        )
-                else:
-                    self.console.print(
-                        f"  • {summary.display_name:<30} : "
-                        f"0 {summary.entity_noun} evaluated against "
-                        f"thresholds ({total_nodes} total)"
-                    )
-
-                if (
-                    summary.unmet_threshold > 0
-                    and summary.unmet_threshold_resources
-                ):
-                    unmet_threshold_unique = sorted(
-                        list(set(summary.unmet_threshold_resources))
-                    )
-                    if len(unmet_threshold_unique) > 5:
-                        self.console.print(
-                            f"    - {summary.entity_noun.title()} That "
-                            "Didn't Meet Threshold (First 5):"
-                        )
-                        for node in unmet_threshold_unique[:5]:
-                            self.console.print(f"      * {node}")
-                        self.console.print(
-                            f"      ... and "
-                            f"{len(unmet_threshold_unique) - 5} more."
-                        )
-                    else:
-                        self.console.print(
-                            f"    - {summary.entity_noun.title()} That "
-                            "Didn't Meet Threshold:"
-                        )
-                        for node in unmet_threshold_unique:
-                            self.console.print(f"      * {node}")
-
-                if (
-                    summary.missing_metrics > 0
-                    and summary.missing_metrics_resources
-                ):
-                    missing_unique = sorted(
-                        list(set(summary.missing_metrics_resources))
-                    )
-                    if len(missing_unique) > 5:
-                        self.console.print(
-                            f"    - {summary.entity_noun.title()} Missing "
-                            "Required Metrics (First 5):"
-                        )
-                        for node in missing_unique[:5]:
-                            self.console.print(f"      * {node}")
-                        self.console.print(
-                            f"      ... and " f"{len(missing_unique) - 5} more."
-                        )
-                    else:
-                        self.console.print(
-                            f"    - {summary.entity_noun.title()} Missing "
-                            "Required Metrics:"
-                        )
-                        for node in missing_unique:
-                            self.console.print(f"      * {node}")
-
-                if summary.failed_to_execute > 0:
-                    self.console.print(
-                        f"    - {summary.entity_noun.title()} Failed "
-                        f"To Execute: {summary.failed_to_execute}"
-                    )
-
-        if summary_data.errors_and_warnings:
-            self.console.print("\nPOTENTIAL ERRORS / WARNINGS:")
-            self.console.print(
-                "───────────────────────────────────────────────────────"
-            )
-
-            grouped_errors = defaultdict(list)
-            for err in summary_data.errors_and_warnings:
-                grouped_errors[(err.category, err.test)].append(err)
-
-            sorted_errors = sorted(
-                grouped_errors.items(), key=lambda x: len(x[1]), reverse=True
-            )
-
-            total_categories = len(sorted_errors)
-            shown_categories = sorted_errors[:5]
-
-            for (category, test_name), errs in shown_categories:
-                err_type = errs[0].type
-                msg = errs[0].message
-                nodes = sorted(list(set(e.node for e in errs)))
-                node_count = len(nodes)
-
-                self.console.print(
-                    f"{err_type} Category: {category} - Test: {test_name} "
-                    f"({node_count} nodes)"
-                )
-                if msg:
-                    self.console.print(f"  • Message: {msg}")
-
-                if node_count > 5:
-                    self.console.print("  • Affected Nodes (First 5 shown):")
-                    self.console.print(f"    - {', '.join(nodes[:5])}")
-                    self.console.print(
-                        f"    ... and {node_count - 5} other nodes."
-                    )
-                else:
-                    self.console.print("  • Affected Nodes:")
-                    for n in nodes:
-                        self.console.print(f"    - {n}")
-                self.console.print()
-
-            if total_categories > 5:
-                hidden = total_categories - 5
-                hidden_nodes = sum(
-                    len(set(e.node for e in errs))
-                    for _, errs in sorted_errors[5:]
-                )
-                self.console.print(
-                    f"[!] ... and {hidden} other failure/warning categories "
-                    f"affecting {hidden_nodes} nodes."
-                )
-
-            self.console.print(
-                "───────────────────────────────────────────────────────"
-            )
-        else:
-            if summary_data.has_tests_or_resources_filter:
-                self.console.print(
-                    "\nNo warnings or errors for the selected resources."
-                )
-
-        base_msg = (
-            "For full raw metrics and detailed results for all nodes, "
-            "please use [bold cyan]chs results --details[/bold cyan]"
-        )
         if self.boh_uri:
-            self.console.print(f"{base_msg} or check the Bill of Health in:")
             href = (
                 self.boh_uri.replace(
                     "gs://", "https://storage.cloud.google.com/", 1
@@ -317,13 +141,9 @@ class ResultsViewer:
                 else self.boh_uri
             )
             self.console.print(
-                f"[link={href}][cyan]{self.boh_uri}[/cyan][/link]\n"
+                "Check the interactive health report in\n"
+                f"[link={href}][cyan]{self.boh_uri}[/cyan][/link]"
             )
-        else:
-            self.console.print(base_msg)
-
-        if show_details:
-            self.show_details(tests, resources)
 
     def show_details(
         self, tests: list[str] | None = None, resources: list[str] | None = None
