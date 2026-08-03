@@ -49,6 +49,7 @@ class TestKueueManager(unittest.TestCase):
 
     def test_generate_configs_success_renders(self):
         """Test generate_configs renders template and returns correct label."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta2"
         label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
@@ -61,10 +62,12 @@ class TestKueueManager(unittest.TestCase):
             self.assertIn("a3-megagpu-8g", content)
             self.assertIn("nvidia.com/gpu", content)
             self.assertIn('nominalQuota: "16"', content)
+            self.assertIn("apiVersion: kueue.x-k8s.io/v1beta2", content)
 
     def test_generate_configs_tpu_success_renders(self):
         """Test generate_configs for TPU renders correct flavor and
         resource name."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
         label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "tpu7x-standard-4t", ["node1", "node2"]
         )
@@ -76,6 +79,7 @@ class TestKueueManager(unittest.TestCase):
             content = f.read()
             self.assertIn("tpu7x-standard-4t", content)
             self.assertIn("google.com/tpu", content)
+            self.assertIn("apiVersion: kueue.x-k8s.io/v1beta1", content)
             self.assertIn('nominalQuota: "8"', content)
 
     def test_apply_configs_success(self):
@@ -187,6 +191,31 @@ class TestKueueManager(unittest.TestCase):
             KueueException, "Failed to delete Kueue resources"
         ):
             self.kueue_mgr.cleanup()
+
+    def test_get_kueue_api_version_v1beta2_preferred(self):
+        """Test _get_kueue_api_version returns v1beta2 when both
+        are supported."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1 v1beta2"
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta2")
+
+    def test_get_kueue_api_version_v1beta2(self):
+        """Test _get_kueue_api_version returns v1beta2 when only
+        v1beta2 is supported."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta2"
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta2")
+
+    def test_get_kueue_api_version_v1beta1_only(self):
+        """Test _get_kueue_api_version returns v1beta1 when only
+        v1beta1 is supported."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+
+    def test_get_kueue_api_version_fallback(self):
+        """Test _get_kueue_api_version falls back to v1beta1 on error."""
+        self.mock_scheduler._run_kubectl.side_effect = (
+            subprocess.CalledProcessError(1, "cmd")
+        )
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
 
 
 if __name__ == "__main__":

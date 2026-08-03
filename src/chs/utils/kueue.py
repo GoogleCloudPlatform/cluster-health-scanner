@@ -140,6 +140,7 @@ class KueueManager:
             nominal_quota=str(nominal_quota),
             resource_name=resource_name,
             namespace=CHS_NAMESPACE,
+            kueue_api_version=self._get_kueue_api_version(),
         )
 
         kueue_config_path = os.path.join(
@@ -161,23 +162,6 @@ class KueueManager:
             workspace_config_dir, "kueue-configs.yaml"
         )
         self.apply_and_verify(kueue_config_path)
-
-    def _ensure_local_queue_exists(self, workspace_config_dir: str):
-        """Idempotently ensures the LocalQueue exists in the namespace."""
-        kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
-            "local-queue.yaml.tpl"
-        )
-        with pkg_resources.as_file(kueue_tpl_path) as p:
-            with open(p, "r") as f:
-                kueue_tpl = f.read()
-
-        local_queue_yaml = kueue_tpl.format(namespace=CHS_NAMESPACE)
-
-        lq_path = os.path.join(workspace_config_dir, "chs-local-queue.yaml")
-        with open(lq_path, "w") as f:
-            f.write(local_queue_yaml)
-
-        self._run_kubectl(["apply", "-f", lq_path])
 
     def cleanup(self) -> None:
         """Deletes Kueue resources by name.
@@ -218,3 +202,23 @@ class KueueManager:
             raise KueueException(
                 f"Failed to delete Kueue resources. Details: {e.stderr}"
             ) from e
+
+    def _get_kueue_api_version(self) -> str:
+        """Determines whether to use v1beta2 or v1beta1 based on
+        cluster support."""
+        try:
+            output = self._run_kubectl(
+                [
+                    "get",
+                    "crd",
+                    "clusterqueues.kueue.x-k8s.io",
+                    "-o",
+                    "jsonpath={.spec.versions[*].name}",
+                ]
+            )
+            if "v1beta2" in output.split():
+                return "v1beta2"
+            return "v1beta1"
+        except subprocess.CalledProcessError:
+            # Default to v1beta1 if check fails
+            return "v1beta1"
