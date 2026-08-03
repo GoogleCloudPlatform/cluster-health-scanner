@@ -83,7 +83,7 @@ class TpuHostDevice(ExecutableApplication):
         "H2D Bandwidth",
         fom_regex=r".*(?:Host-to-Device|H2D).*?:\s*(?P<h2d_bandwidth>\d+\.\d+)",
         group_name="h2d_bandwidth",
-        units="GB/s",
+        units="GiB/s",
         contexts=["params"],
     )
 
@@ -91,6 +91,6 @@ class TpuHostDevice(ExecutableApplication):
         "D2H Bandwidth",
         fom_regex=r".*(?:Device-to-Host|D2H).*?:\s*(?P<d2h_bandwidth>\d+\.\d+)",
         group_name="d2h_bandwidth",
-        units="GB/s",
+        units="GiB/s",
         contexts=["params"],
     )
