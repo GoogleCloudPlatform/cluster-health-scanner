@@ -15,18 +15,24 @@
 """HTML Bill of Health Report Generator for Cluster Health Scanner (CHS)."""
 
 import json
+import logging
 import os
 from typing import Any
+
+import yaml
 
 from chs.core.plugin_manager import PluginManager
 from chs.core.summary_aggregator import aggregate_boh_summary
 from chs.plugins.utils.validation_analyzer import extract_validation_data
 from chs.protos import bill_of_health_pb2 as pb
+from chs.utils.suites import get_all_suites_details
 from chs.utils.tests import get_all_supported_tests_details
 
 DEFAULT_TEMPLATE_PATH = os.path.join(
     os.path.dirname(__file__), "templates", "boh_template.html"
 )
+
+logger = logging.getLogger(__name__)
 
 
 class HtmlReportGenerator:
@@ -34,6 +40,49 @@ class HtmlReportGenerator:
 
     def __init__(self, template_path: str | None = None):
         self.template_path = template_path or DEFAULT_TEMPLATE_PATH
+
+    def _extract_tier2_mappings(self) -> dict[str, list[str]]:
+        """Extracts tier1-to-tier2 test mappings."""
+        tier2_mappings: dict[str, list[str]] = {}
+        try:
+            for suite_config in get_all_suites_details():
+                s_name = "unknown"
+                try:
+                    s_name = suite_config.get("name", "unknown")
+                    for test_config in suite_config.get("tests", []):
+                        trigger_condition = test_config.get("trigger_condition")
+                        if not trigger_condition:
+                            continue
+
+                        tier2_test_name = test_config.get("name")
+                        for conditions in trigger_condition.values():
+                            for tier1_test_name in conditions:
+                                tier1_canonical = tier1_test_name.lower()
+                                tier2_canonical = tier2_test_name.lower()
+                                tier2_list = tier2_mappings.setdefault(
+                                    tier1_canonical, []
+                                )
+                                if tier2_canonical not in tier2_list:
+                                    tier2_list.append(tier2_canonical)
+                except (
+                    FileNotFoundError,
+                    yaml.YAMLError,
+                    TypeError,
+                    AttributeError,
+                ) as e:
+                    logger.debug(
+                        "Failed to parse suite config for %s: %s",
+                        s_name,
+                        e,
+                        exc_info=True,
+                    )
+                    continue
+        except Exception as e:
+            logger.debug(
+                "Failed to safely extract tier2_mappings: %s", e, exc_info=True
+            )
+
+        return tier2_mappings
 
     def generate_report_data(
         self,
@@ -77,14 +126,7 @@ class HtmlReportGenerator:
                     _extract_nodes(ts.failed_to_execute_resources)
                 )
 
-        missing_metrics_only = missing_metrics_nodes - degraded_nodes
-
         total_nodes = len(all_nodes)
-        degraded_count = len(degraded_nodes)
-        missing_metrics_count = len(missing_metrics_only)
-        healthy_count = total_nodes - len(
-            degraded_nodes | missing_metrics_nodes
-        )
         failed_count = sum(
             1 for e in summary.errors_and_warnings if e.type == "ERROR"
         )
@@ -118,6 +160,10 @@ class HtmlReportGenerator:
             if "skip_validation" in boh.metadata.fields
             else False
         )
+        tier1_to_tier2_tests = self._extract_tier2_mappings()
+
+        executed_tests = {tr.test_name.lower() for tr in boh.test_results}
+
         test_descriptions = {}
         for t in get_all_supported_tests_details():
             desc = t.get("description", "")
@@ -130,6 +176,7 @@ class HtmlReportGenerator:
         for ts in summary.test_summaries:
             description = test_descriptions.get(ts.canonical_name, "")
             evaluated_nodes = ts.met_threshold + ts.unmet_threshold
+            badge_tooltip = None
             if ts.explicit_skip_validation:
                 ratio_str = "Validation skipped"
                 status_badge = "SKIPPED"
@@ -164,8 +211,32 @@ class HtmlReportGenerator:
                         f" against thresholds ({ts.denominator} total)"
                     )
 
+                badge_tooltip = None
+
                 if ts.unmet_threshold > 0:
-                    status_badge = f"{ts.unmet_threshold} DEGRADED"
+                    canonical_lower = ts.canonical_name.lower()
+                    if canonical_lower in tier1_to_tier2_tests:
+                        tier2_list = tier1_to_tier2_tests[canonical_lower]
+                        tier2_names = " or ".join(tier2_list)
+                        status_badge = (
+                            f"{ts.unmet_threshold} POTENTIALLY DEGRADED"
+                        )
+
+                        tier2_executed = any(
+                            d in executed_tests for d in tier2_list
+                        )
+                        if tier2_executed:
+                            badge_tooltip = (
+                                f"Consider checking the {tier2_names} "
+                                "test results for more details"
+                            )
+                        else:
+                            badge_tooltip = (
+                                f"Consider running the {tier2_names} test "
+                                "for more details"
+                            )
+                    else:
+                        status_badge = f"{ts.unmet_threshold} DEGRADED"
                     badge_style = "badge-degraded"
                 elif ts.timeout_count > 0:
                     status_badge = f"{ts.timeout_count} TIMEOUT"
@@ -191,6 +262,7 @@ class HtmlReportGenerator:
                     "target_criteria": ts.target_criteria,
                     "status_badge": status_badge,
                     "badge_style": badge_style,
+                    "badge_tooltip": badge_tooltip,
                     "unmet_threshold_resources": ts.unmet_threshold_resources,
                     "missing_metrics_resources": ts.missing_metrics_resources,
                     "failed_to_execute_resources": (
@@ -209,6 +281,8 @@ class HtmlReportGenerator:
             node_has_unmet_threshold = False
             node_has_missing_metrics = False
             node_has_exec_error = False
+            node_failed_tests = set()
+            node_passed_tests = set()
 
             for tr in boh.test_results:
                 target_nodes = {t.node_name for t in tr.target_resources}
@@ -259,6 +333,7 @@ class HtmlReportGenerator:
                     )
                     if has_unmet_metric:
                         node_has_unmet_threshold = True
+                        node_failed_tests.add(canonical_name.lower())
 
                     res_status = eval_tr.result_status
 
@@ -301,6 +376,7 @@ class HtmlReportGenerator:
                         elif has_metrics:
                             status_str = "✓ MET THRESHOLD"
                             is_met = True
+                            node_passed_tests.add(canonical_name.lower())
                         else:
                             status_str = "✕ MISSING METRICS"
                             is_met = False
@@ -314,8 +390,29 @@ class HtmlReportGenerator:
                         }
                     )
 
+            validated_tier1_tests = set()
+            for (
+                tier1_test,
+                tier2_tests,
+            ) in tier1_to_tier2_tests.items():
+                if any(
+                    tier2_test in node_passed_tests
+                    for tier2_test in tier2_tests
+                ):
+                    validated_tier1_tests.add(tier1_test)
+
+            if node_has_unmet_threshold and node_failed_tests:
+                if node_failed_tests.issubset(validated_tier1_tests):
+                    node_has_unmet_threshold = False
+
             if node_has_unmet_threshold:
-                node_status = "DEGRADED"
+                tier1_tests = set(tier1_to_tier2_tests.keys())
+                if node_failed_tests and node_failed_tests.issubset(
+                    tier1_tests
+                ):
+                    node_status = "POTENTIALLY DEGRADED"
+                else:
+                    node_status = "DEGRADED"
                 node_badge_style = "badge-degraded"
             elif node_has_exec_error or node_has_missing_metrics:
                 node_status = "INCOMPLETE"
@@ -335,6 +432,19 @@ class HtmlReportGenerator:
                     "tests": node_tests,
                 }
             )
+
+        healthy_count = sum(
+            1 for n in node_insights if n["status"] == "HEALTHY"
+        )
+        degraded_count = sum(
+            1 for n in node_insights if n["status"] == "DEGRADED"
+        )
+        potentially_degraded_count = sum(
+            1 for n in node_insights if n["status"] == "POTENTIALLY DEGRADED"
+        )
+        missing_metrics_count = sum(
+            1 for n in node_insights if n["status"] == "INCOMPLETE"
+        )
 
         detailed_reports = self._extract_detailed_reports(boh, plugin_manager)
 
@@ -369,7 +479,7 @@ class HtmlReportGenerator:
         return {
             "metadata": {
                 "report_id": report_id,
-                "chs_version": run_info.get("chs_version", "1.0.0"),
+                "chs_version": run_info.get("chs_version", "0.1.0"),
                 "created_at": created_at_str,
                 "system_type": system_type,
                 "command_statement": run_info.get("command_statement", ""),
@@ -379,6 +489,7 @@ class HtmlReportGenerator:
                 "total_nodes": total_nodes,
                 "healthy_count": healthy_count,
                 "degraded_count": degraded_count,
+                "potentially_degraded_count": potentially_degraded_count,
                 "missing_metrics_count": missing_metrics_count,
                 "failed_count": failed_count,
                 "total_test_suites": len(summary.test_summaries),
