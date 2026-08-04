@@ -28,8 +28,6 @@ ramble:
     scheduler: slurm
     container_dir: ""
     tcp_interfaces: ""
-    timeout: 0
-    deadline: 0
 
   applications:
     chs:

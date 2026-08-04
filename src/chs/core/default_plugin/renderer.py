@@ -18,6 +18,7 @@ from rich.console import RenderableType, Group
 from rich.panel import Panel
 from rich.text import Text
 from chs.utils import create_styled_table
+from rich.markup import escape
 
 
 class DefaultRenderer:
@@ -54,9 +55,11 @@ class DefaultRenderer:
 
                 prefix = rendering.format_context_prefix(metric)
 
-                table.add_row(f"{prefix}{metric.key}", str(val), metric.unit)
+                table.add_row(
+                    escape(f"{prefix}{metric.key}"), str(val), metric.unit
+                )
 
-            nodes_str = rendering.format_nodes(test_result.target_resource_ids)
+            nodes_str = rendering.format_nodes(test_result.target_resources)
             panels.append(
                 Panel(
                     table

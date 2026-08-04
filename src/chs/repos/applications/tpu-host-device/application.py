@@ -67,7 +67,7 @@ class TpuHostDevice(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            "{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1",
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )
@@ -75,15 +75,15 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"Running .* with params:.*'data_size_mib': (?P<size>\d+)",
-        output_format="{size}MiB",
+        regex=r"HOST (?P<node>\S+): Running .* with params:.*'data_size_mib': (?P<size>\d+)",
+        output_format="{node},{size}MiB",
     )
 
     figure_of_merit(
         "H2D Bandwidth",
         fom_regex=r".*(?:Host-to-Device|H2D).*?:\s*(?P<h2d_bandwidth>\d+\.\d+)",
         group_name="h2d_bandwidth",
-        units="GB/s",
+        units="GiB/s",
         contexts=["params"],
     )
 
@@ -91,6 +91,6 @@ class TpuHostDevice(ExecutableApplication):
         "D2H Bandwidth",
         fom_regex=r".*(?:Device-to-Host|D2H).*?:\s*(?P<d2h_bandwidth>\d+\.\d+)",
         group_name="d2h_bandwidth",
-        units="GB/s",
+        units="GiB/s",
         contexts=["params"],
     )

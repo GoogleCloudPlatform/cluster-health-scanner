@@ -364,8 +364,8 @@ a3-megagpu-8g:
 a4x-highgpu-4g:
   variables:
     pod_annotations_yaml: |
-      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
-      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+      compute-domain.nvidia.com/domain-name: {job_name}-cd
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
@@ -398,24 +398,26 @@ a4x-highgpu-4g:
       - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
-        resourceClaimTemplateName: {job_name}-compute-domain-channel
+        resourceClaimTemplateName: {job_name}-cdc
     custom_resources_yaml: |
       apiVersion: resource.nvidia.com/v1beta1
       kind: ComputeDomain
       metadata:
-        name: {job_name}-compute-domain
+        name: {job_name}-cd
+        namespace: "{kubernetes_namespace}"
         labels:
           chs-run: {job_name}
       spec:
         numNodes: {n_nodes}
         channel:
           resourceClaimTemplate:
-            name: {job_name}-compute-domain-channel
+            name: {job_name}-cdc
       ---
       apiVersion: resource.k8s.io/v1beta1
       kind: ResourceClaimTemplate
       metadata:
-        name: {job_name}-compute-domain-channel
+        name: {job_name}-cdc
+        namespace: "{kubernetes_namespace}"
       spec:
         spec:
           devices:
@@ -504,8 +506,8 @@ a4x-highgpu-4g:
 a4x-maxgpu-4g-metal:
   variables:
     pod_annotations_yaml: |
-      compute-domain.nvidia.com/channel-claim-template: {job_name}-compute-domain-channel
-      compute-domain.nvidia.com/domain-name: {job_name}-compute-domain
+      compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+      compute-domain.nvidia.com/domain-name: {job_name}-cd
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
@@ -538,24 +540,26 @@ a4x-maxgpu-4g-metal:
       - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
-        resourceClaimTemplateName: {job_name}-compute-domain-channel
+        resourceClaimTemplateName: {job_name}-cdc
     custom_resources_yaml: |
       apiVersion: resource.nvidia.com/v1beta1
       kind: ComputeDomain
       metadata:
-        name: {job_name}-compute-domain
+        name: {job_name}-cd
+        namespace: "{kubernetes_namespace}"
         labels:
           chs-run: {job_name}
       spec:
         numNodes: {n_nodes}
         channel:
           resourceClaimTemplate:
-            name: {job_name}-compute-domain-channel
+            name: {job_name}-cdc
       ---
       apiVersion: resource.k8s.io/v1beta1
       kind: ResourceClaimTemplate
       metadata:
-        name: {job_name}-compute-domain-channel
+        name: {job_name}-cdc
+        namespace: "{kubernetes_namespace}"
       spec:
         spec:
           devices:
@@ -613,6 +617,39 @@ a4x-maxgpu-4g-metal:
       n_nodes: 1
       mpi_command: ""
 
+  nvidia-stream:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec \"$@\"' --"
+      app_workdir: /workspace
+      n_elements: "2800000000"
+      cpu_affinity: "0-71:0-71:72-143:72-143"
+      mem_affinity: "0:0:1:1"
+
+  nvidia-gemm:
+    modifiers: [{name: "gpu-persistence-mode"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+      processes_per_node: "{gpus_per_node}"
+      n_ranks: "{gpus_per_node}"
+      n_nodes: 1
+      mpi_command: "mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES"
+      app_workdir: /workspace/microbenchmarks
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-71:0-71:72-143:72-143"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 16384
+      n: 16384
+      k: 16384
+
 
 tpu7x-standard-4t:
   variables:
@@ -639,11 +676,19 @@ tpu7x-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       mpi_command: ""
+  tpu-network-diagnostics:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
   tpu-gemm:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -654,7 +699,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -665,7 +709,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -685,7 +728,6 @@ tpu7x-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=tpu7x-8 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -716,11 +758,19 @@ ct6e-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       mpi_command: ""
+  tpu-network-diagnostics:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
   tpu-gemm:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -731,7 +781,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -742,7 +791,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1
@@ -762,7 +810,6 @@ ct6e-standard-4t:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
-      driver_escape_overrides: "export TPU_HOST_BOUNDS=1,1,1 && export HOST_BOUNDS=1,1,1 && export TPU_TOPOLOGY=2x2x1 && export TPU_ACCELERATOR_TYPE=v6e-4 &&"
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
       n_ranks: 1
       processes_per_node: 1

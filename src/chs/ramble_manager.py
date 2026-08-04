@@ -18,7 +18,6 @@ This module provides the RambleManager class, which encapsulates
 the creation, setup, and execution of Ramble workspaces for CHS test runs.
 """
 
-from collections.abc import Callable
 import datetime
 import importlib.resources as pkg_resources
 import json
@@ -27,21 +26,31 @@ import os
 import pathlib
 import re
 import shutil
-
 import subprocess
+import sys
 import sysconfig
 import time
+import chs
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
+
 import click
+import yaml
 from google.protobuf.json_format import MessageToJson
+from rich.console import Console
 
 from chs import exceptions as ex
+from chs import resources
 from chs.boh_generator import BOHGenerator
+from chs.html_generator import HtmlReportGenerator
+from chs.utils import file_utils
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
+from chs.storage import StorageProviderFactory
+from chs.utils import theme
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +84,7 @@ class RambleManager:
         self._base_dir = base_dir
         self._workspace_name = workspace_name
         self._run_id = run_id
+        self._run_command = run_command
         self._app_data = ChsAppData()
         self._path = os.path.join(self._base_dir, self._workspace_name)
 
@@ -125,12 +135,15 @@ class RambleManager:
 
     def _prepare_ramble_command(self, cmd: list[str]) -> list[str]:
         """Prepares a Ramble command by sourcing setup script."""
-        command_str = f'source {self._ramble_setup_script} && exec "$@"'
+        command_str = (
+            f'export RAMBLE_PYTHON="{sys.executable}" && '
+            f'source {self._ramble_setup_script} && exec "$@"'
+        )
         logger.debug(
             "Sourcing %s before running command.",
             self._ramble_setup_script,
         )
-        return ["bash", "-c", command_str, "bash"] + cmd
+        return ["bash", "-eo", "pipefail", "-c", command_str, "bash"] + cmd
 
     def _execute_shell_command(
         self,
@@ -155,10 +168,10 @@ class RambleManager:
             message if the command fails.
 
         Returns:
-          The CompletedProcess object from subprocess.run.
+          The CompletedProcess object from the execution command.
 
         Raises:
-          click.ClickException: If the command fails when check=True.
+          ex.ChsException: If the command fails when check=True.
         """
         logger.debug("Running command: %s", cmd)
         if env:
@@ -177,7 +190,7 @@ class RambleManager:
                 )
                 log_file.flush()
 
-                completed_process = subprocess.run(
+                completed_process = self._run_command(
                     cmd,
                     cwd=cwd,
                     env=run_env,
@@ -192,21 +205,26 @@ class RambleManager:
 
                 if check and completed_process.returncode != 0:
                     msg = (
-                        f"Command failed with exit code "
-                        f"{completed_process.returncode}. "
-                        f"See {log_file_path} for details."
+                        "Command failed with exit code "
+                        f"{completed_process.returncode}."
                     )
+
+                    if completed_process.stderr:
+                        msg += f"\n{completed_process.stderr.strip()}"
+                    elif completed_process.stdout:
+                        msg += f"\n{completed_process.stdout.strip()}"
+
                     if error_context:
                         msg = f"{error_context}. {msg}"
                     raise ex.ChsException(msg)
 
                 return completed_process
 
+        except ex.ChsException:
+            raise
+
         except Exception as e:
-            msg = (
-                f"Failed to execute command: {e}. "
-                f"See {log_file_path} for details."
-            )
+            msg = f"Failed to execute command: {e}."
             if error_context:
                 msg = f"{error_context}: {msg}"
             raise ex.ChsException(msg)
@@ -238,10 +256,10 @@ class RambleManager:
             non-zero exit code.
 
         Returns:
-          The CompletedProcess object from subprocess.run.
+          The CompletedProcess object from the execution command.
 
         Raises:
-          click.ClickException: If the Ramble command fails.
+          ex.ChsException: If the Ramble command fails.
         """
         cmd = ["ramble", "-d", "-w", self.path, subcommand] + args
         exec_cmd = self._prepare_ramble_command(cmd)
@@ -276,12 +294,10 @@ class RambleManager:
 
     def copy_thresholds(self, thresholds_path: str | None = None) -> None:
         """Copies the thresholds configuration file into the workspace."""
-        import shutil
-
         dest_thresholds = os.path.join(self.path, "thresholds.yaml")
         if thresholds_path:
             shutil.copyfile(thresholds_path, dest_thresholds)
-            logger.info(
+            logger.debug(
                 "Copied user thresholds from %s to %s",
                 thresholds_path,
                 dest_thresholds,
@@ -292,11 +308,15 @@ class RambleManager:
             )
             if os.path.exists(internal_thresholds):
                 shutil.copyfile(internal_thresholds, dest_thresholds)
-                logger.info("Copied default thresholds to %s", dest_thresholds)
+                logger.debug("Copied default thresholds to %s", dest_thresholds)
             else:
-                logger.warning(
+                logger.debug(
                     "Default thresholds file not found at %s",
                     internal_thresholds,
+                )
+                logger.warning(
+                    "Unable to find thresholds. The final report will only "
+                    "display raw metrics without pass/fail evaluation."
                 )
 
     def add_custom_repository(self) -> None:
@@ -305,8 +325,6 @@ class RambleManager:
         Raises:
           click.ClickException: If the repository addition command fails.
         """
-        import chs
-
         logger.debug("Adding custom CHS repository to workspace...")
         repo_path = pkg_resources.files(chs).joinpath("repos")
         with pkg_resources.as_file(repo_path) as p:
@@ -322,7 +340,6 @@ class RambleManager:
         scheduler: BaseScheduler,
         tests: list[str] | None,
         machine_type: str,
-        timeout: int | None = None,
         deadline: int | None = None,
     ) -> None:
         """Configures the Ramble workspace for the CHS run.
@@ -331,7 +348,6 @@ class RambleManager:
           scheduler: The scheduler plugin to use (e.g., SlurmScheduler).
           tests: An optional list of names of specific tests to run.
           machine_type: The machine type.
-          timeout: Suite-level timeout in seconds.
           deadline: Suite-level deadline in seconds.
         """
         self._scheduler = scheduler
@@ -348,9 +364,9 @@ class RambleManager:
             workspace_config_dir=workspace_config_dir,
             tests=tests,
             machine_type=machine_type,
-            timeout=timeout,
             deadline=deadline,
             run_id=self.run_id,
+            images_dir=self._app_data.get_images_dir(),
         )
 
     def setup_workspace(self) -> None:
@@ -369,59 +385,87 @@ class RambleManager:
             error_context="Failed to setup workspace",
         )
 
-    def _register_initial_run(self) -> None:
-        """Registers an initial empty run in the app data."""
-        run_entry = self._app_data.get_run(self._workspace_name) or {}
-        run_entry.update(
-            {
-                "run_id": self.run_id,
-                "workspace_path": self.path,
-                "job_entries": {},
-                "submission_time": (
-                    datetime.datetime.now(datetime.timezone.utc).isoformat()
-                ),
-                "scheduler": self._scheduler.name,
-            }
-        )
-        self._app_data.update_run(self._workspace_name, run_entry)
-
-    def execute_experiments(self) -> list[str]:
+    def execute_experiments(
+        self, tier: int = 1, active_tests: list[str] | None = None
+    ) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
-        This runs 'ramble on' to start the experiments and captures Job IDs.
+        This runs the 'all_experiments' script to start the experiments and
+        captures Job IDs by scanning the workspace experiments directory within
+        the current filesystem.
 
         Returns:
           A list of submitted Job IDs.
 
         Raises:
-          click.ClickException: If the experiment execution command fails.
+          ex.ChsException: If the experiment execution command fails.
         """
 
         logger.debug("Executing experiments in %s...", self.path)
 
-        self._register_initial_run()
+        cmd_script = os.path.join(self.path, "all_experiments")
 
-        output = self._execute_ramble_command(
-            subcommand="on",
-            args=[],
-            capture_output=True,
-            env={"TQDM_DISABLE": "1", "TERM": "dumb"},
-            error_context="Failed to execute experiments",
-        ).stdout
+        if not active_tests:
+            logger.debug("Running experiments via all_experiments script...")
+            self._execute_shell_command(
+                cmd=["bash", "-eo", "pipefail", "-c", cmd_script],
+                capture_output=True,
+                error_context="Failed to submit diagnostic jobsets",
+            )
+        else:
+            logger.debug(
+                "Running selected experiments for active tests: %s",
+                active_tests,
+            )
+            test_pattern = "|".join(active_tests)
+            self._execute_shell_command(
+                cmd=[
+                    "bash",
+                    "-eo",
+                    "pipefail",
+                    "-c",
+                    f"grep -E '{test_pattern}' {cmd_script} | "
+                    "bash -eo pipefail",
+                ],
+                capture_output=True,
+                error_context="Failed to execute selected experiments",
+            )
+        job_to_dir = {}
+        experiments_dir = os.path.join(self.path, "experiments")
+        if os.path.exists(experiments_dir):
+            for root, dirs, files in os.walk(experiments_dir):
+                if "execute_experiment" in files:
+                    exp_name = os.path.basename(root)
+                    app_name = os.path.basename(
+                        os.path.dirname(os.path.dirname(root))
+                    )
+                    if app_name == "chs":
+                        dirs.clear()
+                        continue
 
-        job_ids = self._scheduler.parse_job_ids(output)
-        if job_ids:
-            self._update_registry(job_ids)
+                    if active_tests and not any(
+                        t in exp_name for t in active_tests
+                    ):
+                        dirs.clear()
+                        continue
+
+                    scheduler = get_scheduler(self.get_scheduler_type())
+                    job_id = scheduler.extract_job_id(root)
+                    job_to_dir[job_id] = root
+                    dirs.clear()
+
+        if job_to_dir:
+            self._update_registry(job_to_dir, tier=tier)
 
         run_entry = self._app_data.get_run(self._workspace_name) or {}
         run_entry["submission_complete"] = True
         self._app_data.update_run(self._workspace_name, run_entry)
-        logger.info(
+        logger.debug(
             "All JobSets submitted successfully. "
             "submission_complete set to True."
         )
 
-        return job_ids
+        return list(job_to_dir.keys())
 
     def cancel_experiments(self) -> None:
         """Cancels running experiments in the Ramble workspace.
@@ -440,7 +484,7 @@ class RambleManager:
             else "slurm"
         )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
+        scheduler = get_scheduler(scheduler_name)
 
         prefix = "chs-"
         logger.debug(
@@ -451,28 +495,37 @@ class RambleManager:
         scheduler.cancel_jobs_by_prefix(prefix)
         # Clean up associated infrastructure configurations like Kueue
         # statelessly.
-        scheduler.cleanup_scheduler_resources(self._workspace_name)
+        scheduler.cleanup_scheduler_resources()
 
-    def _update_registry(self, job_ids: list[str]) -> None:
+    def _update_registry(
+        self, job_to_dir: dict[str, str], tier: int = 1
+    ) -> None:
         """Updates the runs registry with the current run information."""
         logger.debug(
-            "Updating registry for run %s with job_ids %s",
+            "Updating registry for run %s with job mappings %s (tier %d)",
             self._workspace_name,
-            job_ids,
+            job_to_dir,
+            tier,
         )
         run_entry = self._app_data.get_run(self._workspace_name) or {}
+
+        job_entries = run_entry.get("job_entries", {})
+        for job_id, exp_dir in job_to_dir.items():
+            job_entries[job_id] = {
+                "status": JobStatus.PENDING.value,
+                "experiment_dir": exp_dir,
+                "tier": tier,
+            }
+
         run_entry.update(
             {
                 "run_id": self.run_id,
                 "workspace_path": self.path,
-                "job_entries": {
-                    job_id: {"status": JobStatus.PENDING.value}
-                    for job_id in job_ids
-                },
+                "job_entries": job_entries,
                 "submission_time": (
                     datetime.datetime.now(datetime.timezone.utc).isoformat()
                 ),
-                "scheduler": self._scheduler.name,
+                "scheduler": self.get_scheduler_type(),
             }
         )
         self._app_data.update_run(self._workspace_name, run_entry)
@@ -484,162 +537,353 @@ class RambleManager:
             return list(entry.get("job_entries", {}).keys())
         return []
 
-    def check_jobs_running(self) -> bool:
-        """Checks if any jobs for this workspace are still running."""
-        registry_entry = self._app_data.get_run(self._workspace_name)
-        if not registry_entry:
-            logger.debug("No registry entry found for checking.")
-            return False
-
-        job_ids = self.get_job_ids()
-        if not job_ids:
-            logger.debug("No job IDs found for checking.")
-            return False
-
-        scheduler_name = registry_entry.get("scheduler", "slurm")
-        logger.debug("Using scheduler '%s' for checking jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name, app_data=self._app_data)
-
-        return scheduler.check_jobs_running(job_ids)
-
     def _map_jobs_to_log_paths(self) -> dict[str, str]:
         """Maps Job IDs to their expected log paths on the filesystem.
 
-        Scans the 'experiments' directory for jobset.yaml files, extracts the
-        job name (which is the Job ID), and maps it to the '{experiment}.out'
-        file in the same directory. Matches against registry jobs.
+        Uses the experiment_dir registered in runs.json to find the log files.
         """
-        registry_job_ids = set(self.get_job_ids())
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        job_entries = run_entry.get("job_entries", {})
         mapping = {}
-        experiments_dir = os.path.join(self.path, "experiments")
+        for job_id, info in job_entries.items():
+            exp_dir = info.get("experiment_dir")
+            if not exp_dir or not os.path.exists(exp_dir):
+                logger.debug(
+                    "Experiment directory %s for job %s does not exist",
+                    exp_dir,
+                    job_id,
+                )
+                logger.warning(
+                    "No diagnostic logs found for job '%s'. Some results "
+                    "may be missing from the final report.",
+                    job_id,
+                )
+                continue
 
-        if not os.path.exists(experiments_dir):
-            return mapping
+            try:
+                files = os.listdir(exp_dir)
+                out_files = [
+                    f
+                    for f in files
+                    if f.endswith(".out")
+                    and f != "execute.log"
+                    and not f.startswith("execute")
+                ]
 
-        for root, _, files in os.walk(experiments_dir):
-            if "jobset.yaml" in files:
-                try:
-                    with open(os.path.join(root, "jobset.yaml"), "r") as f:
-                        content = f.read()
-
-                        # Parse all docs (e.g. Service + JobSet) to find match.
-                        docs = list(yaml.safe_load_all(content))
-                        job_name = None
-                        for doc in docs:
-                            if not doc:
-                                continue
-                            name = doc.get("metadata", {}).get("name")
-                            if name and name in registry_job_ids:
-                                job_name = name
-                                break
-
-                        if job_name and job_name in registry_job_ids:
-                            # Find .out file (ignoring execute.log).
-                            out_files = [
-                                f
-                                for f in files
-                                if f.endswith(".out")
-                                and f != "execute.log"
-                                and not f.startswith("execute")
-                            ]
-
-                            if not out_files:
-                                logger.warning(
-                                    "No .out file found in %s for job %s",
-                                    root,
-                                    job_name,
-                                )
-                                continue
-
-                            # Priority 1: File containing job_name
-                            log_path = None
-                            for out_file in out_files:
-                                if job_name in out_file:
-                                    log_path = os.path.join(root, out_file)
-                                    break
-
-                            # Priority 2: Any other .out file (fallback)
-                            if not log_path:
-                                log_path = os.path.join(root, out_files[0])
-
-                            if log_path:
-                                mapping[job_name] = log_path
-                except Exception as e:
-                    logger.warning(
-                        "Failed to parse jobset.yaml in %s: %s", root, e
+                if not out_files:
+                    logger.debug(
+                        "No .out file found in %s for job %s",
+                        exp_dir,
+                        job_id,
                     )
+                    continue
+
+                # Priority 1: File containing job_id
+                log_path = None
+                for out_file in out_files:
+                    if job_id in out_file:
+                        log_path = os.path.join(exp_dir, out_file)
+                        break
+
+                # Priority 2: Any other .out file (fallback)
+                if not log_path:
+                    log_path = os.path.join(exp_dir, out_files[0])
+
+                if log_path:
+                    mapping[job_id] = log_path
+            except OSError as e:
+                logger.debug(
+                    "Failed to list directory %s for job %s: %s",
+                    exp_dir,
+                    job_id,
+                    e,
+                )
+                logger.warning(
+                    "Unable to read the log files for job '%s'. "
+                    "Metrics for this job will be skipped.",
+                    job_id,
+                )
 
         return mapping
 
     def wait_for_jobs(
-        self, app_data: ChsAppData, poll_interval: int = 30
+        self,
+        app_data: ChsAppData,
+        poll_interval: int = 15,
+        tier: int | None = None,
     ) -> None:
         """Waits for all jobs in the workspace to complete and fetches logs.
 
         Args:
             app_data: ChsAppData to update run status.
             poll_interval: Seconds to wait between checks.
+            tier: Optional tier to filter which jobs to wait for.
         """
-        logger.info("Waiting for jobs to complete for run %s...", self._run_id)
-        self._monitor_jobs(app_data, poll_interval)
+        logger.debug("Waiting for jobs to complete for run %s...", self._run_id)
+        self._monitor_jobs(app_data, poll_interval, tier)
 
-    def _monitor_jobs(self, app_data: ChsAppData, poll_interval: int) -> None:
+    def _monitor_jobs(
+        self, app_data: ChsAppData, poll_interval: int, tier: int | None
+    ) -> None:
         """Generic wait logic to monitor job progress and fetch logs.
 
         Polls job statuses for all jobs in the registry. When a job completes,
-        attempts to fetch its log (if a path is mapped). Logs progress.
+        attempts to fetch its log (if a path is mapped) in parallel.
+        Logs progress.
         """
         job_log_map = self._map_jobs_to_log_paths()
         pending_log_fetches = set(job_log_map.keys())
-        scheduler = get_scheduler(self.get_scheduler_type(), app_data=app_data)
+        scheduler = get_scheduler(self.get_scheduler_type())
 
         registry_jobs = set(self.get_job_ids())
         if not registry_jobs:
-            logger.info("No jobs found in registry.")
+            logger.debug("No jobs found in registry.")
             return
 
-        # We poll ALL registry jobs for status
+        # We poll ALL registry jobs for status, but filter active_jobs to just
+        # this tier
+        run_entry = app_data.get_run(self._workspace_name) or {}
+        job_entries = run_entry.get("job_entries", {})
+
         active_jobs = registry_jobs.copy()
+        if tier is not None:
+            active_jobs = {
+                job_id
+                for job_id in active_jobs
+                if job_entries.get(job_id, {}).get("tier", 1) == tier
+            }
 
-        while active_jobs:
-            statuses = scheduler.get_job_statuses(list(active_jobs))
+        QUEUE_TIMEOUT_SECONDS = run_entry.get(
+            "deadline", resources.DEFAULT_DEADLINE
+        )
+        pending_start_times = {}
 
-            still_running = False
-            for job_id, status in statuses.items():
-                if JobStatus.is_terminal(status):
-                    # Job finished
-                    if job_id in pending_log_fetches:
-                        log_path = job_log_map.get(job_id)
-                        if log_path:
-                            try:
-                                scheduler.fetch_job_log(job_id, log_path)
-                            except Exception as e:
-                                logger.error(
-                                    "Error fetching log for %s: %s", job_id, e
-                                )
-                        pending_log_fetches.remove(job_id)
+        max_workers = 32
 
-                    active_jobs.remove(job_id)
-                else:
-                    still_running = True
+        logger.debug(
+            "Starting log fetching executor with %d workers", max_workers
+        )
 
+        start_time = time.time()
+        submission_time_str = run_entry.get("submission_time")
+        if isinstance(submission_time_str, str):
             try:
-                app_data.update_run_status(self._workspace_name, statuses)
-            except Exception as e:
-                logger.warning("Failed to update run status in registry: %s", e)
-
-            if still_running:
-                logger.info(
-                    "Jobs remaining: %d. Waiting %s seconds...",
-                    len(active_jobs),
-                    poll_interval,
+                submission_dt = datetime.datetime.fromisoformat(
+                    submission_time_str
                 )
-                time.sleep(poll_interval)
+                start_time = submission_dt.timestamp()
+            except ValueError:
+                pass
 
-        logger.info(
+        def get_jobs_desc() -> str:
+            elapsed = max(0, time.time() - start_time)
+            elapsed_delta = datetime.timedelta(seconds=int(elapsed))
+            elapsed_str = str(elapsed_delta).split(".")[0]
+            header_style = theme.CHS_HEADER_STYLE
+            title_style = theme.CHS_TITLE_STYLE
+            jobs = (
+                f"[{header_style}]Tests Remaining:[/{header_style}] "
+                f"[{title_style}]{len(active_jobs)}[/{title_style}]"
+            )
+            time_str = (
+                f"[{header_style}]Time Elapsed:[/{header_style}] "
+                f"[{title_style}]{elapsed_str}[/{title_style}]"
+            )
+            return (
+                f"{jobs} | {time_str}\n \n"
+                f"[dim]You can safely detach from this run using Ctrl+C.[/dim]"
+            )
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+
+                with theme.get_progress_spinner(
+                    "Waiting for test execution to complete...", show_time=False
+                ) as (
+                    live_context,
+                    task_id,
+                ):
+                    while active_jobs:
+                        if live_context and task_id is not None:
+                            live_context.update(
+                                task_id, description=get_jobs_desc()
+                            )
+                        statuses = scheduler.get_job_statuses(list(active_jobs))
+
+                        jobs_to_cancel = []
+                        still_running = False
+                        for job_id, status in statuses.items():
+                            if JobStatus.is_terminal(status):
+                                # Job finished
+                                pending_start_times.pop(job_id, None)
+                                if job_id in pending_log_fetches:
+                                    log_path = job_log_map.get(job_id)
+                                    if log_path:
+                                        logger.debug(
+                                            "Fetching log for "
+                                            "completed job: %s",
+                                            job_id,
+                                        )
+                                        future = executor.submit(
+                                            self._safe_fetch_log,
+                                            scheduler,
+                                            job_id,
+                                            log_path,
+                                        )
+                                        futures.append(future)
+                                    pending_log_fetches.remove(job_id)
+
+                                active_jobs.remove(job_id)
+                            elif status in (
+                                JobStatus.PENDING,
+                                JobStatus.UNKNOWN,
+                            ):
+                                if job_id not in pending_start_times:
+                                    pending_start_times[job_id] = time.time()
+
+                                if (
+                                    time.time() - pending_start_times[job_id]
+                                    > QUEUE_TIMEOUT_SECONDS
+                                ):
+                                    logger.error(
+                                        "Job '%s' has exceeded the maximum "
+                                        "queue wait time of %d "
+                                        "seconds. It will be cancelled to "
+                                        "free up resources.",
+                                        job_id,
+                                        QUEUE_TIMEOUT_SECONDS,
+                                    )
+                                    jobs_to_cancel.append(job_id)
+                                else:
+                                    still_running = True
+                            else:
+                                pending_start_times.pop(job_id, None)
+                                still_running = True
+
+                        if jobs_to_cancel:
+                            scheduler.cancel_jobs(jobs_to_cancel)
+                            for canceled_job in jobs_to_cancel:
+                                statuses[canceled_job] = (
+                                    JobStatus.DEADLINE.value
+                                )
+                                if canceled_job in active_jobs:
+                                    active_jobs.remove(canceled_job)
+                                pending_start_times.pop(canceled_job, None)
+
+                        try:
+                            app_data.update_run_status(
+                                self._workspace_name, statuses
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to update the CHS run status in the "
+                                "internal registry. Error: %s",
+                                e,
+                            )
+
+                        if still_running:
+                            if not live_context:
+                                elapsed = int(time.time() - start_time)
+                                elapsed_td = datetime.timedelta(seconds=elapsed)
+                                logger.debug(
+                                    "Jobs remaining: %d | Elapsed time: %s. "
+                                    "Waiting %s seconds...",
+                                    len(active_jobs),
+                                    elapsed_td,
+                                    poll_interval,
+                                )
+                                time.sleep(poll_interval)
+                            else:
+                                for _ in range(poll_interval):
+                                    if task_id is not None:
+                                        live_context.update(
+                                            task_id, description=get_jobs_desc()
+                                        )
+                                    time.sleep(1)
+
+                    if live_context and task_id is not None:
+                        live_context.update(
+                            task_id,
+                            description=get_jobs_desc(),
+                            force_print=True,
+                        )
+
+                    if futures:
+                        if live_context and task_id is not None:
+                            live_context.update(
+                                task_id,
+                                description=(
+                                    f"[{theme.CHS_HEADER_STYLE}]Fetching test "
+                                    "logs..."
+                                    f"[/{theme.CHS_HEADER_STYLE}]"
+                                ),
+                                force_print=True,
+                            )
+
+                        while True:
+                            pending_count = sum(
+                                1 for f in futures if not f.done()
+                            )
+                            if pending_count == 0:
+                                if live_context and task_id is not None:
+                                    live_context.update(
+                                        task_id,
+                                        description=(
+                                            f"[{theme.CHS_HEADER_STYLE}]All "
+                                            "test logs fetched successfully."
+                                            f"[/{theme.CHS_HEADER_STYLE}]"
+                                        ),
+                                    )
+                                break
+                            if live_context and task_id is not None:
+                                live_context.update(
+                                    task_id,
+                                    description=(
+                                        f"[{theme.CHS_HEADER_STYLE}]Fetching "
+                                        "test logs..."
+                                        f"[/{theme.CHS_HEADER_STYLE}]"
+                                    ),
+                                )
+                            wait(futures, timeout=1)
+                        for f in futures:
+                            try:
+                                f.result()
+                            except Exception as e:
+                                logger.debug("Log fetch task failed: %s", e)
+        except KeyboardInterrupt:
+            console = Console()
+            console.print(
+                "\n[yellow]Detached from active run. "
+                "Tests will continue executing on the cluster.[/yellow]\n"
+                "To attach to the ongoing run, run: [cyan]chs run[/cyan]\n"
+                "To cancel execution and cleanup run: [cyan]chs cancel[/cyan]"
+            )
+            raise ex.ChsDetachedException()
+
+        logger.debug(
             "All jobs completed and logs fetched for run %s.",
             self._run_id,
         )
+        Console().print(
+            f"[{theme.CHS_SUCCESS_STYLE}]Tests execution completed."
+            f"[/{theme.CHS_SUCCESS_STYLE}]"
+        )
+
+    def _safe_fetch_log(
+        self, scheduler: BaseScheduler, job_id: str, log_path: str
+    ) -> None:
+        """Helper to run fetch_job_log safely in a thread."""
+        try:
+            scheduler.fetch_job_log(job_id, log_path)
+            logger.debug("Successfully fetched log for %s", job_id)
+        except Exception as e:
+            logger.error(
+                "Failed to retrieve execution logs for job ID '%s'. Error: %s",
+                job_id,
+                e,
+            )
+            raise
 
     def get_scheduler_type(self) -> str:
         """Retrieves scheduler type for this workspace from the registry."""
@@ -709,10 +953,11 @@ class RambleManager:
                     )
                     continue
                 elif process.returncode != 0:
-                    logger.warning(
-                        "Fetching success criteria for %s %s "
-                        "failed with exit code %s. "
-                        "Continuing without success criteria.",
+                    logger.debug(
+                        "Failed to evaluate success criteria for "
+                        "%s '%s' (Exit Code: %s). "
+                        "The analysis will proceed without "
+                        "this validation.",
                         key_type,
                         name,
                         process.returncode,
@@ -764,9 +1009,10 @@ class RambleManager:
                 Exception,
             ) as e:
                 logger.warning(
-                    "Fetching success criteria for %s %s "
-                    "failed with error: %s. "
-                    "Continuing without success criteria.",
+                    "Encountered an error while evaluating success "
+                    "criteria for %s '%s'. The "
+                    "analysis will proceed without this "
+                    "validation. Error: %s",
                     key_type,
                     name,
                     e,
@@ -774,21 +1020,35 @@ class RambleManager:
 
         return mapping_result
 
-    def analyze_results(
-        self, thresholds_path: str | None = None, skip_validation: bool = False
-    ) -> str:
-        """Analyzes and stores the results of the Ramble experiments.
+    def _reset_experiment_statuses(self) -> None:
+        """Resets Ramble experiment statuses to force re-analysis."""
+        logger.debug("Resetting experiment statuses to 'SETUP' for analysis...")
+        experiments_dir = os.path.join(self.path, "experiments")
+        if os.path.exists(experiments_dir):
+            for root, _, files in os.walk(experiments_dir):
+                if "ramble_status.json" in files:
+                    status_path = os.path.join(root, "ramble_status.json")
+                    try:
+                        with file_utils.atomic_open(status_path, "w") as f:
+                            json.dump({"experiment_status": "SETUP"}, f)
+                    except OSError as e:
+                        logger.warning(
+                            "Failed to reset the internal state file at '%s'. "
+                            "Subsequent runs may be affected. Error: %s",
+                            status_path,
+                            e,
+                        )
 
-        Analyzes the results and stores BoH in GCS/ BigQuery for later
-        retrieval.
+    def analyze_experiments(self) -> str:
+        """Analyzes the results of the Ramble experiments.
 
         Returns:
-          The path to the directory containing the analysis results and Bill of
-          Health.
+          The path to the results.latest.json file.
 
         Raises:
           click.ClickException: If the experiment analyze command fails.
         """
+        self._reset_experiment_statuses()
 
         logger.debug("Analyzing experiments in %s...", self.path)
         self._execute_ramble_command(
@@ -811,15 +1071,11 @@ class RambleManager:
 
         if not os.path.exists(results_json_path):
             raise ex.ChsException(
-                "chs analyze command failed. Recheck the run id and try "
-                "rerunning the command."
+                "Failed to generate results. Ensure jobs are complete and try "
+                "running 'chs run' again to auto-attach and resume."
             )
         self._cleanup_inputs_dir()
-        return self.generate_boh(
-            results_json_path,
-            thresholds_path=thresholds_path,
-            skip_validation=skip_validation,
-        )
+        return results_json_path
 
     def generate_boh(
         self,
@@ -862,49 +1118,85 @@ class RambleManager:
         logger.debug("Bill of Health generated successfully.")
 
         boh_path = workspace_dir / "bill_of_health.json"
-        with open(boh_path, "w") as f:
+        with file_utils.atomic_open(boh_path, "w") as f:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
-        # Cleanup jobs after successful analysis
         try:
-            self.cancel_experiments()
-            logger.debug("Cleaned up jobs for run %s", self._run_id)
+            html_gen = HtmlReportGenerator()
+            html_path = workspace_dir / "bill_of_health.html"
+            html_gen.save_html(boh, str(html_path))
+            logger.debug("Interactive health report generated successfully.")
         except Exception as e:
-            logger.warning("Failed to cleanup jobs after analysis: %s", e)
+            logger.warning(
+                "Failed to generate the interactive health "
+                "report summary. Error: %s",
+                e,
+            )
 
         return str(workspace_dir)
 
-    def _upload_boh(self, provider) -> None:
-        """Uploads Bill of Health using the provider."""
+    def _upload_boh(self, provider) -> tuple[str | None, str | None, bool]:
+        """Uploads the Bill of Health JSON and HTML files.
+
+        Returns:
+            A tuple of (json_destination, html_destination, success).
+        """
         boh_path = os.path.join(self.path, "bill_of_health.json")
+        html_path = os.path.join(self.path, "bill_of_health.html")
+
         if not os.path.exists(boh_path):
-            logger.warning(
+            logger.debug(
                 "Bill of Health file %s does not exist. Skipping BOH archival.",
                 boh_path,
             )
-            return
+            return None, None, True
 
-        logger.info("Uploading Bill of Health...")
+        logger.debug("Uploading Bill of Health...")
+        boh_json_dest = None
+        boh_html_dest = None
+        upload_success = True
+
         try:
-            provider.upload_file(
-                boh_path, f"bills_of_health/{self._workspace_name}.json"
-            )
-            logger.info("Bill of Health uploaded successfully.")
+            boh_json_dest = f"bills_of_health/{self._workspace_name}.json"
+            provider.upload_file(boh_path, boh_json_dest)
         except Exception as e:
-            raise ex.ChsArchiveException(
-                f"Failed to archive Bill of Health: {e}"
-            ) from e
+            logger.debug("Failed to archive Bill of Health JSON: %s", e)
+            upload_success = False
+            boh_json_dest = None
 
-    def _upload_workspace(self, provider) -> None:
+        if os.path.exists(html_path):
+            try:
+                boh_html_dest = f"bills_of_health/{self._workspace_name}.html"
+                provider.upload_file(html_path, boh_html_dest)
+                logger.debug(
+                    "Interactive health report uploaded successfully to %s",
+                    boh_html_dest,
+                )
+            except Exception as e:
+                logger.debug("Failed to archive Bill of Health HTML: %s", e)
+                upload_success = False
+                boh_html_dest = None
+
+        if upload_success:
+            logger.debug("Bill of Health uploaded successfully.")
+
+        return boh_json_dest, boh_html_dest, upload_success
+
+    def _get_archive_dir(self) -> str:
+        """Returns the local workspace archive directory."""
+        return os.path.join(self.path, "archive")
+
+    def _upload_workspace(self, provider) -> str | None:
         """Archives workspace locally and uploads using the provider."""
         if not os.path.exists(self.path):
-            logger.warning(
-                "Workspace path %s does not exist. Skipping archival.",
+            logger.debug(
+                "The workspace directory '%s' was not found. "
+                "Skipping the archival process.",
                 self.path,
             )
-            return
+            return None
 
-        logger.info("Archiving workspace locally...")
+        logger.debug("Archiving workspace locally...")
         try:
             # Archive locally (without --upload-url)
             self._execute_ramble_command(
@@ -916,13 +1208,15 @@ class RambleManager:
                     "bill_of_health.json",
                     "--archive-pattern",
                     "internal.log",
+                    "--archive-pattern",
+                    "debug.txt",
                 ],
                 capture_output=True,
                 error_context="Failed to archive workspace",
             )
 
             # Scan for the generated tarball
-            archive_dir = pathlib.Path(self.path) / "archive"
+            archive_dir = pathlib.Path(self._get_archive_dir())
             archives = list(archive_dir.glob("*.tar.gz")) + list(
                 archive_dir.glob("*.tgz")
             )
@@ -934,12 +1228,11 @@ class RambleManager:
 
             # Use the first match (should be only one if clean)
             archive_file = archives[0]
-            logger.info("Uploading workspace archive %s...", archive_file.name)
+            logger.debug("Uploading workspace archive %s...", archive_file.name)
 
-            provider.upload_file(
-                str(archive_file), f"workspaces/{self._workspace_name}.tar.gz"
-            )
-            logger.info("Workspace archive uploaded successfully.")
+            dest = f"workspaces/{self._workspace_name}.tar.gz"
+            provider.upload_file(str(archive_file), dest)
+            logger.debug("Workspace archive uploaded successfully.")
 
             # Clean up local archive
             try:
@@ -953,40 +1246,110 @@ class RambleManager:
                 )
 
         except Exception as e:
-            logger.warning(
-                "Non-fatal failure while archiving and uploading "
-                "the workspace: %s",
+            logger.debug(
+                "Failed to archive and upload the workspace "
+                "archive to remote storage. Your "
+                "local CHS results under '%s' have been "
+                "preserved. Error: %s",
+                self.path,
                 e,
             )
+            return None
+        return dest
 
-    def archive(self) -> None:
-        """Orchestrates archival of BoH and workspace using active provider."""
-        if not os.path.exists(self.path) or not os.path.exists(
+    def has_bill_of_health(self) -> bool:
+        """Returns True if bill_of_health.json exists in the workspace."""
+        return os.path.exists(os.path.join(self.path, "bill_of_health.json"))
+
+    def is_archived(self) -> bool:
+        """Returns True if workspace has been archived.
+
+        Checks against configured storage provider (if any).
+        """
+        from chs.storage import StorageProviderFactory
+
+        storage_provider = StorageProviderFactory.get_provider_for_run(
+            self.workspace_name
+        )
+        if storage_provider:
+            run_entry = self._app_data.get_run(self.workspace_name) or {}
+            return bool(run_entry.get("is_archived", False))
+        return True
+
+    @property
+    def is_workspace_created(self) -> bool:
+        """Returns True if the workspace directory exists on disk."""
+        return os.path.exists(self.path) and os.path.exists(
             os.path.join(self.path, ".ramble-workspace")
-        ):
+        )
+
+    def archive(self) -> tuple[str | None, str | None, str | None, bool]:
+        """Orchestrates archival of BoH and workspace using active provider.
+
+        Returns:
+            A tuple of (workspace_uri, json_boh_uri, html_boh_uri,
+                        all_uploads_succeeded). Returns local paths if no
+            storage provider is configured.
+        """
+        local_ws_path = os.path.join(
+            self._get_archive_dir(), f"{self._workspace_name}.tar.gz"
+        )
+        local_json_path = os.path.join(self.path, "bill_of_health.json")
+        local_html_path = os.path.join(self.path, "bill_of_health.html")
+
+        if not self.is_workspace_created:
             logger.debug(
                 "Workspace %s is not a valid Ramble workspace. "
                 "Skipping archival.",
                 self.path,
             )
-            return
+            return None, None, None, False
 
         try:
-            from chs.storage import StorageProviderFactory
-
-            provider = StorageProviderFactory.get_active_provider()
+            provider = StorageProviderFactory.get_provider_for_run(
+                self._workspace_name
+            )
+            if not provider:
+                raise ex.ChsException(
+                    "No storage provider configured for this run"
+                )
         except Exception as e:
             logger.debug(
                 "Storage provider not configured or failed to load. "
                 "Skipping archival: %s",
                 e,
             )
-            return
+            return (
+                local_ws_path if os.path.exists(local_ws_path) else None,
+                local_json_path if os.path.exists(local_json_path) else None,
+                local_html_path if os.path.exists(local_html_path) else None,
+                False,
+            )
 
-        try:
-            self._upload_boh(provider)
-        finally:
-            self._upload_workspace(provider)
+        all_uploads_succeeded = True
+        boh_json_dest, boh_html_dest, boh_success = self._upload_boh(provider)
+        ws_dest = None
+        if not boh_success:
+            logger.debug("Failed to upload Bill of Health.")
+            all_uploads_succeeded = False
+
+        ws_dest = self._upload_workspace(provider)
+        if not ws_dest:
+            logger.debug("Failed to upload workspace archive.")
+            all_uploads_succeeded = False
+
+        return (
+            provider.get_uri(ws_dest)
+            if ws_dest
+            else (local_ws_path if os.path.exists(local_ws_path) else None),
+            provider.get_uri(boh_json_dest)
+            if boh_json_dest
+            else (local_json_path if os.path.exists(local_json_path) else None),
+            provider.get_uri(boh_html_dest)
+            if boh_html_dest
+            else (local_html_path if os.path.exists(local_html_path) else None),
+            all_uploads_succeeded,
+        )
 
     def _cleanup_inputs_dir(self) -> None:
         """Deletes the inputs directory in the workspace."""
@@ -996,8 +1359,11 @@ class RambleManager:
             try:
                 shutil.rmtree(inputs_dir)
             except OSError as e:
-                logger.warning(
-                    "Failed to delete inputs directory %s: %s", inputs_dir, e
+                logger.debug(
+                    "Failed to clean up the temporary inputs "
+                    "directory at '%s'. Error: %s",
+                    inputs_dir,
+                    e,
                 )
 
     def cleanup_workspace(self) -> None:

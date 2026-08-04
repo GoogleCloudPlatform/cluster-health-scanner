@@ -13,20 +13,41 @@
 # limitations under the License.
 
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import format_nodes
 from rich.console import RenderableType
 from chs.core.default_plugin.renderer import DefaultRenderer
-from chs.plugins.utils.nccl_utils import render_nccl_detail
+from chs.core.plugin_base import PluginDetailReport
+from chs.plugins.utils.nccl_utils import (
+    render_nccl_detail,
+    extract_nccl_detail_data,
+)
 
 
 class NcclSingleNodeRenderer(DefaultRenderer):
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        return extract_nccl_detail_data(
+            "NCCL Single Node Detail",
+            "Node",
+            test_results,
+            lambda res: (
+                format_nodes(res.target_resources)
+                if res.target_resources
+                else "Unknown Node"
+            ),
+        )
+
     def render_detail(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
         return render_nccl_detail(
-            "Single Node Detail",
+            "NCCL Single Node Detail",
             "Node",
             test_results,
-            lambda res: ", ".join(res.target_resource_ids)
-            if res.target_resource_ids
-            else "Unknown Node",
+            lambda res: (
+                format_nodes(res.target_resources)
+                if res.target_resources
+                else "Unknown Node"
+            ),
         )

@@ -13,9 +13,14 @@
 # limitations under the License.
 
 from chs.protos import bill_of_health_pb2 as pb
+from chs.plugins.utils.rendering import format_nodes
 from rich.console import RenderableType
 from chs.core.default_plugin.renderer import DefaultRenderer
-from chs.plugins.utils.nccl_utils import render_nccl_detail
+from chs.core.plugin_base import PluginDetailReport
+from chs.plugins.utils.nccl_utils import (
+    render_nccl_detail,
+    extract_nccl_detail_data,
+)
 
 
 class NcclPairwiseRenderer(DefaultRenderer):
@@ -26,6 +31,21 @@ class NcclPairwiseRenderer(DefaultRenderer):
     def set_topology(self, topology):
         self.topology = topology
 
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        return extract_nccl_detail_data(
+            "Pairwise Detail (Aggregated)",
+            "Pair (Node 1 <-> Node 2)",
+            test_results,
+            lambda res: (
+                format_nodes(res.target_resources, join_str=" <-> ")
+                if res.target_resources
+                else "Unknown Pair"
+            ),
+            self.topology,
+        )
+
     def render_detail(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:
@@ -33,8 +53,10 @@ class NcclPairwiseRenderer(DefaultRenderer):
             "Pairwise Detail (Aggregated)",
             "Pair (Node 1 <-> Node 2)",
             test_results,
-            lambda res: " <-> ".join(res.target_resource_ids)
-            if res.target_resource_ids
-            else "Unknown Pair",
+            lambda res: (
+                format_nodes(res.target_resources, join_str=" <-> ")
+                if res.target_resources
+                else "Unknown Pair"
+            ),
             self.topology,
         )

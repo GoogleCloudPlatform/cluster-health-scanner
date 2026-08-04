@@ -1,12 +1,12 @@
-FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
+RUN apk add --no-cache \
+    build-base \
     git \
-    python3-venv \
-    google-cloud-cli-gke-gcloud-auth-plugin kubectl \
-    && rm -rf /var/lib/apt/lists/*
+    python3 \
+    kubectl \
+    && gcloud components install gke-gcloud-auth-plugin --quiet
 
 WORKDIR /workspace
 ENV HOME=/workspace
@@ -24,5 +24,9 @@ WORKDIR /app
 RUN pip install --no-cache-dir .
 
 WORKDIR /workspace
+
+# Tells the CHS python app how it is being invoked so it logs correctly
+ARG CHS_VERSION=latest
+ENV CHS_CLI_NAME="docker run chs:${CHS_VERSION}"
 
 ENTRYPOINT ["chs"]

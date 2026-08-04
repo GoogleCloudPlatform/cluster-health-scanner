@@ -67,12 +67,13 @@ class NcclTestCompiler(BasicModifier):
 
     modifier_variable(
         "nccl_tests_build_wrapper",
-        default='srun -N 1 --ntasks=1 --container-mounts="{workspace_shared}:{workspace_shared}" --container-image="{container_path}" bash -c "{nccl_tests_build_command}"',
+        default='srun -N 1 --ntasks=1 --container-mounts="{workspace_shared}:{workspace_shared}" --container-image="{container_path}" bash -eo pipefail -c "{nccl_tests_build_command}"',
         description="Execution wrapper for the build command (defaults to srun with container mounts)",
         modes=["standard"],
     )
 
     build_script = """
+set -eo pipefail
 LOCK_DIR="{nccl_tests_build_dir}.lock"
 SUCCESS_FILE="{nccl_tests_build_dir}/.success"
 FAIL_FILE="{nccl_tests_build_dir}.failed"

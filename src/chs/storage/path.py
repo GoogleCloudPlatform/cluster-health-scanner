@@ -18,7 +18,7 @@ import logging
 import pathlib
 import shutil
 import tempfile
-from chs.exceptions import ChsValidationError
+from chs.exceptions import ChsValidationError, StorageObjectNotFoundException
 from chs.storage.base import StorageProvider
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,10 @@ class PathStorageProvider(StorageProvider):
         try:
             shutil.copy2(src_path, local_dest)
             logger.debug("Copied %s to %s", src_path, local_dest)
+        except FileNotFoundError as e:
+            raise StorageObjectNotFoundException(
+                f"File {src_path} not found."
+            ) from e
         except OSError as e:
             raise OSError(
                 f"Failed to copy {src_path} to {local_dest}: {e}"
@@ -136,3 +140,11 @@ class PathStorageProvider(StorageProvider):
                     logger.debug("Cleaned up empty validation directory: %s", d)
             except OSError as e:
                 logger.debug("Failed to clean up directory %s: %s", d, e)
+
+    def get_uri(self, remote_path: str) -> str:
+        """Returns the full local absolute path."""
+        return str(self._get_full_path(remote_path))
+
+    def exists(self, remote_path: str) -> bool:
+        """Checks if relative path exists under target_path."""
+        return self._get_full_path(remote_path).exists()

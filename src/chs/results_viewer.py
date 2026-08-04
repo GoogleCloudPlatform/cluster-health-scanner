@@ -20,12 +20,17 @@ import json
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
-from chs.utils.theme import create_error_table as create_theme_error_table
 
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
+from chs.plugins.utils import rendering
+from chs.utils import lifecycle
+from chs.core.summary_aggregator import (
+    RunSummaryData,
+    aggregate_boh_summary,
+    filter_test_results,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +38,14 @@ logger = logging.getLogger(__name__)
 class ResultsViewer:
     """Renders Bill of Health results using Rich formatting via Plugins."""
 
-    def __init__(self, boh_path: str):
+    def __init__(
+        self,
+        boh_path: str | os.PathLike[str],
+        boh_uri: str | None = None,
+    ):
         """Initializes the viewer with the path to the Bill of Health JSON."""
         self.boh_path = boh_path
+        self.boh_uri = boh_uri
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
@@ -48,16 +58,26 @@ class ResultsViewer:
                 with open(topo_path, "r") as f:
                     self.topology = json.load(f)
             except json.JSONDecodeError as e:
-                logger.warning(
-                    "Failed to parse topology JSON from %s: %s",
+                logger.debug(
+                    "Failed to parse the cluster topology "
+                    "file at '%s'. Error: %s",
                     topo_path,
                     e,
                 )
-            except IOError as e:
                 logger.warning(
-                    "Failed to read topology file %s: %s",
+                    "Could not load cluster topology data. Some "
+                    "node-specific diagnostics will be skipped."
+                )
+            except IOError as e:
+                logger.debug(
+                    "Failed to read the cluster topology "
+                    "file at '%s'. Error: %s",
                     topo_path,
                     e,
+                )
+                logger.warning(
+                    "Could not load cluster topology data. Some "
+                    "node-specific diagnostics will be skipped."
                 )
 
         try:
@@ -71,14 +91,21 @@ class ResultsViewer:
 
         except FileNotFoundError as e:
             logger.error(
-                "Bill of Health file not found at %s: %s", self.boh_path, e
+                "The Bill of Health results file could not "
+                "be found at '%s'. Ensure "
+                "the diagnostics run completed successfully. Error: %s",
+                self.boh_path,
+                e,
             )
             raise ex.BillOfHealthNotFoundException(
                 f"Bill of Health file not found at {self.boh_path}: {e}"
             ) from e
         except Exception as e:
             logger.error(
-                "Error parsing Bill of Health from %s: %s", self.boh_path, e
+                "Failed to parse the Bill of Health results "
+                "file at '%s'. Error: %s",
+                self.boh_path,
+                e,
             )
             raise ex.BillOfHealthLoadException(
                 f"Error parsing Bill of Health from {self.boh_path}: {e}"
@@ -87,48 +114,53 @@ class ResultsViewer:
     def _filter_results(
         self, tests: list[str] | None = None, resources: list[str] | None = None
     ) -> list[pb.TestResult]:
-        filtered_results = []
-        for result in self.boh.test_results:
-            match_tests = True
-            match_resources = True
+        return filter_test_results(self.boh, tests, resources)
 
-            if tests:
-                match_tests = any(t == result.test_name for t in tests)
-            if resources:
-                match_resources = any(
-                    r in result.target_resource_ids for r in resources
-                )
+    def _aggregate_summary_data(
+        self,
+    ) -> RunSummaryData | None:
+        """Extracts and normalizes data into a structured format."""
+        return aggregate_boh_summary(
+            boh=self.boh,
+            boh_path=self.boh_path,
+            plugin_manager=self.plugin_manager,
+        )
 
-            if match_tests and match_resources:
-                filtered_results.append(result)
-        return filtered_results
+    def show_summary_and_details(
+        self,
+    ) -> None:
+        summary_data = self._aggregate_summary_data()
+        if not summary_data:
+            return
 
-    def _append_errors(self, results: list[pb.TestResult]) -> None:
-        """Checks for errors (keys ending in 'Detected') and prints them."""
-        all_errors = []
-        for res in results:
-            for m in res.metrics:
-                if m.key.endswith("Error Detected") or m.key.endswith(
-                    "Failure Detected"
-                ):
-                    all_errors.append(m)
-
-        if all_errors:
+        if summary_data.run_id == "" and not summary_data.test_summaries:
             self.console.print(
-                Text("\nDetected Errors/Warnings", style="bold red")
+                Panel(
+                    "[yellow]No matching results found.[/yellow]",
+                    title="Info",
+                    border_style="yellow",
+                )
             )
-            error_data = []
-            for m in all_errors:
-                if m.value.HasField("string_value"):
-                    val = m.value.string_value
-                elif m.value.HasField("bool_value"):
-                    val = str(m.value.bool_value)
-                else:
-                    val = "<unknown value type>"
-                error_data.append((m.key, val))
+            return
 
-            table = create_theme_error_table(error_data)
-            self.console.print(table)
+        self.console.print(f"Run ID: {summary_data.run_id}")
+        self.console.print(f"Submission Time: {summary_data.submission_time}")
+        self.console.print(
+            f"Nodes under test: {summary_data.total_nodes} nodes"
+        )
+
+        if self.boh_uri:
+            href = (
+                self.boh_uri.replace(
+                    "gs://", "https://storage.cloud.google.com/", 1
+                )
+                if self.boh_uri.startswith("gs://")
+                else self.boh_uri
+            )
+            self.console.print(
+                "Check the interactive health report in\n"
+                f"[link={href}][cyan]{self.boh_uri}[/cyan][/link]"
+            )
 
     def show_details(
         self, tests: list[str] | None = None, resources: list[str] | None = None
@@ -166,20 +198,28 @@ class ResultsViewer:
             plugin = self.plugin_manager.get_plugin(canonical_name)
             if hasattr(plugin, "set_topology"):
                 plugin.set_topology(self.topology)
-            detail = plugin.render_detail(results)
+            valid_results = []
+            for res in results:
+                if (
+                    res.result_status
+                    in lifecycle.TIME_EXCEEDED_PB_STATUSES.values()
+                ):
+                    nodes_str = rendering.format_nodes(res.target_resources)
+                    status_name = pb.ResultStatus.Name(res.result_status)
+                    status_clean = status_name.replace("RESULT_STATUS_", "")
+                    self.console.print(
+                        f"[bold red]{status_clean}[/bold red] • "
+                        f"{res.test_name} ({res.test_level}) on {nodes_str}"
+                    )
+                else:
+                    valid_results.append(res)
 
-            has_errors = any(
-                (
-                    m.key.endswith("Error Detected")
-                    or m.key.endswith("Failure Detected")
-                )
-                for res in results
-                for m in res.metrics
-            )
+            if not valid_results:
+                self.console.print()
+                continue
 
-            if detail is not None or has_errors:
-                if detail is not None:
-                    self.console.print(detail)
+            detail = plugin.render_detail(valid_results)
 
-                self._append_errors(results)
+            if detail is not None:
+                self.console.print(detail)
                 self.console.print()

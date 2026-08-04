@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass
 
 from chs.core.default_plugin.renderer import DefaultRenderer
+from chs.core.plugin_base import ColumnDef, PluginDetailReport, TableDataModel
+from chs.plugins.utils.rendering import format_nodes, format_val
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import create_styled_table
 from rich.console import Group
@@ -36,6 +38,70 @@ class StreamRenderer(DefaultRenderer):
     """Renders details for stream tests."""
 
     validation_render_mode = "all"
+
+    def get_column_schema(self) -> list[ColumnDef]:
+        return [
+            ColumnDef("node", "Node"),
+            ColumnDef("device_id", "Device"),
+            ColumnDef("copy_rate", "Copy (GB/s)", align="right"),
+            ColumnDef("scale_rate", "Scale (GB/s)", align="right"),
+            ColumnDef("add_rate", "Add (GB/s)", align="right"),
+            ColumnDef("triad_rate", "Triad (GB/s)", align="right"),
+        ]
+
+    def get_detail_data(
+        self, test_results: list[pb.TestResult]
+    ) -> PluginDetailReport | None:
+        """Extracts structured STREAM detail data model."""
+        if not test_results:
+            return None
+
+        results_map, node_peak_bw = self._parse_metrics(test_results)
+        if not results_map:
+            return None
+
+        node_groups: dict[str, list[StreamParsedResult]] = {}
+        for key in sorted(results_map.keys()):
+            item = results_map[key]
+            if item.node not in node_groups:
+                node_groups[item.node] = []
+            node_groups[item.node].append(item)
+
+        tables = []
+        for node, items in node_groups.items():
+            peak = node_peak_bw.get(node)
+            peak_str = (
+                f" (Peak BW: {peak:.2f} GB/s)" if peak is not None else ""
+            )
+            rows = []
+            for item in items:
+                rows.append(
+                    {
+                        "node": node,
+                        "device_id": str(item.device_id),
+                        "copy_rate": format_val(item.copy_rate),
+                        "scale_rate": format_val(item.scale_rate),
+                        "add_rate": format_val(item.add_rate),
+                        "triad_rate": format_val(item.triad_rate),
+                    }
+                )
+
+            tables.append(
+                TableDataModel(
+                    title=f"STREAM Performance Detail ({node}){peak_str}",
+                    headers=self.get_column_schema(),
+                    rows=rows,
+                )
+            )
+
+        test_name = test_results[0].test_name
+        test_level = test_results[0].test_level
+
+        return PluginDetailReport(
+            test_name=test_name,
+            test_level=test_level,
+            tables=tables,
+        )
 
     def _parse_metrics(
         self, test_results: list[pb.TestResult]
@@ -60,9 +126,9 @@ class StreamRenderer(DefaultRenderer):
 
         for res in test_results:
             node = (
-                ", ".join(res.target_resource_ids)
-                if res.target_resource_ids
-                else "Unknown Node"
+                format_nodes(res.target_resources)
+                if res.target_resources
+                else "Unknown"
             )
 
             for m in res.metrics:
@@ -111,30 +177,14 @@ class StreamRenderer(DefaultRenderer):
 
     def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
         """Renders detail tables for stream tests per node and device."""
-        if not test_results:
+        report = self.get_detail_data(test_results)
+        if not report or not report.tables:
             return Text("No detailed metrics available.", style="yellow")
-
-        results_map, node_peak_bw = self._parse_metrics(test_results)
-
-        # Group results by node
-        node_groups: dict[str, list[StreamParsedResult]] = {}
-        for key in sorted(results_map.keys()):
-            item = results_map[key]
-            if item.node not in node_groups:
-                node_groups[item.node] = []
-            node_groups[item.node].append(item)
 
         group_elements = [Text("\nSTREAM Detail", style="bold")]
 
-        for node, items in node_groups.items():
-            peak = node_peak_bw.get(node)
-            peak_str = (
-                f" (Peak BW: {peak:.2f} GB/s)" if peak is not None else ""
-            )
-
-            group_elements.append(
-                Text(f"\nNode: {node}{peak_str}", style="cyan")
-            )
+        for table_model in report.tables:
+            group_elements.append(Text(f"\n{table_model.title}", style="cyan"))
 
             table = create_styled_table(expand=False)
             table.add_column("Device")
@@ -143,16 +193,13 @@ class StreamRenderer(DefaultRenderer):
             table.add_column("Add (GB/s)", justify="right")
             table.add_column("Triad (GB/s)", justify="right")
 
-            def format_val(v):
-                return f"{v:.2f}" if v is not None else "N/A"
-
-            for item in items:
+            for r in table_model.rows:
                 table.add_row(
-                    item.device_id,
-                    format_val(item.copy_rate),
-                    format_val(item.scale_rate),
-                    format_val(item.add_rate),
-                    format_val(item.triad_rate),
+                    r["device_id"],
+                    r["copy_rate"],
+                    r["scale_rate"],
+                    r["add_rate"],
+                    r["triad_rate"],
                 )
 
             group_elements.append(table)

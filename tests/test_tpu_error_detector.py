@@ -103,6 +103,13 @@ class TestTpuErrorDetector(unittest.TestCase):
                 "PermissionError: [Errno 13] Permission denied: '/dev/accel0'",
             )
         )
+        self.assertTrue(
+            re.match(
+                regex,
+                "Check failed: vf_helper_->TearDownMesh() is OK "
+                "(INTERNAL: GRPC_ERROR error message: STOP_SESSION failed",
+            )
+        )
         self.assertFalse(re.match(regex, "TPU initialized successfully"))
 
     def test_comp_regex(self):

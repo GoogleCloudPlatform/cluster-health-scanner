@@ -25,12 +25,9 @@ from google.cloud import compute_v1
 import google.auth
 from google.api_core.exceptions import GoogleAPICallError
 
+from chs.exceptions import NoActiveJobsException
 
-from typing import Any, TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    from chs.utils.app_data import ChsAppData
+from typing import Any
 
 
 from chs.schedulers.base import BaseScheduler
@@ -78,13 +75,22 @@ class SlurmScheduler(BaseScheduler):
         nodes: str | None = None,
         nodelists: str | None = None,
         partitions: str | None = None,
-        app_data: "ChsAppData | None" = None,
+        nodepools: str | None = None,
     ):
-        super().__init__(app_data)
+        super().__init__()
+
+        if nodepools:
+            raise ex.ChsValidationError(
+                "The --nodepools flag is Kubernetes-specific and cannot be "
+                "used with the Slurm scheduler. Please use --nodes, "
+                "--nodelists, or --partitions instead."
+            )
+
         self.nodes_arg = nodes
         self.nodelists_arg = nodelists
         self.partitions_arg = partitions
         self._resolved_nodes: list[str] | None = None
+        self._resolved_raw_nodes: list[str] | None = None
 
     def _resolve_project_id(self, node: str) -> str:
         """Resolves GCP project ID from GCP application default credentials."""
@@ -175,7 +181,7 @@ class SlurmScheduler(BaseScheduler):
                 ]
             )
 
-            logger.info("Detected network interfaces: %r", interfaces)
+            logger.debug("Detected network interfaces: %r", interfaces)
             return interfaces
 
         except Exception as e:
@@ -183,9 +189,9 @@ class SlurmScheduler(BaseScheduler):
                 f"Unexpected error during network discovery: {e}"
             ) from e
 
-    def get_nodes_under_test(self) -> list[str]:
-        if self._resolved_nodes is not None:
-            return self._resolved_nodes
+    def resolve_raw_nodes(self) -> list[str]:
+        if self._resolved_raw_nodes is not None:
+            return self._resolved_raw_nodes
 
         if (
             bool(self.nodes_arg)
@@ -193,17 +199,17 @@ class SlurmScheduler(BaseScheduler):
             + bool(self.partitions_arg)
         ) > 1:
             raise click.UsageError(
-                "Only one of --nodes, --nodelists, or "
-                "--partitions can be provided."
+                "Only one of --nodes, --nodelists, or --partitions can be "
+                "provided."
             )
 
+        raw_nodes = []
         if self.nodes_arg:
-            self._resolved_nodes = [
+            raw_nodes = [
                 n.strip() for n in self.nodes_arg.split(",") if n.strip()
             ]
-            return self._resolved_nodes
 
-        if self.nodelists_arg:
+        elif self.nodelists_arg:
             try:
                 output = subprocess.run(
                     ["scontrol", "show", "hostname", self.nodelists_arg],
@@ -212,37 +218,65 @@ class SlurmScheduler(BaseScheduler):
                     capture_output=True,
                     timeout=5,
                 ).stdout.strip()
-                self._resolved_nodes = [n for n in output.split("\n") if n]
-                return self._resolved_nodes
+                raw_nodes = [n for n in output.split("\n") if n]
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 raise ex.ChsSchedulerException(
                     f"Failed to expand nodelists: {e}"
                 ) from e
 
-        sinfo_cmd = ["sinfo", "-t", "idle", "-N", "-h", "-o", "%N"]
-        if self.partitions_arg:
-            sinfo_cmd.extend(["-p", self.partitions_arg])
+        else:
+            sinfo_cmd = ["sinfo", "-e", "-N", "-h", "-o", "%N"]
+            if self.partitions_arg:
+                sinfo_cmd.extend(["-p", self.partitions_arg])
+            try:
+                output = subprocess.run(
+                    sinfo_cmd, text=True, check=True, capture_output=True
+                ).stdout.strip()
+                raw_nodes = [
+                    line.strip() for line in output.split("\n") if line.strip()
+                ]
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                raise ex.ChsSchedulerException(
+                    f"Failed to get raw nodes: {e}"
+                ) from e
+
+        self._resolved_raw_nodes = raw_nodes
+        return self._resolved_raw_nodes
+
+    def get_nodes_under_test(self) -> list[str]:
+        if self._resolved_nodes is not None:
+            return self._resolved_nodes
+
+        raw_nodes = self.resolve_raw_nodes()
+        if not raw_nodes:
+            self._resolved_nodes = []
+            return []
 
         try:
             output = subprocess.run(
-                sinfo_cmd,
+                ["sinfo", "-e", "-t", "idle", "-N", "-h", "-o", "%N"],
                 text=True,
                 check=True,
                 capture_output=True,
             ).stdout.strip()
+            idle_nodes = set(
+                line.strip() for line in output.split("\n") if line.strip()
+            )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             raise ex.ChsSchedulerException(
                 f"Failed to get free nodes: {e}"
             ) from e
 
-        if not output:
-            return []
+        busy_nodes = set(raw_nodes) - idle_nodes
+        if busy_nodes:
+            logger.info(
+                "The following nodes are currently executing workloads and "
+                "will be skipped to avoid disruption: %s",
+                ", ".join(sorted(busy_nodes)),
+            )
 
-        all_nodes = [
-            line.strip() for line in output.split("\n") if line.strip()
-        ]
-
-        self._resolved_nodes = all_nodes
+        valid_nodes = [node for node in raw_nodes if node in idle_nodes]
+        self._resolved_nodes = valid_nodes
         return self._resolved_nodes
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
@@ -259,8 +293,10 @@ class SlurmScheduler(BaseScheduler):
             credentials, project = google.auth.default()
             if not project:
                 logger.warning(
-                    "Could not determine GCP project. "
-                    "Skipping topology discovery."
+                    "Could not determine GCP project via Application Default"
+                    " Credentials. GCE topology discovery skipped. Set"
+                    " 'GOOGLE_CLOUD_PROJECT' or run 'gcloud auth"
+                    " application-default login'."
                 )
                 return {}
 
@@ -318,10 +354,18 @@ class SlurmScheduler(BaseScheduler):
             return topology
 
         except GoogleAPICallError as e:
-            logger.warning("Failed to get node topology via API: %s", e)
+            logger.warning(
+                "Failed to retrieve node topology information "
+                "via the Slurm API. Error: %s",
+                e,
+            )
             return {}
         except Exception as e:
-            logger.error("Unexpected error getting node topology: %s", e)
+            logger.error(
+                "Encountered an unexpected error while discovering "
+                "Slurm node topology. Error: %s",
+                e,
+            )
             return {}
 
     def _ensure_enroot_directories(self) -> None:
@@ -345,9 +389,9 @@ class SlurmScheduler(BaseScheduler):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
-        timeout: int | None = None,
         deadline: int | None = None,
         run_id: str | None = None,
+        images_dir: str | None = None,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -368,9 +412,7 @@ class SlurmScheduler(BaseScheduler):
 
         tcp_interfaces_str = ",".join(tcp_interfaces)
 
-        images_dir_value = (
-            self._app_data and self._app_data.get_images_dir()
-        ) or "{workload_input_dir}"
+        images_dir_value = images_dir or "{workload_input_dir}"
 
         variables = config["ramble"]["variables"]
         variables["nodes"] = nodes or []
@@ -378,8 +420,9 @@ class SlurmScheduler(BaseScheduler):
         variables["tests"] = tests or []
         variables["container_dir"] = images_dir_value
         variables["tcp_interfaces"] = tcp_interfaces_str
-        variables["timeout"] = timeout
-        variables["deadline"] = deadline
+
+        if deadline is not None:
+            variables["deadline"] = deadline
 
         variables["chs_run_id"] = run_id
 
@@ -390,35 +433,61 @@ class SlurmScheduler(BaseScheduler):
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-    def check_jobs_running(self, job_ids: list[str]) -> bool:
-        """Checks if the given jobs are still running."""
-        if not job_ids:
-            logger.warning(
-                "No job IDs provided to check. Proceeding with analyzing logs. "
-                "Did chs run submit jobs?"
-            )
-            return False
+    # TODO: Test and make slurm workflow consistent with GKE
+    def has_no_failed_jobs(self) -> bool:
+        """Checks if there are any failed CHS jobs.
 
+        Returns:
+            True if all are healthy (active/completed).
+        """
         cmd = [
-            "squeue",
-            "--jobs",
-            ",".join(job_ids),
-            "--noheader",
+            "sacct",
+            "-P",
+            "-X",
+            "-n",
+            "--format=JobName,State",
         ]
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=False
             )
-            if result.stdout.strip():
-                logger.debug(
-                    "Jobs are still running. Output: %s", result.stdout
-                )
-                return True
-            logger.debug("No running jobs found in squeue.")
-            return False
+            if not result.stdout.strip():
+                raise NoActiveJobsException("No jobs found on the cluster.")
+
+            has_chs_jobs = False
+            for line in result.stdout.splitlines():
+                parts = line.strip().split("|")
+                if len(parts) >= 2:
+                    job_name = parts[0]
+                    state = parts[1].upper()
+                    if job_name.startswith("chs-"):
+                        has_chs_jobs = True
+                        if state in (
+                            "FAILED",
+                            "NODE_FAIL",
+                            "OUT_OF_MEMORY",
+                            "BOOT_FAIL",
+                        ):
+                            logger.warning(
+                                "Diagnostic job '%s' has failed "
+                                "with state '%s'. "
+                                "Initiating resource cleanup.",
+                                job_name,
+                                state,
+                            )
+                            return False
+
+            if not has_chs_jobs:
+                raise NoActiveJobsException("No CHS jobs found on the cluster.")
+
+            return True
         except FileNotFoundError:
-            logger.warning("squeue command not found. Cannot check job status.")
-            return False
+            logger.warning(
+                "Slurm CLI tool 'sacct' was not found in PATH. Please ensure"
+                " Slurm client utilities (sacct/scancel) are installed and"
+                " available in your PATH."
+            )
+        return False
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs using sacct."""
@@ -455,7 +524,14 @@ class SlurmScheduler(BaseScheduler):
                     statuses[jid] = JobStatus.UNKNOWN.value
 
         except FileNotFoundError:
-            logger.warning("sacct command not found. Assuming UNKNOWN.")
+            logger.debug(
+                "The 'sacct' command was not found. Job states cannot be "
+                "verified and will default to UNKNOWN."
+            )
+            logger.warning(
+                "The 'sacct' command was not found. Unable to "
+                "track job completion statuses."
+            )
             for jid in job_ids:
                 statuses[jid] = JobStatus.UNKNOWN.value
 
@@ -470,15 +546,30 @@ class SlurmScheduler(BaseScheduler):
         if os.path.exists(log_path):
             logger.debug("Log file for job %s exists at %s", job_id, log_path)
         else:
-            logger.warning(
-                "Log file for job %s not found at %s", job_id, log_path
+            logger.debug(
+                "The execution log file for job ID '%s' "
+                "could not be found at '%s'.",
+                job_id,
+                log_path,
             )
 
-    def parse_job_ids(self, output: str) -> list[str]:
-        """Parses job IDs from the experiment execution output."""
-        return re.findall(r"Submitted batch job (\d+)", output)
+    def extract_job_id(self, experiment_dir: str) -> str:
+        """Extracts the job ID from the experiment directory."""
+        job_file = os.path.join(experiment_dir, ".slurm_job")
+        try:
+            with open(job_file, "r") as f:
+                job_id = f.read().strip()
+                if job_id.isdigit():
+                    return job_id
+            raise ex.ChsSchedulerException(
+                f"Slurm job file {job_file} does not contain a valid job ID"
+            )
+        except IOError as e:
+            raise ex.ChsSchedulerException(
+                f"Failed to read Slurm job file at {job_file}: {e}"
+            ) from e
 
-    def _cancel_jobs(self, job_ids: list[str]) -> None:
+    def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels the given jobs using scancel."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
@@ -493,15 +584,47 @@ class SlurmScheduler(BaseScheduler):
                 logger.debug("Successfully canceled jobs: %s", job_ids)
             else:
                 logger.warning(
-                    "scancel returned non-zero exit code: %s", result.stderr
+                    "The 'scancel' command failed while attempting "
+                    "to terminate jobs. Error: %s",
+                    result.stderr,
                 )
         except FileNotFoundError:
-            logger.warning("scancel command not found. Cannot cancel jobs.")
+            logger.warning(
+                "Slurm CLI tool 'scancel' was not found in PATH. Please ensure"
+                " Slurm client utilities (sacct/scancel) are installed and"
+                " available in your PATH."
+            )
         except (OSError, subprocess.SubprocessError) as e:
-            logger.error("Failed to cancel jobs. Error: %s", e)
+            err_msg = ex.format_subprocess_error(e)
+            logger.error(
+                "Failed to cancel active Slurm jobs. Error: %s", err_msg
+            )
             raise ex.ChsCancellationException(
-                f"Failed to cancel jobs: {e}"
+                f"Failed to cancel jobs: {err_msg}"
             ) from e
+
+    def get_active_job_names(self) -> list[str]:
+        """Returns a list of active job names on the cluster."""
+        try:
+            cmd = ["squeue", "-h", "-o", "%.200j"]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False
+            )
+            if result.returncode != 0:
+                return []
+
+            job_names = []
+            for line in result.stdout.splitlines():
+                name = line.strip()
+                if name:
+                    job_names.append(name)
+            return job_names
+        except FileNotFoundError:
+            logger.warning(
+                "The 'squeue' command was not found in your PATH. "
+                "Cannot retrieve the list of active jobs."
+            )
+            return []
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all jobs matching the specified prefix natively."""
@@ -512,7 +635,7 @@ class SlurmScheduler(BaseScheduler):
                 "squeue",
                 "-h",
                 "-o",
-                "%i %j",
+                "%i %.200j",
                 "-u",
                 os.environ.get("USER", ""),
             ]
@@ -521,7 +644,8 @@ class SlurmScheduler(BaseScheduler):
             )
             if result.returncode != 0:
                 logger.warning(
-                    "Failed to list jobs via squeue for cancellation."
+                    "Failed to retrieve the list of active jobs using "
+                    "'squeue' during the cancellation process."
                 )
                 return
 
@@ -532,17 +656,22 @@ class SlurmScheduler(BaseScheduler):
                     job_ids.append(parts[0])
 
             if job_ids:
-                logger.info(
+                logger.debug(
                     "Found %d jobs to cancel for prefix %s.",
                     len(job_ids),
                     prefix,
                 )
-                self._cancel_jobs(job_ids)
+                self.cancel_jobs(job_ids)
             else:
                 logger.debug("No matching jobs found for prefix %s.", prefix)
         except FileNotFoundError:
             logger.warning(
-                "squeue command not found. Cannot perform native cancel."
+                "The 'squeue' command was not found in your PATH. "
+                "Cannot perform native job cancellation."
             )
         except Exception as e:
-            logger.warning("Native cancel failed: %s", e)
+            logger.warning(
+                "Failed to execute native job "
+                "cancellation via Slurm. Error: %s",
+                e,
+            )

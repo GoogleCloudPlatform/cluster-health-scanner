@@ -24,6 +24,12 @@ from unittest import mock
 
 import chs.boh_generator
 from chs.boh_generator import BOHGenerator
+from chs.core.default_plugin import DefaultPlugin
+from chs.core.plugin_base import (
+    ColumnDef,
+    PluginDetailReport,
+    TableDataModel,
+)
 from chs.protos import bill_of_health_pb2 as pb
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -56,6 +62,29 @@ class TestBOHGenerator(unittest.TestCase):
         now = datetime.datetime.now(datetime.timezone.utc)
         proto_time = ts.ToDatetime().replace(tzinfo=datetime.timezone.utc)
         self.assertLess(abs((now - proto_time).total_seconds()), 60)
+
+    def test_plugin_base_data_contracts(self):
+        """Test default plugin base data contracts."""
+        col = ColumnDef("key1", "Label 1", align="center")
+        self.assertEqual(col.key, "key1")
+        self.assertEqual(col.align, "center")
+
+        table = TableDataModel(
+            title="Test", headers=[col], rows=[{"key1": "val"}]
+        )
+        self.assertEqual(table.title, "Test")
+
+        report = PluginDetailReport(
+            test_name="t1", test_level="l1", tables=[table]
+        )
+        self.assertEqual(report.test_name, "t1")
+
+        plugin = DefaultPlugin(test_name="t1")
+        self.assertEqual(
+            plugin.parse_context_metadata("foo"), {"context": "foo"}
+        )
+        self.assertEqual(len(plugin.get_column_schema()), 3)
+        self.assertIsNone(plugin.get_detail_data([]))
 
     def test_parse_foms_various_inputs(self):
         """Test parsing of various FOM inputs."""
@@ -278,12 +307,45 @@ class TestBOHGenerator(unittest.TestCase):
         generator = BOHGenerator(self.test_json_path)
         report = generator.generate()
 
-        self.assertEqual(
-            list(report.test_results[0].target_resource_ids), ["node1"]
+        tr1 = report.test_results[0].target_resources[0]
+        self.assertEqual(tr1.node_name, "node1")
+        self.assertEqual(tr1.instance_id, "")
+
+        trs2 = report.test_results[1].target_resources
+        self.assertEqual(trs2[0].node_name, "node1")
+        self.assertEqual(trs2[0].instance_id, "")
+        self.assertEqual(trs2[1].node_name, "node2")
+        self.assertEqual(trs2[1].instance_id, "")
+
+    def test_split_test_result_per_node_preserves_null_context(self):
+        """Test per-node splitting retains metrics with 'null' context."""
+        test_result = pb.TestResult(test_name="tpu-info")
+        test_result.target_resources.add(node_name="node1")
+        test_result.target_resources.add(node_name="node2")
+
+        m_null = pb.Metric(key="TPU Hardware / Driver / Network Error Detected")
+        m_null.metadata.fields["context"].string_value = "null"
+        test_result.metrics.append(m_null)
+
+        m_node1 = pb.Metric(key="Node1 Metric")
+        m_node1.metadata.fields["context"].string_value = "node1"
+        test_result.metrics.append(m_node1)
+
+        generator = BOHGenerator(self.test_json_path)
+        split = generator._split_test_result_per_node(test_result)
+
+        self.assertEqual(len(split), 2)
+        node1_keys = [m.key for m in split[0].metrics]
+        node2_keys = [m.key for m in split[1].metrics]
+
+        self.assertIn(
+            "TPU Hardware / Driver / Network Error Detected", node1_keys
         )
-        self.assertEqual(
-            list(report.test_results[1].target_resource_ids), ["node1", "node2"]
+        self.assertIn(
+            "TPU Hardware / Driver / Network Error Detected", node2_keys
         )
+        self.assertIn("Node1 Metric", node1_keys)
+        self.assertNotIn("Node1 Metric", node2_keys)
 
     def test_generate_file_error(self):
         """Test error handling for missing input file."""
@@ -675,8 +737,8 @@ class TestBOHGenerator(unittest.TestCase):
             pb.RESULT_STATUS_FAILED,
         )
 
-    def test_generate_missing_fom_ignored(self):
-        """Test that missing FOM for a defined threshold is ignored safely."""
+    def test_generate_missing_fom_fails(self):
+        """Test that missing FOM for a defined threshold causes failure."""
         thresholds_data = {
             "default": {
                 "my-test": {
@@ -710,11 +772,7 @@ class TestBOHGenerator(unittest.TestCase):
         )
         report = generator.generate()
         self.assertEqual(
-            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
-        )
-        self.assertEqual(
-            report.test_results[0].metrics[0].validation_criteria.result_status,
-            pb.RESULT_STATUS_SUCCESS,
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
         )
 
     def test_generate_machine_override_type(self):
@@ -838,6 +896,478 @@ class TestBOHGenerator(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             BOHGenerator(self.test_json_path, thresholds_path=thresh_file)
+
+    @mock.patch("chs.boh_generator.ChsAppData")
+    def test_generate_time_exceeded(self, mock_app_data_cls):
+        """Test handling of TIMEOUT and DEADLINE job statuses."""
+        mock_app_data = mock_app_data_cls.return_value
+        mock_app_data.get_run.return_value = {
+            "job_entries": {
+                "job1": {
+                    "experiment_dir": "/path/to/exp_timeout",
+                    "status": "TIMEOUT",
+                },
+                "job2": {
+                    "experiment_dir": "/path/to/exp_deadline",
+                    "status": "DEADLINE",
+                },
+            }
+        }
+
+        data = {
+            "workspace_name": "test_workspace",
+            "experiments": [
+                {
+                    "experiment_name": "exp_timeout",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "metric", "value": 1}],
+                        }
+                    ],
+                },
+                {
+                    "experiment_name": "exp_deadline",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "metric", "value": 1}],
+                        }
+                    ],
+                },
+            ],
+        }
+        self._write_json(data)
+        generator = BOHGenerator(self.test_json_path)
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 2)
+
+        self.assertEqual(report.test_results[0].test_name, "exp_timeout")
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_TIMEOUT
+        )
+
+        self.assertEqual(report.test_results[1].test_name, "exp_deadline")
+        self.assertEqual(
+            report.test_results[1].result_status, pb.RESULT_STATUS_DEADLINE
+        )
+
+    def test_parse_tier_results_from_boh_with_prefixed_test_names(self):
+        """Test parse_tier_results_from_boh correctly matches test names."""
+        boh = pb.BillOfHealth()
+        t1 = boh.test_results.add()
+        t1.test_name = "tpu-collectives"
+        t1.result_status = pb.RESULT_STATUS_SUCCESS
+
+        t2 = boh.test_results.add()
+        t2.test_name = "tpu-hbm"
+        t2.result_status = pb.RESULT_STATUS_SUCCESS
+
+        t3 = boh.test_results.add()
+        t3.test_name = "tpu-gemm"
+        t3.result_status = pb.RESULT_STATUS_FAILED
+
+        expected = ["tpu-collectives", "tpu-hbm", "tpu-gemm", "tpu-info"]
+        tier_results, hard_failure = (
+            chs.boh_generator.parse_tier_results_from_boh(boh, expected)
+        )
+
+        from chs.tier_manager import TestStatus
+
+        self.assertEqual(tier_results["tpu-collectives"], TestStatus.HEALTHY)
+        self.assertEqual(tier_results["tpu-hbm"], TestStatus.HEALTHY)
+        self.assertEqual(tier_results["tpu-gemm"], TestStatus.DEGRADED)
+        self.assertEqual(tier_results["tpu-info"], TestStatus.ERROR)
+        self.assertFalse(hard_failure)
+
+    def test_generate_tpu_collectives_peak_bandwidth(self):
+        """Test peak bandwidth threshold evaluation for tpu-collectives."""
+        thresholds_data = {
+            "default": {
+                "tpu-collectives": {
+                    "type": "min",
+                    "thresholds": {
+                        "peak_bandwidth": [
+                            {
+                                "value": 155.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "all_gather",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "2x2x1",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "node-1,16384,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 160.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_SUCCESS)
+
+        self.assertEqual(len(res.metrics), 3)
+
+        peak_metric = next(
+            (m for m in res.metrics if m.key == "Peak Bandwidth (median)"), None
+        )
+        self.assertIsNotNone(peak_metric)
+        self.assertEqual(peak_metric.value.number_value, 160.0)
+        self.assertEqual(
+            peak_metric.metadata.fields["context"].string_value,
+            "node-1,peak,16384,float32",
+        )
+        self.assertEqual(
+            peak_metric.validation_criteria.result_status,
+            pb.RESULT_STATUS_SUCCESS,
+        )
+
+        # Test case 2: Failing peak (150.0 < 155.0)
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "all_gather",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "2x2x1",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "node-1,16384,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 140.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_FAILED)
+        peak_metric = next(
+            (m for m in res.metrics if m.key == "Peak Bandwidth (median)"), None
+        )
+        self.assertIsNotNone(peak_metric)
+        self.assertEqual(peak_metric.value.number_value, 140.0)
+        self.assertEqual(
+            peak_metric.validation_criteria.result_status,
+            pb.RESULT_STATUS_FAILED,
+        )
+
+    def test_split_test_result_per_node_prefix_isolation(self):
+        """Test per-node splitting isolates node-1 from node-10 metrics."""
+        test_result = pb.TestResult(test_name="tpu-info")
+        test_result.target_resources.add(node_name="node-1")
+        test_result.target_resources.add(node_name="node-10")
+        test_result.target_resources.add(node_name="node-100")
+
+        # Global metric (null context) - should be present in all
+        m_global = pb.Metric(key="Global Metric")
+        m_global.metadata.fields["context"].string_value = "null"
+        test_result.metrics.append(m_global)
+
+        # Metric for node-10 via context
+        m_node10_ctx = pb.Metric(key="Node 10 Ctx Metric")
+        m_node10_ctx.metadata.fields["context"].string_value = "Node node-10"
+        test_result.metrics.append(m_node10_ctx)
+
+        # Metric for my-node-1 (hyphenated prefix - should NOT match node-1)
+        m_mynode1_ctx = pb.Metric(key="My Node 1 Ctx Metric")
+        m_mynode1_ctx.metadata.fields["context"].string_value = "Node my-node-1"
+        test_result.metrics.append(m_mynode1_ctx)
+
+        # Metric for node-1-pool (hyphenated suffix - should NOT match node-1)
+        m_node1pool_ctx = pb.Metric(key="Node 1 Pool Ctx Metric")
+        m_node1pool_ctx.metadata.fields[
+            "context"
+        ].string_value = "Node node-1-pool"
+        test_result.metrics.append(m_node1pool_ctx)
+
+        # Metric for node-100 via explicit node metadata
+        m_node100_meta = pb.Metric(key="Node 100 Meta Metric")
+        m_node100_meta.metadata.fields["node"].string_value = "node-100"
+        m_node100_meta.metadata.fields["context"].string_value = "Node node-100"
+        test_result.metrics.append(m_node100_meta)
+
+        # Metric for node-10 via explicit node metadata with null context
+        m_node10_meta_null_ctx = pb.Metric(key="Node 10 Meta Null Ctx Metric")
+        m_node10_meta_null_ctx.metadata.fields["node"].string_value = "node-10"
+        m_node10_meta_null_ctx.metadata.fields["context"].string_value = "null"
+        test_result.metrics.append(m_node10_meta_null_ctx)
+
+        # Metric for node-1
+        m_node1_ctx = pb.Metric(key="Node 1 Ctx Metric")
+        m_node1_ctx.metadata.fields[
+            "context"
+        ].string_value = "node-1,1024,float32"
+        test_result.metrics.append(m_node1_ctx)
+
+        generator = BOHGenerator(self.test_json_path)
+        split = generator._split_test_result_per_node(test_result)
+
+        self.assertEqual(len(split), 3)
+
+        # node-1 checks
+        node1_keys = [m.key for m in split[0].metrics]
+        self.assertIn("Global Metric", node1_keys)
+        self.assertIn("Node 1 Ctx Metric", node1_keys)
+        self.assertNotIn("Node 10 Ctx Metric", node1_keys)
+        self.assertNotIn("My Node 1 Ctx Metric", node1_keys)
+        self.assertNotIn("Node 1 Pool Ctx Metric", node1_keys)
+        self.assertNotIn("Node 100 Meta Metric", node1_keys)
+        self.assertNotIn("Node 10 Meta Null Ctx Metric", node1_keys)
+
+        # node-10 checks
+        node10_keys = [m.key for m in split[1].metrics]
+        self.assertIn("Global Metric", node10_keys)
+        self.assertIn("Node 10 Ctx Metric", node10_keys)
+        self.assertIn("Node 10 Meta Null Ctx Metric", node10_keys)
+        self.assertNotIn("Node 1 Ctx Metric", node10_keys)
+        self.assertNotIn("Node 100 Meta Metric", node10_keys)
+
+        # node-100 checks
+        node100_keys = [m.key for m in split[2].metrics]
+        self.assertIn("Global Metric", node100_keys)
+        self.assertIn("Node 100 Meta Metric", node100_keys)
+        self.assertNotIn("Node 1 Ctx Metric", node100_keys)
+        self.assertNotIn("Node 10 Ctx Metric", node100_keys)
+        self.assertNotIn("Node 10 Meta Null Ctx Metric", node100_keys)
+
+    def test_generate_tpu_collectives_unconfigured_topology_unknown(self):
+        """Test unconfigured topology results in UNKNOWN status."""
+        thresholds_data = {
+            "default": {
+                "tpu-collectives": {
+                    "type": "min",
+                    "thresholds": {
+                        "peak_bandwidth": [
+                            {
+                                "value": 155.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(
+            self.test_dir.name, "thresh_unconfigured.yaml"
+        )
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "all_gather",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "8x8x8",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_UNKNOWN)
+
+        from chs.core.summary_aggregator import aggregate_boh_summary
+
+        summary_data = aggregate_boh_summary(report, self.test_json_path)
+        self.assertIsNotNone(summary_data)
+        self.assertEqual(len(summary_data.test_summaries), 1)
+        ts = summary_data.test_summaries[0]
+        self.assertTrue(ts.group_has_no_thresholds)
+        self.assertEqual(ts.met_threshold, 0)
+        self.assertEqual(ts.failed_to_execute, 0)
+
+    def test_generate_tpu_collectives_removed_workload_threshold_unknown(self):
+        """Test removed workload thresholds result in UNKNOWN status."""
+        thresholds_data = {
+            "default": {
+                "tpu-collectives": {
+                    "type": "min",
+                    "thresholds": {
+                        "peak_bandwidth": [
+                            {
+                                "value": 155.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ],
+                        "some_other_metric_for_all_gather": [
+                            {
+                                "value": 100.0,
+                                "conditions": {
+                                    "tpu_topology": "2x2x1",
+                                    "workload_name": "all_gather",
+                                },
+                            }
+                        ],
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(
+            self.test_dir.name, "thresh_removed_workload.yaml"
+        )
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "tpu-collectives",
+                    "workload_name": "psum",
+                    "RAMBLE_VARIABLES": {
+                        "machine_type": "tpu7x-standard-4t",
+                        "tpu_topology": "2x2x1",
+                    },
+                    "CONTEXTS": [
+                        {
+                            "name": "node-1,1024,float32",
+                            "foms": [
+                                {
+                                    "name": "Bandwidth (median)",
+                                    "value": 100.0,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        res = report.test_results[0]
+        self.assertEqual(res.result_status, pb.RESULT_STATUS_UNKNOWN)
+
+        from chs.core.summary_aggregator import aggregate_boh_summary
+
+        summary_data = aggregate_boh_summary(report, self.test_json_path)
+        self.assertIsNotNone(summary_data)
+        self.assertEqual(len(summary_data.test_summaries), 1)
+        ts = summary_data.test_summaries[0]
+        self.assertTrue(ts.group_has_no_thresholds)
+        self.assertEqual(ts.missing_metrics, 0)
+        self.assertEqual(ts.met_threshold, 0)
+        self.assertEqual(ts.failed_to_execute, 0)
+
+    def test_tpu_test_names_prefix(self):
+        """Ensure TPU-related tests in thresholds.yaml have 'tpu-' prefix."""
+        generator = BOHGenerator(self.test_json_path)
+        thresholds = generator._load_thresholds()
+        for machine_type, tests in thresholds.items():
+            if machine_type == "default":
+                continue
+            for test_name in tests:
+                if "tpu" in test_name.lower():
+                    msg = (
+                        f"TPU test '{test_name}' under '{machine_type}' "
+                        "must start with 'tpu-' prefix."
+                    )
+                    self.assertTrue(test_name.startswith("tpu-"), msg)
 
 
 if __name__ == "__main__":

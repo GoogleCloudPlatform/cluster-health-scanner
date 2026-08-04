@@ -86,7 +86,7 @@ class TestDefaultRenderer(unittest.TestCase):
         self.assertIn("metric_with_threshold", output)
         self.assertIn("85", output)
         self.assertIn(">= 80", output)
-        self.assertIn("PASS", output)
+        self.assertIn("MET", output)
 
         # Metric without threshold should NOT be filtered out from raw metrics
         self.assertIn("metric_without_threshold", output)

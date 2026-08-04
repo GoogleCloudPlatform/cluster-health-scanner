@@ -1,9 +1,0 @@
-description: Tests the JAX 'host-device' test against a kubernetes scheduler for tpuv6e
-command:
-- run
-- --tests
-- host-device
-- --nodes
-- node1,node2
-- --dry-run
-- kubernetes

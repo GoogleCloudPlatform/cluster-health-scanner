@@ -12,56 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
 from rich.console import RenderableType, Group
 from rich.text import Text
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import create_styled_table
 from . import rendering
+from . import validation_analyzer
 
 
 def has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
     """Checks if any metric in the test results has validation criteria."""
-    return any(
-        m.HasField("validation_criteria") and m.validation_criteria.name
-        for res in test_results
-        for m in res.metrics
-    )
+    return validation_analyzer.has_validation_criteria(test_results)
 
 
 def _parse_threshold(validation_criteria: pb.ValidationCriteria) -> str:
     """Parses expected value and comparator into a string."""
-    threshold_value = "N/A"
-    if validation_criteria.HasField("expected_value"):
-        threshold_value = rendering.parse_value(
-            validation_criteria.expected_value
-        )
-    else:
-        threshold_value = "complex"
-
-    comparator_str = ""
-    if validation_criteria.comparator == pb.Comparator.COMPARATOR_GTE:
-        comparator_str = ">="
-    elif validation_criteria.comparator == pb.Comparator.COMPARATOR_EQ:
-        comparator_str = "=="
-    elif validation_criteria.comparator == pb.Comparator.COMPARATOR_CONTAINS:
-        comparator_str = "contains"
-
-    return f"{comparator_str} {threshold_value}".strip()
+    return validation_analyzer.parse_threshold(validation_criteria)
 
 
 def _parse_status(
     validation_criteria: pb.ValidationCriteria,
 ) -> tuple[str, str]:
     """Returns (status_str, status_style) for validation criteria."""
-    if validation_criteria.result_status == pb.RESULT_STATUS_SUCCESS:
-        return "PASS", "green"
-    elif validation_criteria.result_status == pb.RESULT_STATUS_FAILED:
-        return "FAIL", "red"
-    return "UNKNOWN", "yellow"
+    return validation_analyzer.parse_status(validation_criteria)
 
 
 def render_validation_results(
     test_results: list[pb.TestResult],
+    plugin_manager: Any = None,
 ) -> RenderableType | None:
     """Renders tables showing only the metrics that have validation criteria.
 
@@ -72,63 +51,50 @@ def render_validation_results(
         A Rich Renderable (Group of Tables) if validation criteria are present,
         otherwise None.
     """
-    if not test_results or not has_validation_criteria(test_results):
+    groups = validation_analyzer.extract_validation_data(
+        test_results, max_display_nodes=5, plugin_manager=plugin_manager
+    )
+    if not groups:
         return None
 
     renderables = []
-    for test_result in test_results:
-        if not has_validation_criteria([test_result]):
-            continue
 
-        is_success = test_result.result_status == pb.RESULT_STATUS_SUCCESS
-        border_color = "green" if is_success else "red"
-
-        nodes_str = rendering.format_nodes(test_result.target_resource_ids)
+    for group in groups:
+        header = (
+            f"\nValidation Results: {group.test_name} "
+            f"({group.test_level}) - [{group.nodes_str}]"
+        )
         title_text = Text(
-            f"\nValidation Results: {test_result.test_name}"
-            f" ({test_result.test_level}) - [{nodes_str}]",
-            style=f"bold {border_color}",
+            header,
+            style=f"bold {group.status_summary}",
         )
         renderables.append(title_text)
 
         table = create_styled_table(
-            header_style=f"bold {border_color}",
+            header_style=f"bold {group.status_summary}",
             expand=False,
-            show_lines=True,
+            show_lines=False,
         )
+        table.add_column("Target", style="magenta")
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="bold white")
         table.add_column("Unit", style="dim")
         table.add_column("Threshold", style="yellow")
         table.add_column("Status", style="bold")
 
-        for metric in test_result.metrics:
-            if not metric.HasField("validation_criteria"):
-                continue
-
-            validation_criteria = metric.validation_criteria
-            if not validation_criteria.name:
-                continue
-
-            metric_value = rendering.parse_value(metric.value)
-            threshold_str = _parse_threshold(validation_criteria)
-            status_str, status_style = _parse_status(validation_criteria)
-
-            prefix = rendering.format_context_prefix(metric)
-
+        for row in group.rows:
             table.add_row(
-                f"{prefix}{metric.key}",
-                str(metric_value),
-                metric.unit,
-                threshold_str,
-                Text(status_str, style=status_style),
+                row.target,
+                rendering.escape(row.metric),
+                row.formatted_value,
+                row.unit,
+                row.threshold,
+                Text(row.status, style=row.status_style),
+                style=row.status_style,
             )
 
         renderables.append(table)
         renderables.append(Text())
-
-    if not renderables:
-        return None
 
     if (
         renderables

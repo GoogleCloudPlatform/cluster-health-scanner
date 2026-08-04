@@ -15,6 +15,7 @@
 """Cluster name retrieval and sanitization utilities for CHS."""
 
 import logging
+import os
 import random
 import re
 import string
@@ -72,3 +73,11 @@ def get_sanitized_cluster_name(scheduler_obj: "BaseScheduler") -> str:
             "comply with DNS-1123 rules."
         )
     return sanitized
+
+
+def is_in_cluster() -> bool:
+    """Returns True if running inside a Kubernetes cluster."""
+    return (
+        os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token")
+        or "KUBERNETES_SERVICE_HOST" in os.environ
+    )

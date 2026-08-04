@@ -17,6 +17,12 @@ from chs.core.default_plugin.extractor import DefaultExtractor
 
 
 class DcgmExtractor(DefaultExtractor):
+    def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
+        """Parses DCGM test group or sub-test context into structured fields."""
+        if ctx_name.startswith("GPU"):
+            return {"gpu_id": ctx_name, "context": ctx_name}
+        return {"test_group": ctx_name, "context": ctx_name}
+
     def extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         name = "dcgm"
         level_val = exp.get("RAMBLE_VARIABLES", {}).get("diag_level")

@@ -1,0 +1,910 @@
+<!--
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bill of Health Report - Overview</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    :root {
+      --bg-main: #f8f9fa;
+      --card-bg: #ffffff;
+      --border-color: #dadce0;
+      --text-main: #202124;
+      --text-muted: #5f6368;
+    }
+    h1, h2, h3, h4, h5, h6 { font-family: 'Google Sans', sans-serif; }
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+    }
+    .badge-success { background-color: #e6f4ea; color: #137333; border: 1px solid #ceead6; }
+    .badge-failed { background-color: #fce8e6; color: #c5221f; border: 1px solid #fad2cf; }
+    .badge-degraded { background-color: #fef7e0; color: #b06000; border: 1px solid #feefc3; }
+    .badge-info { background-color: #e8f0fe; color: #1a73e8; border: 1px solid #d2e3fc; }
+    .badge-slate { background-color: #f1f3f4; color: #5f6368; border: 1px solid #dadce0; }
+    .glass-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+    }
+  </style>
+</head>
+<body class="p-6 relative overflow-x-hidden">
+
+  <!-- RAW DATA INJECTION POINT FOR PART 1 -->
+  <script id="boh-overview-raw-data" type="application/json">
+__BOH_OVERVIEW_RAW_DATA_JSON__
+  </script>
+
+  <div class="max-w-7xl mx-auto space-y-6">
+
+    <!-- Global Header -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[var(--border-color)] pb-5">
+      <div>
+        <div class="flex items-center gap-3">
+          <h1 class="text-2xl font-bold tracking-tight text-slate-900">Cluster Bill of Health Report</h1>
+        </div>
+        <p class="text-sm text-[var(--text-muted)] mt-1">
+          Run ID: <span id="runId" class="font-mono text-slate-800">-</span> •
+          Generated: <span id="createdAt" class="text-slate-800">-</span> •
+          System: <span id="systemType" class="text-slate-800">-</span>
+        </p>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="window.location.reload()" class="px-3 py-1.5 text-xs font-medium rounded bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-900 transition">Reset Filters</button>
+        <button onclick="window.print()" class="px-3 py-1.5 text-xs font-medium rounded bg-[#1a73e8] hover:bg-[#1967d2] text-white font-medium transition shadow">Export / Print</button>
+      </div>
+    </div>
+
+    <!-- PART 1: Executive Overview Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-3 gap-4">
+
+      <!-- Card 1: Total Nodes Tested -->
+      <div class="glass-card rounded-md p-4">
+        <span class="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wider">Total Nodes Tested</span>
+        <div class="text-3xl font-extrabold text-slate-900 mt-1">
+          <span id="totalNodes">0</span> <span class="text-xs font-normal text-slate-600">nodes</span>
+        </div>
+        <div id="nodeStatusDetail" class="text-xs text-slate-700 mt-2">0 Degraded • 0 Missing Metrics • 0 Healthy</div>
+      </div>
+
+      <!-- Card 2: Test Suite Executions -->
+      <div class="glass-card rounded-md p-4">
+        <span class="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wider">Test Suite Executions</span>
+        <div class="text-3xl font-extrabold text-slate-900 mt-1">
+          <span id="totalSuites">0</span> <span class="text-xs font-normal text-slate-600">tests</span>
+        </div>
+      </div>
+
+      <!-- Card 3: Potential Errors & Warnings -->
+      <div class="glass-card rounded-md p-4">
+        <span class="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wider">Potential Errors & Warnings</span>
+        <div class="text-3xl font-extrabold text-red-600 mt-1">
+          <span id="potentialErrors">0</span> <span class="text-xs font-normal text-slate-600">detected</span>
+        </div>
+        <div class="text-xs text-red-700 mt-2">Potential errors</div>
+      </div>
+
+    </div>
+
+    <!-- PART 2: Test Suite Breakdown Summary -->
+    <div class="glass-card rounded-md p-5 space-y-4">
+      <h2 class="text-base font-bold text-slate-900 border-b border-slate-200 pb-2">Test Suite Breakdown Summary</h2>
+      <div id="testSuiteBreakdownList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <!-- JS populates test suite breakdown cards here -->
+      </div>
+    </div>
+
+    <!-- PART 2.5: Potential Errors & Warnings Summary -->
+    <div class="glass-card rounded-md p-5 space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-200 pb-2">
+        <div class="flex items-center gap-2.5">
+          <h2 class="text-base font-bold text-slate-900">Potential Errors & Warnings</h2>
+          <span id="potentialErrorsBadge" class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">0 Events</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button id="btnGroupErrorNode" onclick="setErrorsGroup('node')" class="px-2.5 py-1 text-xs font-semibold rounded bg-blue-600 text-white shadow">Group by Node</button>
+          <button id="btnGroupErrorTest" onclick="setErrorsGroup('test')" class="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Group by Test</button>
+        </div>
+      </div>
+      <div class="border border-slate-200 rounded overflow-hidden shadow-sm">
+        <div id="potentialErrorsTableContainer" class="overflow-x-auto max-h-64 overflow-y-scroll">
+          <!-- JS populates potential errors table here -->
+        </div>
+        <div id="potentialErrorsFooter" class="hidden bg-slate-50 text-slate-600 text-[11px] px-3 py-1.5 border-t border-slate-200 flex items-center justify-between font-medium">
+          <span id="potentialErrorsFooterText"></span>
+          <span class="text-blue-600 font-semibold">↓ Scroll inside table to view all items</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PART 3: Filter Bar & View Options -->
+    <div class="glass-card rounded-md p-4 space-y-4">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <!-- Search & Dropdowns -->
+        <div class="flex flex-wrap items-center gap-3 flex-1">
+          <div class="relative w-full sm:w-64">
+            <input type="text" id="searchInput" placeholder="Filter by node name..." oninput="filterNodeInsights()" class="w-full text-xs px-3 py-2 rounded border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <!-- Multi-Select Suite Filter -->
+          <div class="relative inline-block text-left" id="suiteDropdownContainer">
+            <button type="button" onclick="toggleDropdown('suiteDropdownMenu', event)" class="text-xs px-3 py-2 rounded border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between gap-2 min-w-[160px]">
+              <span id="suiteDropdownLabel" class="truncate">All Test Suites</span>
+              <svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+            </button>
+            <div id="suiteDropdownMenu" class="hidden absolute left-0 mt-1 w-64 rounded-md shadow-lg bg-white border border-slate-200 z-50 p-2 space-y-2">
+              <div class="flex items-center justify-between text-[11px] text-slate-500 pb-1 border-b border-slate-100">
+                <button type="button" onclick="selectAllOptions('suiteOptions', true)" class="text-blue-600 font-medium hover:underline">Select All</button>
+                <button type="button" onclick="selectAllOptions('suiteOptions', false)" class="text-slate-500 font-medium hover:underline">Clear</button>
+              </div>
+              <div id="suiteOptions" class="max-h-48 overflow-y-auto space-y-1 text-xs"></div>
+            </div>
+          </div>
+
+          <!-- Multi-Select Node Filter -->
+          <div class="relative inline-block text-left" id="nodeDropdownContainer">
+            <button type="button" onclick="toggleDropdown('nodeDropdownMenu', event)" class="text-xs px-3 py-2 rounded border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between gap-2 min-w-[160px]">
+              <span id="nodeDropdownLabel" class="truncate">All Target Nodes</span>
+              <svg class="w-3 h-3 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+            </button>
+            <div id="nodeDropdownMenu" class="hidden absolute left-0 mt-1 w-64 rounded-md shadow-lg bg-white border border-slate-200 z-50 p-2 space-y-2">
+              <div class="flex items-center justify-between text-[11px] text-slate-500 pb-1 border-b border-slate-100">
+                <button type="button" onclick="selectAllOptions('nodeOptions', true)" class="text-blue-600 font-medium hover:underline">Select All</button>
+                <button type="button" onclick="selectAllOptions('nodeOptions', false)" class="text-slate-500 font-medium hover:underline">Clear</button>
+              </div>
+              <div id="nodeOptions" class="max-h-48 overflow-y-auto space-y-1 text-xs"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Status Filter Buttons -->
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="btnAll" onclick="setStatusFilter('all')" class="status-btn px-3 py-1.5 text-xs font-semibold rounded border transition bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200">All Hosts</button>
+          <button id="btnErrors" onclick="setStatusFilter('errors')" class="status-btn px-3 py-1.5 text-xs font-semibold rounded border transition bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200">Potential Errors</button>
+          <button id="btnBreaches" onclick="setStatusFilter('breaches')" class="status-btn px-3 py-1.5 text-xs font-semibold rounded border transition bg-blue-600 border-blue-600 text-white shadow">Threshold Breaches</button>
+          <button id="btnHealthy" onclick="setStatusFilter('healthy')" class="status-btn px-3 py-1.5 text-xs font-semibold rounded border transition bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200">Healthy</button>
+        </div>
+      </div>
+
+      <!-- View Navigation Tabs -->
+      <div class="flex items-center gap-6 border-b border-slate-200 pt-1 text-xs font-medium">
+        <button id="tabNodeInsights" onclick="switchTab('node-insights')" class="pb-2 border-b-2 border-blue-600 text-blue-600 font-bold">Node Insights View</button>
+        <button id="tabTestMetrics" onclick="switchTab('test-metrics')" class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700">Test Specific Metrics (Detailed Test View)</button>
+        <button id="tabValidationTable" onclick="switchTab('validation-table')" class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700">Validation Results Table</button>
+      </div>
+    </div>
+
+    <!-- PART 4: Node Cards Grid Container -->
+    <div id="viewNodeInsights" class="tab-content">
+      <div id="nodeCardsGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <!-- JS populates node cards here -->
+      </div>
+    </div>
+
+    <!-- PART 5: Detailed Test Specific Metrics View -->
+    <div id="viewTestMetrics" class="tab-content hidden">
+      <div id="detailedReportsList" class="space-y-6">
+        <!-- JS renders detailed metric tables here -->
+      </div>
+    </div>
+
+    <!-- PART 6: Validation Results Table View -->
+    <div id="viewValidationTable" class="tab-content hidden">
+      <div id="validationReportsList" class="space-y-6">
+        <!-- JS renders validation tables here -->
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const rawText = document.getElementById('boh-overview-raw-data').textContent.trim();
+    const data = rawText ? JSON.parse(rawText) : {};
+
+    const nodeStatusMap = {};
+    const nodeTestStatusMap = {};
+    const nodeTestErrorSet = new Set();
+    if (data.potential_errors_list) {
+      data.potential_errors_list.forEach(e => {
+        if (e.node && e.test) {
+          nodeTestErrorSet.add(`${e.node}|${e.test}`);
+        }
+      });
+    }
+    function isBreachStatus(str) {
+      if (!str) return false;
+      const s = String(str).toUpperCase();
+      if (s.includes('FAILED TO EXECUTE')) return false;
+      return s.includes('DID NOT MEET THRESHOLD') || s.includes('NOT MET') || s.includes('FAIL') || s.includes('BREACH');
+    }
+    if (data.node_insights) {
+      data.node_insights.forEach(node => {
+        nodeStatusMap[node.node_name] = {
+          has_threshold_breach: node.has_threshold_breach,
+          has_potential_errors: node.has_potential_errors,
+          is_healthy: node.is_healthy
+        };
+        if (node.tests) {
+          node.tests.forEach(t => {
+            const statusUpper = (t.status_str || '').toUpperCase();
+            const has_breach = isBreachStatus(statusUpper);
+            const has_error = nodeTestErrorSet.has(`${node.node_name}|${t.display_name}`);
+            nodeTestStatusMap[`${node.node_name}|${t.display_name}`] = {
+              is_met: t.is_met,
+              has_breach: has_breach,
+              has_error: has_error,
+              status_str: t.status_str
+            };
+          });
+        }
+      });
+    }
+
+    function showGlobalNodeTooltip(e, text) {
+      const el = document.getElementById('globalNodeTooltip');
+      if (!el) return;
+      el.innerHTML = text;
+      el.classList.remove('hidden');
+      const rect = e.currentTarget.getBoundingClientRect();
+      const tooltipRect = el.getBoundingClientRect();
+      let top = rect.top - tooltipRect.height - 8;
+      if (top < 10) top = rect.bottom + 8;
+      let left = rect.left;
+      if (left + tooltipRect.width > window.innerWidth - 10) {
+        left = window.innerWidth - tooltipRect.width - 10;
+      }
+      if (left < 10) left = 10;
+      el.style.top = `${top}px`;
+      el.style.left = `${left}px`;
+    }
+
+    function hideGlobalNodeTooltip() {
+      const el = document.getElementById('globalNodeTooltip');
+      if (el) el.classList.add('hidden');
+    }
+
+    function formatNodeListSummary(input) {
+      if (!input) return '-';
+      let parts;
+      if (Array.isArray(input)) {
+        parts = input;
+      } else {
+        const sStr = String(input);
+        parts = sStr.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      if (parts.length > 2) {
+        const formattedList = parts.join(', ');
+        const safeText = formattedList.replace(/"/g, '&quot;');
+        return `<span class="cursor-help underline decoration-dotted text-slate-700 font-medium" onmouseenter="showGlobalNodeTooltip(event, '${safeText}')" onmouseleave="hideGlobalNodeTooltip()">${parts.length} nodes</span>`;
+      }
+      return Array.isArray(input) ? input.join(', ') : String(input);
+    }
+
+    let currentStatusFilter = 'breaches';
+
+    function setStatusFilter(filter) {
+      currentStatusFilter = filter;
+      const btns = {
+        all: document.getElementById('btnAll'),
+        errors: document.getElementById('btnErrors'),
+        breaches: document.getElementById('btnBreaches'),
+        healthy: document.getElementById('btnHealthy'),
+      };
+      for (const [key, btn] of Object.entries(btns)) {
+        if (btn) {
+          if (key === filter) {
+            btn.className = 'status-btn px-3 py-1.5 text-xs font-semibold rounded border transition bg-blue-600 border-blue-600 text-white shadow';
+          } else {
+            btn.className = 'status-btn px-3 py-1.5 text-xs font-semibold rounded border transition bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200';
+          }
+        }
+      }
+      filterNodeInsights();
+    }
+
+    function switchTab(tabName) {
+      document.getElementById('viewNodeInsights').classList.toggle('hidden', tabName !== 'node-insights');
+      document.getElementById('viewTestMetrics').classList.toggle('hidden', tabName !== 'test-metrics');
+      document.getElementById('viewValidationTable').classList.toggle('hidden', tabName !== 'validation-table');
+
+      document.getElementById('tabNodeInsights').className = tabName === 'node-insights' ? 'pb-2 border-b-2 border-blue-600 text-blue-600 font-bold' : 'pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700';
+      document.getElementById('tabTestMetrics').className = tabName === 'test-metrics' ? 'pb-2 border-b-2 border-blue-600 text-blue-600 font-bold' : 'pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700';
+      document.getElementById('tabValidationTable').className = tabName === 'validation-table' ? 'pb-2 border-b-2 border-blue-600 text-blue-600 font-bold' : 'pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700';
+
+      if (tabName === 'test-metrics') renderDetailedReports();
+      if (tabName === 'validation-table') renderValidationReports();
+    }
+
+    function toggleDropdown(id, event) {
+      if (event) event.stopPropagation();
+      const el = document.getElementById(id);
+      const isHidden = el.classList.contains('hidden');
+      document.querySelectorAll('#suiteDropdownMenu, #nodeDropdownMenu').forEach(m => m.classList.add('hidden'));
+      if (isHidden) el.classList.remove('hidden');
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#suiteDropdownContainer') && !e.target.closest('#nodeDropdownContainer')) {
+        document.querySelectorAll('#suiteDropdownMenu, #nodeDropdownMenu').forEach(m => m.classList.add('hidden'));
+      }
+    });
+
+    function getSelectedValues(containerId) {
+      const container = document.getElementById(containerId);
+      if (!container) return [];
+      const checked = container.querySelectorAll('input[type="checkbox"]:checked');
+      return Array.from(checked).map(c => c.value);
+    }
+
+    function updateDropdownLabels() {
+      const selectedSuites = getSelectedValues('suiteOptions');
+      const selectedNodes = getSelectedValues('nodeOptions');
+
+      const suiteLabel = document.getElementById('suiteDropdownLabel');
+      if (selectedSuites.length === 0) suiteLabel.textContent = 'All Test Suites';
+      else if (selectedSuites.length === 1) suiteLabel.textContent = selectedSuites[0];
+      else suiteLabel.textContent = `${selectedSuites.length} Test Suites`;
+
+      const nodeLabel = document.getElementById('nodeDropdownLabel');
+      if (selectedNodes.length === 0) nodeLabel.textContent = 'All Target Nodes';
+      else if (selectedNodes.length === 1) nodeLabel.textContent = selectedNodes[0];
+      else nodeLabel.textContent = `${selectedNodes.length} Target Nodes`;
+    }
+
+    function selectAllOptions(containerId, checkAll) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = checkAll);
+      updateDropdownLabels();
+      filterNodeInsights();
+    }
+
+    function initDropdowns() {
+      const suiteOpts = document.getElementById('suiteOptions');
+      const nodeOpts = document.getElementById('nodeOptions');
+      if (!data.node_insights) return;
+
+      const suites = new Set();
+      const nodes = new Set();
+      data.node_insights.forEach(n => {
+        nodes.add(n.node_name);
+        n.tests.forEach(t => suites.add(t.display_name));
+      });
+
+      suiteOpts.innerHTML = Array.from(suites).map(s => `
+        <label class="flex items-center gap-2 p-1 hover:bg-slate-50 rounded cursor-pointer select-none">
+          <input type="checkbox" value="${s}" onchange="updateDropdownLabels(); filterNodeInsights();" class="rounded text-blue-600 focus:ring-blue-500">
+          <span class="truncate" title="${s}">${s}</span>
+        </label>
+      `).join('');
+
+      nodeOpts.innerHTML = Array.from(nodes).map(n => `
+        <label class="flex items-center gap-2 p-1 hover:bg-slate-50 rounded cursor-pointer select-none">
+          <input type="checkbox" value="${n}" onchange="updateDropdownLabels(); filterNodeInsights();" class="rounded text-blue-600 focus:ring-blue-500">
+          <span class="truncate" title="${n}">${n}</span>
+        </label>
+      `).join('');
+
+      updateDropdownLabels();
+    }
+
+    function filterNodeInsights() {
+      const search = (document.getElementById('searchInput').value || '').toLowerCase();
+      const selectedSuites = getSelectedValues('suiteOptions');
+      const selectedNodes = getSelectedValues('nodeOptions');
+      const grid = document.getElementById('nodeCardsGrid');
+
+      if (!grid || !data.node_insights) return;
+
+      const cardResults = [];
+
+      data.node_insights.forEach(node => {
+        if (search && !node.node_name.toLowerCase().includes(search)) return;
+        if (selectedNodes.length > 0 && !selectedNodes.includes(node.node_name)) return;
+
+        let matchingTests = node.tests;
+        if (selectedSuites.length > 0) {
+          matchingTests = matchingTests.filter(t => selectedSuites.includes(t.display_name));
+        }
+
+        if (matchingTests.length === 0) return;
+
+        const hasSuiteBreach = matchingTests.some(t => isBreachStatus(t.status_str));
+        const hasSuiteExecError = matchingTests.some(t => {
+          const s = (t.status_str || '').toUpperCase();
+          return !t.is_met && (s.includes('TIMEOUT') || s.includes('DEADLINE') || s.includes('CANCELLED') || s.includes('FAILED TO EXECUTE') || s.includes('ERROR') || s.includes('WARNING'));
+        });
+        const allSuiteHealthy = matchingTests.every(t => t.is_met);
+
+        if (currentStatusFilter === 'breaches') {
+          if (!hasSuiteBreach && !node.has_threshold_breach) return;
+          matchingTests = matchingTests.filter(t => isBreachStatus(t.status_str));
+          if (matchingTests.length === 0) return;
+        }
+        if (currentStatusFilter === 'errors') {
+          matchingTests = matchingTests.filter(t => nodeTestErrorSet.has(`${node.node_name}|${t.display_name}`));
+          if (matchingTests.length === 0) return;
+        }
+        if (currentStatusFilter === 'healthy') {
+          matchingTests = matchingTests.filter(t => {
+            const hasTestBreach = isBreachStatus(t.status_str);
+            return t.is_met && !hasTestBreach;
+          });
+          if (matchingTests.length === 0) return;
+        }
+
+        cardResults.push({
+          node: node,
+          displayTests: matchingTests
+        });
+      });
+
+      grid.innerHTML = cardResults.map(({ node, displayTests }) => `
+        <div class="glass-card rounded-md p-4 space-y-3 flex flex-col justify-between border-slate-200 shadow-sm">
+          <div>
+            <div class="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+              <span class="font-bold text-slate-900 text-sm truncate" title="${node.node_name}">${node.node_name}</span>
+              <span class="shrink-0 inline-block text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${node.badge_style}">
+                ${node.status}
+              </span>
+            </div>
+
+            <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-2.5 mb-1.5">TEST THRESHOLD BREAKDOWN</div>
+
+            <div class="space-y-1.5">
+              ${displayTests.map(t => `
+                <div class="px-2.5 py-1.5 rounded bg-slate-50 border border-slate-200/60 flex items-center justify-between gap-2 text-xs">
+                  <span class="text-slate-800 font-medium flex-1 break-words whitespace-normal">${t.display_name}</span>
+                  <span class="${t.is_met ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'} text-[11px] shrink-0 whitespace-nowrap">
+                    ${t.status_str}
+                  </span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      if (cardResults.length === 0) {
+        grid.innerHTML = `<div class="col-span-full p-8 text-center text-slate-500 glass-card rounded-md text-sm">No matching node insights found.</div>`;
+      }
+
+      renderDetailedReports();
+      renderValidationReports();
+    }
+
+    function renderValidationReports() {
+      const container = document.getElementById('validationReportsList');
+      if (!container) return;
+
+      if (!data.validation_tables || data.validation_tables.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-slate-500 glass-card rounded-md text-sm">No validation results tables available.</div>`;
+        return;
+      }
+
+      const search = (document.getElementById('searchInput').value || '').toLowerCase();
+      const selectedSuites = getSelectedValues('suiteOptions');
+      const selectedNodes = getSelectedValues('nodeOptions');
+
+      const renderedBlocks = [];
+
+      data.validation_tables.forEach(table => {
+        const displayName = `${table.test_name} (${table.test_level})`;
+        if (selectedSuites.length > 0 && !selectedSuites.includes(displayName) && !selectedSuites.includes(table.test_name)) return;
+
+        let matchingRows = table.rows || [];
+        matchingRows = matchingRows.filter(r => {
+          const rowTarget = (r.target || '').toLowerCase();
+          const rowMetric = (r.metric || '').toLowerCase();
+
+          if (search) {
+            const matchSearch = rowTarget.includes(search) || displayName.toLowerCase().includes(search) || rowMetric.includes(search);
+            if (!matchSearch) return false;
+          }
+
+          if (selectedNodes.length > 0) {
+            const rowNodes = r.target.replace(/\([^)]*\)/g, '').split(/[\s,<>]+/).map(n => n.trim()).filter(Boolean);
+            const matchNode = rowNodes.some(n => selectedNodes.includes(n)) || selectedNodes.some(n => r.target.includes(n));
+            if (!matchNode) return false;
+          }
+
+          const statusUpper = (r.status || '').toUpperCase();
+          const rowIsFail = isBreachStatus(r.status);
+          const rowIsErr = statusUpper.includes('ERROR') || statusUpper.includes('TIMEOUT') || statusUpper.includes('DEADLINE') || statusUpper.includes('CANCELLED') || statusUpper.includes('UNKNOWN');
+
+          if ((currentStatusFilter === 'breaches' && !rowIsFail) || (currentStatusFilter === 'errors' && !rowIsErr)) return false;
+          if (currentStatusFilter === 'healthy' && !statusUpper.includes('MET') && !statusUpper.includes('PASS')) return false;
+
+          return true;
+        });
+
+        if (matchingRows.length === 0) return;
+
+        const activeNodesSet = new Set();
+        matchingRows.forEach(r => {
+          const nodes = r.target_nodes || (r.target ? r.target.replace(/\([^)]*\)/g, '').split(/[\s,<>]+/).map(n => n.trim()).filter(Boolean) : []);
+          nodes.forEach(n => activeNodesSet.add(n));
+        });
+        const activeNodesList = Array.from(activeNodesSet);
+        const headerNodesInput = activeNodesList.length > 0 ? activeNodesList : (table.target_nodes || table.nodes_str);
+
+        const summaryBadgeClass = table.status_summary === 'green'
+          ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+          : table.status_summary === 'red'
+          ? 'bg-red-50 text-red-700 border-red-300'
+          : 'bg-amber-50 text-amber-700 border-amber-300';
+
+        const tableHtml = `
+          <div class="glass-card rounded-md p-4 space-y-3 border-slate-200 shadow-sm">
+            <div class="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-slate-900 text-sm">Validation Results: ${table.test_name} (${table.test_level})</span>
+                <span class="text-xs text-slate-500 font-mono">[${formatNodeListSummary(headerNodesInput)}]</span>
+              </div>
+              <span class="shrink-0 inline-block text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider border ${summaryBadgeClass}">
+                ${table.status_summary === 'green' ? 'MET' : table.status_summary === 'red' ? 'NOT MET' : 'PARTIALLY MET'}
+              </span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs text-left text-slate-800">
+                <thead class="bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wider border-b border-slate-200">
+                  <tr>
+                    <th class="px-3 py-2 text-left">Target</th>
+                    <th class="px-3 py-2 text-left">Metric</th>
+                    <th class="px-3 py-2 text-right">Value</th>
+                    <th class="px-3 py-2 text-left">Unit</th>
+                    <th class="px-3 py-2 text-left">Threshold</th>
+                    <th class="px-3 py-2 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 font-mono">
+                  ${matchingRows.map(r => {
+                    const rowStatusBadge = r.status_style === 'green'
+                      ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                      : r.status_style === 'red'
+                      ? 'text-red-700 bg-red-50 border-red-200'
+                      : 'text-amber-700 bg-amber-50 border-amber-200';
+                    return `
+                      <tr class="hover:bg-slate-50/80 transition">
+                        <td class="px-3 py-2 text-left text-slate-700">${formatNodeListSummary(r.target_nodes || r.target)}</td>
+                        <td class="px-3 py-2 text-left font-medium text-slate-900">${r.metric}</td>
+                        <td class="px-3 py-2 text-right font-bold text-slate-900">${r.formatted_value}</td>
+                        <td class="px-3 py-2 text-left text-slate-500">${r.unit || '-'}</td>
+                        <td class="px-3 py-2 text-left text-slate-700">${r.threshold || '-'}</td>
+                        <td class="px-3 py-2 text-center">
+                          <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${rowStatusBadge}">
+                            ${r.status}
+                          </span>
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+        renderedBlocks.push(tableHtml);
+      });
+
+      if (renderedBlocks.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-slate-500 glass-card rounded-md text-sm">No matching validation results tables found.</div>`;
+      } else {
+        container.innerHTML = renderedBlocks.join('');
+      }
+    }
+
+    function renderDetailedReports() {
+      const container = document.getElementById('detailedReportsList');
+      if (!container) return;
+
+      if (!data.detailed_reports || data.detailed_reports.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-slate-500 glass-card rounded-md text-sm">No detailed test metric tables available.</div>`;
+        return;
+      }
+
+      const search = (document.getElementById('searchInput').value || '').toLowerCase();
+      const selectedSuites = getSelectedValues('suiteOptions');
+      const selectedNodes = getSelectedValues('nodeOptions');
+
+      function extractNodesFromTitle(title, allTargetNodes) {
+        if (!title) return [];
+        const m = title.match(/Node:\s*([^\s,\()]+)|Node\s+([^\s,\()]+)/i);
+        if (m) {
+          const extracted = m[1] || m[2];
+          if (extracted && extracted !== 'Summary') return [extracted];
+        }
+        if (allTargetNodes && allTargetNodes.length > 0) {
+          const found = allTargetNodes.filter(n => new RegExp('\\b' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(title));
+          if (found.length > 0) return found;
+        }
+        return [];
+      }
+
+      function matchStatusFilter(nodesList, displayName, r) {
+        if (currentStatusFilter === 'all') return true;
+
+        const valStatus = ((r && (r.validation || r.status)) || '').toString().toUpperCase();
+        const rowIsFail = isBreachStatus(valStatus);
+        const rowIsErr = valStatus.includes('ERROR') || valStatus.includes('TIMEOUT') || valStatus.includes('DEADLINE') || valStatus.includes('CANCELLED') || valStatus.includes('FAILED TO EXECUTE');
+        const rowIsPass = valStatus.includes('PASS') || valStatus.includes('MET THRESHOLD') || valStatus.includes('PASSED');
+
+        if (currentStatusFilter === 'breaches') {
+          if (rowIsFail) return true;
+          if (!nodesList || nodesList.length === 0) return false;
+          return nodesList.some(n => {
+            const ts = nodeTestStatusMap[`${n}|${displayName}`];
+            if (ts) return ts.has_breach;
+            return false;
+          });
+        } else if (currentStatusFilter === 'errors') {
+          if (!nodesList || nodesList.length === 0) return false;
+          return nodesList.some(n => nodeTestErrorSet.has(`${n}|${displayName}`));
+        } else if (currentStatusFilter === 'healthy') {
+          if (rowIsFail || rowIsErr) return false;
+          if (!nodesList || nodesList.length === 0) return false;
+          const cleanName = (displayName || '').toLowerCase().trim();
+          return nodesList.every(n => {
+            const keys = Object.keys(nodeTestStatusMap).filter(k => k.startsWith(`${n}|`));
+            const matchingKeys = keys.filter(k => {
+              const suitePart = k.split('|')[1]?.toLowerCase() || '';
+              return suitePart === cleanName || suitePart.startsWith(cleanName);
+            });
+            if (matchingKeys.length === 0) return false;
+            return matchingKeys.every(k => {
+              const ts = nodeTestStatusMap[k];
+              return ts && ts.is_met && !ts.has_breach;
+            });
+          });
+        }
+        return true;
+      }
+
+      const renderedBlocks = [];
+
+      data.detailed_reports.forEach(report => {
+        if (selectedSuites.length > 0 && !selectedSuites.includes(report.display_name)) return;
+
+        const reportNodes = report.target_nodes || [];
+
+        report.tables.forEach(table => {
+          let matchingRows = table.rows || [];
+          let lastSeenNode = '';
+          const tableNodesFromTitle = extractNodesFromTitle(table.title, reportNodes);
+
+          matchingRows = matchingRows.filter(r => {
+            let rawNodeVal = (r.node || r.nodes || r.resource || '').toString().trim();
+            if (rawNodeVal && rawNodeVal !== 'N/A' && rawNodeVal !== 'unknown' && !rawNodeVal.includes('Cluster Bandwidth')) {
+              lastSeenNode = rawNodeVal;
+            } else if (lastSeenNode) {
+              rawNodeVal = lastSeenNode;
+            }
+
+            let rowNodes = [];
+            if (rawNodeVal && rawNodeVal !== 'N/A' && rawNodeVal !== 'unknown' && !rawNodeVal.includes('Cluster Bandwidth')) {
+              const cleaned = rawNodeVal.replace(/\([^)]*\)/g, '');
+              rowNodes = cleaned.split(/[\s,<>]+/).map(n => n.trim()).filter(n => n && n !== '-');
+            } else if (tableNodesFromTitle.length > 0) {
+              rowNodes = tableNodesFromTitle;
+            } else {
+              rowNodes = reportNodes;
+            }
+
+            if (search) {
+              const matchSearch = rowNodes.length > 0
+                ? rowNodes.some(n => n.toLowerCase().includes(search))
+                : (report.display_name.toLowerCase().includes(search) || table.title.toLowerCase().includes(search));
+              if (!matchSearch) return false;
+            }
+
+            if (selectedNodes.length > 0) {
+              const matchNode = rowNodes.some(n => selectedNodes.includes(n));
+              if (!matchNode) return false;
+            }
+
+            if (!matchStatusFilter(rowNodes, report.display_name, r)) return false;
+
+            return true;
+          });
+
+          if (matchingRows.length === 0) return;
+
+          let headerTitle = table.title || report.display_name;
+
+          let visibleHeaders = table.headers || [];
+          const nodeHeader = visibleHeaders.find(h => h.key === 'node' || h.key === 'nodes');
+          if (nodeHeader) {
+            const uniqueNodesInRows = new Set(
+              matchingRows.map(r => (r[nodeHeader.key] || '').toString().trim()).filter(Boolean)
+            );
+            if (uniqueNodesInRows.size === 1) {
+              const singleNodeStr = Array.from(uniqueNodesInRows)[0];
+              const isNodeInTitle = new RegExp('\\b' + singleNodeStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(headerTitle) ||
+                (report.target_nodes && report.target_nodes.length === 1 && new RegExp('\\b' + report.target_nodes[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(headerTitle));
+              if (isNodeInTitle) {
+                visibleHeaders = visibleHeaders.filter(h => h.key !== 'node' && h.key !== 'nodes');
+              }
+            }
+          }
+
+          const tableHtml = `
+            <div class="glass-card rounded-md p-4 space-y-3 border-slate-200 shadow-sm">
+              <div class="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-slate-900 text-sm">${headerTitle}</span>
+                </div>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-xs text-left text-slate-800">
+                  <thead class="bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wider border-b border-slate-200">
+                    <tr>
+                      ${visibleHeaders.map(h => `<th class="px-3 py-2 ${h.align === 'right' ? 'text-right' : h.align === 'center' ? 'text-center' : 'text-left'}">${h.label}</th>`).join('')}
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100 font-mono">
+                    ${matchingRows.map(r => `
+                      <tr class="hover:bg-slate-50/80 transition">
+                        ${visibleHeaders.map(h => `<td class="px-3 py-2 ${h.align === 'right' ? 'text-right' : h.align === 'center' ? 'text-center' : 'text-left'}">${(h.key === 'node' || h.key === 'nodes' || h.key === 'resource') ? formatNodeListSummary(r[h.key]) : (r[h.key] !== undefined && r[h.key] !== null ? r[h.key] : '-')}</td>`).join('')}
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          renderedBlocks.push(tableHtml);
+        });
+      });
+
+      if (renderedBlocks.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-slate-500 glass-card rounded-md text-sm">No matching detailed test metrics found.</div>`;
+      } else {
+        container.innerHTML = renderedBlocks.join('');
+      }
+    }
+
+    let errorsGroupMode = 'node';
+
+    function setErrorsGroup(mode) {
+      errorsGroupMode = mode;
+      const btnNode = document.getElementById('btnGroupErrorNode');
+      const btnTest = document.getElementById('btnGroupErrorTest');
+      if (btnNode && btnTest) {
+        btnNode.className = mode === 'node' ? 'px-2.5 py-1 text-xs font-semibold rounded bg-blue-600 text-white shadow' : 'px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 text-slate-700 hover:bg-slate-200';
+        btnTest.className = mode === 'test' ? 'px-2.5 py-1 text-xs font-semibold rounded bg-blue-600 text-white shadow' : 'px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 text-slate-700 hover:bg-slate-200';
+      }
+      renderPotentialErrors();
+    }
+
+    function escapeHtml(str) {
+      return (str || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function renderPotentialErrors() {
+      const container = document.getElementById('potentialErrorsTableContainer');
+      const badge = document.getElementById('potentialErrorsBadge');
+      const footer = document.getElementById('potentialErrorsFooter');
+      const footerText = document.getElementById('potentialErrorsFooterText');
+      const list = (data.potential_errors_list || []).slice().sort((a, b) => {
+        if (errorsGroupMode === 'node') {
+          return (a.node || '').localeCompare(b.node || '') || (a.test || '').localeCompare(b.test || '');
+        }
+        return (a.test || '').localeCompare(b.test || '') || (a.node || '').localeCompare(b.node || '');
+      });
+
+      if (badge) badge.textContent = `${list.length} Events`;
+      if (footer && footerText) {
+        if (list.length > 5) {
+          footer.classList.remove('hidden');
+          footerText.textContent = `Showing all ${list.length} potential errors and warnings`;
+        } else {
+          footer.classList.add('hidden');
+        }
+      }
+      if (!container) return;
+
+      if (list.length === 0) {
+        container.innerHTML = `<div class="p-6 text-center text-slate-500 text-xs">No potential errors or diagnostic warnings detected.</div>`;
+        if (footer) footer.classList.add('hidden');
+        return;
+      }
+
+      const primaryHeader = errorsGroupMode === 'node' ? 'Node' : 'Test Suite';
+      const secondaryHeader = errorsGroupMode === 'node' ? 'Test Suite' : 'Node';
+
+      container.innerHTML = `
+        <table class="w-full text-xs text-left text-slate-800">
+          <thead class="bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wider border-b border-slate-200 sticky top-0">
+            <tr>
+              <th class="px-3 py-2">${primaryHeader}</th>
+              <th class="px-3 py-2">${secondaryHeader}</th>
+              <th class="px-3 py-2">Category</th>
+              <th class="px-3 py-2">Diagnostic Message</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100 font-mono">
+            ${list.map(err => {
+              const primaryVal = errorsGroupMode === 'node' ? (err.node || '-') : (err.test || '-');
+              const secondaryVal = errorsGroupMode === 'node' ? (err.test || '-') : (err.node || '-');
+              return `
+                <tr class="hover:bg-slate-50/80 transition">
+                  <td class="px-3 py-2 font-bold text-slate-900">${escapeHtml(primaryVal)}</td>
+                  <td class="px-3 py-2 text-slate-700">${escapeHtml(secondaryVal)}</td>
+                  <td class="px-3 py-2"><span class="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-bold text-[10px]">${escapeHtml(err.category || err.type)}</span></td>
+                  <td class="px-3 py-2 text-slate-800">${escapeHtml(err.message) || '-'}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function initPart1() {
+      const meta = data.metadata || {};
+      const summary = data.summary || {};
+
+      document.getElementById('runId').textContent = meta.report_id || '-';
+      document.getElementById('createdAt').textContent = meta.created_at || '-';
+      document.getElementById('systemType').textContent = meta.system_type || '-';
+
+      document.getElementById('totalNodes').textContent = summary.total_nodes || 0;
+      const parts = [];
+      parts.push(`${summary.degraded_count || 0} Degraded`);
+      if (summary.potentially_degraded_count) parts.push(`${summary.potentially_degraded_count} Potentially Degraded`);
+      if (summary.missing_metrics_count) parts.push(`${summary.missing_metrics_count} Missing Metrics`);
+      parts.push(`${summary.healthy_count || 0} Healthy`);
+      document.getElementById('nodeStatusDetail').textContent = parts.join(' \u2022 ');
+      document.getElementById('totalSuites').textContent = summary.total_test_suites || 0;
+      document.getElementById('potentialErrors').textContent = summary.potential_errors_count || 0;
+
+      const breakdownContainer = document.getElementById('testSuiteBreakdownList');
+      if (breakdownContainer && data.test_suite_breakdown && data.test_suite_breakdown.length > 0) {
+        breakdownContainer.innerHTML = data.test_suite_breakdown.map(item => `
+          <div class="p-4 rounded border border-slate-200 bg-slate-50/50 flex flex-col justify-between space-y-3 h-full shadow-sm">
+            <div>
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex items-center gap-1.5 min-w-0">
+                  <div class="font-bold text-slate-900 text-sm truncate" title="${item.display_name}">${item.display_name}</div>
+                  ${item.description ? `<span class="relative group/tip inline-flex items-center shrink-0"><span class="cursor-help text-slate-400 hover:text-slate-600 inline-flex items-center justify-center w-4 h-4 rounded-full border border-slate-300 text-[10px] font-bold transition">?</span><span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block w-48 p-2 bg-slate-900/95 text-white text-[11px] font-normal rounded shadow-lg z-50 whitespace-normal leading-snug">${item.description}</span></span>` : ''}
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                  <span class="shrink-0 inline-block text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${item.badge_style}">
+                    ${item.status_badge}
+                  </span>
+                  ${item.badge_tooltip ? `<span class="relative group/tip inline-flex items-center shrink-0"><span class="cursor-help text-slate-400 hover:text-slate-600 inline-flex items-center justify-center w-4 h-4 rounded-full border border-slate-300 text-[10px] font-bold transition">?</span><span class="pointer-events-none absolute right-0 bottom-full mb-1.5 hidden group-hover/tip:block w-48 p-2 bg-slate-900/95 text-white text-[11px] font-normal rounded shadow-lg z-50 whitespace-normal leading-snug break-words">${item.badge_tooltip}</span></span>` : ''}
+                </div>
+              </div>
+              <div class="text-xs text-slate-600 mt-1">${item.ratio_str}</div>
+            </div>
+            ${item.target_criteria ? `<div class="text-[11px] text-slate-500 font-mono bg-slate-100/80 px-2 py-1 rounded border border-slate-200/60 truncate" title="${item.target_criteria}">${item.target_criteria}</div>` : ''}
+          </div>
+        `).join('');
+      }
+
+      initDropdowns();
+      filterNodeInsights();
+      renderPotentialErrors();
+    }
+
+    initPart1();
+  </script>
+  <div id="globalNodeTooltip" class="fixed hidden z-[9999] p-3 bg-slate-900/95 text-white text-xs font-mono rounded shadow-2xl max-w-lg max-h-80 overflow-y-auto leading-relaxed whitespace-normal break-words pointer-events-none border border-slate-700/50"></div>
+</body>
+</html>

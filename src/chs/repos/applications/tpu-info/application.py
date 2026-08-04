@@ -12,11 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import inspect
+import base64
 from ramble.appkit import *
+
+_APP_DIR = os.path.dirname(
+    os.path.abspath(inspect.getfile(inspect.currentframe()))
+)
+
+with open(os.path.join(_APP_DIR, "tpu_inventory.py"), "r") as f:
+    _TPU_INVENTORY_SCRIPT = f.read().strip()
+
+_B64_SCRIPT = base64.b64encode(_TPU_INVENTORY_SCRIPT.encode("utf-8")).decode(
+    "utf-8"
+)
 
 
 class TpuInfo(ExecutableApplication):
-    """TPU Info application for cluster health scanner"""
+    """An application to gather TPU inventory and diagnostics."""
 
     name = "tpu-info"
     maintainers("simrankaurb")
@@ -25,66 +39,50 @@ class TpuInfo(ExecutableApplication):
     executable(
         "execute",
         template=[
-            "TPU_OUT=$(tpu-info)",
-            'echo "$TPU_OUT"',
-            'echo "TPU Count: $(echo "$TPU_OUT" | grep -c "chip")"',
-            'echo "Host Info: $(uname -a)"',
+            f"echo '{_B64_SCRIPT}' | base64 -d > tpu_inventory.py",
+            "python3 tpu_inventory.py",
         ],
-        use_mpi=False,
+        use_mpi=True,
     )
     workload("local", executables=["execute"])
 
+    figure_of_merit_context(
+        "node",
+        regex=r"(?i)HOST (?P<node>\S+):",
+        output_format="Node {node}",
+    )
+
     figure_of_merit(
-        "TPU Chip Count",
-        fom_regex=r"TPU Count: (?P<tpu_count>\d+)",
+        "JAX Devices",
+        fom_regex=r"(?i)HOST \S+: JAX Devices: (?P<tpu_count>\d+)",
         group_name="tpu_count",
         units="",
+        contexts=["node"],
     )
 
     figure_of_merit(
         "Host Info",
-        fom_regex=r"Host Info: (?P<host_info>[^;\n]+)",
+        fom_regex=r"(?i)HOST \S+: Host Info: (?P<host_info>[^;\n]+)",
         group_name="host_info",
         units="",
         fom_type=FomType.INFO,
+        contexts=["node"],
     )
 
     figure_of_merit(
         "Libtpu version",
-        fom_regex=r"Libtpu version: (?P<libtpu_version>[^\n]+)",
+        fom_regex=r"(?i)HOST \S+: Libtpu version: (?P<libtpu_version>[^\n]+)",
         group_name="libtpu_version",
         units="",
         fom_type=FomType.INFO,
+        contexts=["node"],
     )
 
     figure_of_merit(
         "Accelerator type",
-        fom_regex=r"Accelerator type: (?P<accelerator_type>[^\n]+)",
+        fom_regex=r"(?i)HOST \S+: Accelerator type: (?P<accelerator_type>[^\n]+)",
         group_name="accelerator_type",
         units="",
         fom_type=FomType.INFO,
-    )
-
-    figure_of_merit_context(
-        "tpu_chip",
-        regex=r"\|\s+(?P<chip_path>/dev/vfio/\d+|/dev/accel\d+)\s+\|\s*(?P<chip_type>[^|]+?)\s*\|",
-        output_format="Chip {chip_path}",
-    )
-
-    figure_of_merit(
-        "Chip Type",
-        fom_regex=r"\|\s+(?:/dev/vfio/\d+|/dev/accel\d+)\s+\|\s*(?P<chip_type>[^|]+?)\s*\|",
-        group_name="chip_type",
-        units="",
-        fom_type=FomType.INFO,
-        contexts=["tpu_chip"],
-    )
-
-    figure_of_merit(
-        "Chip Devices",
-        fom_regex=r"\|\s+(?:/dev/vfio/\d+|/dev/accel\d+)\s+\|\s*[^|]+\s*\|\s*(?P<chip_devices>\d+)\s*\|",
-        group_name="chip_devices",
-        units="",
-        fom_type=FomType.INFO,
-        contexts=["tpu_chip"],
+        contexts=["node"],
     )

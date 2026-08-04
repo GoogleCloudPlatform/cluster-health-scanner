@@ -27,7 +27,190 @@ default:
     thresholds:
       bandwidth: 50
 
-a3-ultra:
+
+tpu7x-standard-4t:
+  tpu-network-diagnostics:
+    type: min
+    thresholds:
+      bandwidth: 160.0
+  tpu-info:
+    type: scalar
+    thresholds:
+      "JAX Devices": 8
+  tpu-gemm:
+    type: min
+    thresholds:
+      Throughput: 1000.0
+  tpu-hbm:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 3200
+          conditions:
+            elements: 2147483648
+  tpu-collectives:
+    type: min
+    thresholds:
+      peak_bandwidth:
+        - value: 155.0
+          conditions:
+            tpu_topology: "2x2x1"
+            workload_name: "all_gather"
+        - value: 130.0
+          conditions:
+            tpu_topology: "2x2x1"
+            workload_name: "psum"
+        - value: 65.0
+          conditions:
+            tpu_topology: "2x2x1"
+            workload_name: "all_to_all"
+        - value: 170.0
+          conditions:
+            tpu_topology: "2x2x2"
+            workload_name: "all_gather"
+        - value: 200.0
+          conditions:
+            tpu_topology: "2x2x2"
+            workload_name: "psum"
+        - value: 75.0
+          conditions:
+            tpu_topology: "2x2x2"
+            workload_name: "all_to_all"
+        - value: 175.0
+          conditions:
+            tpu_topology: "2x2x4"
+            workload_name: "all_gather"
+        - value: 140.0
+          conditions:
+            tpu_topology: "2x2x4"
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "2x2x4"
+            workload_name: "all_to_all"
+        - value: 70.0
+          conditions:
+            tpu_topology: "2x4x4"
+            workload_name: "all_gather"
+        - value: 170.0
+          conditions:
+            tpu_topology: "2x4x4"
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "2x4x4"
+            workload_name: "all_to_all"
+        - value: 500.0
+          conditions:
+            tpu_topology: "4x4x4"
+            workload_name: "all_gather"
+        - value: 370.0
+          conditions:
+            tpu_topology: "4x4x4"
+            workload_name: "psum"
+        - value: 83.0
+          conditions:
+            tpu_topology: "4x4x4"
+            workload_name: "all_to_all"
+
+ct6e-standard-4t:
+  tpu-network-diagnostics:
+    type: min
+    thresholds:
+      bandwidth: 150.0
+  tpu-info:
+    type: scalar
+    thresholds:
+      "JAX Devices": 4
+  tpu-gemm:
+    type: min
+    thresholds:
+      Throughput: 850.0
+  tpu-hbm:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 1100
+          conditions:
+            elements: 2147483648
+  tpu-collectives:
+    type: min
+    thresholds:
+      peak_bandwidth:
+        - value: 180.0
+          conditions:
+            tpu_topology: "2x2"
+            workload_name: "all_gather"
+        - value: 170.0
+          conditions:
+            tpu_topology: "2x2"
+            workload_name: "psum"
+        - value: 130.0
+          conditions:
+            tpu_topology: "2x2"
+            workload_name: "all_to_all"
+        - value: 180.0
+          conditions:
+            tpu_topology: "2x4"
+            workload_name: "all_gather"
+        - value: 140.0
+          conditions:
+            tpu_topology: "2x4"
+            workload_name: "psum"
+        - value: 75.0
+          conditions:
+            tpu_topology: "2x4"
+            workload_name: "all_to_all"
+        - value: 170.0
+          conditions:
+            tpu_topology: "4x4"
+            workload_name: "all_gather"
+        - value: 175.0
+          conditions:
+            tpu_topology: "4x4"
+            workload_name: "psum"
+        - value: 80.0
+          conditions:
+            tpu_topology: "4x4"
+            workload_name: "all_to_all"
+        - value: 155.0
+          conditions:
+            tpu_topology: "4x8"
+            workload_name: "all_gather"
+        - value: 150.0
+          conditions:
+            tpu_topology: "4x8"
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "4x8"
+            workload_name: "all_to_all"
+        - value: 175.0
+          conditions:
+            tpu_topology: "8x8"
+            workload_name: "all_gather"
+        - value: 175.0
+          conditions:
+            tpu_topology: "8x8"
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "8x8"
+            workload_name: "all_to_all"
+        - value: 180.0
+          conditions:
+            tpu_topology: "8x16"
+            workload_name: "all_gather"
+        - value: 150.0
+          conditions:
+            tpu_topology: "8x16"
+            workload_name: "psum"
+        - value: 40.0
+          conditions:
+            tpu_topology: "8x16"
+            workload_name: "all_to_all"
+
+a3-ultragpu-8g:
   nccl-cluster:
     type: min
     thresholds:
@@ -53,7 +236,7 @@ a3-ultra:
     thresholds:
       gpus: 8
 
-a3-mega:
+a3-megagpu-8g:
   nccl-cluster:
     type: min
     thresholds:
@@ -67,7 +250,7 @@ a3-mega:
     thresholds:
       bandwidth: 80
 
-a4:
+a4-highgpu-8g:
   nccl-cluster:
     type: min
     thresholds:
@@ -81,16 +264,105 @@ a4:
     thresholds:
       bandwidth: 80
 
-a4x:
+a4x-highgpu-4g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 800.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 600.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 580.0
+          conditions:
+            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 600.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 800.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 550.0
+          conditions:
+            workload_name: "all-to-all"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 780.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 680.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 660.0
+          conditions:
+            workload_name: "all-to-all"
+  stream:
+    type: relative
+    thresholds:
+      efficiency: 0.8
+  gemm:
+    type: min
+    thresholds:
+      performance: 35000
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 4
+
+a4x-maxgpu-4g-metal:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 330.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 340.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 80.0
+          conditions:
+            workload_name: "all-to-all"
+  nccl-single-node:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 600.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 800.0
+          conditions:
+            workload_name: "all-gather"
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 240.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 380.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 40.0
+          conditions:
+            workload_name: "all-to-all"
+  stream:
+    type: relative
+    thresholds:
+      efficiency: 0.8
+  gemm:
+    type: min
+    thresholds:
+      performance: 1000
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 4

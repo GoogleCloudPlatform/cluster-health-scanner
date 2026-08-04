@@ -57,3 +57,13 @@ class StorageProvider(abc.ABC):
             ChsValidationError: If validation fails.
         """
         pass
+
+    @abc.abstractmethod
+    def get_uri(self, remote_path: str) -> str:
+        """Returns the full URI or path to the given remote destination."""
+        pass
+
+    @abc.abstractmethod
+    def exists(self, remote_path: str) -> bool:
+        """Checks whether the remote destination exists."""
+        pass

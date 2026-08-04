@@ -20,22 +20,26 @@ routing, and error handling for various valid and invalid inputs.
 
 import dataclasses
 import datetime
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
-from unittest import mock
 from typing import Any
+from unittest import mock
+
+import click
+from click import testing
 
 from chs import cli
 from chs import exceptions
-from chs.utils.tests import TestsMap
-from click import testing
-import shutil
-import tempfile
-import os
-import pathlib
+from chs.cli import list_formatting
+from chs.utils.tests import TestsMap as _TestsMap
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
 MOCK_WORKSPACE_NAME = "20230101-120000_mockcluster-suite1-mockhash"
+MOCK_CUSTOM_WORKSPACE_NAME = "20230101-120000_mockcluster-custom-mockhash"
 
 
 @dataclasses.dataclass
@@ -43,7 +47,8 @@ class _ListActionKwargs:
     suites: bool = False
     tests: bool = False
     schedulers: bool = False
-    from_suite: str | None = None
+    machine_types: bool = False
+    suite: str | None = None
     machine_type: str | None = None
 
 
@@ -51,7 +56,7 @@ class _ListActionKwargs:
 class _ListCommandTestCase:
     name: str
     args_list: list[str]
-    expected_kwargs: _ListActionKwargs
+    expected_kwargs: dict[str, Any]
 
 
 @dataclasses.dataclass
@@ -76,6 +81,7 @@ class _ListActionTestCase:
     expected_suites_calls: int
     expected_tests_call_args: tuple[str | None, bool] | None
     expected_schedulers_calls: int
+    expected_machine_types_calls: int = 0
 
 
 @dataclasses.dataclass
@@ -92,6 +98,16 @@ class TestCli(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.runner = CliRunner()
+
+        def patched_logger_error(msg, *args, **kwargs):
+            click.echo(msg, err=True)
+
+        self.mock_logger_error = mock.patch(
+            "chs.exceptions.logger.error", side_effect=patched_logger_error
+        )
+        self.mock_logger_error.start()
+        self.addCleanup(self.mock_logger_error.stop)
+
         self.mock_rm_cls = self.enterContext(
             mock.patch("chs.cli.RambleManager", autospec=True)
         )
@@ -99,7 +115,12 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.workspace_name = MOCK_WORKSPACE_NAME
         self.mock_rm_instance.path = f"/mocked/workspaces/{MOCK_WORKSPACE_NAME}"
         self.mock_rm_instance.execute_experiments.return_value = []
-        self.mock_rm_instance.check_jobs_running.return_value = False
+        self.mock_rm_instance.archive.return_value = (
+            "mock_ws_path",
+            "mock_json_path",
+            "mock_html_path",
+            True,
+        )
 
         self.mock_dt = self.enterContext(
             mock.patch("chs.cli.datetime.datetime", autospec=True)
@@ -115,7 +136,11 @@ class TestCli(unittest.TestCase):
         self.mock_detect_scheduler.return_value = "slurm"
         self.mock_scheduler = self.mock_get_scheduler.return_value
         self.mock_scheduler.name = "mock_scheduler"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodelists_arg = None
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        self.mock_scheduler.has_no_failed_jobs.return_value = False
+        self.mock_scheduler.get_active_job_names.return_value = []
         self.mock_scheduler.detect_nodes_hardware.return_value = [
             "a3-megagpu-8g"
         ]
@@ -128,15 +153,18 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch("chs.preflights.run_platform_preflights", autospec=True)
         )
+        self.enterContext(
+            mock.patch("chs.cli._setup_workspace_logger", autospec=True)
+        )
 
         self.mock_load_suite = self.enterContext(
             mock.patch("chs.cli.load_suite", autospec=True)
         )
         self.mock_load_suite.return_value = {
             "tests": [
-                "nccl-cluster",
-                "nccl-pairwise",
-                "dcgm",
+                {"name": "nccl-cluster"},
+                {"name": "nccl-pairwise"},
+                {"name": "dcgm"},
             ]
         }
         self.mock_app_data_cls = self.enterContext(
@@ -148,6 +176,10 @@ class TestCli(unittest.TestCase):
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.resolve_run_id.side_effect = lambda x: x
+        self.mock_app_data.get_storage_config.return_value = {
+            "type": "gcs",
+            "gcs": {"bucket_name": "test_bucket"},
+        }
 
         self.mock_get_cluster_name = self.enterContext(
             mock.patch(
@@ -176,7 +208,7 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch(
                 "chs.utils.suites.get_all_suites",
-                return_value=["lite", "standard", "burn-in", "suite1", "s1"],
+                return_value=["lite", "standard", "suite1", "s1"],
             )
         )
         self.enterContext(
@@ -201,7 +233,7 @@ class TestCli(unittest.TestCase):
         self.enterContext(
             mock.patch(
                 "chs.utils.tests.get_tests_map",
-                return_value=TestsMap(
+                return_value=_TestsMap(
                     data={
                         "slurm": {
                             "a3-megagpu-8g": [
@@ -230,37 +262,59 @@ class TestCli(unittest.TestCase):
 
     def test_list_tests_implementation_both_hints(self):
         """Test _get_tests_list returns both hints."""
-        lines = cli._get_tests_list(from_suite=None, tests_flag=True)
+
+        renderables = list_formatting.get_tests_renderables(
+            suite=None, tests_flag=True
+        )
         hint = (
-            "  (Hint: Use --from-suite <suite_name> or "
+            "  (Hint: Use --suite <suite_name> or "
             "--machine-type <machine_type> to filter tests)"
         )
-        self.assertIn(hint, lines)
+        self.assertTrue(
+            any(hint in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
-    def test_list_tests_implementation_machine_type_hint(self):
+    @mock.patch("chs.cli.list_formatting.load_suite")
+    def test_list_tests_implementation_machine_type_hint(self, mock_load_suite):
         """Test _get_tests_list returns machine-type hint."""
-        lines = cli._get_tests_list(from_suite="suite1", tests_flag=True)
+
+        mock_load_suite.return_value = {"tests": ["test1", "test2"]}
+        renderables = list_formatting.get_tests_renderables(
+            suite="suite1", tests_flag=True
+        )
         hint = "  (Hint: Use --machine-type <machine_type> to filter tests)"
-        self.assertIn(hint, lines)
+        self.assertTrue(
+            any(hint in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
     @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
     def test_list_tests_implementation_suite_hint(self, mock_get_tests):
         """Test _get_tests_list returns suite hint."""
         mock_get_tests.return_value = ["test1", "test2"]
-        lines = cli._get_tests_list(
-            from_suite=None, tests_flag=True, machine_type="a3-ultra"
+
+        renderables = list_formatting.get_tests_renderables(
+            suite=None, tests_flag=True, machine_type="a3-ultragpu-8g"
         )
-        hint = "  (Hint: Use --from-suite <suite_name> to filter tests)"
-        self.assertIn(hint, lines)
+        hint = "  (Hint: Use --suite <suite_name> to filter tests)"
+        self.assertTrue(
+            any(hint in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
     @mock.patch("chs.cli.utils.tests.get_tests_by_machine_type")
-    def test_list_tests_implementation_no_hint(self, mock_get_tests):
+    @mock.patch("chs.cli.list_formatting.load_suite")
+    def test_list_tests_implementation_no_hint(
+        self, mock_load_suite, mock_get_tests
+    ):
         """Test _get_tests_list returns no hint."""
         mock_get_tests.return_value = ["test1", "test2"]
-        lines = cli._get_tests_list(
-            from_suite="suite1", tests_flag=True, machine_type="a3-ultra"
+        mock_load_suite.return_value = {"tests": ["test1", "test2"]}
+
+        renderables = list_formatting.get_tests_renderables(
+            suite="suite1", tests_flag=True, machine_type="a3-ultragpu-8g"
         )
-        self.assertFalse(any("Hint:" in line for line in lines))
+        self.assertFalse(
+            any("Hint:" in r.plain for r in renderables if hasattr(r, "plain"))
+        )
 
     @mock.patch.object(cli, "list_action", autospec=True)
     def test_list_command(self, mock_list_action):
@@ -268,114 +322,126 @@ class TestCli(unittest.TestCase):
         test_cases = [
             _ListCommandTestCase(
                 name="suites",
-                args_list=["list", "--suites"],
-                expected_kwargs=_ListActionKwargs(suites=True),
+                args_list=["list", "suites"],
+                expected_kwargs={"suites": True, "accelerator_type": None},
             ),
             _ListCommandTestCase(
                 name="tests",
-                args_list=["list", "--tests"],
-                expected_kwargs=_ListActionKwargs(tests=True),
+                args_list=["list", "tests"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": None,
+                    "machine_type": None,
+                    "accelerator_type": None,
+                },
             ),
             _ListCommandTestCase(
                 name="schedulers",
-                args_list=["list", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(schedulers=True),
+                args_list=["list", "schedulers"],
+                expected_kwargs={"schedulers": True, "accelerator_type": None},
+            ),
+            _ListCommandTestCase(
+                name="machine_types",
+                args_list=["list", "machine-types"],
+                expected_kwargs={
+                    "machine_types": True,
+                    "accelerator_type": None,
+                },
+            ),
+            _ListCommandTestCase(
+                name="tpu_suites",
+                args_list=["list", "suites", "--tpu"],
+                expected_kwargs={"suites": True, "accelerator_type": "tpu"},
+            ),
+            _ListCommandTestCase(
+                name="gpu_tests",
+                args_list=["list", "tests", "--gpu"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": None,
+                    "machine_type": None,
+                    "accelerator_type": "gpu",
+                },
+            ),
+            _ListCommandTestCase(
+                name="all_tpu",
+                args_list=["list", "--tpu"],
+                expected_kwargs={"accelerator_type": "tpu"},
             ),
             _ListCommandTestCase(
                 name="all",
                 args_list=["list"],
-                expected_kwargs=_ListActionKwargs(),
+                expected_kwargs={"accelerator_type": None},
             ),
             _ListCommandTestCase(
-                name="from_suite",
-                args_list=["list", "--tests", "--from-suite", "suite1"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1",
-                ),
+                name="suite",
+                args_list=["list", "tests", "--suite", "suite1"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1",
+                    "machine_type": None,
+                    "accelerator_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="suites_and_tests",
-                args_list=["list", "--suites", "--tests"],
-                expected_kwargs=_ListActionKwargs(
-                    suites=True,
-                    tests=True,
-                ),
+                name="suite_trailing_comma",
+                args_list=["list", "tests", "--suite", "suite1,"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1,",
+                    "machine_type": None,
+                    "accelerator_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="suites_and_schedulers",
-                args_list=["list", "--suites", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(
-                    suites=True,
-                    schedulers=True,
-                ),
+                name="suite_leading_comma",
+                args_list=["list", "tests", "--suite", ",suite1"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": ",suite1",
+                    "machine_type": None,
+                    "accelerator_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="tests_and_schedulers",
-                args_list=["list", "--tests", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    schedulers=True,
-                ),
+                name="suite_double_comma",
+                args_list=["list", "tests", "--suite", "suite1,,suite2"],
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1,,suite2",
+                    "machine_type": None,
+                    "accelerator_type": None,
+                },
             ),
             _ListCommandTestCase(
-                name="all_boolean_flags",
-                args_list=["list", "--suites", "--tests", "--schedulers"],
-                expected_kwargs=_ListActionKwargs(
-                    suites=True,
-                    tests=True,
-                    schedulers=True,
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_trailing_comma",
-                args_list=["list", "--tests", "--from-suite", "suite1,"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1,",
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_leading_comma",
-                args_list=["list", "--tests", "--from-suite", ",suite1"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite=",suite1",
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_double_comma",
-                args_list=["list", "--tests", "--from-suite", "suite1,,suite2"],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1,,suite2",
-                ),
-            ),
-            _ListCommandTestCase(
-                name="from_suite_whitespace_and_comma",
+                name="suite_whitespace_and_comma",
                 args_list=[
                     "list",
-                    "--tests",
-                    "--from-suite",
+                    "tests",
+                    "--suite",
                     "suite1, suite2 ,suite3 ",
                 ],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    from_suite="suite1, suite2 ,suite3",
-                ),
+                expected_kwargs={
+                    "tests": True,
+                    "suite": "suite1, suite2 ,suite3",
+                    "machine_type": None,
+                    "accelerator_type": None,
+                },
             ),
             _ListCommandTestCase(
                 name="machine_type",
                 args_list=[
                     "list",
-                    "--tests",
+                    "tests",
                     "--machine-type",
                     "a3-ultragpu-8g",
                 ],
-                expected_kwargs=_ListActionKwargs(
-                    tests=True,
-                    machine_type="a3-ultragpu-8g",
-                ),
+                expected_kwargs={
+                    "tests": True,
+                    "suite": None,
+                    "machine_type": "a3-ultragpu-8g",
+                    "accelerator_type": None,
+                },
             ),
         ]
         for case in test_cases:
@@ -383,36 +449,30 @@ class TestCli(unittest.TestCase):
                 mock_list_action.reset_mock()
                 result = self.runner.invoke(cli.cli, case.args_list)
                 self.assertEqual(result.exit_code, 0)
-                mock_list_action.assert_called_once_with(
-                    **dataclasses.asdict(case.expected_kwargs)
-                )
+                mock_list_action.assert_called_once_with(**case.expected_kwargs)
 
     def test_list_command_errors(self):
         """Test 'list' command with invalid flags."""
         test_cases = [
             _CommandErrorTestCase(
-                name="from_suite_empty",
-                args_list=["list", "--tests", "--from-suite", ""],
+                name="suite_empty",
+                args_list=["list", "tests", "--suite", ""],
                 expected_output="cannot be an empty string",
             ),
             _CommandErrorTestCase(
-                name="from_suite_whitespace",
-                args_list=["list", "--tests", "--from-suite", " "],
+                name="suite_whitespace",
+                args_list=["list", "tests", "--suite", " "],
                 expected_output="cannot be an empty string",
             ),
             _CommandErrorTestCase(
-                name="from_suite_without_tests",
-                args_list=["list", "--from-suite", "suite1"],
-                expected_output=(
-                    "Error: Option '--from-suite' requires option '--tests'."
-                ),
+                name="suite_without_tests",
+                args_list=["list", "--suite", "suite1"],
+                expected_output="No such option",
             ),
             _CommandErrorTestCase(
-                name="from_suite_with_suites",
-                args_list=["list", "--suites", "--from-suite", "suite1"],
-                expected_output=(
-                    "Error: Option '--from-suite' requires option '--tests'."
-                ),
+                name="suite_with_suites",
+                args_list=["list", "suites", "--suite", "suite1"],
+                expected_output="No such option",
             ),
         ]
         for case in test_cases:
@@ -421,7 +481,7 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(result.exit_code, 2)
                 self.assertIn(case.expected_output, result.output)
 
-    @mock.patch("chs.cli.analyze_action", autospec=True)
+    @mock.patch("chs.cli._analyze_action", autospec=True)
     @mock.patch("chs.cli.get_scheduler")
     def test_run_command(self, mock_get_scheduler, mock_analyze_action):
         """Test 'run' command."""
@@ -431,11 +491,16 @@ class TestCli(unittest.TestCase):
         # Setup mock scheduler
         mock_scheduler = mock.Mock()
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
 
         def get_scheduler_side_effect(name, **kwargs):
             s = mock.Mock()
             s.name = name
+            s.nodes_arg = None
+            s.nodelists_arg = None
             s.get_nodes_under_test.return_value = ["node1"]
+            s.has_no_failed_jobs.return_value = False
+            s.get_active_job_names.return_value = []
             s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
             s.run_preflight_checks.side_effect = (
                 lambda tests=None, *args, **kwargs: tests
@@ -446,8 +511,11 @@ class TestCli(unittest.TestCase):
                 *args,
                 **kwargs: tests
             )
+            mock_manager.attach_mock(s, "scheduler")
             return s
 
+        mock_manager = mock.Mock()
+        mock_manager.attach_mock(self.mock_rm_instance, "rm")
         mock_get_scheduler.side_effect = get_scheduler_side_effect
 
         test_cases = [
@@ -462,7 +530,11 @@ class TestCli(unittest.TestCase):
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
                     scheduler_name="slurm",
-                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    tests=[
+                        {"name": "nccl-cluster"},
+                        {"name": "nccl-pairwise"},
+                        {"name": "dcgm"},
+                    ],
                     workspace_name=MOCK_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
@@ -473,16 +545,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1,t2",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -492,16 +562,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -511,16 +579,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1,",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -530,16 +596,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     ",t1",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -549,16 +613,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1,,t2",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -568,16 +630,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1, t2 ",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -587,16 +647,14 @@ class TestCli(unittest.TestCase):
                 args_list=[
                     "-v",
                     "run",
-                    "--suite",
-                    "suite1",
                     "--tests",
                     "t1, t2 ,t3 ",
                 ],
                 expected_return=cli.RunExecutionResult(
-                    suite="suite1",
+                    suite="custom",
                     scheduler_name="mock_scheduler",
                     tests=[{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
-                    workspace_name=MOCK_WORKSPACE_NAME,
+                    workspace_name=MOCK_CUSTOM_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
                 ),
@@ -614,7 +672,11 @@ class TestCli(unittest.TestCase):
                 expected_return=cli.RunExecutionResult(
                     suite="suite1",
                     scheduler_name="mock_scheduler",
-                    tests=["nccl-cluster", "nccl-pairwise", "dcgm"],
+                    tests=[
+                        {"name": "nccl-cluster"},
+                        {"name": "nccl-pairwise"},
+                        {"name": "dcgm"},
+                    ],
                     workspace_name=MOCK_WORKSPACE_NAME,
                     workspaces_base_dir=mock_default_dir,
                     job_ids=["job1"],
@@ -638,7 +700,7 @@ class TestCli(unittest.TestCase):
 
                 result = self.runner.invoke(
                     cli.cli,
-                    case.args_list,
+                    case.args_list + ["--auto-approve"],
                     standalone_mode=False,
                 )
                 self.assertEqual(
@@ -652,11 +714,25 @@ class TestCli(unittest.TestCase):
                 self.mock_app_data.get_workspaces_dir.assert_called()
                 self.mock_rm_cls.assert_any_call(
                     mock_default_dir,
-                    MOCK_WORKSPACE_NAME,
+                    case.expected_return.workspace_name,
                     run_id=f"mockcluster-{case.expected_return.suite}-mockhash",
                 )
                 self.mock_rm_instance.create_workspace.assert_called_once()
                 self.mock_rm_instance.configure_workspace.assert_called_once()
+
+                apply_idx = mock_manager.mock_calls.index(
+                    mock.call.scheduler.apply_scheduler_resources()
+                )
+                create_idx = mock_manager.mock_calls.index(
+                    mock.call.rm.create_workspace()
+                )
+                config_idx = -1
+                for i, c in enumerate(mock_manager.mock_calls):
+                    if c[0] == "rm.configure_workspace":
+                        config_idx = i
+                        break
+                self.assertLess(apply_idx, create_idx)
+                self.assertLess(create_idx, config_idx)
                 args, kwargs = (
                     self.mock_rm_instance.configure_workspace.call_args
                 )
@@ -670,11 +746,278 @@ class TestCli(unittest.TestCase):
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data,
                     f"mockcluster-{case.expected_return.suite}-mockhash",
-                    validation=None,
-                    skip_validation=False,
                 )
+                mock_manager.reset_mock()
 
-    @mock.patch("chs.cli.analyze_action")
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_active_tier_tests_filtered_by_supported_tests(
+        self, mock_analyze_action
+    ):
+        """Test active_tier_tests only contains tests for given machine type."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                {"name": "nvidia-smi"},
+                {"name": "dcgm"},
+                {"name": "tpu-info"},
+                {"name": "collectives"},
+            ]
+        }
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t", "a3-megagpu-8g"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                ["run", "--suite", "standard", "--auto-approve"],
+                standalone_mode=False,
+            )
+            self.assertEqual(
+                result.exit_code,
+                0,
+                f"Command failed: {result.output}\n"
+                f"Exception: {result.exception}",
+            )
+
+            self.mock_app_data.update_run.assert_called_once()
+            _, run_details = self.mock_app_data.update_run.call_args[0]
+            self.assertEqual(
+                run_details["active_tier_tests"],
+                ["tpu-info", "collectives"],
+            )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_raises_validation_error_when_initial_tier_tests_empty(
+        self, mock_analyze_action
+    ):
+        """Test Exception raised when initial tier has no supported tests."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                {"name": "tier1-gpu-test"},
+                {
+                    "name": "tpu-info",
+                    "trigger_condition": {"DEGRADED": ["tier1-gpu-test"]},
+                },
+            ]
+        }
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                ["run", "--suite", "standard", "--auto-approve"],
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn(
+                "No supported initial health checks found in suite",
+                result.output,
+            )
+
+    def test_run_action_called_process_error_includes_stderr(self):
+        """Test run_action formats CalledProcessError with stderr."""
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, **kwargs: tests
+        )
+        err = subprocess.CalledProcessError(
+            1,
+            ["kubectl", "create", "namespace", "chs"],
+            stderr="Error from server (Forbidden): namespaces 'chs' forbidden",
+        )
+        mock_scheduler.apply_scheduler_resources.side_effect = err
+
+        with self.assertRaises(exceptions.ChsExecutionException) as ctx:
+            cli.run_action(
+                suite="custom",
+                scheduler_obj=mock_scheduler,
+                tests=[{"name": "tpu-info"}],
+                workspace_name="test_ws",
+                workspaces_base_dir="/tmp/test_ws",
+                machine_type="tpu7x-standard-4t",
+            )
+        self.assertIn(
+            "CHS execution failed: Command '['kubectl', 'create', 'namespace',"
+            " 'chs']' returned non-zero exit status 1: Error from server"
+            " (Forbidden): namespaces 'chs' forbidden",
+            str(ctx.exception),
+        )
+
+    def test_format_subprocess_error_helper(self):
+        """Test format_subprocess_error formats command & output."""
+        err_with_stderr = subprocess.CalledProcessError(
+            1,
+            ["kubectl", "get", "crd"],
+            stderr="Error from server (Forbidden)",
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_with_stderr),
+            "Command '['kubectl', 'get', 'crd']' returned non-zero exit status"
+            " 1: Error from server (Forbidden)",
+        )
+
+        err_with_stdout = subprocess.CalledProcessError(
+            1,
+            ["gcloud", "auth"],
+            output="Invalid credentials",
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_with_stdout),
+            "Command '['gcloud', 'auth']' returned non-zero exit status 1:"
+            " Invalid credentials",
+        )
+
+        err_without_output = subprocess.CalledProcessError(
+            1,
+            ["ls", "/nonexistent"],
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_without_output),
+            "Command '['ls', '/nonexistent']' returned non-zero exit status 1.",
+        )
+
+        err_with_bytes_stderr = subprocess.CalledProcessError(
+            1,
+            ["kubectl", "apply"],
+            stderr=b"Permission denied error\n",
+        )
+        self.assertEqual(
+            exceptions.format_subprocess_error(err_with_bytes_stderr),
+            "Command '['kubectl', 'apply']' returned non-zero exit status 1:"
+            " Permission denied error",
+        )
+
+        generic_err = ValueError("Something went wrong")
+        self.assertEqual(
+            exceptions.format_subprocess_error(generic_err),
+            "Something went wrong",
+        )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_preserves_suite_test_variables(
+        self, mock_analyze_action
+    ):
+        """Test suite variables and workloads are preserved in tests config."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "a3-megagpu-8g"
+        ]
+        self.mock_load_suite.return_value = {
+            "tests": [
+                {
+                    "name": "dcgm",
+                    "variables": {"diag_level": [3]},
+                },
+                {
+                    "name": "nccl-cluster",
+                    "workloads": ["all-gather"],
+                    "variables": {"begin_message_size": "256M"},
+                },
+            ]
+        }
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["a3-megagpu-8g"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "a3-megagpu-8g": [
+                                "dcgm",
+                                "nccl-cluster",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                ["run", "--suite", "standard", "--auto-approve"],
+                standalone_mode=False,
+            )
+            self.assertEqual(
+                result.exit_code,
+                0,
+                f"Command failed: {result.output}\n"
+                f"Exception: {result.exception}",
+            )
+
+            self.mock_app_data.update_run.assert_called_once()
+            _, run_details = self.mock_app_data.update_run.call_args[0]
+            self.assertEqual(
+                run_details["tests"],
+                [
+                    {
+                        "name": "dcgm",
+                        "variables": {"diag_level": [3]},
+                    },
+                    {
+                        "name": "nccl-cluster",
+                        "workloads": ["all-gather"],
+                        "variables": {"begin_message_size": "256M"},
+                    },
+                ],
+            )
+
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_custom_run_id(self, mock_analyze_action):
         """Test 'run' command with a custom run ID."""
         mock_default_dir = "/mocked/workspaces"
@@ -691,6 +1034,7 @@ class TestCli(unittest.TestCase):
                 "suite1",
                 "--run-id",
                 "customrun",
+                "--auto-approve",
             ],
             standalone_mode=False,
         )
@@ -705,50 +1049,19 @@ class TestCli(unittest.TestCase):
         mock_analyze_action.assert_called_once_with(
             self.mock_app_data,
             expected_run_id,
-            validation=None,
-            skip_validation=False,
         )
 
-    @mock.patch("chs.cli.analyze_action")
-    def test_run_command_dry_run(self, mock_analyze_action):
-        """Test 'run' command with dry-run."""
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
-        self.mock_rm_instance.execute_experiments.return_value = []
-        self.mock_scheduler.name = "slurm"
-
-        result = self.runner.invoke(
-            cli.cli,
-            [
-                "-v",
-                "run",
-                "--suite",
-                "suite1",
-                "--dry-run",
-                "slurm",
-            ],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-
-        expected_run_id = "dry-run-cluster-suite1-mockhash"
-        expected_workspace_name = f"20230101-120000_{expected_run_id}"
-
-        self.mock_rm_cls.assert_any_call(
-            mock_default_dir, expected_workspace_name, run_id=expected_run_id
-        )
-        mock_analyze_action.assert_not_called()
-        self.mock_get_cluster_name.assert_not_called()
-
-    @mock.patch("chs.cli.analyze_action")
-    def test_run_command_attach_success(self, mock_analyze_action):
-        """Test 'run' command with --attach flag when complete."""
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_auto_attach_success(self, mock_analyze_action):
+        """Test 'run' command automatically attaches to an active run."""
+        self.mock_app_data.get_latest_run_id.side_effect = None
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = {"submission_complete": True}
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
 
         result = self.runner.invoke(
             cli.cli,
-            ["-v", "run", "--suite", "suite1", "--attach"],
+            ["-v", "run", "--suite", "suite1"],
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
@@ -756,67 +1069,17 @@ class TestCli(unittest.TestCase):
         mock_analyze_action.assert_called_once_with(
             self.mock_app_data,
             "latest_run",
-            None,
-            False,
         )
         self.assertEqual(result.return_value.workspace_name, "latest_run")
         self.assertEqual(result.return_value.suite, "suite1")
 
-    @mock.patch("chs.cli.get_scheduler")
-    @mock.patch("chs.cli.analyze_action")
-    @mock.patch("chs.cli._validate_run_args")
-    @mock.patch("chs.utils.tests.get_tests_by_machine_type_and_scheduler")
-    @mock.patch("chs.cli.load_suite")
-    @mock.patch("chs.cli.run_action")
-    def test_run_command_attach_no_runs(
-        self,
-        mock_run_action,
-        mock_load_suite,
-        mock_get_supported_tests,
-        mock_validate_run_args,
-        mock_analyze_action,
-        mock_get_scheduler,
-    ):
-        """Test 'run' command with --attach flag when there are no previous
-        runs."""
-        self.mock_app_data.get_latest_run_id.side_effect = (
-            exceptions.NoPreviousRunsFoundException()
-        )
-
-        # We need to mock scheduler interactions because it will proceed
-        # to run normally
-        mock_scheduler = mock.Mock()
-        mock_scheduler.get_nodes_under_test.return_value = ["node1"]
-        mock_scheduler.detect.return_value = True
-        mock_scheduler.validate_environment.return_value = None
-        mock_scheduler.detect_nodes_hardware.return_value = ["a3-ultragpu-8g"]
-        mock_get_scheduler.return_value = mock_scheduler
-        mock_load_suite.return_value = {"tests": ["test1"]}
-        mock_validate_run_args.return_value = ["test1"]
-        mock_get_supported_tests.return_value = ["test1"]
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["-v", "run", "--suite", "suite1", "--attach"],
-            standalone_mode=False,
-        )
-        if result.exit_code != 0:
-            import traceback
-
-            traceback.print_exception(*result.exc_info)
-        self.assertEqual(result.exit_code, 0, msg=str(result.exception))
-
-        # Should have called run_action and analyze_action since it
-        # fell back to normal run
-        mock_run_action.assert_called_once()
-        mock_analyze_action.assert_called_once()
-
     @mock.patch("chs.cli.cancel_action")
-    @mock.patch("chs.cli.analyze_action")
-    def test_run_command_attach_died_mid_submission(
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_auto_attach_died_mid_submission(
         self, mock_analyze_action, mock_cancel_action
     ):
-        """Test 'run' command with --attach flag when incomplete."""
+        """Test 'run' command auto-cancels and restarts if incomplete."""
+        self.mock_app_data.get_latest_run_id.side_effect = None
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = {"submission_complete": False}
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
@@ -825,73 +1088,172 @@ class TestCli(unittest.TestCase):
 
         result = self.runner.invoke(
             cli.cli,
-            ["-v", "run", "--suite", "suite1", "--attach"],
+            ["-v", "run", "--suite", "suite1", "--auto-approve"],
             standalone_mode=False,
         )
         self.assertEqual(result.exit_code, 0)
 
-        mock_cancel_action.assert_called_once_with(
-            self.mock_app_data, "latest_run"
-        )
+        mock_cancel_action.assert_called_once_with("slurm")
         self.mock_rm_instance.execute_experiments.assert_called_once()
 
-    def test_analyze_action_exception_handling(self):
-        """Test that analyze_action wraps exceptions in ClickException."""
-        ws_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, ws_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
+    @mock.patch("chs.cli.cancel_action")
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_auto_attach_completed_run(
+        self, mock_analyze_action, mock_cancel_action
+    ):
+        """Test 'run' auto-cancels and restarts if previous run is completed."""
+        self.mock_app_data.get_latest_run_id.side_effect = None
+        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_run.return_value = {
+            "submission_complete": True,
+            "is_boh_final": True,
+        }
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
 
-        run_dir = os.path.join(ws_dir, "some_run_id")
-        os.makedirs(run_dir)
-        self.mock_rm_instance.path = run_dir
-
-        self.mock_rm_instance.wait_for_jobs.side_effect = (
-            exceptions.ChsAnalysisException("Analysis failed")
+        result = self.runner.invoke(
+            cli.cli,
+            ["-v", "run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
         )
-        result = self.runner.invoke(cli.cli, ["analyze", "some_run_id"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("Analysis failed", result.output)
-        self.mock_rm_instance.archive.assert_called_once()
+        self.assertEqual(result.exit_code, 0)
+
+        mock_cancel_action.assert_called_once_with("slurm")
+        self.mock_rm_instance.execute_experiments.assert_called_once()
+
+    def test_run_command_aborts_on_foreign_active_jobs(self):
+        """Test 'run' aborts if foreign jobs are detected."""
+        self.mock_app_data.get_latest_runs.return_value = {
+            "ws1": {"run_id": "my-old-run-1"},
+            "ws2": {"run_id": "my-old-run-2"},
+        }
+
+        self.mock_scheduler.get_active_job_names.return_value = [
+            "chs-someone-elses-run-job-1",
+            "chs-someone-elses-run-job-2",
+        ]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIsInstance(result.exception, click.ClickException)
+        self.assertIn(
+            "A CHS run is already in progress on this cluster by another user",
+            str(result.exception),
+        )
+        self.mock_app_data.get_latest_run_id.assert_not_called()
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
         self.mock_app_data.get_latest_run_id.return_value = "some_run_id"
-        self.mock_rm_instance.check_jobs_running.return_value = True
-        self.mock_rm_instance.cancel_experiments.side_effect = (
-            exceptions.ChsCancellationException("Cancellation failed")
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
+        self.mock_scheduler.cancel_jobs_by_prefix.side_effect = (
+            exceptions.ChsSchedulerException("Cancellation failed")
         )
-        result = self.runner.invoke(cli.cli, ["cancel"])
+        result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
-        self.mock_rm_instance.archive.assert_called_once()
 
-    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
-    def test_results_command_no_boh_no_storage(self, mock_get_active_provider):
+    @mock.patch("chs.cli.RambleManager")
+    @mock.patch("chs.cli._show_results")
+    @mock.patch("chs.cli.StorageProviderFactory.get_provider_for_run")
+    def test_analyze_action_archival_edge_cases(
+        self, mock_get_provider, mock_show_results, mock_rm_class
+    ):
+        """Test _analyze_action archival shortcutting across storage cases."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws_dir = os.path.join(tmpdir, "run1")
+            os.makedirs(os.path.join(ws_dir, ".ramble-workspace"))
+            boh_path = os.path.join(ws_dir, "bill_of_health.json")
+            with open(boh_path, "w") as f:
+                f.write("{}")
+
+            self.mock_app_data.get_workspaces_dir.return_value = tmpdir
+            self.mock_app_data.resolve_run_id.return_value = "run1"
+
+            mock_rm = mock.MagicMock()
+            mock_rm.path = ws_dir
+            mock_rm.workspace_name = "run1"
+            mock_rm.is_workspace_created = True
+            mock_rm_class.return_value = mock_rm
+
+            # Case 1: Local BoH exists + Storage NOT configured -> Shortcut
+            mock_get_provider.return_value = None
+            mock_rm.is_archived.return_value = True
+
+            cli._analyze_action(self.mock_app_data, "run1")
+            mock_show_results.assert_called_once_with(
+                self.mock_app_data, "run1"
+            )
+            mock_rm.archive.assert_not_called()
+
+            # Reset mocks
+            mock_show_results.reset_mock()
+
+            # Case 2: Local BoH + GCS Storage configured + is_archived=True
+            mock_provider = mock.Mock()
+            mock_get_provider.return_value = mock_provider
+            mock_rm.is_archived.return_value = True
+
+            cli._analyze_action(self.mock_app_data, "run1")
+            mock_show_results.assert_called_once_with(
+                self.mock_app_data, "run1"
+            )
+            mock_rm.archive.assert_not_called()
+
+            # Reset mocks
+            mock_show_results.reset_mock()
+
+            # Case 3: Local BoH + GCS configured + is_archived=False -> Archive
+            mock_rm.is_archived.return_value = False
+            mock_rm.has_bill_of_health.return_value = True
+            mock_rm.archive.return_value = (
+                "gs://bucket/ws.tar.gz",
+                "gs://bucket/boh.json",
+                "gs://bucket/boh.html",
+                True,
+            )
+
+            cli._analyze_action(self.mock_app_data, "run1")
+            mock_rm.archive.assert_called_once()
+
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
+    def test_results_command_no_boh_no_storage(self, mock_get_provider_for_run):
         """Test results command when BoH is missing and no storage set."""
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
-        mock_get_active_provider.side_effect = Exception(
-            "No storage configured"
-        )
+        mock_get_provider_for_run.return_value = None
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with (
+            mock.patch(
+                "chs.storage.StorageProviderFactory.get_active_provider",
+                side_effect=Exception("No storage configured"),
+            ),
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
             os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
             result = self.runner.invoke(cli.cli, ["results"])
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("failed to resolve storage provider", result.output)
 
-    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
+    @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_results_command_download_success(
-        self, mock_viewer, mock_get_active_provider
+        self, mock_viewer, mock_get_provider_for_run
     ):
         """Test results command downloads BoH from storage if missing."""
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
 
         mock_provider = mock.Mock()
-        mock_get_active_provider.return_value = mock_provider
+        mock_get_provider_for_run.return_value = mock_provider
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
@@ -907,6 +1269,12 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_success(self):
         """Test archive_workspace calling archival on success."""
         mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+            "/mock/boh.html",
+            True,
+        )
         with cli.archive_workspace(mock_rm):
             pass
         mock_rm.archive.assert_called_once()
@@ -914,14 +1282,48 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_failure(self):
         """Test archive_workspace calling archival on failure."""
         mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+            "/mock/boh.html",
+            True,
+        )
         with self.assertRaises(ValueError):
             with cli.archive_workspace(mock_rm):
                 raise ValueError("test error")
         mock_rm.archive.assert_called_once()
 
+    def test_archive_workspace_context_manager_keyboard_interrupt(self):
+        """Test archive_workspace on BaseException (e.g. KeyboardInterrupt)."""
+        mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+            "/mock/boh.html",
+            True,
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            with cli.archive_workspace(mock_rm):
+                raise KeyboardInterrupt()
+        mock_rm.archive.assert_called_once()
+
+    def test_archive_workspace_context_manager_detached(self):
+        """Test archive_workspace bypassing archival on ChsDetachedException."""
+        mock_rm = mock.Mock()
+        with self.assertRaises(exceptions.ChsDetachedException):
+            with cli.archive_workspace(mock_rm):
+                raise exceptions.ChsDetachedException()
+        mock_rm.archive.assert_not_called()
+
     def test_archive_workspace_context_manager_archive_failure(self):
         """Test archive_workspace raising ChsArchiveException when BOH fails."""
         mock_rm = mock.Mock()
+        mock_rm.archive.return_value = (
+            "/mock/workspace.tar.gz",
+            "/mock/boh.json",
+            None,
+            False,
+        )
         mock_rm.archive.side_effect = exceptions.ChsArchiveException("boh fail")
         with self.assertRaises(exceptions.ChsArchiveException):
             with cli.archive_workspace(mock_rm):
@@ -930,13 +1332,16 @@ class TestCli(unittest.TestCase):
 
     def test_run_action_chs_exception(self):
         """Test that run_action handles ChsException and archives."""
+        self.mock_app_data.get_latest_run_id.side_effect = (
+            exceptions.NoPreviousRunsFoundException()
+        )
         self.mock_scheduler.name = "slurm"
         self.mock_rm_instance.setup_workspace.side_effect = (
             exceptions.ChsException("Mock failure")
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run"],
+            ["run", "--auto-approve"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Mock failure", result.output)
@@ -944,6 +1349,9 @@ class TestCli(unittest.TestCase):
 
     def test_run_action_exception_handling(self):
         """Test that run_action wraps exceptions in ClickException."""
+        self.mock_app_data.get_latest_run_id.side_effect = (
+            exceptions.NoPreviousRunsFoundException()
+        )
         self.mock_app_data.get_workspaces_dir.return_value = (
             "/mocked/workspaces"
         )
@@ -955,7 +1363,7 @@ class TestCli(unittest.TestCase):
         )
         result = self.runner.invoke(
             cli.cli,
-            ["run", "-s", "s1"],
+            ["run", "-s", "s1", "--auto-approve"],
         )
         self.assertEqual(result.exit_code, 1)
         self.assertIn("CHS execution failed", result.output)
@@ -964,7 +1372,7 @@ class TestCli(unittest.TestCase):
 
     @mock.patch("chs.cli.detect_scheduler")
     @mock.patch("chs.cli.get_scheduler")
-    @mock.patch("chs.cli.analyze_action", autospec=True)
+    @mock.patch("chs.cli._analyze_action", autospec=True)
     def test_run_command_passes_nodepool_to_scheduler(
         self, mock_analyze_action, mock_get_scheduler, mock_detect_scheduler
     ):
@@ -973,10 +1381,20 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.get_workspaces_dir.return_value = (
             "/mocked/workspaces"
         )
+        self.mock_app_data.get_latest_run_id.return_value = None
         mock_scheduler = mock.Mock()
         mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
+        mock_scheduler.has_no_failed_jobs.return_value = False
+        mock_scheduler.get_active_job_names.return_value = []
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
+        mock_scheduler.run_preflight_checks.side_effect = (
+            lambda tests=None, *args, **kwargs: tests
+        )
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, *args, **kwargs: tests
+        )
         mock_get_scheduler.return_value = mock_scheduler
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         result = self.runner.invoke(
@@ -985,6 +1403,7 @@ class TestCli(unittest.TestCase):
                 "run",
                 "--nodepools",
                 "pool1",
+                "--auto-approve",
             ],
         )
 
@@ -993,25 +1412,13 @@ class TestCli(unittest.TestCase):
             0,
             f"Command failed: {result.output}\nException: {result.exception}",
         )
-        mock_get_scheduler.assert_called_once()
-        _, kwargs = mock_get_scheduler.call_args
-        self.assertEqual(kwargs.get("nodepools"), "pool1")
-
-    def test_run_command_latest_run_active(self):
-        """Test `run` command when the latest run is active."""
-        ws_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, ws_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = ws_dir
-
-        latest_run_id = "latest_run"
-        self.mock_app_data.get_latest_run_id.return_value = latest_run_id
-
-        os.makedirs(os.path.join(ws_dir, "latest_run"), exist_ok=True)
-
-        self.mock_rm_instance.check_jobs_running.return_value = True
-        result = self.runner.invoke(cli.cli, ["run"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("The latest CHS run is still in progress", result.output)
+        self.assertEqual(mock_get_scheduler.call_count, 3)
+        calls_with_nodepool = [
+            c
+            for c in mock_get_scheduler.call_args_list
+            if c[1].get("nodepools") == "pool1"
+        ]
+        self.assertEqual(len(calls_with_nodepool), 1)
 
     def test_run_command_heterogeneous_cluster_raises(self):
         """Test `run` command when a heterogeneous cluster is detected."""
@@ -1020,10 +1427,65 @@ class TestCli(unittest.TestCase):
             "a3-megagpu-8g",
             "a3-ultragpu-8g",
         ]
-        result = self.runner.invoke(cli.cli, ["run"])
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
         self.assertIn("--partitions", result.output)
+
+    @mock.patch("chs.cli._handle_previous_run")
+    def test_validations_occur_before_preparing_cluster(
+        self, mock_handle_previous_run
+    ):
+        """Test validation failures prevent cluster preparation for execution"""
+        mock_handle_previous_run.return_value = None
+        self.mock_scheduler.name = "slurm"
+        self.mock_scheduler.get_nodes_under_test.return_value = [
+            "node1",
+            "node2",
+        ]
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "a3-megagpu-8g",
+            "a3-ultragpu-8g",
+        ]
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("Heterogeneous cluster detected", result.output)
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    @mock.patch("chs.cli.get_scheduler")
+    def test_run_command_execution_preview_shows_full_cluster_name(
+        self, mock_get_scheduler, mock_analyze_action
+    ):
+        """Test that the full cluster name is printed in execution preview."""
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.get_cluster_name.return_value = (
+            "full-cluster-name-123456"
+        )
+        mock_scheduler.get_nodes_under_test.return_value = ["node1"]
+        mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
+        mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
+        mock_scheduler.has_no_failed_jobs.return_value = False
+        mock_scheduler.get_active_job_names.return_value = []
+        mock_scheduler.run_preflight_checks.return_value = [{"name": "test1"}]
+        mock_scheduler.setup_scheduler_resources.return_value = [
+            {"name": "test1"}
+        ]
+        mock_get_scheduler.return_value = mock_scheduler
+
+        result = self.runner.invoke(
+            cli.cli, ["run", "--suite", "suite1", "--auto-approve"]
+        )
+
+        self.assertIn("full-cluster-name-123456", result.output)
+        self.assertIn("Target Cluster", result.output)
+
+    def test_validate_run_args_empty_machine_types(self):
+        """Test _validate_run_args raises validation error on empty types."""
+        with self.assertRaisesRegex(
+            exceptions.ChsValidationError, "No valid machine types"
+        ):
+            cli._validate_run_args("slurm", self.mock_scheduler, [], "test1")
 
     def test_run_command_errors(self):
         """Test 'run' command with invalid flags."""
@@ -1042,20 +1504,6 @@ class TestCli(unittest.TestCase):
                     "",
                 ],
                 expected_output="cannot be an empty string",
-            ),
-            _CommandErrorTestCase(
-                name="invalid_dry_run_scheduler",
-                args_list=[
-                    "run",
-                    "--suite",
-                    "suite1",
-                    "--dry-run",
-                    "unknown",
-                ],
-                expected_output=(
-                    "Invalid value for '--dry-run': 'unknown' "
-                    "is not one of 'slurm', 'kubernetes'"
-                ),
             ),
             _CommandErrorTestCase(
                 name="empty_suite",
@@ -1100,137 +1548,17 @@ class TestCli(unittest.TestCase):
 
                 if case.name == "no_nodes_provided":
                     self.mock_scheduler.get_nodes_under_test.return_value = []
+                    mock_filter = self.mock_scheduler.filter_partial_tpu_slices
+                    mock_filter.return_value = []
                 else:
                     self.mock_scheduler.get_nodes_under_test.return_value = [
                         "node1"
                     ]
+                    mock_filter = self.mock_scheduler.filter_partial_tpu_slices
+                    mock_filter.return_value = ["node1"]
 
                 result = self.runner.invoke(cli.cli, case.args_list)
                 self.assertNotEqual(result.exit_code, 0)
-                self.assertIn(case.expected_output, result.output)
-
-    @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    def test_analyze_command_shortcut_boh(self, mock_results_viewer):
-        """Test 'analyze' command shortcut when BoH already exists."""
-        # Create temp workspace
-        workspaces_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, workspaces_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
-
-        # Create BOH file
-        run_dir = os.path.join(workspaces_dir, "my_run_id")
-        os.makedirs(run_dir)
-        boh_path = os.path.join(run_dir, "bill_of_health.json")
-        with open(boh_path, "w") as f:
-            f.write("{}")
-
-        # Configure RambleManager mock instance
-        self.mock_rm_instance.path = os.path.join(workspaces_dir, "my_run_id")
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["analyze", "my_run_id"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-        self.mock_rm_instance.wait_for_jobs.assert_not_called()
-        self.mock_rm_instance.generate_boh.assert_not_called()
-        mock_results_viewer.assert_called_once_with(pathlib.Path(boh_path))
-
-    @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    def test_analyze_command_shortcut_results(self, mock_results_viewer):
-        """Test 'analyze' command shortcut when results.latest.json exists."""
-        # Create temp workspace
-        workspaces_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, workspaces_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
-
-        # Create results.latest.json file
-        workspace_dir = os.path.join(workspaces_dir, "my_run_id")
-        os.makedirs(workspace_dir)
-        results_path = os.path.join(workspace_dir, "results.latest.json")
-        with open(results_path, "w") as f:
-            f.write("{}")
-
-        # Configure RambleManager mock instance
-        self.mock_rm_instance.path = workspace_dir
-
-        def mock_generate_boh(results_path, **kwargs):
-            boh_file = os.path.join(workspace_dir, "bill_of_health.json")
-            with open(boh_file, "w") as f:
-                f.write("{}")
-            return workspace_dir
-
-        self.mock_rm_instance.generate_boh.side_effect = mock_generate_boh
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["analyze", "my_run_id"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-        self.mock_rm_instance.wait_for_jobs.assert_not_called()
-        self.mock_rm_instance.generate_boh.assert_called_once_with(
-            results_path, thresholds_path=None, skip_validation=False
-        )
-        mock_results_viewer.assert_called_once()
-
-    @mock.patch("chs.cli.ResultsViewer", autospec=True)
-    def test_analyze_command_full(self, mock_results_viewer):
-        """Test 'analyze' command full path when no results exist yet."""
-        # Create temp workspace
-        workspaces_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, workspaces_dir)
-        self.mock_app_data.get_workspaces_dir.return_value = workspaces_dir
-
-        # Create empty workspace dir
-        workspace_dir = os.path.join(workspaces_dir, "my_run_id")
-        os.makedirs(workspace_dir)
-
-        # Configure RambleManager mock instance
-        self.mock_rm_instance.path = workspace_dir
-
-        def mock_analyze_results(**kwargs):
-            boh_file = os.path.join(workspace_dir, "bill_of_health.json")
-            with open(boh_file, "w") as f:
-                f.write("{}")
-            return workspace_dir
-
-        self.mock_rm_instance.analyze_results.side_effect = mock_analyze_results
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["analyze", "my_run_id"],
-            standalone_mode=False,
-        )
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"Exception: {result.exception}\nOutput: {result.output}",
-        )
-        self.mock_rm_instance.wait_for_jobs.assert_called_once()
-        self.mock_rm_instance.analyze_results.assert_called_once()
-        self.mock_rm_instance.archive.assert_called_once()
-        mock_results_viewer.assert_called_once()
-
-    def test_analyze_command_errors(self):
-        """Test 'analyze' command with invalid flags."""
-        test_cases = [
-            _CommandErrorTestCase(
-                name="empty_run_id",
-                args_list=["analyze", ""],
-                expected_output="cannot be an empty string",
-            ),
-            _CommandErrorTestCase(
-                name="whitespace_run_id",
-                args_list=["analyze", " "],
-                expected_output="cannot be an empty string",
-            ),
-        ]
-        for case in test_cases:
-            with self.subTest(case.name):
-                result = self.runner.invoke(cli.cli, case.args_list)
-                self.assertEqual(result.exit_code, 2)
                 self.assertIn(case.expected_output, result.output)
 
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
@@ -1254,31 +1582,8 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.exit_code, 0)
         mock_results_viewer.assert_called_once()
-        mock_results_viewer.return_value.show_details.assert_called_once_with(
-            tests=None, resources=None
-        )
-
-        # Test with tests flag
-        mock_results_viewer.reset_mock()
-        result = self.runner.invoke(
-            cli.cli,
-            ["results", "my_run_id", "--tests", "t1,t2"],
-        )
-        self.assertEqual(result.exit_code, 0)
-        mock_results_viewer.return_value.show_details.assert_called_once_with(
-            tests=["t1", "t2"], resources=None
-        )
-
-        # Test with resources flag
-        mock_results_viewer.reset_mock()
-        result = self.runner.invoke(
-            cli.cli,
-            ["results", "my_run_id", "--resources", "r1"],
-        )
-        self.assertEqual(result.exit_code, 0)
-        mock_results_viewer.return_value.show_details.assert_called_once_with(
-            tests=None, resources=["r1"]
-        )
+        viewer_mock = mock_results_viewer.return_value
+        viewer_mock.show_summary_and_details.assert_called_once_with()
 
     def test_results_command_no_run_id(self):
         """Test 'results' command without run_id."""
@@ -1306,14 +1611,20 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.mock_app_data_cls.assert_called_once()
 
-    @mock.patch.object(cli, "_get_schedulers_list", autospec=True)
-    @mock.patch.object(cli, "_get_tests_list", autospec=True)
-    @mock.patch.object(cli, "_get_suites_list", autospec=True)
+    @mock.patch(
+        "chs.cli.list_formatting.get_machine_types_renderable", autospec=True
+    )
+    @mock.patch(
+        "chs.cli.list_formatting.get_schedulers_renderable", autospec=True
+    )
+    @mock.patch("chs.cli.list_formatting.get_tests_renderables", autospec=True)
+    @mock.patch("chs.cli.list_formatting.get_suites_renderable", autospec=True)
     def test_list_action(
         self,
         mock_suites,
         mock_tests,
         mock_schedulers,
+        mock_machine_types,
     ):
         """Test list_action with various flags."""
         test_cases = [
@@ -1322,8 +1633,9 @@ class TestCli(unittest.TestCase):
                 kwargs=_ListActionKwargs(),
                 expected_result=True,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, False, None),
+                expected_tests_call_args=(None, False, None, None),
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
             _ListActionTestCase(
                 name="suites_only",
@@ -1332,17 +1644,19 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=1,
                 expected_tests_call_args=None,
                 expected_schedulers_calls=0,
+                expected_machine_types_calls=0,
             ),
             _ListActionTestCase(
                 name="tests_only",
                 kwargs=_ListActionKwargs(
                     tests=True,
-                    from_suite="s1",
+                    suite="s1",
                 ),
                 expected_result=False,
                 expected_suites_calls=0,
-                expected_tests_call_args=("s1", True, None),
+                expected_tests_call_args=("s1", True, None, None),
                 expected_schedulers_calls=0,
+                expected_machine_types_calls=0,
             ),
             _ListActionTestCase(
                 name="schedulers_only",
@@ -1351,6 +1665,7 @@ class TestCli(unittest.TestCase):
                 expected_suites_calls=0,
                 expected_tests_call_args=None,
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
             _ListActionTestCase(
                 name="suites_and_tests",
@@ -1360,8 +1675,9 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, True, None),
+                expected_tests_call_args=(None, True, None, None),
                 expected_schedulers_calls=0,
+                expected_machine_types_calls=0,
             ),
             _ListActionTestCase(
                 name="tests_and_schedulers",
@@ -1371,8 +1687,9 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=0,
-                expected_tests_call_args=(None, True, None),
+                expected_tests_call_args=(None, True, None, None),
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
             _ListActionTestCase(
                 name="all_flags",
@@ -1383,8 +1700,9 @@ class TestCli(unittest.TestCase):
                 ),
                 expected_result=False,
                 expected_suites_calls=1,
-                expected_tests_call_args=(None, True, None),
+                expected_tests_call_args=(None, True, None, None),
                 expected_schedulers_calls=1,
+                expected_machine_types_calls=1,
             ),
         ]
         mock_suites.return_value = ["suite1"]
@@ -1414,7 +1732,7 @@ class TestCli(unittest.TestCase):
     def test_main(self, mock_cli):
         """Test main entry point."""
         cli.main()
-        mock_cli.assert_called_once_with(obj={})
+        mock_cli.assert_called_once_with(args=None, obj={})
 
     def test_results_command_no_previous_runs(self):
         """Test results command when no previous runs exist."""
@@ -1446,6 +1764,7 @@ class TestCli(unittest.TestCase):
             "Storage configured and validated successfully.", result.output
         )
 
+    @unittest.skip("Local path storage configuration is temporarily disabled")
     @mock.patch("chs.storage.StorageProviderFactory.get_provider")
     def test_configure_storage_path(self, mock_get_provider):
         """Test 'configure storage path' command."""
@@ -1484,22 +1803,14 @@ class TestCli(unittest.TestCase):
         mock_provider = mock.Mock()
         mock_get_provider.return_value = mock_provider
 
-        # Input: 1 (GCS), my-bucket
+        # Input: my-bucket
         result = self.runner.invoke(
-            cli.cli, ["configure", "storage"], input="1\nmy-bucket\n"
+            cli.cli, ["configure", "storage"], input="my-bucket\n"
         )
         self.assertEqual(result.exit_code, 0)
         self.mock_app_data.set_storage_config.assert_called_once_with(
             {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
         )
-
-    @mock.patch("chs.cli.RambleManager")
-    def test_analyze_command_workspace_not_found(self, mock_rm_cls):
-        """Test analyze command when workspace is not found."""
-        mock_rm_cls.return_value.path = "/non/existent/path"
-        result = self.runner.invoke(cli.cli, ["analyze", "missing_run"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("Workspace 'missing_run' not found", result.output)
 
 
 class TestCliHistory(unittest.TestCase):
@@ -1508,6 +1819,15 @@ class TestCliHistory(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.runner = testing.CliRunner()
+
+        def patched_logger_error(msg, *args, **kwargs):
+            click.echo(msg, err=True)
+
+        self.mock_logger_error = mock.patch(
+            "chs.exceptions.logger.error", side_effect=patched_logger_error
+        )
+        self.mock_logger_error.start()
+        self.addCleanup(self.mock_logger_error.stop)
         self.mock_app_data_cls = self.enterContext(
             mock.patch("chs.cli.ChsAppData", autospec=True)
         )
@@ -1532,18 +1852,33 @@ class TestCliHistory(unittest.TestCase):
                     "run2": {
                         "run_id": "run2",
                         "submission_time": "2023-01-02T12:00:00Z",
-                        "command_statement": "chs run --dry-run kubernetes",
+                        "command_statement": "chs run kubernetes",
+                        "storage": {
+                            "type": "path",
+                            "path": {"path": "/tmp/test"},
+                        },
                     },
                 },
                 expected_strings=[
-                    "Workspace",
-                    "Details",
+                    "Run ID",
+                    "Submitted",
+                    "Storage",
+                    "Age",
+                    "Command",
                     "run1",
                     "run2",
                     "chs run",
-                    "chs run --dry-run kubernetes",
+                    "chs run kubernetes",
+                    "/tmp/test",
                 ],
-                unexpected_strings=["Alias", "my_alias", "alias not set"],
+                unexpected_strings=[
+                    "Alias",
+                    "my_alias",
+                    "alias not set",
+                    "Status",
+                    "Details",
+                    "BoH",
+                ],
             ),
         ]
         for case in test_cases:

@@ -24,7 +24,7 @@ ramble_mock.context = mock.Mock()
 sys.modules["ramble"] = ramble_mock
 sys.modules["ramble.context"] = ramble_mock.context
 
-from chs.repos.applications.chs.test_helper import TestHelper  # noqa: E402
+from chs.repos.applications.chs.test_helper import TestHelper as _TestHelper  # noqa: E402
 
 
 class TestTestHelper(unittest.TestCase):
@@ -38,7 +38,7 @@ class TestTestHelper(unittest.TestCase):
             "--gpu-bind": "single:1",
             "--empty": None,
         }
-        headers = TestHelper._get_sbatch_headers(headers_dict)
+        headers = _TestHelper._get_sbatch_headers(headers_dict)
         expected = (
             "#SBATCH -w node1,node2\n"
             "#SBATCH --time=10\n"
@@ -49,7 +49,7 @@ class TestTestHelper(unittest.TestCase):
 
     def test_build_common_sbatch_headers_valid(self):
         ctx_vars = {"timeout": 1200, "deadline": 3600}
-        headers_dict = TestHelper._build_common_sbatch_headers(
+        headers_dict = _TestHelper._build_common_sbatch_headers(
             ctx_vars, "node1"
         )
         self.assertEqual(headers_dict["-w"], "node1")
@@ -59,7 +59,7 @@ class TestTestHelper(unittest.TestCase):
     def test_merge_configs_variables(self):
         context_dict = {"variables": {"a": 1}}
         configs = {"machine": {"variables": {"b": 2}, "app": {}}}
-        TestHelper._merge_configs(context_dict, configs, "machine", "app")
+        _TestHelper._merge_configs(context_dict, configs, "machine", "app")
         self.assertEqual(context_dict["variables"], {"a": 1, "b": 2})
 
     def test_generate_topological_pairs(self):
@@ -80,7 +80,7 @@ class TestTestHelper(unittest.TestCase):
             ["node5", "node6"],
             ["node1", "node5"],
         ]
-        pairs = TestHelper.generate_topological_pairs(topology)
+        pairs = _TestHelper.generate_topological_pairs(topology)
         self.assertEqual(pairs, expected_pairs)
 
     def test_generate_topological_pairs_flat_topology(self):
@@ -91,14 +91,14 @@ class TestTestHelper(unittest.TestCase):
             ["node1", "node2"],
             ["node3", "node4"],
         ]
-        pairs = TestHelper.generate_topological_pairs(topology)
+        pairs = _TestHelper.generate_topological_pairs(topology)
         self.assertEqual(pairs, expected_pairs)
 
     def test_generate_topological_pairs_too_few_nodes(self):
         topology = {
             "rack1": {"default-subblock": ["node1"]},
         }
-        pairs = TestHelper.generate_topological_pairs(topology)
+        pairs = _TestHelper.generate_topological_pairs(topology)
         self.assertEqual(pairs, [])
 
     def test_nccl_test_fallback_disjoint(self):
@@ -123,7 +123,7 @@ class TestTestHelper(unittest.TestCase):
                     }
                 }
             }
-            results = TestHelper.nccl_test(
+            results = _TestHelper.nccl_test(
                 variables, "test-exp", configs, "nccl-pairwise", topology=None
             )
             self.assertEqual(len(results), 2)
@@ -145,7 +145,7 @@ class TestTestHelper(unittest.TestCase):
                 }
             }
         }
-        context_dict = TestHelper._prepare_base_context(
+        context_dict = _TestHelper._prepare_base_context(
             ctx_vars,
             configs,
             ramble_app_name="my-app",
@@ -172,7 +172,7 @@ class TestTestHelper(unittest.TestCase):
                 }
             }
         }
-        context_dict = TestHelper._prepare_cluster_context(
+        context_dict = _TestHelper._prepare_cluster_context(
             variables,
             configs,
             ramble_app_name="my-app",
@@ -204,7 +204,7 @@ class TestTestHelper(unittest.TestCase):
             "chs.repos.applications.chs.test_helper.create_context_from_dict"
         ) as mock_create:
             mock_create.return_value = "mock_context"
-            result = TestHelper._create_node_test_context(
+            result = _TestHelper._create_node_test_context(
                 variables, "test-node", configs, ramble_app_name="my-app"
             )
             self.assertEqual(result, "mock_context")
@@ -249,16 +249,18 @@ class TestTestHelper(unittest.TestCase):
         ):
             mock_create.side_effect = lambda name, ctx: ctx
 
-            ctx = TestHelper.tpu_collectives_single_node_test(
+            contexts = _TestHelper.tpu_collectives_single_node_test(
                 variables, "test-collectives", configs
             )
+            self.assertEqual(len(contexts), 1)
+            ctx = contexts[0]
 
             escaped_config = ctx["variables"]["benchmarks_yaml_escaped"]
             unescaped = escaped_config.replace("\\n", "\n").replace(
                 "\\\\", "\\"
             )
 
-            self.assertIn('mesh_shape: "2x2x1"', unescaped)
+            self.assertIn('mesh_shape: "2x2x2"', unescaped)
             self.assertIn("ici_size: 4", unescaped)
 
 

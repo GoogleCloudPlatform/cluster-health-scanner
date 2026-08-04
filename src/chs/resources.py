@@ -65,6 +65,14 @@ def is_tpu(machine_type: str) -> bool:
     )
 
 
+def is_gpu(machine_type: str) -> bool:
+    """Checks if the given machine type is a GPU."""
+    return (
+        MACHINE_TYPE_RESOURCE_MAP.get(machine_type, {}).get("resource_name")
+        == "nvidia.com/gpu"
+    )
+
+
 # Default timeout and deadline values in seconds
 DEFAULT_TIMEOUT = 1200
 DEFAULT_DEADLINE = 4200

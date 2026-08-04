@@ -37,34 +37,20 @@ class TestKueueManager(unittest.TestCase):
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
 
-    def test_setup_unsupported_machine_type_raises(self):
-        """Test setup with unsupported machine type raises KueueException."""
+    def test_generate_configs_unsupported_machine_type_raises(self):
+        """Test generate_configs with unsupported machine type raises
+        KueueException."""
         with self.assertRaisesRegex(
             KueueException, "not recognized in MACHINE_TYPE_RESOURCE_MAP"
         ):
-            self.kueue_mgr.setup(self.tmp_dir, "unsupported-mt", ["node1"])
+            self.kueue_mgr.generate_configs(
+                self.tmp_dir, "unsupported-mt", ["node1"]
+            )
 
-    def test_setup_already_active_returns_label(self):
-        """Test setup returns queue label if ClusterQueue is already active."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            "a3-megagpu-8g",
-            "True",
-            "",
-        ]
-        label = self.kueue_mgr.setup(self.tmp_dir, "a3-megagpu-8g", ["node1"])
-        self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
-
-    def test_setup_success_renders_and_verifies(self):
-        """Test setup renders template, applies it, and verifies readiness."""
-
-        self.mock_scheduler._run_kubectl.side_effect = [
-            subprocess.CalledProcessError(1, "kubectl"),
-            "",
-            "",
-        ]
-
-        label = self.kueue_mgr.setup(
+    def test_generate_configs_success_renders(self):
+        """Test generate_configs renders template and returns correct label."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta2"
+        label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
@@ -76,16 +62,13 @@ class TestKueueManager(unittest.TestCase):
             self.assertIn("a3-megagpu-8g", content)
             self.assertIn("nvidia.com/gpu", content)
             self.assertIn('nominalQuota: "16"', content)
+            self.assertIn("apiVersion: kueue.x-k8s.io/v1beta2", content)
 
-    def test_setup_tpu_success_renders_and_verifies(self):
-        """Test setup for TPU renders correct resource flavor and name."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            subprocess.CalledProcessError(1, "kubectl"),
-            "",
-            "",
-        ]
-
-        label = self.kueue_mgr.setup(
+    def test_generate_configs_tpu_success_renders(self):
+        """Test generate_configs for TPU renders correct flavor and
+        resource name."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
+        label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "tpu7x-standard-4t", ["node1", "node2"]
         )
         self.assertEqual(label, "kueue.x-k8s.io/queue-name: chs-local-queue")
@@ -96,7 +79,20 @@ class TestKueueManager(unittest.TestCase):
             content = f.read()
             self.assertIn("tpu7x-standard-4t", content)
             self.assertIn("google.com/tpu", content)
+            self.assertIn("apiVersion: kueue.x-k8s.io/v1beta1", content)
             self.assertIn('nominalQuota: "8"', content)
+
+    def test_apply_configs_success(self):
+        """Test apply_configs cleans up and applies configurations."""
+        self.mock_scheduler._run_kubectl.side_effect = [
+            "",  # cleanup localqueue
+            "",  # cleanup clusterqueue
+            "",  # cleanup resourceflavor
+            "",  # apply
+            "",  # wait
+        ]
+        self.kueue_mgr.apply_configs(self.tmp_dir)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 5)
 
     def test_apply_and_verify_permission_error_raises(self):
         """Test applying config with kubectl error raises KueueException."""
@@ -106,15 +102,32 @@ class TestKueueManager(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(
-            KueueException, "ensure you have cluster-level permissions"
+            KueueException, "Failed to create ResourceFlavors"
         ):
             self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
 
-    @mock.patch("chs.utils.kueue.time.time")
-    def test_apply_and_verify_timeout_raises(self, mock_time):
+    def test_apply_and_verify_success(self):
+        """Test apply_and_verify successfully runs apply and wait commands."""
+        self.mock_scheduler._run_kubectl.return_value = ""
+        self.kueue_mgr.apply_and_verify("/tmp/kueue-configs.yaml")
+
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            ["apply", "-f", "/tmp/kueue-configs.yaml"],
+            timeout=None,
+        )
+
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "wait",
+                "--for=condition=Active",
+                "clusterqueue/chs-cluster-queue",
+                "--timeout=300s",
+            ],
+            timeout=350,
+        )
+
+    def test_apply_and_verify_timeout_raises(self):
         """Test timeout during verification wait loop raises KueueException."""
-        # start_time, loop check 1, log check, loop check 2
-        mock_time.side_effect = [100, 101, 102, 405]
         self.mock_scheduler._run_kubectl.side_effect = [
             "",
             subprocess.CalledProcessError(
@@ -123,33 +136,52 @@ class TestKueueManager(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(
-            KueueException, "Timeout waiting for Kueue ClusterQueue"
+            KueueException, "Timeout or error waiting for Kueue ClusterQueue"
         ):
             self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
 
-    def test_cleanup_nonexistent_file_skips(self):
-        """Test cleanup skips if configuration file doesn't exist."""
-        self.kueue_mgr.cleanup("/tmp/nonexistent_file_12345.yaml")
-        self.mock_scheduler._run_kubectl.assert_not_called()
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "wait",
+                "--for=condition=Active",
+                "clusterqueue/chs-cluster-queue",
+                "--timeout=300s",
+            ],
+            timeout=350,
+        )
 
     def test_cleanup_success(self):
         """Test cleanup deletes resources via kubectl."""
-        config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
-        with open(config_path, "w") as f:
-            f.write("dummy")
-
         self.mock_scheduler._run_kubectl.return_value = ""
-        self.kueue_mgr.cleanup(config_path)
-        self.mock_scheduler._run_kubectl.assert_called_once_with(
-            ["delete", "--ignore-not-found", "-f", config_path]
+        self.kueue_mgr.cleanup()
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "delete",
+                "localqueue",
+                "chs-local-queue",
+                "-n",
+                "chs",
+                "--ignore-not-found",
+            ],
+            timeout=None,
+        )
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "delete",
+                "clusterqueue",
+                "chs-cluster-queue",
+                "--ignore-not-found",
+            ],
+            timeout=None,
+        )
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            ["delete", "resourceflavor", "chs-flavor", "--ignore-not-found"],
+            timeout=None,
         )
 
     def test_cleanup_failure_raises(self):
         """Test cleanup error raises KueueException."""
-        config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
-        with open(config_path, "w") as f:
-            f.write("dummy")
-
         self.mock_scheduler._run_kubectl.side_effect = (
             subprocess.CalledProcessError(
                 1, "kubectl delete", stderr="conflict"
@@ -158,7 +190,32 @@ class TestKueueManager(unittest.TestCase):
         with self.assertRaisesRegex(
             KueueException, "Failed to delete Kueue resources"
         ):
-            self.kueue_mgr.cleanup(config_path)
+            self.kueue_mgr.cleanup()
+
+    def test_get_kueue_api_version_v1beta2_preferred(self):
+        """Test _get_kueue_api_version returns v1beta2 when both
+        are supported."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1 v1beta2"
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta2")
+
+    def test_get_kueue_api_version_v1beta2(self):
+        """Test _get_kueue_api_version returns v1beta2 when only
+        v1beta2 is supported."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta2"
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta2")
+
+    def test_get_kueue_api_version_v1beta1_only(self):
+        """Test _get_kueue_api_version returns v1beta1 when only
+        v1beta1 is supported."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+
+    def test_get_kueue_api_version_fallback(self):
+        """Test _get_kueue_api_version falls back to v1beta1 on error."""
+        self.mock_scheduler._run_kubectl.side_effect = (
+            subprocess.CalledProcessError(1, "cmd")
+        )
+        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
 
 
 if __name__ == "__main__":

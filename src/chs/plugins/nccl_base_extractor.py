@@ -14,9 +14,13 @@
 
 from typing import Any
 from chs.core.default_plugin.extractor import DefaultExtractor
+from chs.plugins.utils.nccl_utils import parse_nccl_context_metadata
 
 
 class NcclBaseExtractor(DefaultExtractor):
+    def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
+        return parse_nccl_context_metadata(ctx_name)
+
     def get_required_contexts(
         self, contexts: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -34,9 +38,38 @@ class NcclBaseExtractor(DefaultExtractor):
         )
         if default_ctx is not None:
             extracted.append(default_ctx)
-
         last_ctx = contexts[-1]
         if last_ctx != default_ctx:
             extracted.append(last_ctx)
+
+        # We only want to inject Peak Detected Bandwidth into the last context
+        # (which corresponds to the maximum message size) to avoid false
+        # negatives from validating the null context against peak thresholds.
+
+        for ctx in extracted:
+            # We skip injecting into 'null' context unless it's the only one.
+            if len(extracted) > 1 and ctx.get("name") == "null":
+                continue
+
+            foms = ctx.get("foms", [])
+            max_bw = 0.0
+            for fom in foms:
+                name = fom.get("name", "")
+                val = fom.get("value")
+                if "Bandwidth" in name:
+                    try:
+                        max_bw = max(max_bw, float(val))
+                    except (ValueError, TypeError):
+                        pass
+
+            if max_bw > 0:
+                # Add synthetic metric so thresholds can validate against it
+                foms.append(
+                    {
+                        "name": "Peak Detected Bandwidth",
+                        "value": max_bw,
+                        "units": "GB/s",
+                    }
+                )
 
         return extracted

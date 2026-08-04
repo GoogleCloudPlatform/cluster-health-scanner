@@ -61,6 +61,21 @@ class StorageProviderFactory:
             raise ChsException(f"Unsupported storage type: '{provider_type}'")
 
     @staticmethod
+    def get_provider_for_run(run_id: str) -> StorageProvider | None:
+        """Retrieves the storage provider configured for a specific run."""
+        app_data = ChsAppData()
+        run_entry = app_data.get_run(run_id)
+        storage_config = (
+            run_entry.get("storage") if isinstance(run_entry, dict) else None
+        )
+        if storage_config:
+            try:
+                return StorageProviderFactory.get_provider(storage_config)
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
     def get_active_provider() -> StorageProvider:
         """Instantiates the currently active storage provider.
 

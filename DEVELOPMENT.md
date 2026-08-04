@@ -220,8 +220,8 @@ __chs_plugin__ = {
 }
 ```
 
-> [!NOTE]
-> The `test_name` is used as a prefix to match against the raw Ramble experiment name. If multiple plugins match, the longest prefix wins.
+**Note:**
+The `test_name` is used as a prefix to match against the raw Ramble experiment name. If multiple plugins match, the longest prefix wins.
 
 ### 5. Future Extensibility
 

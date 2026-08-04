@@ -18,7 +18,8 @@ from .renderer import TpuGemmRenderer
 
 
 class TpuGemmPlugin(TpuGemmRenderer, TpuGemmExtractor, TestPlugin):
-    pass
+    def creates_per_node_results(self) -> bool:
+        return True
 
 
 __chs_plugin__ = {

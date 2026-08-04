@@ -1,4 +1,5 @@
 #!/bin/bash
+set -eo pipefail
 if [ "{application_name}" = "chs" ]; then
     echo "Skipping JobSet wait for {application_name} scaffolding experiment."
     exit 0
@@ -21,7 +22,9 @@ fi
 echo "Extracting logs..."
 
 # The primary pod for both standard and MPI templates is ALWAYS rank 0 in the "w" replicatedJob
-HEAD_POD=$(kubectl get pods -l jobset.sigs.k8s.io/jobset-name=$JOBSET_NAME,batch.kubernetes.io/job-completion-index=0 -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
+# We suppress stderr and use || true so that if the pod is missing, kubectl's non-zero
+# exit code does not trip the 'set -e' immediate exit, allowing the -z error handling block below to run.
+HEAD_POD=$(kubectl get pods -l jobset.sigs.k8s.io/jobset-name=$JOBSET_NAME,batch.kubernetes.io/job-completion-index=0 -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
 
 if [ -z "$HEAD_POD" ]; then
     echo "Error: Head pod not found." > "$LOG_FILE"

@@ -15,3 +15,20 @@
 """Constants used across the CHS package."""
 
 CHS_NAMESPACE = "chs"
+
+TOPOLOGY_TO_MESH = {
+    # tpu7x
+    "2x2x1": "2x2x2",
+    "2x2x2": "4x2x2",
+    "2x2x4": "4x4x2",
+    "2x4x4": "8x4x2",
+    "4x4x4": "16x4x2",
+    # v6e
+    "2x2": "2x2",
+    "2x4": "4x2",
+    "4x4": "4x4",
+    "4x8": "8x4",
+    "8x8": "8x8",
+    "8x16": "16x8",
+    "16x16": "16x16",
+}

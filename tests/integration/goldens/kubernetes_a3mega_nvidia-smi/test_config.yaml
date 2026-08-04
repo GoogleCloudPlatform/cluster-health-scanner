@@ -1,9 +1,0 @@
-description: Tests the 'nvidia-smi' test against a kubernetes scheduler for a3-mega
-command:
-- run
-- --tests
-- nvidia-smi
-- --nodes
-- node1,node2
-- --dry-run
-- kubernetes

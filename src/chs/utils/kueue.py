@@ -18,7 +18,6 @@ import importlib.resources as pkg_resources
 import logging
 import os
 import subprocess
-import time
 from typing import Any
 
 from chs.exceptions import KueueException
@@ -42,10 +41,10 @@ class KueueManager:
         """
         self.scheduler = scheduler
 
-    def _run_kubectl(self, args: list[str]) -> str:
+    def _run_kubectl(self, args: list[str], timeout: int | None = None) -> str:
         """Runs kubectl command via the scheduler instance."""
         if hasattr(self.scheduler, "_run_kubectl"):
-            return self.scheduler._run_kubectl(args)
+            return self.scheduler._run_kubectl(args, timeout=timeout)
 
         cmd = ["kubectl"] + args
         result = subprocess.run(
@@ -53,6 +52,7 @@ class KueueManager:
             text=True,
             capture_output=True,
             check=True,
+            timeout=timeout,
         )
         return result.stdout.strip()
 
@@ -71,52 +71,38 @@ class KueueManager:
             self._run_kubectl(["apply", "-f", kueue_config_path])
         except subprocess.CalledProcessError as e:
             raise KueueException(
-                "Failed to apply Kueue configuration. Please ensure you have "
-                "cluster-level permissions to create ResourceFlavors and "
-                "ClusterQueues, or namespace-level permissions for "
-                f"LocalQueues. Details: {e.stderr}"
+                "Failed to create ResourceFlavors, ClusterQueues, and/or "
+                "LocalQueues. Details: "
+                f"{e.stderr}"
             ) from e
 
-        logger.info(
+        logger.debug(
             "Waiting for Kueue ClusterQueue 'chs-cluster-queue' to become "
             "active."
         )
-        start_time = time.time()
-        timeout = 300
-        verified = False
-        last_log_time = start_time
 
-        while time.time() - start_time < timeout:
-            try:
-                self._run_kubectl(
-                    [
-                        "wait",
-                        "--for=condition=Active",
-                        "clusterqueue/chs-cluster-queue",
-                        "--timeout=10s",
-                    ]
-                )
-                verified = True
-                logger.debug("Kueue ClusterQueue is active.")
-                break
-            except subprocess.CalledProcessError:
-                if time.time() - last_log_time >= 30:
-                    logger.info(
-                        "Waiting for Kueue ClusterQueue 'chs-cluster-queue' "
-                        "to become active."
-                    )
-                    last_log_time = time.time()
-
-        if not verified:
-            raise KueueException(
-                "Timeout waiting for Kueue ClusterQueue 'chs-cluster-queue' "
-                "to become active."
+        try:
+            self._run_kubectl(
+                [
+                    "wait",
+                    "--for=condition=Active",
+                    "clusterqueue/chs-cluster-queue",
+                    "--timeout=300s",
+                ],
+                timeout=350,
             )
+            logger.debug("Kueue ClusterQueue is active.")
 
-    def setup(
+        except subprocess.CalledProcessError as e:
+            raise KueueException(
+                "Timeout or error waiting for Kueue ClusterQueue "
+                f"'chs-cluster-queue' to become active. Details: {e}"
+            ) from e
+
+    def generate_configs(
         self, workspace_config_dir: str, machine_type: str, nodes: list[str]
     ) -> str:
-        """Renders Kueue config, applies it, and verifies readiness.
+        """Renders Kueue config to disk without applying.
 
         Args:
             workspace_config_dir: Directory where Kueue configs will be written.
@@ -138,66 +124,9 @@ class KueueManager:
             )
 
         resource_map = MACHINE_TYPE_RESOURCE_MAP.get(machine_type, {})
-        instance_type = machine_type
         accelerators_per_node = resource_map.get("accelerators", 0)
         nominal_quota = len(nodes) * accelerators_per_node
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
-
-        try:
-            # Check if flavor matches the current instance_type
-            existing_flavor = self._run_kubectl(
-                [
-                    "get",
-                    "resourceflavor",
-                    "chs-flavor",
-                    "-o",
-                    "jsonpath={.spec.nodeLabels['node.kubernetes.io/instance-type']}",
-                ]
-            )
-            if existing_flavor.strip() != instance_type:
-                logger.warning(
-                    "Existing Kueue resource flavor has instance type %s, "
-                    "but current run requires %s. Recreating Kueue "
-                    "resources...",
-                    existing_flavor.strip(),
-                    instance_type,
-                )
-                # Delete existing kueue resources to force recreation
-                self._run_kubectl(
-                    [
-                        "delete",
-                        "clusterqueue",
-                        "chs-cluster-queue",
-                        "--ignore-not-found",
-                    ]
-                )
-                self._run_kubectl(
-                    [
-                        "delete",
-                        "resourceflavor",
-                        "chs-flavor",
-                        "--ignore-not-found",
-                    ]
-                )
-            else:
-                result = self._run_kubectl(
-                    [
-                        "get",
-                        "clusterqueue",
-                        "chs-cluster-queue",
-                        "-o",
-                        'jsonpath={.status.conditions[?(@.type=="Active")].status}',
-                    ]
-                )
-                if result.strip() == "True":
-                    logger.info(
-                        "ClusterQueue chs-cluster-queue is already active "
-                        "and matches machine type."
-                    )
-                    self._ensure_local_queue_exists(workspace_config_dir)
-                    return "kueue.x-k8s.io/queue-name: chs-local-queue"
-        except subprocess.CalledProcessError:
-            pass
 
         kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
             "kueue-configs.yaml.tpl"
@@ -207,10 +136,11 @@ class KueueManager:
                 kueue_tpl = f.read()
 
         rendered_kueue = kueue_tpl.format(
-            instance_type=instance_type,
+            instance_type=machine_type,
             nominal_quota=str(nominal_quota),
             resource_name=resource_name,
             namespace=CHS_NAMESPACE,
+            kueue_api_version=self._get_kueue_api_version(),
         )
 
         kueue_config_path = os.path.join(
@@ -219,50 +149,76 @@ class KueueManager:
         with open(kueue_config_path, "w") as f:
             f.write(rendered_kueue)
 
-        self.apply_and_verify(kueue_config_path)
-
         return "kueue.x-k8s.io/queue-name: chs-local-queue"
 
-    def _ensure_local_queue_exists(self, workspace_config_dir: str):
-        """Idempotently ensures the LocalQueue exists in the namespace."""
-        kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
-            "local-queue.yaml.tpl"
+    def apply_configs(self, workspace_config_dir: str) -> None:
+        """Applies rendered Kueue configurations to the cluster."""
+        try:
+            self.cleanup()
+        except KueueException:
+            pass
+
+        kueue_config_path = os.path.join(
+            workspace_config_dir, "kueue-configs.yaml"
         )
-        with pkg_resources.as_file(kueue_tpl_path) as p:
-            with open(p, "r") as f:
-                kueue_tpl = f.read()
+        self.apply_and_verify(kueue_config_path)
 
-        local_queue_yaml = kueue_tpl.format(namespace=CHS_NAMESPACE)
-
-        lq_path = os.path.join(workspace_config_dir, "chs-local-queue.yaml")
-        with open(lq_path, "w") as f:
-            f.write(local_queue_yaml)
-
-        self._run_kubectl(["apply", "-f", lq_path])
-
-    def cleanup(self, kueue_config_path: str) -> None:
-        """Deletes Kueue resources defined in the configuration file.
-
-        Args:
-            kueue_config_path: Path to the Kueue YAML configuration file.
+    def cleanup(self) -> None:
+        """Deletes Kueue resources by name.
 
         Raises:
             KueueException: If deletion fails.
         """
-        if not os.path.exists(kueue_config_path):
-            logger.debug(
-                "Kueue configuration file not found at %s; skipping deletion.",
-                kueue_config_path,
-            )
-            return
-
-        logger.info("Cleaning up Kueue resources...")
+        logger.debug("Cleaning up Kueue resources...")
         try:
             self._run_kubectl(
-                ["delete", "--ignore-not-found", "-f", kueue_config_path]
+                [
+                    "delete",
+                    "localqueue",
+                    "chs-local-queue",
+                    "-n",
+                    CHS_NAMESPACE,
+                    "--ignore-not-found",
+                ]
             )
-            logger.info("Successfully deleted Kueue resources.")
+            self._run_kubectl(
+                [
+                    "delete",
+                    "clusterqueue",
+                    "chs-cluster-queue",
+                    "--ignore-not-found",
+                ]
+            )
+            self._run_kubectl(
+                [
+                    "delete",
+                    "resourceflavor",
+                    "chs-flavor",
+                    "--ignore-not-found",
+                ]
+            )
+            logger.debug("Successfully deleted Kueue resources.")
         except subprocess.CalledProcessError as e:
             raise KueueException(
                 f"Failed to delete Kueue resources. Details: {e.stderr}"
             ) from e
+
+    def _get_kueue_api_version(self) -> str:
+        """Determines whether to use v1beta2 or v1beta1 based on
+        cluster support."""
+        try:
+            output = self._run_kubectl(
+                [
+                    "get",
+                    "crd",
+                    "clusterqueues.kueue.x-k8s.io",
+                    "-o",
+                    "jsonpath={.spec.versions[*].name}",
+                ]
+            )
+            if "v1beta2" in output.split():
+                return "v1beta2"
+            return "v1beta1"
+        except subprocess.CalledProcessError:
+            # Default to v1beta1 if check fails
+            return "v1beta1"

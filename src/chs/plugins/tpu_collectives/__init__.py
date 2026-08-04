@@ -20,7 +20,8 @@ from .renderer import TpuCollectivesRenderer
 class TpuCollectivesPlugin(
     TpuCollectivesRenderer, TpuCollectivesExtractor, TestPlugin
 ):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"peak_bandwidth": "Peak Bandwidth (median)"}
 
 
 __chs_plugin__ = {

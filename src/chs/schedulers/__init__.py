@@ -16,31 +16,33 @@
 
 import os
 import shutil
+import subprocess
 
-from chs.exceptions import ChsSchedulerException
+from chs import exceptions as ex
 from chs.schedulers.base import BaseScheduler
-from chs.schedulers.default import DefaultScheduler
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers.kubernetes import KubernetesScheduler
 
 
 def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
     """Factory to get the right scheduler instance."""
-    app_data = kwargs.get("app_data")
     if scheduler == "slurm":
         return SlurmScheduler(
             nodes=kwargs.get("nodes"),
             nodelists=kwargs.get("nodelists"),
             partitions=kwargs.get("partitions"),
-            app_data=app_data,
+            nodepools=kwargs.get("nodepools"),
         )
     if scheduler == "kubernetes":
         return KubernetesScheduler(
             nodes=kwargs.get("nodes"),
             nodepools=kwargs.get("nodepools"),
-            app_data=app_data,
+            nodelists=kwargs.get("nodelists"),
+            partitions=kwargs.get("partitions"),
         )
-    return DefaultScheduler(scheduler, app_data=app_data)
+    raise ex.UnsupportedSchedulerException(
+        f"Unsupported scheduler: {scheduler}"
+    )
 
 
 def _has_kubeconfig() -> bool:
@@ -52,6 +54,24 @@ def _has_kubeconfig() -> bool:
                 return True
         return False
     return os.path.exists(os.path.expanduser("~/.kube/config"))
+
+
+def _get_kubectl_context() -> str | None:
+    """Gets the current kubectl context."""
+    if not shutil.which("kubectl"):
+        return None
+
+    try:
+        result = subprocess.run(
+            ["kubectl", "config", "current-context"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
 
 
 def detect_scheduler() -> str:
@@ -66,10 +86,21 @@ def detect_scheduler() -> str:
     ):
         return "kubernetes"
 
-    if shutil.which("kubectl") and _has_kubeconfig():
+    if _has_kubeconfig():
+        if not shutil.which("kubectl"):
+            raise ex.ChsSchedulerException(
+                "Missing required executable: kubectl. "
+                "Please install kubectl and ensure it is in your PATH."
+            )
+        if not _get_kubectl_context():
+            raise ex.ChsSchedulerException(
+                "Kubernetes configuration found, but no active kubectl "
+                "context is set. Please set a context using "
+                "'kubectl config use-context <context-name>'."
+            )
         return "kubernetes"
 
-    raise ChsSchedulerException(
+    raise ex.ChsSchedulerException(
         "Auto-detection failed: No active Slurm or Kubernetes "
         "environment detected."
     )

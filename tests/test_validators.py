@@ -189,35 +189,47 @@ class TestValidators(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
-    def test_project_config_validator_invalid_suite_and_test(self):
+    def test_project_config_validator_invalid_test(self):
         v = validators.ProjectConfigValidator()
         errors = v.validate(
             {
-                "suite": "unknown_suite",
                 "tests": ["unknown_test"],
                 "scheduler": "kubernetes",
                 "machine_type": "a3-megagpu-8g",
             }
         )
-        self.assertEqual(len(errors), 2)
-        self.assertTrue(any("Suite" in e for e in errors))
+        self.assertEqual(len(errors), 1)
         self.assertTrue(any("Tests" in e for e in errors))
 
-    def test_project_config_validator_invalid_suite_scheduler_and_machine_type(
-        self,
-    ):
-        v = validators.ProjectConfigValidator()
+    def test_cli_args_validator_conflict_suite_and_tests(self):
+        v = validators.CliArgsValidator()
+        errors = v.validate({"suite": "lite", "tests": ["nvidia-smi"]})
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(any("Cannot specify both" in e for e in errors))
+
+    def test_cli_args_validator_conflict_targeting(self):
+        v = validators.CliArgsValidator()
         errors = v.validate(
-            {
-                "suite": "unknown_suite",
-                "scheduler": "unknown_scheduler",
-                "machine_type": "unknown_mt",
-            }
+            {"nodes": "node1", "nodelists": "list1", "suite": "lite"}
         )
-        self.assertEqual(len(errors), 3)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(
+            any(
+                "Cannot specify more than one targeting option" in e
+                for e in errors
+            )
+        )
+
+    def test_cli_args_validator_invalid(self):
+        v = validators.CliArgsValidator()
+        errors = v.validate({"suite": "unknown_suite"})
+        self.assertEqual(len(errors), 1)
         self.assertTrue(any("Suite" in e for e in errors))
-        self.assertTrue(any("Scheduler" in e for e in errors))
-        self.assertTrue(any("Machine type" in e for e in errors))
+
+    def test_cli_args_validator_valid(self):
+        v = validators.CliArgsValidator()
+        errors = v.validate({"suite": "lite"})
+        self.assertEqual(len(errors), 0)
 
     def test_thresholds_validator_valid(self):
         import tempfile
@@ -355,6 +367,89 @@ class TestValidators(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("Heterogeneous cluster detected", errors[0])
         self.assertIn("--partitions", errors[0])
+
+    def test_tpu_topology_validator_valid(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "kubernetes",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg=None, nodelists_arg=None, nodepools_arg="pool1"
+                ),
+            }
+        )
+        self.assertEqual(errors, [])
+
+    def test_tpu_topology_validator_invalid_kubernetes(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "kubernetes",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg="node1", nodelists_arg=None, nodepools_arg="pool1"
+                ),
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn(
+            "TPU tests need entire slice, please use --nodepools.", errors[0]
+        )
+
+    def test_tpu_topology_validator_invalid_slurm(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "ct5l-hightpu-4t",
+                "scheduler": "slurm",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg=None,
+                    nodelists_arg="node-[1-2]",
+                    partitions_arg="part1",
+                ),
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn(
+            "TPU tests need entire slice, please use --partitions.", errors[0]
+        )
+
+    def test_tpu_topology_validator_missing_nodepool(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "kubernetes",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg=None, nodelists_arg=None, nodepools_arg=None
+                ),
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn(
+            "TPU tests need entire slice, please use --nodepools to target "
+            "specific nodepools.",
+            errors[0],
+        )
+
+    def test_tpu_topology_validator_missing_partitions(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "slurm",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg=None, nodelists_arg=None, partitions_arg=None
+                ),
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn(
+            "TPU tests need entire slice, please use --partitions to target "
+            "specific partitions.",
+            errors[0],
+        )
 
 
 if __name__ == "__main__":

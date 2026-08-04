@@ -1,9 +1,0 @@
-description: Tests the 'nccl-cluster' test against a slurm scheduler for a4
-command:
-- run
-- --tests
-- nccl-cluster
-- --nodes
-- node1,node2
-- --dry-run
-- slurm

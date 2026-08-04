@@ -1,9 +1,0 @@
-description: Tests the 'nccl-cluster' test against a kubernetes scheduler for a3-ultra
-command:
-- run
-- --tests
-- nccl-cluster
-- --nodes
-- node1,node2
-- --dry-run
-- kubernetes

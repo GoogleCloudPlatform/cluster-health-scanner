@@ -1,9 +1,0 @@
-description: Tests the JAX 'collectives' test against a kubernetes scheduler for tpuv6e
-command:
-- run
-- --tests
-- collectives
-- --nodes
-- node1,node2
-- --dry-run
-- kubernetes

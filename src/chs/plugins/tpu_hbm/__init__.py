@@ -18,7 +18,11 @@ from .renderer import TpuHbmRenderer
 
 
 class TpuHbmPlugin(TpuHbmRenderer, TpuHbmExtractor, TestPlugin):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"bandwidth": "Bandwidth (median)"}
+
+    def creates_per_node_results(self) -> bool:
+        return True
 
 
 __chs_plugin__ = {

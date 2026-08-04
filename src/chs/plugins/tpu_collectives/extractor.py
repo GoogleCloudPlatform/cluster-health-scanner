@@ -14,6 +14,7 @@
 
 from typing import Any
 from chs.core.default_plugin.extractor import DefaultExtractor
+from chs.protos import bill_of_health_pb2 as pb
 
 
 class TpuCollectivesExtractor(DefaultExtractor):
@@ -28,3 +29,30 @@ class TpuCollectivesExtractor(DefaultExtractor):
         name = "tpu-collectives"
         level = exp.get("workload_name", "check")
         return name, level, self.get_description(name)
+
+    def post_process_test_result(self, test_result: pb.TestResult) -> None:
+        """Calculates and appends the Peak Bandwidth metric for each node."""
+        peak_by_node = {}
+        for m in test_result.metrics:
+            if m.key == "Bandwidth (median)":
+                ctx = m.metadata.fields["context"].string_value
+                parts = ctx.split(",")
+                node = parts[0]
+                val = m.value.number_value
+                if node not in peak_by_node or val > peak_by_node[node]["val"]:
+                    peak_by_node[node] = {
+                        "val": val,
+                        "matrix_dim": parts[1]
+                        if len(parts) == 3
+                        else "unknown",
+                        "dtype": parts[2] if len(parts) == 3 else "unknown",
+                    }
+
+        for node, info in peak_by_node.items():
+            peak_metric = test_result.metrics.add()
+            peak_metric.key = "Peak Bandwidth (median)"
+            peak_metric.value.number_value = info["val"]
+            peak_metric.unit = "GB/s"
+            peak_metric.metadata.fields[
+                "context"
+            ].string_value = f"{node},peak,{info['matrix_dim']},{info['dtype']}"

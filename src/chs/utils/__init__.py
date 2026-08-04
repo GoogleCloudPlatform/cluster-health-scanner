@@ -15,13 +15,15 @@
 """Utility functions for CHS."""
 
 from chs.utils.app_data import ChsAppData
-from chs.utils.suites import load_suite
+from chs.utils.suites import load_suite, is_suite_tiered
 from chs.utils import suites
 from chs.utils import tests
+from chs.utils import formatting
 from chs.utils.cluster import (
     sanitize_dns_1123,
     get_sanitized_cluster_name,
     generate_random_suffix,
+    is_in_cluster,
 )
 from chs.utils.theme import (
     create_styled_table,
@@ -36,6 +38,7 @@ from chs.utils.theme import (
 __all__ = [
     "ChsAppData",
     "load_suite",
+    "is_suite_tiered",
     "create_styled_table",
     "CHS_HEADER_STYLE",
     "CHS_WARNING_STYLE",
@@ -45,7 +48,9 @@ __all__ = [
     "CHS_NEUTRAL_STYLE",
     "suites",
     "tests",
+    "formatting",
     "sanitize_dns_1123",
     "get_sanitized_cluster_name",
     "generate_random_suffix",
+    "is_in_cluster",
 ]

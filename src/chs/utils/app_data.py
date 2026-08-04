@@ -24,6 +24,8 @@ import os
 import pathlib
 from typing import Any
 
+from chs.utils import file_utils
+
 import chs.exceptions as ex
 import platformdirs
 from chs.utils.lifecycle import JobStatus
@@ -79,16 +81,25 @@ class ChsAppData:
                 with open(file_path, "r") as f:
                     return json.load(f)
         except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to read data file %s: %s", file_path, e)
+            logger.debug(
+                "Failed to read the internal data file at '%s'. Error: %s",
+                file_path,
+                e,
+            )
         return {}
 
     def _save_json(self, file_path: pathlib.Path, data: dict[str, Any]) -> None:
         """Saves dictionary data to a JSON file."""
         try:
-            with open(file_path, "w") as f:
+            with file_utils.atomic_open(file_path, "w") as f:
                 json.dump(data, f, indent=2)
         except OSError as e:
-            logger.warning("Failed to write to data file %s: %s", file_path, e)
+            logger.warning(
+                "Failed to persist state to the internal "
+                "data file at '%s'. Error: %s",
+                file_path,
+                e,
+            )
 
     def set_storage_config(self, config: dict) -> None:
         """Sets the storage configuration in the app data."""
@@ -102,6 +113,13 @@ class ChsAppData:
         metadata = self._load_json(self._metadata_file)
         return metadata.get("storage", {})
 
+    def remove_storage_config(self) -> None:
+        """Removes the storage configuration from the app data."""
+        metadata = self._load_json(self._metadata_file)
+        if metadata.pop("storage", None) is not None:
+            self._save_json(self._metadata_file, metadata)
+            logger.debug("AppData: Removed storage config")
+
     def update_run(self, run_id: str, run_data: dict[str, Any]) -> None:
         """Updates or adds a run entry in the app data.
 
@@ -113,6 +131,22 @@ class ChsAppData:
 
         # Merge with existing data if present
         if run_id in runs:
+            if "job_entries" in run_data and "job_entries" in runs[run_id]:
+                existing_entries = dict(runs[run_id]["job_entries"])
+                new_entries = run_data["job_entries"]
+                for job_id, new_entry in new_entries.items():
+                    if job_id not in existing_entries:
+                        existing_entries[job_id] = new_entry
+                    else:
+                        curr_status = existing_entries[job_id].get("status")
+                        new_status = new_entry.get("status")
+                        if (
+                            JobStatus.is_terminal(curr_status)
+                            and new_status == JobStatus.PENDING.value
+                        ):
+                            continue
+                        existing_entries[job_id].update(new_entry)
+                run_data["job_entries"] = existing_entries
             runs[run_id].update(run_data)
         else:
             runs[run_id] = run_data
@@ -133,7 +167,11 @@ class ChsAppData:
             entry = job_entries.setdefault(job_id, {})
             # Update the status only if the job is in a non-terminal state.
             if not JobStatus.is_terminal(entry.get("status")):
-                entry["status"] = new_status
+                entry["status"] = (
+                    new_status.value
+                    if isinstance(new_status, JobStatus)
+                    else str(new_status)
+                )
         self._save_json(self._runs_file, runs)
         logger.debug("AppData: Updated status for run %s", run_id)
 
@@ -196,7 +234,8 @@ class ChsAppData:
             return str(images_dir)
         except OSError as e:
             logger.warning(
-                "Failed to create images directory at %s: %s. ",
+                "Failed to create the required image assets "
+                "directory at '%s'. Error: %s",
                 self._data_dir / "images",
                 e,
             )

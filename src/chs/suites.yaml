@@ -14,13 +14,18 @@
 
 suites:
 - name: lite
-  timeout: 1200
-  deadline: 4200
+  est_time: "~5 mins"
+  description: "Quick health check."
+  deadline: 600
   tests:
   - name: nvidia-smi
   - name: dcgm
     variables:
       diag_level: [2]
+  - name: tpu-gemm
+    workloads: [check]
+    variables:
+      timeout: 180
   - name: gemm
     workloads: [check]
   - name: nccl-single-node
@@ -29,12 +34,22 @@ suites:
       begin_message_size: 256M
       end_message_size: 8G
   - name: tpu-info
-  - name: hbm
-  - name: host-device
-  - name: collectives-single-node
+    variables:
+      timeout: 120
+  - name: tpu-hbm
+    variables:
+      timeout: 300
+  - name: tpu-collectives
+    workloads: [psum]
+    variables:
+      timeout: 240
+      message_size_start: 4096
+      message_size_end: 16384
+      message_size_multiplier: 2
 - name: standard
-  timeout: 2400
-  deadline: 6000
+  est_time: "~30 mins"
+  description: "Thorough network & collective testing."
+  deadline: 2400
   tests:
   - name: nvidia-smi
   - name: dcgm
@@ -52,9 +67,25 @@ suites:
       begin_message_size: 256M
       end_message_size: 8G
   - name: tpu-info
-  - name: collectives
-- name: burn-in
-  tests:
-  - name: dcgm
     variables:
-      diag_level: [4]
+      timeout: 120
+  - name: tpu-hbm
+    variables:
+      timeout: 300
+  - name: tpu-gemm
+    variables:
+      timeout: 180
+  - name: gemm
+  - name: tpu-host-device
+    variables:
+      timeout: 600
+  - name: tpu-collectives
+    workloads: [psum]
+    variables:
+      timeout: 240
+  - name: tpu-network-diagnostics
+    variables:
+      timeout: 360
+    trigger_condition:
+      DEGRADED: [tpu-collectives]
+      ERROR: [tpu-collectives]

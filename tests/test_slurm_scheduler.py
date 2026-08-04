@@ -63,14 +63,14 @@ class TestSlurmScheduler(unittest.TestCase):
         self.scheduler.fetch_job_log("123", "/path/to/log")
 
     @patch("subprocess.run")
-    def test_check_jobs_running_true(self, mock_run):
-        mock_run.return_value.stdout = "123"
-        self.assertTrue(self.scheduler.check_jobs_running(["123"]))
+    def test_has_no_failed_jobs_true(self, mock_run):
+        mock_run.return_value.stdout = "chs-123|RUNNING"
+        self.assertTrue(self.scheduler.has_no_failed_jobs())
 
     @patch("subprocess.run")
-    def test_check_jobs_running_false(self, mock_run):
-        mock_run.return_value.stdout = ""
-        self.assertFalse(self.scheduler.check_jobs_running(["123"]))
+    def test_has_no_failed_jobs_false(self, mock_run):
+        mock_run.return_value.stdout = "chs-123|FAILED"
+        self.assertFalse(self.scheduler.has_no_failed_jobs())
 
     def test_get_extra_env(self):
         """Test get_extra_env returns expected Enroot paths."""

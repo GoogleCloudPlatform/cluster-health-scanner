@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chs"
-version = "0.4.0"
+version = "0.1.0"
 description = "CHS provides a comprehensive suite of tools for validating the health and performance of Accelerators."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,10 +14,12 @@ dependencies = [
     "platformdirs",
     "protobuf",
     "rich",
+    "questionary",
     "pre_commit",
     "google-cloud-storage",
     "google-cloud-compute",
-    "pyOpenSSL",
+    "pyOpenSSL<24.1.0",
+    "packaging",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +37,7 @@ where = ["src"]
 
 
 [tool.setuptools.package-data]
-"chs" = ["**/*.yaml", "**/*.tpl", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+"chs" = ["**/*.yaml", "**/*.tpl", "**/*.html", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
 
 [tool.ruff]
 exclude = [

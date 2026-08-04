@@ -67,7 +67,7 @@ class TpuGemm(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            "{driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1",
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )
@@ -75,8 +75,8 @@ class TpuGemm(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"Running .* with params:.*'m': (?P<m>\d+), 'k': (?P<k>\d+), 'n': (?P<n>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
-        output_format="{m}x{n}x{k}-{dtype}",
+        regex=r"HOST (?P<node>\S+): Running .* with params:.*'m': (?P<m>\d+), 'k': (?P<k>\d+), 'n': (?P<n>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
+        output_format="{node},{m}x{n}x{k},{dtype}",
     )
 
     figure_of_merit(
@@ -91,7 +91,7 @@ class TpuGemm(ExecutableApplication):
         "Total Throughput",
         fom_regex=r".*TotalThroughput \(median\): (?P<total_tflops>\d+\.\d+) TFLOP / second",
         group_name="total_tflops",
-        units="TFLOPs/s",
+        units="TFLOP/s",
         contexts=["params"],
     )
 
@@ -107,7 +107,7 @@ class TpuGemm(ExecutableApplication):
         "Step Time",
         fom_regex=r".*Step Time \(median\): (?P<step_time>\d+\.\d+)",
         group_name="step_time",
-        units="s",
+        units="ms",
         fom_type=FomType.INFO,
         contexts=["params"],
     )
@@ -116,7 +116,7 @@ class TpuGemm(ExecutableApplication):
         "Total FLOPs",
         fom_regex=r".*Total floating-point ops: (?P<flops>\d+)",
         group_name="flops",
-        units="ops",
+        units="FLOP",
         fom_type=FomType.INFO,
         contexts=["params"],
     )

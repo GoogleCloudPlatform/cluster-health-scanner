@@ -16,7 +16,7 @@
 
 import logging
 import uuid
-from chs.exceptions import ChsValidationError
+from chs.exceptions import ChsValidationError, StorageObjectNotFoundException
 from chs.storage.base import StorageProvider
 from google.cloud import storage
 from google.api_core import exceptions as gcp_ex
@@ -63,6 +63,10 @@ class GcsStorageProvider(StorageProvider):
                 remote_src,
                 local_dest,
             )
+        except gcp_ex.NotFound as e:
+            raise StorageObjectNotFoundException(
+                f"File gs://{self.bucket_name}/{remote_src} not found."
+            ) from e
         except Exception as e:
             raise OSError(
                 f"Failed to download gs://{self.bucket_name}/{remote_src} "
@@ -91,18 +95,20 @@ class GcsStorageProvider(StorageProvider):
         except gcp_ex.NotFound as e:
             raise ChsValidationError(
                 f"GCS bucket '{self.bucket_name}' not found. "
-                f"Please verify the bucket name. "
+                f"Please verify the bucket name or run the following "
+                f"command to create it:\n"
+                f"  gcloud storage buckets create gs://{self.bucket_name}\n\n"
                 f"Details: {e}"
             ) from e
         except gcp_ex.Forbidden as e:
             raise ChsValidationError(
                 f"Access denied: Write permission missing for GCS bucket "
-                f"'{self.bucket_name}'. "
+                f"'{self.bucket_name}'.\n"
                 f"Details: {e}"
             ) from e
         except (gcp_ex.GoogleAPICallError, Exception) as e:
             raise ChsValidationError(
-                f"Failed to access GCS bucket '{self.bucket_name}'. "
+                f"Failed to access GCS bucket '{self.bucket_name}'.\n"
                 f"Details: {e}"
             ) from e
 
@@ -132,3 +138,17 @@ class GcsStorageProvider(StorageProvider):
             logger.debug(
                 "Unexpected error during GCS validation delete test: %s", e
             )
+
+    def get_uri(self, remote_path: str) -> str:
+        """Returns the gs:// URI for the remote path."""
+        return f"gs://{self.bucket_name}/{remote_path}"
+
+    def exists(self, remote_path: str) -> bool:
+        """Checks if blob exists in GCS bucket."""
+        try:
+            client = storage.Client()
+            bucket = client.bucket(self.bucket_name)
+            blob = bucket.blob(remote_path)
+            return blob.exists()
+        except Exception:
+            return False

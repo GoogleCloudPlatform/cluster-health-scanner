@@ -42,13 +42,13 @@ class TestResultsViewer(unittest.TestCase):
                 {
                     "test_name": "test1",
                     "result_status": "RESULT_STATUS_SUCCESS",
-                    "target_resource_ids": ["node1"],
+                    "target_resources": [{"node_name": "node1"}],
                     "metrics": [{"key": "m1", "value": 1.0, "unit": "GB/s"}],
                 },
                 {
                     "test_name": "test2",
                     "result_status": "RESULT_STATUS_FAILED",
-                    "target_resource_ids": ["node2"],
+                    "target_resources": [{"node_name": "node2"}],
                     "metrics": [{"key": "m2", "value": "some_error"}],
                 },
             ],
@@ -132,6 +132,76 @@ class TestResultsViewer(unittest.TestCase):
         viewer.show_details(resources=["ode2"])  # Should match "node2"
         self.assertTrue(mock_print.called)
         self.assertGreater(mock_print.call_count, 0)
+
+    @mock.patch.object(Console, "print")
+    @mock.patch("chs.results_viewer.PluginManager.get_plugin")
+    def test_show_details_time_exceeded(self, mock_get_plugin, mock_print):
+        """Test that TIMEOUT and DEADLINE statuses are printed and filtered."""
+        data = {
+            "report_id": "test-id",
+            "chs_version": "1.0.0",
+            "test_results": [
+                {
+                    "test_name": "test_timeout",
+                    "test_level": "level-1",
+                    "result_status": "RESULT_STATUS_TIMEOUT",
+                    "target_resources": [{"node_name": "node1"}],
+                },
+                {
+                    "test_name": "test_deadline",
+                    "test_level": "level-2",
+                    "result_status": "RESULT_STATUS_DEADLINE",
+                    "target_resources": [{"node_name": "node2"}],
+                },
+                {
+                    "test_name": "test_success",
+                    "test_level": "level-3",
+                    "result_status": "RESULT_STATUS_SUCCESS",
+                    "target_resources": [{"node_name": "node3"}],
+                },
+            ],
+        }
+        time_exceeded_json_path = os.path.join(
+            self.test_dir.name, "time_exceeded.json"
+        )
+        with open(time_exceeded_json_path, "w") as f:
+            json.dump(data, f)
+
+        viewer = ResultsViewer(time_exceeded_json_path)
+
+        mock_plugin = mock.MagicMock()
+        mock_get_plugin.return_value = mock_plugin
+        mock_plugin.render_detail.return_value = None
+
+        viewer.show_details()
+
+        timeout_msg_called = False
+        deadline_msg_called = False
+        for call in mock_print.call_args_list:
+            args = call[0]
+            if len(args) > 0 and isinstance(args[0], str):
+                if "TIMEOUT" in args[0] and "test_timeout" in args[0]:
+                    timeout_msg_called = True
+                if "DEADLINE" in args[0] and "test_deadline" in args[0]:
+                    deadline_msg_called = True
+
+        self.assertTrue(timeout_msg_called, "TIMEOUT message should be printed")
+        self.assertTrue(
+            deadline_msg_called, "DEADLINE message should be printed"
+        )
+
+        self.assertTrue(mock_plugin.render_detail.called)
+
+        render_args = mock_plugin.render_detail.call_args_list
+        valid_passed = False
+        for call in render_args:
+            results_passed = call[0][0]
+            for res in results_passed:
+                self.assertEqual(res.test_name, "test_success")
+                valid_passed = True
+        self.assertTrue(
+            valid_passed, "render_detail should be called with valid results"
+        )
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ class TpuCollectives(ExecutableApplication):
     executable(
         "execute",
         template=(
-            '{driver_escape_overrides} cd {run_dir} && printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && python3 {run_script} --config {config_file} 2>&1'
+            'set -o pipefail; {driver_escape_overrides} cd {run_dir} && printf "%b" "{benchmarks_yaml_escaped}" > {config_file} && python3 {run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"'
         ),
         use_mpi=False,
     )
@@ -72,13 +72,13 @@ class TpuCollectives(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"Running\s+(?:benchmark:\s+)?(?P<op_type>\w+)\s+with params:.*?['\"]matrix_dim['\"]:\s*(?P<matrix_dim>\d+).*?['\"]dtype['\"]:\s*<class\s+['\"]jax\.numpy\.(?P<dtype>\w+)['\"]>",
-        output_format="{matrix_dim},{dtype}",
+        regex=r"HOST (?P<node>\S+): Running\s+(?:benchmark:\s+)?(?P<op_type>\w+)\s+with params:.*?['\"]matrix_dim['\"]:\s*(?P<matrix_dim>\d+).*?['\"]dtype['\"]:\s*<class\s+['\"]jax\.numpy\.(?P<dtype>\w+)['\"]>",
+        output_format="{node},{matrix_dim},{dtype}",
     )
 
     figure_of_merit(
         "Bandwidth (median)",
-        fom_regex=r"metrics:\s*.*?['\"]achieved_bw \(GB/s\)_p50['\"]:\s*(?:np\.float64\()?(?P<bandwidth>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
+        fom_regex=r".*metrics:\s*.*?['\"]achieved_bw \(GB/s\)_p50['\"]:\s*(?:np\.float64\()?(?P<bandwidth>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="bandwidth",
         units="GB/s",
         contexts=["params"],
@@ -86,7 +86,7 @@ class TpuCollectives(ExecutableApplication):
 
     figure_of_merit(
         "Time Taken (median)",
-        fom_regex=r"metrics:\s*.*?['\"]step_time_ms_p50['\"]:\s*(?:np\.float64\()?(?P<time>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
+        fom_regex=r".*metrics:\s*.*?['\"]step_time_ms_p50['\"]:\s*(?:np\.float64\()?(?P<time>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="time",
         units="ms",
         fom_type=FomType.INFO,

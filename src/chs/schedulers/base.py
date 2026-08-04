@@ -17,26 +17,18 @@
 import abc
 import json
 import os
-from typing import Any, TYPE_CHECKING
+from typing import Any
 import logging
 from chs.utils.gcp import query_gce_instances_info
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from chs.utils.app_data import ChsAppData
-
 
 class BaseScheduler(abc.ABC):
     """Base class for cluster schedulers."""
 
-    def __init__(self, app_data: "ChsAppData | None" = None):
-        """Initializes the scheduler.
-
-        Args:
-          app_data: ChsAppData instance or None.
-        """
-        self._app_data = app_data
+    def __init__(self):
+        """Initializes the scheduler."""
         self.node_to_instance_id: dict[
             str, str
         ] = {}  # Store node -> GCE instance_id
@@ -66,7 +58,12 @@ class BaseScheduler(abc.ABC):
                 unique_types.add(machine_type)
                 self.node_to_instance_id[node] = instance_info["instance_id"]
             else:
-                logger.warning(f"Could not retrieve GCE info for node {node}")
+                logger.warning(
+                    "Could not retrieve GCE metadata for node '%s'. Machine"
+                    " type defaulted to 'unknown'. Ensure Compute Viewer IAM"
+                    " permissions if running on GKE/GCE.",
+                    node,
+                )
                 unique_types.add("unknown")
 
         return sorted(list(unique_types))
@@ -101,9 +98,14 @@ class BaseScheduler(abc.ABC):
         """
         return tests
 
-    def cleanup_scheduler_resources(
-        self, workspace_name: str | None = None
-    ) -> None:
+    def apply_scheduler_resources(self) -> None:
+        """Applies generated scheduler resources to the cluster.
+
+        Optional to implement.
+        """
+        pass
+
+    def cleanup_scheduler_resources(self) -> None:
         """Cleans up scheduler-specific resources. Optional to implement."""
         pass
 
@@ -134,6 +136,11 @@ class BaseScheduler(abc.ABC):
             json.dump(self.get_topology(), f)
 
     @abc.abstractmethod
+    def resolve_raw_nodes(self) -> list[str]:
+        """Resolves raw targeted nodes based on CLI arguments purely."""
+        pass
+
+    @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:
         """Determine which nodes to test based on provided parameters."""
         pass
@@ -144,9 +151,9 @@ class BaseScheduler(abc.ABC):
         workspace_config_dir: str,
         tests: list[dict[str, Any]] | None,
         machine_type: str,
-        timeout: int | None = None,
         deadline: int | None = None,
         run_id: str | None = None,
+        images_dir: str | None = None,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -154,10 +161,14 @@ class BaseScheduler(abc.ABC):
           workspace_config_dir: Directory to write the config file to.
           tests: List of tests to run.
           machine_type: The machine type of the cluster nodes.
-          timeout: The timeout for the job in seconds.
           deadline: The deadline for the job in seconds.
           run_id: The user-facing run ID.
         """
+        pass
+
+    @abc.abstractmethod
+    def cancel_jobs(self, job_ids: list[str]) -> None:
+        """Cancels specific jobs by their IDs."""
         pass
 
     @abc.abstractmethod
@@ -166,13 +177,29 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def check_jobs_running(self, job_ids: list[str]) -> bool:
-        """Checks if the given jobs are still running."""
+    def get_active_job_names(self) -> list[str]:
+        """Returns a list of active job names on the cluster."""
         pass
 
     @abc.abstractmethod
-    def parse_job_ids(self, output: str) -> list[str]:
-        """Parses job IDs from the experiment execution output."""
+    def has_no_failed_jobs(self) -> bool:
+        """Checks if there are any failed CHS jobs.
+
+        Returns:
+            True if all are healthy (active/completed).
+        """
+        pass
+
+    @abc.abstractmethod
+    def extract_job_id(self, experiment_dir: str) -> str:
+        """Extracts the job ID from the experiment directory.
+
+        Args:
+            experiment_dir: The path to the experiment directory.
+
+        Returns:
+            The job ID as a string.
+        """
         pass
 
     @abc.abstractmethod

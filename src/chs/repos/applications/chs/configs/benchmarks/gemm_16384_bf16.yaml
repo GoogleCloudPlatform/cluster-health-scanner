@@ -19,4 +19,4 @@ benchmarks:
   xlml_metrics_dir: "../microbenchmarks/gemm_multiple_run_bf16"
   xla_dump_dir: "../microbenchmarks/gemm_multiple_run_bf16/hlo_graphs"
   benchmark_sweep_params:
-  - {m: 16384, k: 16384, n: 16384, num_runs: 100, dtype: 'bfloat16'}
+  - {m: 16384, k: 16384, n: 16384, num_runs: 100, dtype: 'bfloat16', run_on_local_node: True}
