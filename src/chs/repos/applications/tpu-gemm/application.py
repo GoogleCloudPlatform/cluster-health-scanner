@@ -91,7 +91,7 @@ class TpuGemm(ExecutableApplication):
         "Total Throughput",
         fom_regex=r".*TotalThroughput \(median\): (?P<total_tflops>\d+\.\d+) TFLOP / second",
         group_name="total_tflops",
-        units="TFLOPs/s",
+        units="TFLOP/s",
         contexts=["params"],
     )
 
@@ -107,7 +107,7 @@ class TpuGemm(ExecutableApplication):
         "Step Time",
         fom_regex=r".*Step Time \(median\): (?P<step_time>\d+\.\d+)",
         group_name="step_time",
-        units="s",
+        units="ms",
         fom_type=FomType.INFO,
         contexts=["params"],
     )
@@ -116,7 +116,7 @@ class TpuGemm(ExecutableApplication):
         "Total FLOPs",
         fom_regex=r".*Total floating-point ops: (?P<flops>\d+)",
         group_name="flops",
-        units="ops",
+        units="FLOP",
         fom_type=FomType.INFO,
         contexts=["params"],
     )
