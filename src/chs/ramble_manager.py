@@ -310,9 +310,13 @@ class RambleManager:
                 shutil.copyfile(internal_thresholds, dest_thresholds)
                 logger.debug("Copied default thresholds to %s", dest_thresholds)
             else:
-                logger.warning(
+                logger.debug(
                     "Default thresholds file not found at %s",
                     internal_thresholds,
+                )
+                logger.warning(
+                    "Unable to find thresholds. The final report will only "
+                    "display raw metrics without pass/fail evaluation."
                 )
 
     def add_custom_repository(self) -> None:
@@ -544,9 +548,14 @@ class RambleManager:
         for job_id, info in job_entries.items():
             exp_dir = info.get("experiment_dir")
             if not exp_dir or not os.path.exists(exp_dir):
-                logger.warning(
+                logger.debug(
                     "Experiment directory %s for job %s does not exist",
                     exp_dir,
+                    job_id,
+                )
+                logger.warning(
+                    "No diagnostic logs found for job '%s'. Some results "
+                    "may be missing from the final report.",
                     job_id,
                 )
                 continue
@@ -583,11 +592,16 @@ class RambleManager:
                 if log_path:
                     mapping[job_id] = log_path
             except OSError as e:
-                logger.warning(
+                logger.debug(
                     "Failed to list directory %s for job %s: %s",
                     exp_dir,
                     job_id,
                     e,
+                )
+                logger.warning(
+                    "Unable to read the log files for job '%s'. "
+                    "Metrics for this job will be skipped.",
+                    job_id,
                 )
 
         return mapping
@@ -733,9 +747,10 @@ class RambleManager:
                                     > QUEUE_TIMEOUT_SECONDS
                                 ):
                                     logger.error(
-                                        "Job %s has been queued for more than "
-                                        "%d seconds. Marking for "
-                                        "cancellation...",
+                                        "Job '%s' has exceeded the maximum "
+                                        "queue wait time of %d "
+                                        "seconds. It will be cancelled to "
+                                        "free up resources.",
                                         job_id,
                                         QUEUE_TIMEOUT_SECONDS,
                                     )
@@ -762,7 +777,9 @@ class RambleManager:
                             )
                         except Exception as e:
                             logger.warning(
-                                "Failed to update run status in registry: %s", e
+                                "Failed to update the CHS run status in the "
+                                "internal registry. Error: %s",
+                                e,
                             )
 
                         if still_running:
@@ -861,7 +878,11 @@ class RambleManager:
             scheduler.fetch_job_log(job_id, log_path)
             logger.debug("Successfully fetched log for %s", job_id)
         except Exception as e:
-            logger.error("Error fetching log for %s: %s", job_id, e)
+            logger.error(
+                "Failed to retrieve execution logs for job ID '%s'. Error: %s",
+                job_id,
+                e,
+            )
             raise
 
     def get_scheduler_type(self) -> str:
@@ -932,10 +953,11 @@ class RambleManager:
                     )
                     continue
                 elif process.returncode != 0:
-                    logger.warning(
-                        "Fetching success criteria for %s %s "
-                        "failed with exit code %s. "
-                        "Continuing without success criteria.",
+                    logger.debug(
+                        "Failed to evaluate success criteria for "
+                        "%s '%s' (Exit Code: %s). "
+                        "The analysis will proceed without "
+                        "this validation.",
                         key_type,
                         name,
                         process.returncode,
@@ -987,9 +1009,10 @@ class RambleManager:
                 Exception,
             ) as e:
                 logger.warning(
-                    "Fetching success criteria for %s %s "
-                    "failed with error: %s. "
-                    "Continuing without success criteria.",
+                    "Encountered an error while evaluating success "
+                    "criteria for %s '%s'. The "
+                    "analysis will proceed without this "
+                    "validation. Error: %s",
                     key_type,
                     name,
                     e,
@@ -1010,7 +1033,10 @@ class RambleManager:
                             json.dump({"experiment_status": "SETUP"}, f)
                     except OSError as e:
                         logger.warning(
-                            "Failed to reset status for %s: %s", status_path, e
+                            "Failed to reset the internal state file at '%s'. "
+                            "Subsequent runs may be affected. Error: %s",
+                            status_path,
+                            e,
                         )
 
     def analyze_experiments(self) -> str:
@@ -1102,7 +1128,9 @@ class RambleManager:
             logger.debug("Interactive health report generated successfully.")
         except Exception as e:
             logger.warning(
-                "Failed to generate interactive health report: %s", e
+                "Failed to generate the interactive health "
+                "report summary. Error: %s",
+                e,
             )
 
         return str(workspace_dir)
@@ -1161,8 +1189,9 @@ class RambleManager:
     def _upload_workspace(self, provider) -> str | None:
         """Archives workspace locally and uploads using the provider."""
         if not os.path.exists(self.path):
-            logger.warning(
-                "Workspace path %s does not exist. Skipping archival.",
+            logger.debug(
+                "The workspace directory '%s' was not found. "
+                "Skipping the archival process.",
                 self.path,
             )
             return None
@@ -1217,11 +1246,13 @@ class RambleManager:
                 )
 
         except Exception as e:
-            logger.warning(
-                "Failed to archive and upload workspace to remote storage: %s. "
-                "Local test results under '%s' remain intact.",
-                e,
+            logger.debug(
+                "Failed to archive and upload the workspace "
+                "archive to remote storage. Your "
+                "local CHS results under '%s' have been "
+                "preserved. Error: %s",
                 self.path,
+                e,
             )
             return None
         return dest
@@ -1328,8 +1359,11 @@ class RambleManager:
             try:
                 shutil.rmtree(inputs_dir)
             except OSError as e:
-                logger.warning(
-                    "Failed to delete inputs directory %s: %s", inputs_dir, e
+                logger.debug(
+                    "Failed to clean up the temporary inputs "
+                    "directory at '%s'. Error: %s",
+                    inputs_dir,
+                    e,
                 )
 
     def cleanup_workspace(self) -> None:

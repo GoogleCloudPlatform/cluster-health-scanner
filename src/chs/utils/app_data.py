@@ -81,7 +81,11 @@ class ChsAppData:
                 with open(file_path, "r") as f:
                     return json.load(f)
         except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Failed to read data file %s: %s", file_path, e)
+            logger.debug(
+                "Failed to read the internal data file at '%s'. Error: %s",
+                file_path,
+                e,
+            )
         return {}
 
     def _save_json(self, file_path: pathlib.Path, data: dict[str, Any]) -> None:
@@ -90,7 +94,12 @@ class ChsAppData:
             with file_utils.atomic_open(file_path, "w") as f:
                 json.dump(data, f, indent=2)
         except OSError as e:
-            logger.warning("Failed to write to data file %s: %s", file_path, e)
+            logger.warning(
+                "Failed to persist state to the internal "
+                "data file at '%s'. Error: %s",
+                file_path,
+                e,
+            )
 
     def set_storage_config(self, config: dict) -> None:
         """Sets the storage configuration in the app data."""
@@ -225,7 +234,8 @@ class ChsAppData:
             return str(images_dir)
         except OSError as e:
             logger.warning(
-                "Failed to create images directory at %s: %s. ",
+                "Failed to create the required image assets "
+                "directory at '%s'. Error: %s",
                 self._data_dir / "images",
                 e,
             )

@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from tpu_network_diagnostics import (
+    build_permutation_pairs,
+    calculate_bandwidth,
+)
 import unittest
 import sys
 from unittest.mock import MagicMock
@@ -21,10 +25,6 @@ sys.modules["jax.numpy"] = MagicMock()
 sys.modules["jax.sharding"] = MagicMock()
 sys.modules["jax.experimental"] = MagicMock()
 sys.modules["jax.experimental.multihost_utils"] = MagicMock()
-from tpu_network_diagnostics import (
-    build_permutation_pairs,
-    calculate_bandwidth,
-)
 
 
 class TpuNetworkDiagnosticsTest(unittest.TestCase):

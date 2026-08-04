@@ -53,7 +53,10 @@ class PluginManager:
                         self._register_plugin_from_module(module, modname)
                     except Exception as e:
                         logger.warning(
-                            "Failed to load CHS visualization plugin %s: %s",
+                            "Failed to load the Cluster Health Scanner "
+                            "(CHS) visualization plugin "
+                            "'%s'. Some UI features may be "
+                            "unavailable. Error: %s",
                             modname,
                             e,
                         )

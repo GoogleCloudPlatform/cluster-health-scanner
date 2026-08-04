@@ -79,11 +79,14 @@ class TestChsAppData(unittest.TestCase):
 
     @mock.patch("pathlib.Path.mkdir")
     def test_get_images_dir_failure(self, mock_mkdir):
-        mock_mkdir.side_effect = OSError("Permission denied")
-        with self.assertLogs(app_data.logger, level="WARNING") as cm:
+        mock_mkdir.side_effect = PermissionError("Permission denied")
+        with self.assertLogs("chs.utils.app_data", level="WARNING") as cm:
             images_dir = self.app_data.get_images_dir()
-        self.assertIsNone(images_dir)
-        self.assertIn("Failed to create images directory", cm.output[0])
+            self.assertIsNone(images_dir)
+            self.assertIn(
+                "Failed to create the required image " "assets directory",
+                cm.output[0],
+            )
 
     def test_update_run_status_success(self):
         self.app_data.update_run(

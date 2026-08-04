@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import jax
 import importlib.metadata as meta
 import os
 import socket
@@ -22,7 +23,6 @@ for k in list(os.environ.keys()):
         os.environ.pop(k)
 
 warnings.filterwarnings("ignore")
-import jax
 
 node_name = os.environ.get("MY_NODE_NAME", socket.gethostname())
 local_devs = jax.local_devices()

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ramble.appkit import *
+from test_helper import TestHelper
 from copy import deepcopy
 import logging
 import sys
@@ -27,8 +29,6 @@ config_dir = (
 )
 sys.path.append(config_dir)
 
-from test_helper import TestHelper
-from ramble.appkit import *
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,9 @@ class Chs(ExecutableApplication):
         try:
             tests_config = parse_tests_config(tests_str)
         except Exception as e:
-            logger.error(f"Failed to parse tests configuration: {e}")
+            logger.error(
+                f"Failed to parse the test suite configuration file. Error: {e}"
+            )
             raise ChsExecutionException(
                 f"Failed to parse tests configuration: {e}"
             ) from e
@@ -228,16 +230,22 @@ class Chs(ExecutableApplication):
                             with open(topo_path, "r") as f:
                                 topology = json.load(f)
                         except json.JSONDecodeError as e:
-                            logger.warning(
-                                "Failed to parse topology JSON from %s: %s",
+                            logger.debug(
+                                "Failed to parse the cluster topology JSON file at '%s'. Ensure the file is correctly formatted. Error: %s",
                                 topo_path,
                                 e,
                             )
-                        except IOError as e:
                             logger.warning(
-                                "Failed to read topology file %s: %s",
+                                "Could not load cluster topology data. Some node-specific diagnostics will be skipped."
+                            )
+                        except IOError as e:
+                            logger.debug(
+                                "Failed to read the cluster topology file at '%s'. Network discovery may be incomplete. Error: %s",
                                 topo_path,
                                 e,
+                            )
+                            logger.warning(
+                                "Could not load cluster topology data. Some node-specific diagnostics will be skipped."
                             )
 
                 workloads = (

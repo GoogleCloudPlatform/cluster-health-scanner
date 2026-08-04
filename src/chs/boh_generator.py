@@ -78,7 +78,10 @@ class BOHGenerator:
                         return data
                 except (yaml.YAMLError, OSError) as e:
                     logger.warning(
-                        "Failed to load thresholds from %s: %s", path, e
+                        "Failed to load performance thresholds "
+                        "configuration file from '%s'. Error: %s",
+                        path,
+                        e,
                     )
                     if explicit:
                         raise ValueError(
@@ -104,7 +107,11 @@ class BOHGenerator:
                     data = yaml.safe_load(f) or {}
                     return data
             except (yaml.YAMLError, OSError) as e:
-                logger.warning("Failed to load internal thresholds: %s", e)
+                logger.debug("Failed to load internal thresholds: %s", e)
+                logger.warning(
+                    "Unable to find thresholds. The final report will only "
+                    "display raw metrics without pass/fail evaluation."
+                )
         return {}
 
     def _get_timestamp(self) -> Timestamp:
@@ -248,7 +255,11 @@ class BOHGenerator:
 
         comp_type = machine_cfg.get("type") or default_cfg.get("type")
         if not comp_type:
-            logger.warning("No comparison type defined for test %s", test_name)
+            logger.debug(
+                "Missing comparison type configuration for test "
+                "'%s'. Validation will be skipped.",
+                test_name,
+            )
             test_result.result_status = pb.RESULT_STATUS_UNKNOWN
             return
 
@@ -311,8 +322,10 @@ class BOHGenerator:
                     ach_key, peak_key = pair
                     peak_metric = metrics_map.get(peak_key)
                     if not peak_metric:
-                        logger.warning(
-                            "Peak metric %s not found for relative check",
+                        logger.debug(
+                            "Missing metric: Peak metric '%s' is "
+                            "required for the "
+                            "relative threshold but was not found",
                             peak_key,
                         )
                         overall_success = False
@@ -477,7 +490,11 @@ class BOHGenerator:
                         "command_statement"
                     ].string_value = command_statement
         except Exception as e:
-            logger.warning("Failed to add system info from app_data: %s", e)
+            logger.debug(
+                "Failed to retrieve system information from "
+                "application data cache. Error: %s",
+                e,
+            )
 
     def generate(self) -> pb.BillOfHealth:
         """Generates the Bill of Health report."""
@@ -485,7 +502,11 @@ class BOHGenerator:
             with open(self.file_path, "r") as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.error("Error reading JSON results: %s", e)
+            logger.debug("Error reading JSON results: %s", e)
+            logger.error(
+                "Failed to read raw diagnostic results. The final Bill "
+                "of Health report cannot be generated."
+            )
             return self.report
 
         self.report.report_id = data.get("workspace_name", str(uuid.uuid4()))

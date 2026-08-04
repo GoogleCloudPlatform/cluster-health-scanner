@@ -303,8 +303,11 @@ class KubernetesPreflightChecker:
             return current_version >= min_version
         except InvalidVersion:
             logger.warning(
-                "Could not parse JobSet version '%s'. " "Assuming supported.",
+                "Unable to parse the installed JobSet "
+                "version '%s'. Proceeding with "
+                "the assumption that it is a supported version (>= %s).",
                 version_str,
+                MIN_JOBSET_VERSION,
             )
             return True
 
@@ -355,8 +358,11 @@ class KubernetesPreflightChecker:
             return True
         except InvalidVersion:
             logger.warning(
-                "Could not parse Kueue version '%s'. " "Assuming supported.",
+                "Unable to parse the installed Kueue version "
+                "'%s'. Proceeding with the "
+                "assumption that it is a supported version (>= %s).",
                 version,
+                MIN_KUEUE_VERSION,
             )
             return True
 

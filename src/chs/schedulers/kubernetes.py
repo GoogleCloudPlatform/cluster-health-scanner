@@ -235,7 +235,9 @@ class KubernetesScheduler(BaseScheduler):
             )
         except Exception as e:
             logger.warning(
-                "Failed to delete namespace: %s", format_subprocess_error(e)
+                "Failed to delete Kubernetes namespace. This may "
+                "leave orphaned resources. Error: %s",
+                format_subprocess_error(e),
             )
 
     def _run_kubectl(
@@ -289,7 +291,8 @@ class KubernetesScheduler(BaseScheduler):
                 logger.debug("No CHS SSH secrets found to delete.")
         except Exception as e:
             logger.warning(
-                "Failed to delete secrets: %s", format_subprocess_error(e)
+                "Failed to delete Kubernetes secrets. Error: %s",
+                format_subprocess_error(e),
             )
 
     def _group_nodes_by_slice(
@@ -324,12 +327,17 @@ class KubernetesScheduler(BaseScheduler):
                     slices[slice_id].append(node_name)
         except subprocess.CalledProcessError as e:
             logger.warning(
-                "Failed to run kubectl for nodes %s: %s", node_names, e
+                "Failed to execute 'kubectl' for nodes %s. Error: %s",
+                node_names,
+                format_subprocess_error(e),
             )
             slices["failed-nodes"].extend(node_names)
         except json.JSONDecodeError as e:
             logger.warning(
-                "Failed to parse json for nodes %s: %s", node_names, e
+                "Failed to parse the Kubernetes node metadata "
+                "JSON for nodes (%s). Error: %s",
+                node_names,
+                e,
             )
             slices["failed-nodes"].extend(node_names)
 
@@ -374,7 +382,10 @@ class KubernetesScheduler(BaseScheduler):
 
             if "default" not in l3_networks:
                 logger.warning(
-                    "Default L3 network not found. Discovered L3: %s",
+                    "The default Layer 3 network configuration "
+                    "was not found. Discovered "
+                    "networks: %s. Ensure network "
+                    "configuration is correct.",
                     ", ".join(l3_networks) or "none",
                 )
                 return [], []
@@ -389,10 +400,18 @@ class KubernetesScheduler(BaseScheduler):
             return l3_networks, device_networks
 
         except json.JSONDecodeError as e:
-            logger.warning("Failed to parse network discovery JSON: %s", e)
+            logger.warning(
+                "Failed to parse the network discovery JSON "
+                "output from the cluster. Error: %s",
+                e,
+            )
             return [], []
         except Exception as e:
-            logger.warning("Unexpected error during network discovery: %s", e)
+            logger.warning(
+                "Encountered an unexpected error during Kubernetes "
+                "network topology discovery. Error: %s",
+                e,
+            )
             return [], []
 
     def _get_busy_nodes(self) -> set[str]:
@@ -639,7 +658,8 @@ class KubernetesScheduler(BaseScheduler):
 
         if unhealthy_pools:
             logger.warning(
-                "Dropped unhealthy dynamic TPU pools: %s",
+                "Excluded the following unhealthy dynamic TPU pools from "
+                "diagnostics: %s. Please check the TPU node health.",
                 ", ".join(unhealthy_pools),
             )
 
@@ -689,8 +709,10 @@ class KubernetesScheduler(BaseScheduler):
                 ChsSchedulerException,
             ) as e:
                 logger.warning(
-                    "Failed to automatically discover nodes using kubectl: %s",
-                    e,
+                    "Failed to discover cluster nodes via the "
+                    "Kubernetes API. Ensure "
+                    "'kubectl' is configured correctly. Error: %s",
+                    format_subprocess_error(e),
                 )
 
         self._resolved_raw_nodes = raw_nodes
@@ -721,8 +743,8 @@ class KubernetesScheduler(BaseScheduler):
             elif node in topology.all_tpu_nodes:
                 # TPU node and exists without its nodepool/slice mapping
                 logger.warning(
-                    "Dropping TPU node '%s' because its slice is unhealthy "
-                    "or malformed.",
+                    "Excluded TPU node '%s' from testing because "
+                    "its parent slice is unhealthy.",
                     node,
                 )
                 continue
@@ -734,8 +756,9 @@ class KubernetesScheduler(BaseScheduler):
             excluded_gpus = gpu_nodes.intersection(excluded_nodes)
             if excluded_gpus:
                 logger.info(
-                    "Found %d busy or unavailable GPU node(s). "
-                    "They will be skipped.",
+                    "Identified %d active GPU node(s) with "
+                    "existing workloads. These nodes "
+                    "will be skipped to avoid disrupting running tasks.",
                     len(excluded_gpus),
                 )
 
@@ -821,10 +844,18 @@ class KubernetesScheduler(BaseScheduler):
             return {b: dict(s) for b, s in topology.items()}
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logger.warning("Failed to get node topology via kubectl: %s", e)
+            logger.warning(
+                "Failed to retrieve node topology information from "
+                "the Kubernetes cluster. Error: %s",
+                format_subprocess_error(e),
+            )
             return {}
         except json.JSONDecodeError as e:
-            logger.warning("Failed to parse kubectl output as JSON: %s", e)
+            logger.warning(
+                "Failed to parse the node topology metadata "
+                "returned by Kubernetes. Error: %s",
+                e,
+            )
             return {}
 
     def write_ramble_config(
@@ -948,7 +979,8 @@ class KubernetesScheduler(BaseScheduler):
 
                 if failed:
                     logger.warning(
-                        "JobSet %s is failed. Will trigger cleanup.",
+                        "The diagnostic JobSet '%s' has entered a failed "
+                        "state. Initiating resource cleanup.",
                         job_data.get("metadata", {}).get("name", "Unknown"),
                     )
                     return False
@@ -960,9 +992,17 @@ class KubernetesScheduler(BaseScheduler):
                     )
 
         except subprocess.CalledProcessError as e:
-            logger.warning("Failed to run kubectl get jobset: %s", e.stderr)
+            logger.warning(
+                "Failed to query the status of diagnostic JobSets "
+                "via Kubernetes API. Error: %s",
+                e.stderr,
+            )
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
-            logger.warning("Failed to parse status for JobSets: %s", e)
+            logger.warning(
+                "Failed to parse the status payload returned by "
+                "the JobSet controller. Error: %s",
+                e,
+            )
 
         return all_healthy
 
@@ -1075,7 +1115,11 @@ class KubernetesScheduler(BaseScheduler):
             AttributeError,
             TypeError,
         ) as e:
-            logger.warning("Failed to get statuses for JobSets: %s", e)
+            logger.warning(
+                "Failed to retrieve the current execution statuses "
+                "for the scheduled JobSets. Error: %s",
+                e,
+            )
 
         return statuses
 
@@ -1147,10 +1191,18 @@ class KubernetesScheduler(BaseScheduler):
                 )
             else:
                 logger.error(
-                    "Failed to fetch logs for JobSet %s: %s", job_id, e
+                    "Failed to retrieve execution logs for JobSet '%s'. "
+                    "Result parsing may be incomplete. Error: %s",
+                    job_id,
+                    e,
                 )
         except OSError as e:
-            logger.error("Failed to write log file %s: %s", log_path, e)
+            logger.error(
+                "Failed to write execution logs to the "
+                "local file '%s'. Error: %s",
+                log_path,
+                e,
+            )
 
     def extract_job_id(self, experiment_dir: str) -> str:
         """Extracts the job ID (JobSet name) from the experiment directory."""
@@ -1197,7 +1249,11 @@ class KubernetesScheduler(BaseScheduler):
                 timeout=300,
             )
         except subprocess.SubprocessError as e:
-            logger.warning("Failed to delete dynamic slices: %s", e)
+            logger.warning(
+                "Failed to delete dynamic TPU slices after execution. "
+                "Manual cleanup may be required. Error: %s",
+                format_subprocess_error(e),
+            )
 
     def _wait_for_slices_active(
         self, expected_nodepools: list[str], timeout_sec: int = 300
@@ -1432,7 +1488,11 @@ class KubernetesScheduler(BaseScheduler):
         try:
             kueue_mgr.cleanup()
         except KueueException as e:
-            logger.warning("Failed to clean up Kueue resources: %s", e)
+            logger.warning(
+                "Failed to clean up Kueue workload resources. Manual "
+                "cleanup may be required. Error: %s",
+                e,
+            )
 
         self._delete_job_secrets()
 
@@ -1449,9 +1509,16 @@ class KubernetesScheduler(BaseScheduler):
             self._run_kubectl(args, namespaced=True)
             logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
         except FileNotFoundError:
-            logger.warning("kubectl command not found. Cannot cancel jobs.")
+            logger.warning(
+                "The 'kubectl' command-line tool was not found in your "
+                "PATH. Cannot natively cancel active jobs."
+            )
         except subprocess.CalledProcessError as e:
-            logger.error("Failed to delete JobSets. Error: %s", e.stderr)
+            logger.error(
+                "Encountered an error while attempting to "
+                "delete active JobSets. Error: %s",
+                e.stderr,
+            )
 
         self._delete_job_secrets()
 
@@ -1470,10 +1537,17 @@ class KubernetesScheduler(BaseScheduler):
                     job_names.append(line.split("/")[-1])
             return job_names
         except FileNotFoundError:
-            logger.warning("kubectl command not found. Cannot get jobs.")
+            logger.warning(
+                "The 'kubectl' command-line tool was not found in your "
+                "PATH. Cannot fetch the status of active jobs."
+            )
             return []
         except subprocess.CalledProcessError as e:
-            logger.warning("Failed to get jobsets: %s", e)
+            logger.warning(
+                "Failed to retrieve the list of active JobSets "
+                "from the cluster. Error: %s",
+                e,
+            )
             return []
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
@@ -1508,7 +1582,12 @@ class KubernetesScheduler(BaseScheduler):
                 logger.debug("No matching JobSets found for %s.", prefix)
         except FileNotFoundError:
             logger.warning(
-                "kubectl command not found. Cannot perform native cancel."
+                "The 'kubectl' command-line tool was not found in your PATH. "
+                "Cannot perform a native job cancellation."
             )
         except Exception as e:
-            logger.warning("Native cancel failed: %s", e)
+            logger.warning(
+                "Failed to execute native job cancellation "
+                "via Kubernetes. Error: %s",
+                e,
+            )

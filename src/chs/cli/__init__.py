@@ -218,9 +218,14 @@ def archive_workspace(
             try:
                 _archive_and_log(ramble_manager)
             except Exception as archive_err:
-                logger.warning(
-                    "Failed to archive workspace during error cleanup: %s",
+                logger.debug(
+                    "Failed to archive the workspace and upload the "
+                    "health report during cleanup. Error: %s",
                     archive_err,
+                )
+                logger.warning(
+                    "Failed to archive the workspace and upload "
+                    "the Bill of Health report."
                 )
         raise
     else:
@@ -253,7 +258,10 @@ def cancel_jobs_on_failure(
                 except Exception as e:
                     # We catch broad Exception here as a fallback to ensure we
                     # don't hide the original exception that triggered cleanup.
-                    logger.error(f"Failed to clean up CHS resources: {e}")
+                    logger.error(
+                        "Failed to clean CHS resources. Please run "
+                        "`chs cancel`. Error: {e}"
+                    )
                     Console().print(
                         "\n[bold red]WARNING: Automatic cleanup failed. "
                         "You may have resources from lingering tests on the "
@@ -661,13 +669,15 @@ def _analyze_action(
                         )
                         try:
                             ramble_manager.cancel_experiments()
-                            logger.debug("Cleaned up jobs for run %s", run_id)
+                            logger.debug(
+                                "Cleaned up CHS resources for run %s", run_id
+                            )
                         except (
                             ex.ChsException,
                             subprocess.CalledProcessError,
                         ) as e:
                             logger.warning(
-                                "Failed to cleanup jobs after analysis: %s", e
+                                "Failed to clean CHS resources. Error: %s", e
                             )
                     Console().print(
                         f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
@@ -749,14 +759,15 @@ def _analyze_action(
                             try:
                                 ramble_manager.cancel_experiments()
                                 logger.debug(
-                                    "Cleaned up jobs for run %s", run_id
+                                    "Cleaned up CHS resources for run %s",
+                                    run_id,
                                 )
                             except (
                                 ex.ChsException,
                                 subprocess.CalledProcessError,
                             ) as e:
                                 logger.warning(
-                                    "Failed to cleanup jobs after analysis: %s",
+                                    "Failed to clean CHS resources. Error: %s",
                                     e,
                                 )
 
@@ -1257,7 +1268,8 @@ def _handle_previous_run(
         try:
             if scheduler_instance.has_no_failed_jobs():
                 logger.warning(
-                    "An active CHS run is already executing on this cluster."
+                    "An active Cluster Health Scanner diagnostics run is "
+                    "already executing on this cluster."
                 )
                 has_no_failed_jobs = True
         except ex.NoActiveJobsException:
@@ -1274,15 +1286,11 @@ def _handle_previous_run(
             return None
 
         if submission_complete and has_no_failed_jobs and not is_boh_final:
-            cleanup_cmd = (
-                "./bin/delete_chs_gke.sh"
-                if utils.is_in_cluster()
-                else "chs cancel"
-            )
             logger.warning(
-                "Parallel runs are not supported. "
-                f"Attaching to ongoing/completed run: {latest_run_id}. "
-                f"Run `{cleanup_cmd}` to terminate it."
+                "Parallel CHS runs are not supported. "
+                f"Attaching to the existing run ID: {latest_run_id}. "
+                f"To start a new run, terminate the current "
+                "one using: {cleanup_cmd}."
             )
             _analyze_action(app_data, latest_run_id)
             return RunExecutionResult(
@@ -1926,7 +1934,11 @@ def cancel(obj, auto_approve: bool = False) -> None:
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
         pass
     except (OSError, ex.ChsException) as e:
-        logger.warning("Failed to archive workspace after cancellation: %s", e)
+        logger.debug(
+            "Failed to archive the workspace directory "
+            "after run cancellation. Error: %s",
+            e,
+        )
 
 
 @cli.command()

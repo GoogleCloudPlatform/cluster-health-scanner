@@ -270,7 +270,8 @@ class SlurmScheduler(BaseScheduler):
         busy_nodes = set(raw_nodes) - idle_nodes
         if busy_nodes:
             logger.info(
-                "Nodes %s busy. Skipping running diagnostics.",
+                "The following nodes are currently executing workloads and "
+                "will be skipped to avoid disruption: %s",
                 ", ".join(sorted(busy_nodes)),
             )
 
@@ -353,10 +354,18 @@ class SlurmScheduler(BaseScheduler):
             return topology
 
         except GoogleAPICallError as e:
-            logger.warning("Failed to get node topology via API: %s", e)
+            logger.warning(
+                "Failed to retrieve node topology information "
+                "via the Slurm API. Error: %s",
+                e,
+            )
             return {}
         except Exception as e:
-            logger.error("Unexpected error getting node topology: %s", e)
+            logger.error(
+                "Encountered an unexpected error while discovering "
+                "Slurm node topology. Error: %s",
+                e,
+            )
             return {}
 
     def _ensure_enroot_directories(self) -> None:
@@ -460,8 +469,9 @@ class SlurmScheduler(BaseScheduler):
                             "BOOT_FAIL",
                         ):
                             logger.warning(
-                                "Job %s is failed (State: %s). Will trigger"
-                                " cleanup.",
+                                "Diagnostic job '%s' has failed "
+                                "with state '%s'. "
+                                "Initiating resource cleanup.",
                                 job_name,
                                 state,
                             )
@@ -514,7 +524,14 @@ class SlurmScheduler(BaseScheduler):
                     statuses[jid] = JobStatus.UNKNOWN.value
 
         except FileNotFoundError:
-            logger.warning("sacct command not found. Assuming UNKNOWN.")
+            logger.debug(
+                "The 'sacct' command was not found. Job states cannot be "
+                "verified and will default to UNKNOWN."
+            )
+            logger.warning(
+                "The 'sacct' command was not found. Unable to "
+                "track job completion statuses."
+            )
             for jid in job_ids:
                 statuses[jid] = JobStatus.UNKNOWN.value
 
@@ -529,8 +546,11 @@ class SlurmScheduler(BaseScheduler):
         if os.path.exists(log_path):
             logger.debug("Log file for job %s exists at %s", job_id, log_path)
         else:
-            logger.warning(
-                "Log file for job %s not found at %s", job_id, log_path
+            logger.debug(
+                "The execution log file for job ID '%s' "
+                "could not be found at '%s'.",
+                job_id,
+                log_path,
             )
 
     def extract_job_id(self, experiment_dir: str) -> str:
@@ -564,7 +584,9 @@ class SlurmScheduler(BaseScheduler):
                 logger.debug("Successfully canceled jobs: %s", job_ids)
             else:
                 logger.warning(
-                    "scancel returned non-zero exit code: %s", result.stderr
+                    "The 'scancel' command failed while attempting "
+                    "to terminate jobs. Error: %s",
+                    result.stderr,
                 )
         except FileNotFoundError:
             logger.warning(
@@ -574,7 +596,9 @@ class SlurmScheduler(BaseScheduler):
             )
         except (OSError, subprocess.SubprocessError) as e:
             err_msg = ex.format_subprocess_error(e)
-            logger.error("Failed to cancel jobs: %s", err_msg)
+            logger.error(
+                "Failed to cancel active Slurm jobs. Error: %s", err_msg
+            )
             raise ex.ChsCancellationException(
                 f"Failed to cancel jobs: {err_msg}"
             ) from e
@@ -596,7 +620,10 @@ class SlurmScheduler(BaseScheduler):
                     job_names.append(name)
             return job_names
         except FileNotFoundError:
-            logger.warning("squeue command not found. Cannot get jobs.")
+            logger.warning(
+                "The 'squeue' command was not found in your PATH. "
+                "Cannot retrieve the list of active jobs."
+            )
             return []
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
@@ -617,7 +644,8 @@ class SlurmScheduler(BaseScheduler):
             )
             if result.returncode != 0:
                 logger.warning(
-                    "Failed to list jobs via squeue for cancellation."
+                    "Failed to retrieve the list of active jobs using "
+                    "'squeue' during the cancellation process."
                 )
                 return
 
@@ -638,7 +666,12 @@ class SlurmScheduler(BaseScheduler):
                 logger.debug("No matching jobs found for prefix %s.", prefix)
         except FileNotFoundError:
             logger.warning(
-                "squeue command not found. Cannot perform native cancel."
+                "The 'squeue' command was not found in your PATH. "
+                "Cannot perform native job cancellation."
             )
         except Exception as e:
-            logger.warning("Native cancel failed: %s", e)
+            logger.warning(
+                "Failed to execute native job "
+                "cancellation via Slurm. Error: %s",
+                e,
+            )

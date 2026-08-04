@@ -818,7 +818,11 @@ ramble:
         self.assertEqual(networks_l3, [])
         self.assertEqual(networks_device, [])
         mock_logger.warning.assert_called_with(
-            "Default L3 network not found. Discovered L3: %s", "gvnic-1"
+            "The default Layer 3 network configuration "
+            "was not found. Discovered "
+            "networks: %s. Ensure network "
+            "configuration is correct.",
+            "gvnic-1",
         )
 
     @mock.patch("subprocess.run")

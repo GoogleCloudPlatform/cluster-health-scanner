@@ -58,16 +58,26 @@ class ResultsViewer:
                 with open(topo_path, "r") as f:
                     self.topology = json.load(f)
             except json.JSONDecodeError as e:
-                logger.warning(
-                    "Failed to parse topology JSON from %s: %s",
+                logger.debug(
+                    "Failed to parse the cluster topology "
+                    "file at '%s'. Error: %s",
                     topo_path,
                     e,
                 )
-            except IOError as e:
                 logger.warning(
-                    "Failed to read topology file %s: %s",
+                    "Could not load cluster topology data. Some "
+                    "node-specific diagnostics will be skipped."
+                )
+            except IOError as e:
+                logger.debug(
+                    "Failed to read the cluster topology "
+                    "file at '%s'. Error: %s",
                     topo_path,
                     e,
+                )
+                logger.warning(
+                    "Could not load cluster topology data. Some "
+                    "node-specific diagnostics will be skipped."
                 )
 
         try:
@@ -81,14 +91,21 @@ class ResultsViewer:
 
         except FileNotFoundError as e:
             logger.error(
-                "Bill of Health file not found at %s: %s", self.boh_path, e
+                "The Bill of Health results file could not "
+                "be found at '%s'. Ensure "
+                "the diagnostics run completed successfully. Error: %s",
+                self.boh_path,
+                e,
             )
             raise ex.BillOfHealthNotFoundException(
                 f"Bill of Health file not found at {self.boh_path}: {e}"
             ) from e
         except Exception as e:
             logger.error(
-                "Error parsing Bill of Health from %s: %s", self.boh_path, e
+                "Failed to parse the Bill of Health results "
+                "file at '%s'. Error: %s",
+                self.boh_path,
+                e,
             )
             raise ex.BillOfHealthLoadException(
                 f"Error parsing Bill of Health from {self.boh_path}: {e}"

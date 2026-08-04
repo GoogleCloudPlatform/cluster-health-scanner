@@ -467,7 +467,7 @@ podAntiAffinity:
         if test_type == "nccl-pairwise":
             if not all_nodes or len(all_nodes) < 3:
                 logger.warning(
-                    f"nccl-pairwise test requires at least 3 nodes, but only {len(all_nodes)} were provided. Skipping test generation."
+                    f"The 'nccl-pairwise' diagnostic requires a minimum of 3 nodes, but only {len(all_nodes)} are available. Skipping this test."
                 )
                 return []
 
@@ -584,7 +584,12 @@ podAntiAffinity:
                     break
             return "\n".join(lines[start_idx:])
         except Exception as e:
-            logger.error(f"Failed to read benchmark config {path}: {e}")
+            logger.debug(
+                "Failed to read internal benchmark config at %s: %s", path, e
+            )
+            logger.error(
+                "An internal error prevented the benchmark from initializing. Please try running the command again."
+            )
             raise e
 
     @staticmethod
