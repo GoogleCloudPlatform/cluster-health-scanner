@@ -28,6 +28,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import warnings
 from contextlib import contextmanager
 from typing import Any
 
@@ -57,6 +58,10 @@ from chs.cli import list_formatting
 from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
+
+warnings.filterwarnings(
+    "ignore", category=RuntimeWarning, module="google_crc32c"
+)
 
 logger = logging.getLogger(__name__)
 
