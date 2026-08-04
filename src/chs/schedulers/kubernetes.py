@@ -92,6 +92,7 @@ class KubernetesScheduler(BaseScheduler):
         self.nodepools_arg = nodepools
         self._resolved_nodes: list[str] | None = None
         self._resolved_raw_nodes: list[str] | None = None
+        self._resolved_node_resources: list[dict] | None = None
         self._tpu_slice_data: TpuSliceData | None = None
         self.workspace_config_dir: str | None = None
         self.kueue_supported: bool = False
@@ -430,6 +431,91 @@ class KubernetesScheduler(BaseScheduler):
 
         return busy_nodes
 
+    def _fetch_raw_node_resources(self) -> list[dict]:
+        """Fetches raw node resource dictionaries from kubectl."""
+        if self._resolved_node_resources is not None:
+            return self._resolved_node_resources
+
+        try:
+            args = ["get", "nodes"]
+            if self.nodepools_arg:
+                pools = [
+                    p.strip()
+                    for p in self.nodepools_arg.split(",")
+                    if p.strip()
+                ]
+                if pools:
+                    pools_str = ",".join(pools)
+                    args.extend(
+                        [
+                            "-l",
+                            f"cloud.google.com/gke-nodepool in ({pools_str})",
+                        ]
+                    )
+            else:
+                args.extend(["-l", "cloud.google.com/gke-nodepool!=system"])
+            args.extend(["-o", "json"])
+
+            kubectl_nodes_output = self._run_kubectl(args)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise ChsSchedulerException(
+                f"Failed to get nodes to determine availability: {e}"
+            ) from e
+
+        try:
+            nodes_manifest = json.loads(kubectl_nodes_output)
+            if not isinstance(nodes_manifest, dict):
+                self._resolved_node_resources = []
+                return []
+
+            node_resources = (
+                (nodes_manifest.get("items") or [])
+                if nodes_manifest.get("kind") == "List"
+                else [nodes_manifest]
+            )
+            self._resolved_node_resources = [
+                n for n in node_resources if isinstance(n, dict)
+            ]
+            return self._resolved_node_resources
+        except json.JSONDecodeError as e:
+            raise ChsSchedulerException(
+                f"Failed to parse node JSON during availability check: {e}"
+            ) from e
+
+    def _classify_unhealthy_nodes(
+        self,
+        node_resources: list[dict],
+    ) -> set[str]:
+        """Filters node resources for NotReady or unschedulable nodes."""
+        unhealthy_node_names = set()
+        for node_resource in node_resources:
+            node_name = (node_resource.get("metadata") or {}).get("name")
+            if not node_name:
+                continue
+
+            if (node_resource.get("spec") or {}).get("unschedulable", False):
+                unhealthy_node_names.add(node_name)
+                continue
+
+            conditions = (node_resource.get("status") or {}).get(
+                "conditions"
+            ) or []
+            is_ready = any(
+                isinstance(c, dict)
+                and c.get("type") == "Ready"
+                and c.get("status") == "True"
+                for c in conditions
+            )
+            if not is_ready:
+                unhealthy_node_names.add(node_name)
+
+        return unhealthy_node_names
+
+    def _get_not_ready_nodes(self) -> set[str]:
+        """Returns nodes that are NotReady, Unknown, or Cordoned."""
+        node_resources = self._fetch_raw_node_resources()
+        return self._classify_unhealthy_nodes(node_resources)
+
     def _purge_unhealthy_pool_data(
         self,
         unhealthy_nodepool: str,
@@ -590,29 +676,18 @@ class KubernetesScheduler(BaseScheduler):
                 ) from e
         else:
             try:
-                args = ["get", "nodes"]
-                if self.nodepools_arg:
-                    pools = [
-                        p.strip()
-                        for p in self.nodepools_arg.split(",")
-                        if p.strip()
-                    ]
-                    if pools:
-                        pools_str = ",".join(pools)
-                        args.extend(
-                            [
-                                "-l",
-                                "cloud.google.com/gke-nodepool in "
-                                f"({pools_str})",
-                            ]
-                        )
-                else:
-                    args.extend(["-l", "cloud.google.com/gke-nodepool!=system"])
-                args.extend(["-o", "jsonpath={.items[*].metadata.name}"])
-                output = self._run_kubectl(args)
-                raw_nodes = [n for n in output.split() if n]
+                node_resources = self._fetch_raw_node_resources()
+                raw_nodes = [
+                    res.get("metadata", {}).get("name")
+                    for res in node_resources
+                    if (res.get("metadata") or {}).get("name")
+                ]
                 logger.debug("Resolved raw nodes: %s", raw_nodes)
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            except (
+                subprocess.CalledProcessError,
+                FileNotFoundError,
+                ChsSchedulerException,
+            ) as e:
                 logger.warning(
                     "Failed to automatically discover nodes using kubectl: %s",
                     e,
@@ -633,6 +708,8 @@ class KubernetesScheduler(BaseScheduler):
 
         topology = self._get_tpu_slices()
         busy_nodes = self._get_busy_nodes()
+        not_ready_nodes = self._get_not_ready_nodes()
+        excluded_nodes = busy_nodes.union(not_ready_nodes)
 
         gpu_nodes = set()
         requested_tpu_slices = defaultdict(set)
@@ -654,27 +731,44 @@ class KubernetesScheduler(BaseScheduler):
 
         valid_nodes = []
         if gpu_nodes:
-            busy_gpus = gpu_nodes.intersection(busy_nodes)
-            if busy_gpus:
+            excluded_gpus = gpu_nodes.intersection(excluded_nodes)
+            if excluded_gpus:
                 logger.info(
-                    "Found %d busy GPU node(s). They will be skipped.",
-                    len(busy_gpus),
+                    "Found %d busy or unavailable GPU node(s). "
+                    "They will be skipped.",
+                    len(excluded_gpus),
                 )
 
-            valid_nodes.extend(gpu_nodes - busy_nodes)
+            valid_nodes.extend(
+                [
+                    node
+                    for node in raw_nodes
+                    if node in gpu_nodes and node not in excluded_nodes
+                ]
+            )
 
         for pool_name, requested_slice_nodes in requested_tpu_slices.items():
             expected_slice_nodes = set(topology.pools[pool_name])
 
-            busy_in_slice = list(expected_slice_nodes.intersection(busy_nodes))
+            excluded_in_slice = list(
+                expected_slice_nodes.intersection(excluded_nodes)
+            )
 
-            if busy_in_slice:
+            if excluded_in_slice:
+                if len(excluded_in_slice) > 3:
+                    formatted_nodes = (
+                        f"{', '.join(excluded_in_slice[:3])} and "
+                        f"{len(excluded_in_slice) - 3} others"
+                    )
+                else:
+                    formatted_nodes = ", ".join(excluded_in_slice)
+
                 logger.warning(
                     "Skipping TPU slice '%s': TPU tests require the entire "
-                    "slice to be idle, but the following node(s) are currently "
-                    "busy: %s",
+                    "slice to be available and idle, but the following node(s) "
+                    "are currently busy or unavailable: %s",
                     pool_name,
-                    ", ".join(busy_in_slice),
+                    formatted_nodes,
                 )
             else:
                 valid_nodes.extend(expected_slice_nodes)

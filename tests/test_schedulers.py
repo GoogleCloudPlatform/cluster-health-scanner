@@ -240,13 +240,22 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(scheduler.nodepools_arg, "pool-1")
 
     @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
         return_value=set(),
     )
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_get_nodes_under_test(
-        self, mock_run_kubectl, mock_tpu_slices, mock_busy, mock_logger
+        self,
+        mock_run_kubectl,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
     ):
         """Test get_nodes_under_test returns parsed nodes."""
         mock_tpu_slices.return_value = TpuSliceData(
@@ -258,6 +267,180 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertCountEqual(
             scheduler.get_nodes_under_test(), ["node1", "node2"]
         )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_not_ready_nodes(self, mock_run_kubectl, mock_logger):
+        """Test _get_not_ready_nodes identifies NotReady and Cordoned nodes."""
+        scheduler = KubernetesScheduler()
+
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {
+                    "metadata": {"name": "ready-node"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                },
+                {
+                    "metadata": {"name": "not-ready-node"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "False"}]
+                    },
+                },
+                {
+                    "metadata": {"name": "unknown-node"},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "Unknown"}]
+                    },
+                },
+                {
+                    "metadata": {"name": "cordoned-node"},
+                    "spec": {"unschedulable": True},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                },
+                {
+                    "metadata": {"name": "empty-conditions-node"},
+                    "status": {"conditions": []},
+                },
+                {
+                    "metadata": {"name": "null-status-node"},
+                    "status": None,
+                    "spec": None,
+                },
+            ],
+        }
+        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+
+        not_ready = scheduler._get_not_ready_nodes()
+
+        self.assertEqual(
+            not_ready,
+            {
+                "not-ready-node",
+                "unknown-node",
+                "cordoned-node",
+                "empty-conditions-node",
+                "null-status-node",
+            },
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_not_ready_nodes_with_nodepools(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """Test _get_not_ready_nodes sends nodepools filter to kubectl."""
+        scheduler = KubernetesScheduler(nodepools="pool1,pool2")
+        mock_run_kubectl.return_value = json.dumps({"items": []})
+
+        scheduler._get_not_ready_nodes()
+
+        mock_run_kubectl.assert_called_once_with(
+            [
+                "get",
+                "nodes",
+                "-l",
+                "cloud.google.com/gke-nodepool in (pool1,pool2)",
+                "-o",
+                "json",
+            ]
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_not_ready_nodes_list_kind_null_items(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """Test List kind with null items in _get_not_ready_nodes."""
+        scheduler = KubernetesScheduler()
+        mock_run_kubectl.return_value = json.dumps(
+            {"kind": "List", "items": None}
+        )
+
+        not_ready = scheduler._get_not_ready_nodes()
+
+        self.assertEqual(not_ready, set())
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_fetch_raw_node_resources(self, mock_run_kubectl, mock_logger):
+        """Test _fetch_raw_node_resources parses kubectl json."""
+        scheduler = KubernetesScheduler()
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [{"metadata": {"name": "node1"}}],
+        }
+        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+
+        resources = scheduler._fetch_raw_node_resources()
+
+        self.assertEqual(resources, [{"metadata": {"name": "node1"}}])
+
+    def test_classify_unhealthy_nodes(self, mock_logger):
+        """Test _classify_unhealthy_nodes filters unschedulable nodes."""
+        scheduler = KubernetesScheduler()
+        node_resources = [
+            {
+                "metadata": {"name": "ready-node"},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {"name": "not-ready-node"},
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "False"}]
+                },
+            },
+            {
+                "metadata": {"name": "cordoned-node"},
+                "spec": {"unschedulable": True},
+            },
+        ]
+
+        unhealthy = scheduler._classify_unhealthy_nodes(node_resources)
+
+        self.assertEqual(unhealthy, {"not-ready-node", "cordoned-node"})
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_not_ready_nodes_invalid_json(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """Test _get_not_ready_nodes raises exception on invalid JSON."""
+        scheduler = KubernetesScheduler()
+        mock_run_kubectl.return_value = "invalid-json"
+
+        with self.assertRaises(ChsSchedulerException):
+            scheduler._get_not_ready_nodes()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value={"node2"},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_nodes_under_test_tpu_slice_not_ready(
+        self,
+        mock_run_kubectl,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
+    ):
+        """Test TPU slice is dropped if any node in slice is NotReady."""
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={"pool1": ["node1", "node2"]},
+            node_to_pool={"node1": "pool1", "node2": "pool1"},
+            pool_to_topology={"pool1": "2x2"},
+        )
+        scheduler = KubernetesScheduler(nodes="node1")
+
+        valid_nodes = scheduler.get_nodes_under_test()
+
+        self.assertEqual(valid_nodes, [])
+        mock_logger.warning.assert_called_once()
 
     @mock.patch("subprocess.run")
     def test_resolve_raw_nodes_empty(self, mock_run, mock_logger):
@@ -273,7 +456,15 @@ class TestKubernetesScheduler(unittest.TestCase):
         scheduler = KubernetesScheduler(
             nodepools="pool-1",
         )
-        mock_run.return_value.stdout = "node-1 node-2"
+        mock_run.return_value.stdout = json.dumps(
+            {
+                "kind": "List",
+                "items": [
+                    {"metadata": {"name": "node-1"}},
+                    {"metadata": {"name": "node-2"}},
+                ],
+            }
+        )
 
         nodes = scheduler.resolve_raw_nodes()
 
@@ -713,7 +904,10 @@ ramble:
                         "labels": {
                             "cloud.google.com/gce-topology-block": "block1"
                         },
-                    }
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
                 },
                 {
                     "metadata": {
@@ -721,7 +915,10 @@ ramble:
                         "labels": {
                             "cloud.google.com/gce-topology-block": "block2"
                         },
-                    }
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
                 },
             ],
         }
@@ -743,14 +940,22 @@ ramble:
         mock_nodes_json = {
             "kind": "List",
             "items": [
-                {"metadata": {"name": "node1", "labels": {}}},
+                {
+                    "metadata": {"name": "node1", "labels": {}},
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
+                },
                 {
                     "metadata": {
                         "name": "node2",
                         "labels": {
                             "cloud.google.com/gce-topology-block": "block2"
                         },
-                    }
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}]
+                    },
                 },
             ],
         }
