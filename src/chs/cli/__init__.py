@@ -421,8 +421,9 @@ def _validate_cli_args(
 
     Args:
       suite: Suite name, or None.
-      tests: Comma-separated list of tests, or None.
-      nodes: Comma-separated list of individual nodes, or None.
+      tests: Comma-separated list (or multiple flags) of tests, or None.
+      nodes: Comma-separated list (or multiple flags) of individual nodes,
+             or None.
       nodelists: Slurm node list pattern, or None.
       nodepools: Kubernetes node pools, or None.
       partitions: Slurm partitions, or None.
@@ -467,7 +468,7 @@ def _validate_run_args(
       scheduler: Name of the scheduler.
       scheduler_obj: Resolved scheduler instance.
       detected_machine_types: List of detected machine types.
-      tests: Comma-separated list of tests, or None.
+      tests: Comma-separated list (or multiple flags) of tests, or None.
 
     Raises:
       ex.ChsValidationError: If validation fails.
@@ -962,14 +963,41 @@ def safe_cancel_action(
         "chs list --help)."
     ),
 )
+@help_command_text.style_cli_docstring
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
     """Cluster Health Scanner (CHS) Tool.
 
-    **TL;DR:** To run a standard health check on your cluster immediately,
-    simply type:
-        chs run
+    A command-line utility for executing diagnostic and benchmark tests across
+    accelerator clusters (Kubernetes or Slurm) to evaluate their health.
+
+    \b
+    TL;DR: To get started, configure a pre-existing GCS bucket and run a health
+    check:
+        chs configure storage gcs <bucket-name>
+        chs run --nodepools <nodepool-name>
+
+    \b
+    Examples:
+      # First, configure a pre-existing GCS storage bucket to store results
+      chs configure storage gcs <bucket-name>
+
+    \b
+      # Start a diagnostic run on specific Kubernetes nodepools
+      chs run --nodepools=pool-1,pool-2
+
+    \b
+      # View the interactive health report summary for a specific run
+      chs results
+
+    \b
+      # List all tests and suites available for execution
+      chs list
+
+    \b
+      # Cancel an ongoing run and clean up resources
+      chs cancel
     """
     ctx.ensure_object(dict)
     ctx.obj["app_data"] = ChsAppData()
@@ -1050,6 +1078,7 @@ def list_suites(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
 )
 @click.option(
     "--machine-type",
+    metavar="MACHINE_TYPE",
     help="Filter tests by machine type",
     callback=validators.validate_non_empty_string,
 )
@@ -1295,6 +1324,7 @@ def _handle_previous_run(
 @click.option(
     "--suite",
     "-s",
+    metavar="SUITE_NAME",
     help=help_command_text.get_suite_help(),
     callback=validators.validate_non_empty_string,
 )
@@ -1302,15 +1332,17 @@ def _handle_previous_run(
     "--tests",
     "-t",
     multiple=True,
+    metavar="TEST_LIST",
     help=help_command_text.get_tests_help(),
     callback=validators.validate_non_empty_string,
 )
 @click.option(
     "--nodes",
     multiple=True,
+    metavar="NODE_LIST",
     help=(
-        "Comma-separated list of individual nodes to run the tests on (e.g., "
-        "node-1,node-2).\n\n"
+        "Comma-separated list (or multiple flags) of individual nodes to run "
+        "the tests on (e.g., --nodes=node1,node2, -n node1 -n node2).\n\n"
         f"{click.style('Note:', fg='yellow', bold=True)} Individual nodes are "
         "NOT supported for TPUs. Please use --nodepools instead."
         "\n\n "
@@ -1320,6 +1352,7 @@ def _handle_previous_run(
 @click.option(
     "--nodelists",
     multiple=True,
+    metavar="NODE_PATTERN_LIST",
     help=(
         "Slurm nodelist pattern representing the nodes to target (e.g., "
         "node-[1-3],node-[4-5]).\n\n"
@@ -1331,8 +1364,10 @@ def _handle_previous_run(
 @click.option(
     "--nodepools",
     multiple=True,
+    metavar="NODEPOOL_LIST",
     help=(
-        "Comma-separated list of Kubernetes node pools to target.\n\n"
+        "Comma-separated list (or multiple flags) of Kubernetes node pools to "
+        "target.\n\n"
         "This is the recommended and required way to target TPU resources."
         "\n\n "
     ),
@@ -1341,8 +1376,10 @@ def _handle_previous_run(
 @click.option(
     "--partitions",
     multiple=True,
+    metavar="PARTITION_LIST",
     help=(
-        "Comma-separated list of Slurm partitions to run the tests on.\n\n"
+        "Comma-separated list (or multiple flags) of Slurm partitions to run "
+        "the tests on.\n\n"
         "The system will resolve all active nodes under these partitions."
         "\n\n "
     ),
@@ -1385,8 +1422,8 @@ def run(
 
     Submits a set of diagnostic or benchmark tests (or a predefined suite)
     to run across your selected Kubernetes or Slurm nodes. It creates
-    isolated workspaces, executes the jobs, and generates a unified
-    Bill of Health.
+    isolated workspaces, executes the jobs, generates a unified
+    interactive health report summary, and provides a path or link to it.
 
     Note: We only support targeting resources of a single machine type. Mixed
     hardware targets within a single run are not currently supported.
@@ -1897,7 +1934,7 @@ def results(
     obj,
     run_id: str | None,
 ) -> None:
-    """Show Bill of Health results for a run.
+    """Display interactive health report summary for a run in the terminal.
 
     If no run_id is provided, you will be prompted to select one.
     """

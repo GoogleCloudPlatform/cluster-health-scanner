@@ -79,7 +79,8 @@ def get_tests_help() -> str:
     gpu = ", ".join(utils.tests.get_tests_by_accelerator_type("gpu"))
     tpu = ", ".join(utils.tests.get_tests_by_accelerator_type("tpu"))
     return (
-        "Comma-separated list of individual hardware or network benchmarks "
+        "Comma-separated list (or multiple flags) of individual hardware or "
+        "network benchmarks "
         "to run. Use this flag if you want to selectively run specific "
         "workloads rather than a full suite.\n\n"
         f"Supported GPU benchmarks:\n{gpu}\n\n"
@@ -93,5 +94,14 @@ def style_run_docstring(func):
     if func.__doc__:
         func.__doc__ = func.__doc__.replace(
             "Note:", click.style("Note:", fg="yellow", bold=True)
+        )
+    return func
+
+
+def style_cli_docstring(func):
+    """Decorator to style 'TL;DR:' in the cli docstring for help."""
+    if func.__doc__:
+        func.__doc__ = func.__doc__.replace(
+            "TL;DR:", click.style("TL;DR:", fg="yellow", bold=True)
         )
     return func
