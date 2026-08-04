@@ -32,7 +32,7 @@ tpu7x-standard-4t:
   tpu-network-diagnostics:
     type: min
     thresholds:
-      bandwidth: 150.0
+      bandwidth: 160.0
   tpu-info:
     type: scalar
     thresholds:
