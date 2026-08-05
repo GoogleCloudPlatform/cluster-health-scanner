@@ -149,17 +149,15 @@ class Chs(ExecutableApplication):
                     slurm_configs = yaml.load(f) or {}
                 self._deep_merge(configs, slurm_configs)
 
-        tests_raw = self.variables.get("tests", [])
-        tests_expanded = self.expander.expand_var(tests_raw, typed=True)
-
-        if not tests_expanded:
+        tests_str = self.expander.expand_var_name("tests", typed=True)
+        if not tests_str:
             logger.warn(
                 f"No tests defined for {self.name}. Skipping experiments generation."
             )
             return
 
         try:
-            tests_config = parse_tests_config(tests_expanded)
+            tests_config = parse_tests_config(tests_str)
         except Exception as e:
             logger.error(
                 f"Failed to parse the test suite configuration file. Error: {e}"
