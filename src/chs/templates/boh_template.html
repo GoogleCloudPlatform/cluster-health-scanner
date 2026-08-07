@@ -899,7 +899,19 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
       }
 
       initDropdowns();
-      filterNodeInsights();
+      let hasAnyBreach = false;
+      if (data.node_insights) {
+        hasAnyBreach = data.node_insights.some(node =>
+          node.has_threshold_breach ||
+          (node.tests && node.tests.some(t => isBreachStatus(t.status_str)))
+        );
+      }
+
+      if (data.node_insights && data.node_insights.length > 0 && !hasAnyBreach) {
+        setStatusFilter('all');
+      } else {
+        filterNodeInsights();
+      }
       renderPotentialErrors();
     }
 
