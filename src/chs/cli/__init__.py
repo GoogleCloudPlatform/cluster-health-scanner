@@ -1290,7 +1290,7 @@ def _handle_previous_run(
                 "Parallel CHS runs are not supported. "
                 f"Attaching to the existing run ID: {latest_run_id}. "
                 f"To start a new run, terminate the current "
-                "one using: {cleanup_cmd}."
+                "one using `chs cancel`."
             )
             _analyze_action(app_data, latest_run_id)
             return RunExecutionResult(
@@ -1532,13 +1532,6 @@ def run(
             scheduler, scheduler_obj, detected_machine_types, tests
         )
 
-        nodes_under_test = scheduler_obj.get_nodes_under_test()
-
-        if not nodes_under_test:
-            raise ex.NoNodesProvidedException(
-                "No valid nodes remain available for testing."
-            )
-
         machine_type = detected_machine_types[0]
 
         deadline = resources.DEFAULT_DEADLINE
@@ -1666,6 +1659,15 @@ def run(
     )
     if attach_result:
         return attach_result
+
+    with theme.get_progress_spinner(
+        f"[{theme.CHS_HEADER_STYLE}]Identifying idle nodes for testing..."
+    ):
+        nodes_under_test = scheduler_obj.get_nodes_under_test()
+    if not nodes_under_test:
+        raise ex.NoNodesProvidedException(
+            "No valid nodes remain available for testing."
+        )
 
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
     full_cluster_name = scheduler_obj.get_cluster_name()

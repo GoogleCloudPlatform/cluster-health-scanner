@@ -1072,6 +1072,7 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(result.return_value.workspace_name, "latest_run")
         self.assertEqual(result.return_value.suite, "suite1")
+        self.mock_scheduler.get_nodes_under_test.assert_not_called()
 
     @mock.patch("chs.cli.cancel_action")
     @mock.patch("chs.cli._analyze_action")
@@ -1082,6 +1083,7 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.get_latest_run_id.side_effect = None
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = {"submission_complete": False}
+        self.mock_scheduler.has_no_failed_jobs.return_value = True
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         mock_default_dir = "/mocked/workspaces"
         self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
@@ -1095,6 +1097,7 @@ class TestCli(unittest.TestCase):
 
         mock_cancel_action.assert_called_once_with("slurm")
         self.mock_rm_instance.execute_experiments.assert_called_once()
+        self.mock_scheduler.get_nodes_under_test.assert_called_once()
 
     @mock.patch("chs.cli.cancel_action")
     @mock.patch("chs.cli._analyze_action")
