@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ramble.appkit import *
-from test_helper import TestHelper
 from copy import deepcopy
 import logging
 import sys
@@ -29,6 +27,8 @@ config_dir = (
 )
 sys.path.append(config_dir)
 
+from test_helper import TestHelper
+from ramble.appkit import *
 
 logger = logging.getLogger(__name__)
 
