@@ -1290,7 +1290,7 @@ def _handle_previous_run(
                 "Parallel CHS runs are not supported. "
                 f"Attaching to the existing run ID: {latest_run_id}. "
                 f"To start a new run, terminate the current "
-                "one using: {cleanup_cmd}."
+                "one using `chs cancel`."
             )
             _analyze_action(app_data, latest_run_id)
             return RunExecutionResult(
