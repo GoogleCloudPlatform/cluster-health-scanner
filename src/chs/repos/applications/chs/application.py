@@ -27,8 +27,8 @@ config_dir = (
 )
 sys.path.append(config_dir)
 
-from test_helper import TestHelper
-from ramble.appkit import *
+from test_helper import TestHelper  # isort: skip # noqa: E402
+from ramble.appkit import *  # isort: skip # noqa: E402, F403
 
 logger = logging.getLogger(__name__)
 
