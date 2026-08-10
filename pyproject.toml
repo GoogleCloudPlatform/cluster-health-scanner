@@ -27,6 +27,7 @@ test = [
     "pytest",
     "pytest-mock",
     "pyyaml",
+    "coverage",
 ]
 
 [project.scripts]
@@ -38,6 +39,13 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "chs" = ["**/*.yaml", "**/*.tpl", "**/*.html", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+
+[tool.coverage.run]
+source = ["chs"]
+omit = [
+    "*_pb2.py",
+    "src/chs/protos/*",
+]
 
 [tool.ruff]
 exclude = [
