@@ -22,10 +22,6 @@ suites:
   - name: dcgm
     variables:
       diag_level: [2]
-  - name: tpu-gemm
-    workloads: [check]
-    variables:
-      timeout: 180
   - name: gemm
     workloads: [check]
   - name: nccl-single-node
@@ -36,6 +32,10 @@ suites:
   - name: tpu-info
     variables:
       timeout: 120
+  - name: tpu-gemm
+    workloads: [check]
+    variables:
+      timeout: 180
   - name: tpu-hbm
     variables:
       timeout: 300
@@ -66,6 +66,7 @@ suites:
     variables:
       begin_message_size: 256M
       end_message_size: 8G
+  - name: gemm
   - name: tpu-info
     variables:
       timeout: 120
@@ -75,17 +76,16 @@ suites:
   - name: tpu-gemm
     variables:
       timeout: 180
-  - name: gemm
-  - name: tpu-host-device
-    variables:
-      timeout: 600
   - name: tpu-collectives
     workloads: [psum]
     variables:
       timeout: 240
+  - name: tpu-compute-stress
+    variables:
+      timeout: 360
+  - name: tpu-hbm-stress
+    variables:
+      timeout: 360
   - name: tpu-network-stress
     variables:
       timeout: 360
-    trigger_condition:
-      DEGRADED: [tpu-collectives]
-      ERROR: [tpu-collectives]

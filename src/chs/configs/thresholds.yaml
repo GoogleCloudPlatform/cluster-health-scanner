@@ -32,11 +32,11 @@ tpu7x-standard-4t:
   tpu-compute-stress:
     type: min
     thresholds:
-      performance: 100.0
+      performance: 915.0
   tpu-hbm-stress:
     type: min
     thresholds:
-      bandwidth: 100.0
+      bandwidth: 6430.0
   tpu-network-stress:
     type: min
     thresholds:
@@ -125,11 +125,11 @@ ct6e-standard-4t:
   tpu-compute-stress:
     type: min
     thresholds:
-      performance: 100.0
+      performance: 685.0
   tpu-hbm-stress:
     type: min
     thresholds:
-      bandwidth: 100.0
+      bandwidth: 1150.0
   tpu-network-stress:
     type: min
     thresholds:
