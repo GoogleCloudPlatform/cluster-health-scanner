@@ -19,13 +19,12 @@ import logging
 import os
 from typing import Any
 
-import yaml
 
 from chs.core.plugin_manager import PluginManager
 from chs.core.summary_aggregator import aggregate_boh_summary
 from chs.plugins.utils.validation_analyzer import extract_validation_data
 from chs.protos import bill_of_health_pb2 as pb
-from chs.utils.suites import get_all_suites_details
+from chs.utils.config import load_yaml_config
 from chs.utils.tests import get_all_supported_tests_details
 
 DEFAULT_TEMPLATE_PATH = os.path.join(
@@ -43,46 +42,18 @@ class HtmlReportGenerator:
 
     def _extract_tier2_mappings(self) -> dict[str, list[str]]:
         """Extracts tier1-to-tier2 test mappings."""
-        tier2_mappings: dict[str, list[str]] = {}
         try:
-            for suite_config in get_all_suites_details():
-                s_name = "unknown"
-                try:
-                    s_name = suite_config.get("name", "unknown")
-                    for test_config in suite_config.get("tests", []):
-                        trigger_condition = test_config.get("trigger_condition")
-                        if not trigger_condition:
-                            continue
-
-                        tier2_test_name = test_config.get("name")
-                        for conditions in trigger_condition.values():
-                            for tier1_test_name in conditions:
-                                tier1_canonical = tier1_test_name.lower()
-                                tier2_canonical = tier2_test_name.lower()
-                                tier2_list = tier2_mappings.setdefault(
-                                    tier1_canonical, []
-                                )
-                                if tier2_canonical not in tier2_list:
-                                    tier2_list.append(tier2_canonical)
-                except (
-                    FileNotFoundError,
-                    yaml.YAMLError,
-                    TypeError,
-                    AttributeError,
-                ) as e:
-                    logger.debug(
-                        "Failed to parse suite config for %s: %s",
-                        s_name,
-                        e,
-                        exc_info=True,
-                    )
-                    continue
+            tiering_config = load_yaml_config("tiering.yaml")
+            raw_tiering = tiering_config.get("tiering", {})
+            return {
+                k.lower(): [v.lower() for v in vals]
+                for k, vals in raw_tiering.items()
+            }
         except Exception as e:
             logger.debug(
                 "Failed to safely extract tier2_mappings: %s", e, exc_info=True
             )
-
-        return tier2_mappings
+            return {}
 
     def generate_report_data(
         self,
