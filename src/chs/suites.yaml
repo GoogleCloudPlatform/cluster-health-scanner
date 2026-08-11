@@ -83,7 +83,7 @@ suites:
     workloads: [psum]
     variables:
       timeout: 240
-  - name: tpu-network-diagnostics
+  - name: tpu-network-stress
     variables:
       timeout: 360
     trigger_condition:

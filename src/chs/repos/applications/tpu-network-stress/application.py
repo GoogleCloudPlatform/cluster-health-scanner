@@ -21,28 +21,28 @@ _APP_DIR = os.path.dirname(
     os.path.abspath(inspect.getfile(inspect.currentframe()))
 )
 
-with open(os.path.join(_APP_DIR, "tpu_network_diagnostics.py"), "r") as f:
-    _NETWORK_DIAGNOSTICS_SCRIPT = f.read().strip()
+with open(os.path.join(_APP_DIR, "tpu_network_stress.py"), "r") as f:
+    _NETWORK_STRESS_SCRIPT = f.read().strip()
 
 # Base64 encode the script to bypass Ramble's template parser which would otherwise
 # try to evaluate Python's `{}` dicts/f-strings as Ramble variables. It also avoids
 # shell character escaping issues during injection.
-_B64_SCRIPT = base64.b64encode(
-    _NETWORK_DIAGNOSTICS_SCRIPT.encode("utf-8")
-).decode("utf-8")
+_B64_SCRIPT = base64.b64encode(_NETWORK_STRESS_SCRIPT.encode("utf-8")).decode(
+    "utf-8"
+)
 
 
-class TpuNetworkDiagnostics(ExecutableApplication):
+class TpuNetworkStress(ExecutableApplication):
     """An application to run the check tpu ici network using device to device data transfer."""
 
-    name = "tpu-network-diagnostics"
+    name = "tpu-network-stress"
     maintainers("bytetwin")
-    tags("diagnostics", "tpu", "network")
+    tags("stress", "tpu", "network")
 
     variable(
         "payload_size_mb",
         default="1024",
-        description="Payload size in MB for the network diagnostic test.",
+        description="Payload size in MB for the network stress test.",
     )
     variable(
         "num_iters",
@@ -53,13 +53,13 @@ class TpuNetworkDiagnostics(ExecutableApplication):
     executable(
         "execute",
         template=[
-            f"echo '{_B64_SCRIPT}' | base64 -d > tpu_network_diagnostics.py",
-            "PAYLOAD_SIZE_MB={payload_size_mb} NUM_ITERATIONS={num_iters} python3 tpu_network_diagnostics.py",
+            f"echo '{_B64_SCRIPT}' | base64 -d > tpu_network_stress.py",
+            "PAYLOAD_SIZE_MB={payload_size_mb} NUM_ITERATIONS={num_iters} python3 tpu_network_stress.py",
         ],
         use_mpi=False,
     )
 
-    workload("diagnostic", executables=["execute"])
+    workload("stress", executables=["execute"])
 
     figure_of_merit_context(
         "host_axis",
@@ -68,7 +68,7 @@ class TpuNetworkDiagnostics(ExecutableApplication):
     )
 
     figure_of_merit(
-        "Bandwidth",
+        "bandwidth",
         fom_regex=r".*Host: .* \| Axis: [XYZ] \| (?P<bandwidth>[0-9.]+) GB/s.*",
         group_name="bandwidth",
         units="GB/s",

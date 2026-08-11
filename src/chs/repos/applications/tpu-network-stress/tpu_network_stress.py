@@ -18,6 +18,13 @@ import logging
 import functools
 import collections
 
+init_args = (
+    " --tpu_link_up_check_timeout=15s"
+    " --megascale_error_reporter_abort_on_hang=true"
+)
+os.environ["LIBTPU_INIT_ARGS"] = (
+    os.environ.get("LIBTPU_INIT_ARGS", "") + init_args
+)
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
@@ -30,7 +37,8 @@ logging.basicConfig(
 
 PAYLOAD_SIZE = int(os.environ.get("PAYLOAD_SIZE_MB", 1024)) * 1024 * 1024
 NUM_ITERATIONS_WARMUP = 5
-NUM_ITERATIONS_MEASURE = int(os.environ.get("NUM_ITERATIONS", 1000))
+# MUST be an even number to ensure the payload remains the same after the pair-wise transfer bounces.
+NUM_ITERATIONS_MEASURE = 1000
 
 
 def calculate_bandwidth(payload_nbytes, num_cores_per_chip, duration):
@@ -62,13 +70,13 @@ def build_permutation_pairs(axis_size, is_odd_iteration, mesh_shape):
 
 
 @functools.lru_cache(maxsize=None)
-def get_jitted_swap(perm_list, active_axis, num_iterations, global_mesh):
+def get_jitted_swap(perm_list, active_axis, global_mesh):
     @functools.partial(
         jax.jit,
-        in_shardings=NamedSharding(global_mesh, PartitionSpec()),
+        in_shardings=(NamedSharding(global_mesh, PartitionSpec()), None),
         out_shardings=NamedSharding(global_mesh, PartitionSpec()),
     )
-    def _swap(local_payload):
+    def _swap(local_payload, num_iterations):
         def _shard_map_swap(val):
             val = jax.lax.pcast(val, (active_axis,), to="varying")
 
@@ -76,7 +84,7 @@ def get_jitted_swap(perm_list, active_axis, num_iterations, global_mesh):
                 swapped = jax.lax.ppermute(
                     v, axis_name=active_axis, perm=perm_list
                 )
-                return swapped ^ jnp.array(1, dtype=jnp.int8)
+                return swapped
 
             return jax.lax.fori_loop(0, num_iterations, body_fn, val)
 
@@ -93,10 +101,8 @@ def get_jitted_swap(perm_list, active_axis, num_iterations, global_mesh):
 
 
 def run_swap(payload, perm_list, active_axis, num_iterations, global_mesh):
-    jitted_swap = get_jitted_swap(
-        perm_list, active_axis, num_iterations, global_mesh
-    )
-    return jitted_swap(payload)
+    jitted_swap = get_jitted_swap(tuple(perm_list), active_axis, global_mesh)
+    return jitted_swap(payload, jnp.int32(num_iterations))
 
 
 def test_permutation_group(payload, perm_list, axis_name, global_mesh):
@@ -109,7 +115,7 @@ def test_permutation_group(payload, perm_list, axis_name, global_mesh):
             break
 
     warmup = run_swap(
-        payload, tuple(perm_list), axis_name, NUM_ITERATIONS_WARMUP, global_mesh
+        payload, perm_list, axis_name, NUM_ITERATIONS_WARMUP, global_mesh
     )
     warmup.block_until_ready()
 
@@ -121,7 +127,7 @@ def test_permutation_group(payload, perm_list, axis_name, global_mesh):
     start_time = time.time()
     payload = run_swap(
         payload,
-        tuple(perm_list),
+        perm_list,
         axis_name,
         NUM_ITERATIONS_MEASURE,
         global_mesh,
@@ -150,10 +156,6 @@ def test_permutation_group(payload, perm_list, axis_name, global_mesh):
         local_payload = np.asarray(shard.data)
         local_orig = np.asarray(orig_shards[d.id])
 
-        # For odd NUM_ITERATIONS_MEASURE, the received data would be finally XORed with 1
-        if NUM_ITERATIONS_MEASURE % 2 != 0:
-            local_orig = local_orig ^ np.int8(1)
-
         if not np.array_equal(local_payload, local_orig):
             diff_bytes = np.sum(local_payload != local_orig)
             logging.error(
@@ -171,7 +173,7 @@ def test_permutation_group(payload, perm_list, axis_name, global_mesh):
 
 
 def main():
-    logging.info("Starting TPU ICI diagnostic script...")
+    logging.info("Starting TPU ICI stress script...")
     logging.info(
         f"PAYLOAD_SIZE={PAYLOAD_SIZE} NUM_ITERATIONS_MEASURE={NUM_ITERATIONS_MEASURE}"
     )
@@ -180,15 +182,17 @@ def main():
     local_devices = jax.local_devices()
 
     node_name = os.environ.get("MY_NODE_NAME", "")
-    logging.info(
-        f"JAX auto-initialized successfully. process_index={jax.process_index()}, total_processes={jax.process_count()}, node_name={node_name}, devices={len(devices)}, local_devices={len(local_devices)}"
-    )
 
     if not devices:
         logging.error(
             "XlaRuntimeError: No TPU devices found by JAX. Please check the TPU driver and hardware."
         )
         raise ValueError("No TPU devices found by JAX")
+
+    logging.info(f"NODE:{node_name} EVENT:INIT_START")
+    logging.info(
+        f"Process {jax.process_index()} on {node_name} | Local Devices: {len(local_devices)} | Total Devices: {len(devices)}"
+    )
 
     shape_x = max(d.coords[0] for d in devices) + 1
     shape_y = max(d.coords[1] for d in devices) + 1
@@ -220,24 +224,25 @@ def main():
 
     global_mesh = Mesh(devices_4d, axis_names=("x", "y", "z", "core"))
     sharding = NamedSharding(global_mesh, PartitionSpec())
+    global_seed = 42
+    local_data_list = []
 
-    key = jax.random.PRNGKey(42)
+    for d in local_devices:
+        unique_device_seed = global_seed + d.id
+        key = jax.random.PRNGKey(unique_device_seed)
 
-    # Payload Tiling: Generate a small 1MB high-entropy block, then tile it.
-    # This avoids XLA PRNG state-splitting OOMs during compilation.
-    chunk_size = 1024 * 1024
-    small_entropy = jax.random.randint(
-        key, (chunk_size,), minval=-128, maxval=127, dtype=jnp.int8
-    )
-    repeats = max(1, PAYLOAD_SIZE // chunk_size)
-    local_data = jnp.tile(small_entropy, repeats)
+        # Payload Tiling: Generate a small 1MB high-entropy block, then tile it.
+        # This avoids XLA PRNG state-splitting OOMs during compilation.
+        chunk_size = 1024 * 1024
+        small_entropy = jax.random.randint(
+            key, (chunk_size,), minval=-128, maxval=127, dtype=jnp.int8
+        )
+        repeats = max(1, PAYLOAD_SIZE // chunk_size)
+        device_data = jnp.tile(small_entropy, repeats)
+        local_data_list.append(jax.device_put(device_data, d))
 
-    # Place a copy of the payload explicitly on each local device
-    local_arrays = [jax.device_put(local_data, d) for d in local_devices]
-
-    # Construct the global sharded array without triggering multihost verification
     payload = jax.make_array_from_single_device_arrays(
-        local_data.shape, sharding, local_arrays
+        local_data_list[0].shape, sharding, local_data_list
     )
     payload.block_until_ready()
 

@@ -29,7 +29,15 @@ default:
 
 
 tpu7x-standard-4t:
-  tpu-network-diagnostics:
+  tpu-compute-stress:
+    type: min
+    thresholds:
+      performance: 100.0
+  tpu-hbm-stress:
+    type: min
+    thresholds:
+      bandwidth: 100.0
+  tpu-network-stress:
     type: min
     thresholds:
       bandwidth: 160.0
@@ -114,7 +122,15 @@ tpu7x-standard-4t:
             workload_name: "all_to_all"
 
 ct6e-standard-4t:
-  tpu-network-diagnostics:
+  tpu-compute-stress:
+    type: min
+    thresholds:
+      performance: 100.0
+  tpu-hbm-stress:
+    type: min
+    thresholds:
+      bandwidth: 100.0
+  tpu-network-stress:
     type: min
     thresholds:
       bandwidth: 150.0

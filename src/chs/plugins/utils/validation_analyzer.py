@@ -153,6 +153,9 @@ def extract_validation_data(
         for res in group:
             target_str = rendering.format_nodes(res.target_resources)
             for metric in res.metrics:
+                metric_target = target_str
+                if hasattr(metric, "metadata") and "context" in metric.metadata:
+                    metric_target = metric.metadata["context"]
                 if not metric.HasField("validation_criteria"):
                     continue
 
@@ -172,7 +175,7 @@ def extract_validation_data(
 
                 rows.append(
                     ValidationRowData(
-                        target=target_str,
+                        target=metric_target,
                         target_nodes=rendering.extract_node_names(
                             res.target_resources
                         ),

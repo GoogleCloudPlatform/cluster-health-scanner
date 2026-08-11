@@ -21,8 +21,8 @@ from chs.plugins.tpu_collectives.extractor import TpuCollectivesExtractor
 from chs.plugins.tpu_gemm.extractor import TpuGemmExtractor
 from chs.plugins.tpu_hbm.extractor import TpuHbmExtractor
 from chs.plugins.tpu_host_device.extractor import TpuHostDeviceExtractor
-from chs.plugins.tpu_network_diagnostics.extractor import (
-    TpuNetworkDiagnosticsExtractor,
+from chs.plugins.tpu_network_stress.extractor import (
+    TpuNetworkStressExtractor,
 )
 from chs.protos import bill_of_health_pb2 as pb
 
@@ -82,11 +82,11 @@ def test_tpu_collectives_extractor():
     assert extractor.get_required_contexts(ctxs) == ctxs
 
 
-def test_tpu_network_diagnostics_extractor():
-    extractor = TpuNetworkDiagnosticsExtractor()
+def test_tpu_network_stress_extractor():
+    extractor = TpuNetworkStressExtractor()
     assert extractor.get_fom_aliases() == {"bandwidth": "Bandwidth"}
 
-    res = pb.TestResult(test_name="tpu-network-diagnostics")
+    res = pb.TestResult(test_name="tpu-network-stress")
     m1 = res.metrics.add(key="Bandwidth")
     m1.value.number_value = 100.0
     m1.metadata.fields["context"].string_value = "node-1 Axis-0"

@@ -228,9 +228,27 @@ tests:
         machine_type: ct6e-standard-4t
 
 
-  - name: tpu-network-diagnostics
+  - name: tpu-network-stress
     category: "Network & Collectives"
-    description: "Point-to-point network bandwidth diagnostics"
+    description: "Intense point-to-point network stress test for TPU interconnects"
+    platforms:
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
+
+  - name: tpu-compute-stress
+    category: "TPU Diagnostics"
+    description: "Maximum matrix multiplication stress test for TPU compute cores"
+    platforms:
+      - scheduler: kubernetes
+        machine_type: tpu7x-standard-4t
+      - scheduler: kubernetes
+        machine_type: ct6e-standard-4t
+
+  - name: tpu-hbm-stress
+    category: "TPU Diagnostics"
+    description: "Heavy synthetic load testing High Bandwidth Memory (HBM) stability"
     platforms:
       - scheduler: kubernetes
         machine_type: tpu7x-standard-4t

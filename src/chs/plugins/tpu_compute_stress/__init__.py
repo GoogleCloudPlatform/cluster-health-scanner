@@ -13,18 +13,18 @@
 # limitations under the License.
 
 from chs.core.plugin_base import TestPlugin
-from .extractor import TpuNetworkDiagnosticsExtractor
-from .renderer import TpuNetworkDiagnosticsRenderer
+from .extractor import TpuComputeStressExtractor
+from .renderer import TpuComputeStressRenderer
 
 
-class TpuNetworkDiagnosticsPlugin(
-    TpuNetworkDiagnosticsRenderer, TpuNetworkDiagnosticsExtractor, TestPlugin
+class TpuComputeStressPlugin(
+    TpuComputeStressRenderer, TpuComputeStressExtractor, TestPlugin
 ):
     def creates_per_node_results(self) -> bool:
         return True
 
 
 __chs_plugin__ = {
-    "test_name": "tpu-network-diagnostics",
-    "plugin": TpuNetworkDiagnosticsPlugin,
+    "test_name": "tpu-compute-stress",
+    "plugin": TpuComputeStressPlugin,
 }

@@ -676,7 +676,7 @@ tpu7x-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       mpi_command: ""
-  tpu-network-diagnostics:
+  tpu-network-stress:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
@@ -733,6 +733,24 @@ tpu7x-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       mpi_command: ""
+  tpu-compute-stress:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-hbm-stress:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
 ct6e-standard-4t:
   variables:
     cores_per_chip: 1
@@ -758,7 +776,7 @@ ct6e-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       mpi_command: ""
-  tpu-network-diagnostics:
+  tpu-network-stress:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
@@ -807,6 +825,24 @@ ct6e-standard-4t:
       n_nodes: 1
       mpi_command: ""
   tpu-collectives-single-node:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-compute-stress:
+    modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
+    variables:
+      jobset_template: jobset_standard.yaml.tpl
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:latest
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+      mpi_command: ""
+  tpu-hbm-stress:
     modifiers: [{name: "generic-error-detector"}, {name: "tpu-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl

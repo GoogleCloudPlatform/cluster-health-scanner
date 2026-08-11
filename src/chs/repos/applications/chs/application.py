@@ -151,7 +151,7 @@ class Chs(ExecutableApplication):
 
         tests_str = self.expander.expand_var_name("tests", typed=True)
         if not tests_str:
-            logger.warn(
+            logger.warning(
                 f"No tests defined for {self.name}. Skipping experiments generation."
             )
             return
@@ -439,19 +439,47 @@ class Chs(ExecutableApplication):
                     self.experiment_set.render_chained_experiments(
                         application_name, "local", context
                     )
-            elif test.name == "tpu-network-diagnostics":
-                application_name = "tpu-network-diagnostics"
+            elif test.name == "tpu-network-stress":
+                application_name = "tpu-network-stress"
                 experiment_name = f"{base_prefix}-{test.name}"
 
                 local_vars = deepcopy(test_vars)
                 local_vars["job_name"] = experiment_name
 
-                contexts = TestHelper.tpu_network_diagnostics_test(
+                contexts = TestHelper.tpu_network_stress_test(
                     local_vars, experiment_name, deepcopy(configs)
                 )
                 for context in contexts:
                     self.experiment_set.render_chained_experiments(
-                        application_name, "diagnostic", context
+                        application_name, "stress", context
+                    )
+            elif test.name == "tpu-compute-stress":
+                application_name = "tpu-compute-stress"
+                experiment_name = f"{base_prefix}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                contexts = TestHelper.tpu_compute_stress_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                for context in contexts:
+                    self.experiment_set.render_chained_experiments(
+                        application_name, "stress", context
+                    )
+            elif test.name == "tpu-hbm-stress":
+                application_name = "tpu-hbm-stress"
+                experiment_name = f"{base_prefix}-{test.name}"
+
+                local_vars = deepcopy(test_vars)
+                local_vars["job_name"] = experiment_name
+
+                contexts = TestHelper.tpu_hbm_stress_test(
+                    local_vars, experiment_name, deepcopy(configs)
+                )
+                for context in contexts:
+                    self.experiment_set.render_chained_experiments(
+                        application_name, "stress", context
                     )
             else:
-                logger.warn(f"Unknown test {test.name} requested. Skipping.")
+                logger.warning(f"Unknown test {test.name} requested. Skipping.")

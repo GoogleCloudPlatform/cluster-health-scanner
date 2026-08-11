@@ -25,8 +25,8 @@ from chs.plugins.tpu_collectives.renderer import TpuCollectivesRenderer
 from chs.plugins.tpu_gemm.renderer import TpuGemmRenderer
 from chs.plugins.tpu_hbm.renderer import TpuHbmRenderer
 from chs.plugins.tpu_host_device.renderer import TpuHostDeviceRenderer
-from chs.plugins.tpu_network_diagnostics.renderer import (
-    TpuNetworkDiagnosticsRenderer,
+from chs.plugins.tpu_network_stress.renderer import (
+    TpuNetworkStressRenderer,
 )
 from chs.protos import bill_of_health_pb2 as pb
 
@@ -163,18 +163,18 @@ def test_tpu_host_device_renderer_get_detail_data():
     assert report.tables[0].rows[0]["h2d"] == "15.60"
 
 
-def test_tpu_network_diagnostics_renderer_get_detail_data():
-    renderer = TpuNetworkDiagnosticsRenderer()
+def test_tpu_network_stress_renderer_get_detail_data():
+    renderer = TpuNetworkStressRenderer()
     assert renderer.get_detail_data([]) is None
 
-    res = pb.TestResult(test_name="tpu-network-diagnostics", test_level="check")
+    res = pb.TestResult(test_name="tpu-network-stress", test_level="check")
     m = res.metrics.add(key="Bandwidth")
     m.value.number_value = 80.0
     m.metadata.fields["context"].string_value = "node-1 Axis-0"
 
     report = renderer.get_detail_data([res])
     assert report is not None
-    assert report.test_name == "tpu-network-diagnostics"
+    assert report.test_name == "tpu-network-stress"
     assert len(report.tables) == 1
     assert report.tables[0].rows[0]["node"] == "node-1"
     assert report.tables[0].rows[0]["bandwidth"] == "80.00"
