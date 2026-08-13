@@ -269,6 +269,53 @@ class TestKubernetesScheduler(unittest.TestCase):
         )
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_is_node_busy_true(self, mock_run_kubectl, mock_logger):
+        """Test _is_node_busy returns True for nodes with TPU/GPU requests."""
+        scheduler = KubernetesScheduler()
+        # Header + 1 row with TPU request
+        mock_run_kubectl.return_value = (
+            "NODE PHASE CREQ CLIM IREQ ILIM\n"
+            "node1 Running map[google.com/tpu:4] <none> <none> <none>\n"
+        )
+        self.assertTrue(scheduler._is_node_busy("node1"))
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_is_node_busy_false(self, mock_run_kubectl, mock_logger):
+        """Test _is_node_busy returns False if no accelerator pods exist."""
+        scheduler = KubernetesScheduler()
+        # Header + 1 row with CPU request
+        mock_run_kubectl.return_value = (
+            "NODE PHASE CREQ CLIM IREQ ILIM\n"
+            "node1 Running map[cpu:4] <none> <none> <none>\n"
+        )
+        self.assertFalse(scheduler._is_node_busy("node1"))
+
+    @mock.patch("time.sleep", return_value=None)
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_is_node_busy_error_retries(
+        self, mock_run_kubectl, mock_sleep, mock_logger
+    ):
+        """Test _is_node_busy raises exception after kubectl fails."""
+        scheduler = KubernetesScheduler()
+        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
+            1, "kubectl"
+        )
+        with self.assertRaises(ChsSchedulerException):
+            scheduler._is_node_busy("node1")
+        self.assertEqual(mock_run_kubectl.call_count, 3)
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._is_node_busy")
+    def test_get_busy_nodes(self, mock_is_node_busy, mock_logger):
+        """Test _get_busy_nodes batches calls and returns busy nodes."""
+        scheduler = KubernetesScheduler()
+        mock_is_node_busy.side_effect = lambda n: n == "node2"
+        target_nodes = ["node1", "node2", "node3"]
+
+        busy_nodes = scheduler._get_busy_nodes(target_nodes)
+        self.assertEqual(busy_nodes, {"node2"})
+        self.assertEqual(mock_is_node_busy.call_count, 3)
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_get_not_ready_nodes(self, mock_run_kubectl, mock_logger):
         """Test _get_not_ready_nodes identifies NotReady and Cordoned nodes."""
         scheduler = KubernetesScheduler()

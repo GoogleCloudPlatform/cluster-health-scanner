@@ -22,11 +22,13 @@ import logging
 import os
 import re
 import yaml
+import random
 
 
 import subprocess
 from typing import Any
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from chs.schedulers.base import BaseScheduler
@@ -42,6 +44,10 @@ from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
 from chs.constants import CHS_NAMESPACE
+
+_BUSY_NODES_BATCH_SIZE = 32
+_BUSY_NODES_MAX_RETRIES = 3
+_MAX_NODES_UNDER_TEST = 500
 
 
 @dataclass
@@ -414,39 +420,89 @@ class KubernetesScheduler(BaseScheduler):
             )
             return [], []
 
-    def _get_busy_nodes(self) -> set[str]:
+    def _is_node_busy(self, node_name: str) -> bool:
+        """Helper method to determine if a specific node is busy."""
+        args = [
+            "get",
+            "pods",
+            "-A",
+            "--field-selector",
+            f"spec.nodeName={node_name},status.phase!=Succeeded,status.phase!=Failed",
+            "-o",
+            "custom-columns=NODE:.spec.nodeName,PHASE:.status.phase,"
+            "CREQ:.spec.containers[*].resources.requests,CLIM:.spec.containers[*].resources.limits,"
+            "IREQ:.spec.initContainers[*].resources.requests,ILIM:.spec.initContainers[*].resources.limits",
+        ]
+
+        for attempt in range(_BUSY_NODES_MAX_RETRIES):
+            try:
+                pod_output = self._run_kubectl(args)
+                break
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as e:
+                if attempt == _BUSY_NODES_MAX_RETRIES - 1:
+                    raise ChsSchedulerException(
+                        "Failed to communicate with API server for "
+                        f"node {node_name} "
+                        f"after {_BUSY_NODES_MAX_RETRIES} attempts. Error: {e}"
+                    ) from e
+
+                # Exponential backoff with jitter to prevent thundering herd
+                backoff = (2**attempt) + random.uniform(0, 1)
+                time.sleep(backoff)
+
+        for pod_output_row in pod_output.splitlines()[1:]:
+            pod_columns = pod_output_row.split()
+            if not pod_columns or len(pod_columns) < 2:
+                continue
+            resources_str = " ".join(pod_columns[2:]).lower()
+            if "gpu" in resources_str or "tpu" in resources_str:
+                return True
+        return False
+
+    def _get_busy_nodes(self, target_nodes: list[str]) -> set[str]:
         """Returns a set of nodes running pods that request accelerators."""
-        try:
-            args = [
-                "get",
-                "pods",
-                "-A",
-                "-o",
-                "custom-columns=NODE:.spec.nodeName,PHASE:.status.phase,"
-                "CREQ:.spec.containers[*].resources.requests,CLIM:.spec.containers[*].resources.limits,"
-                "IREQ:.spec.initContainers[*].resources.requests,ILIM:.spec.initContainers[*].resources.limits",
-            ]
-            pod_output = self._run_kubectl(args)
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if not target_nodes:
+            raise ValueError(
+                "target_nodes cannot be empty when checking for busy nodes."
+            )
+
+        if len(target_nodes) > _MAX_NODES_UNDER_TEST:
             raise ChsSchedulerException(
-                f"Failed to get pods to determine busy nodes: {e}"
-            ) from e
+                f"Targeting {len(target_nodes)} nodes exceeds the maximum "
+                f"allowed batch size of {_MAX_NODES_UNDER_TEST}. "
+                f"Please narrow the test scope to less than "
+                f"{_MAX_NODES_UNDER_TEST} nodes at a time."
+            )
 
         busy_nodes = set()
-        for line in pod_output.splitlines()[1:]:
-            parts = line.split()
-            if not parts or len(parts) < 2:
-                continue
+        with ThreadPoolExecutor(max_workers=_BUSY_NODES_BATCH_SIZE) as executor:
+            node_status_futures = {
+                executor.submit(self._is_node_busy, target_node): target_node
+                for target_node in target_nodes
+            }
 
-            node_name = parts[0]
-            phase = parts[1]
+            try:
+                for node_status_future in as_completed(node_status_futures):
+                    target_node = node_status_futures[node_status_future]
+                    if node_status_future.result():
+                        busy_nodes.add(target_node)
+            except Exception as e:
+                logger.error(
+                    "Failed to communicate with the Kubernetes API server "
+                    "while determining node availability. Please verify "
+                    "your cluster connection and credentials. "
+                    "Details: %s",
+                    e,
+                )
 
-            if phase in ("Succeeded", "Failed"):
-                continue
+                for future in node_status_futures:
+                    future.cancel()
 
-            resources_str = " ".join(parts[2:]).lower()
-            if "gpu" in resources_str or "tpu" in resources_str:
-                busy_nodes.add(node_name)
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
 
         return busy_nodes
 
@@ -557,23 +613,9 @@ class KubernetesScheduler(BaseScheduler):
             return self._tpu_slice_data
 
         try:
-            node_data = json.loads(
-                self._run_kubectl(
-                    [
-                        "get",
-                        "nodes",
-                        "-l",
-                        "cloud.google.com/gke-tpu-accelerator",
-                        "-o",
-                        "json",
-                    ]
-                )
-            )
-        except (
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            json.JSONDecodeError,
-        ) as e:
+            nodes = self._fetch_raw_node_resources()
+            node_data = {"items": nodes}
+        except Exception as e:
             raise ChsSchedulerException(
                 f"Failed to get node labels for TPU topology: {e}"
             ) from e
@@ -594,8 +636,10 @@ class KubernetesScheduler(BaseScheduler):
 
             labels = node.get("metadata", {}).get("labels", {})
             tpu_type = labels.get("cloud.google.com/gke-tpu-accelerator")
-            if tpu_type:
-                all_tpu_nodes.add(node_name)
+            if not tpu_type:
+                continue
+
+            all_tpu_nodes.add(node_name)
 
             nodepool = labels.get("cloud.google.com/gke-nodepool")
             if not nodepool:
@@ -729,7 +773,7 @@ class KubernetesScheduler(BaseScheduler):
             return []
 
         topology = self._get_tpu_slices()
-        busy_nodes = self._get_busy_nodes()
+        busy_nodes = self._get_busy_nodes(target_nodes=raw_nodes)
         not_ready_nodes = self._get_not_ready_nodes()
         excluded_nodes = busy_nodes.union(not_ready_nodes)
 
