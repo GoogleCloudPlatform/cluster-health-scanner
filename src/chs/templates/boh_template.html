@@ -211,6 +211,24 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
       </div>
     </div>
 
+    <!-- PART 7: Test Descriptions Table -->
+    <div class="glass-card rounded-md p-5 space-y-4 mt-6">
+      <h2 class="text-base font-bold text-slate-900 border-b border-slate-200 pb-2">Test Descriptions</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs text-left text-slate-800 border bg-white rounded shadow-sm">
+          <thead class="bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wider border-b border-slate-200">
+            <tr>
+              <th class="px-4 py-3 w-1/4">Test Name</th>
+              <th class="px-4 py-3">Description</th>
+            </tr>
+          </thead>
+          <tbody id="testDescriptionsTableBody" class="divide-y divide-slate-100 font-mono">
+            <!-- JS populates test descriptions here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -913,6 +931,22 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
         filterNodeInsights();
       }
       renderPotentialErrors();
+
+      // Render test descriptions table
+      const testDescBody = document.getElementById('testDescriptionsTableBody');
+      if (testDescBody && data.test_suite_breakdown) {
+        if (data.test_suite_breakdown.length > 0) {
+          const sortedBreaks = data.test_suite_breakdown.slice().sort((a, b) => (a.display_name || '').localeCompare(b.display_name || ''));
+          testDescBody.innerHTML = sortedBreaks.map(t => `
+            <tr class="hover:bg-slate-50 transition">
+              <td class="px-4 py-3 font-bold text-slate-900 align-top">${escapeHtml(t.display_name)}</td>
+              <td class="px-4 py-3 text-slate-700 font-sans whitespace-pre-wrap leading-relaxed break-words ${t.description ? '' : 'italic text-slate-400'}">${escapeHtml(t.description || 'No description provided')}</td>
+            </tr>
+          `).join('');
+        } else {
+          testDescBody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-slate-500 italic">No test descriptions available.</td></tr>';
+        }
+      }
     }
 
     initPart1();
