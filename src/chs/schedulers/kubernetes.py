@@ -70,9 +70,7 @@ yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
 
-_PARTITION_STATE_REGEX = re.compile(
-    r"cloud\.google\.com/gke-tpu-partition-(.+)-state"
-)
+SUPPORTED_DYNAMIC_SLICE_TOPOLOGY = "4x4x4"
 
 
 class KubernetesScheduler(BaseScheduler):
@@ -651,28 +649,44 @@ class KubernetesScheduler(BaseScheduler):
             topology = labels.get("cloud.google.com/gke-tpu-topology")
 
             if accelerator_mode == "PROVISION_ONLY":
-                matched_shape = None
-                matched_state = None
-                for key, val in labels.items():
-                    m = _PARTITION_STATE_REGEX.match(key)
-                    if m:
-                        matched_shape = m.group(1)
-                        matched_state = val
-                        break
+                state_label = (
+                    "cloud.google.com/gke-tpu-partition-"
+                    f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
+                )
+                matched_state = labels.get(state_label)
 
-                if matched_shape and matched_state == "HEALTHY":
+                if matched_state == "HEALTHY":
                     if nodepool not in unhealthy_pools:
                         tpu_nodepools[nodepool].append(node_name)
                         node_to_nodepool[node_name] = nodepool
-                        pool_to_topology[nodepool] = matched_shape
-                        partition_id = labels.get(
-                            f"cloud.google.com/gke-tpu-partition-{matched_shape}-id"
+                        pool_to_topology[nodepool] = (
+                            SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
                         )
+                        id_label = (
+                            "cloud.google.com/gke-tpu-partition-"
+                            f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
+                        )
+                        partition_id = labels.get(id_label)
                         if partition_id:
                             dynamic_slice_partitions[nodepool] = partition_id
                         if tpu_type:
                             pool_to_accelerator[nodepool] = tpu_type
                 else:
+                    if nodepool not in unhealthy_pools:
+                        if matched_state is None:
+                            logger.warning(
+                                "Skipping nodepool '%s' because the %s "
+                                "topology is unsupported.",
+                                nodepool,
+                                SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+                            )
+                        else:
+                            logger.warning(
+                                "Skipping nodepool '%s' because the %s "
+                                "topology is currently unhealthy.",
+                                nodepool,
+                                SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+                            )
                     unhealthy_pools.add(nodepool)
                     self._purge_unhealthy_pool_data(
                         nodepool,
