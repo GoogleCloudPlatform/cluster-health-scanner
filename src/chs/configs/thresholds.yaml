@@ -225,6 +225,18 @@ ct6e-standard-4t:
           conditions:
             tpu_topology: "8x16"
             workload_name: "all_to_all"
+        - value: 290.0
+          conditions:
+            tpu_topology: "16x16"
+            workload_name: "all_gather"
+        - value: 260.0
+          conditions:
+            tpu_topology: "16x16"
+            workload_name: "psum"
+        - value: 44.0
+          conditions:
+            tpu_topology: "16x16"
+            workload_name: "all_to_all"
 
 a3-ultragpu-8g:
   nccl-cluster:
