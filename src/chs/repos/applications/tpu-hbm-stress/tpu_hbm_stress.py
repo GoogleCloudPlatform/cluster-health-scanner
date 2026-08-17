@@ -121,10 +121,6 @@ def main():
     devices_per_chip = max(1, len(local_devices) // 4)
     chip_bandwidth = gb_per_second * devices_per_chip
 
-    logging.info(
-        f"NODE:{node_name} EVENT:MEASURE_END DURATION:{duration:.2f}s BANDWIDTH_GBPS:{chip_bandwidth:.2f}"
-    )
-
     checksums = jax.device_get(hbm_checksum(outputs))
     golden_checksum = checksums[0]
     is_valid = True
@@ -139,6 +135,9 @@ def main():
             f"NODE:{node_name} EVENT:STRESS_FAIL. TPU devices failed SDC check"
         )
     else:
+        logging.info(
+            f"NODE:{node_name} EVENT:MEASURE_END DURATION:{duration:.2f}s BANDWIDTH_GBPS:{chip_bandwidth:.2f}"
+        )
         logging.info(f"NODE:{node_name} EVENT:STRESS_PASS")
 
 

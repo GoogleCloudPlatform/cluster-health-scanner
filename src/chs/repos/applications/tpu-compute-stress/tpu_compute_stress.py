@@ -122,10 +122,6 @@ def main():
 
     baseline = cpu_outputs[0]
 
-    logging.info(
-        f"NODE:{node_name} EVENT:MEASURE_END DURATION:{duration:.2f}s TFLOPs: {tflops_per_core:.2f}"
-    )
-
     for i in range(len(local_devices)):
         if not np.array_equal(cpu_outputs[i], baseline):
             sdc_failed = True
@@ -136,6 +132,9 @@ def main():
             f"NODE:{node_name} EVENT:STRESS_FAIL. SDC (Bit flips) Detected"
         )
     else:
+        logging.info(
+            f"NODE:{node_name} EVENT:MEASURE_END DURATION:{duration:.2f}s TFLOPs: {tflops_per_core:.2f}"
+        )
         logging.info(f"NODE:{node_name} EVENT:STRESS_PASS")
 
 

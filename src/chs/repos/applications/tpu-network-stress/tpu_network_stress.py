@@ -300,7 +300,7 @@ def main():
     for host, axis, bw, is_valid in all_results:
         if not is_valid:
             logging.error(
-                f"Host: {host} | Axis: {axis.upper()} | {bw:.2f} GB/s | FAILED: SDC (Bit flips) Detected"
+                f"Host: {host} | Axis: {axis.upper()} | FAILED: SDC (Bit flips) Detected"
             )
         else:
             logging.info(f"Host: {host} | Axis: {axis.upper()} | {bw:.2f} GB/s")
