@@ -135,17 +135,19 @@ class HtmlReportGenerator:
 
         executed_tests = {tr.test_name.lower() for tr in boh.test_results}
 
-        test_descriptions = {}
+        test_long_descriptions = {}
         for t in get_all_supported_tests_details():
-            desc = t.get("description", "")
+            long_desc = t.get("long_description", "") or t.get(
+                "description", ""
+            )
             if t.get("name"):
-                test_descriptions[t["name"]] = desc
+                test_long_descriptions[t["name"]] = long_desc
             if t.get("plugin_name"):
-                test_descriptions[t["plugin_name"]] = desc
+                test_long_descriptions[t["plugin_name"]] = long_desc
 
         test_suite_breakdown = []
         for ts in summary.test_summaries:
-            description = test_descriptions.get(ts.canonical_name, "")
+            long_description = test_long_descriptions.get(ts.canonical_name, "")
             evaluated_nodes = ts.met_threshold + ts.unmet_threshold
             badge_tooltip = None
             if ts.explicit_skip_validation:
@@ -228,7 +230,7 @@ class HtmlReportGenerator:
             test_suite_breakdown.append(
                 {
                     "display_name": ts.display_name,
-                    "description": description,
+                    "long_description": long_description,
                     "ratio_str": ratio_str,
                     "target_criteria": ts.target_criteria,
                     "status_badge": status_badge,

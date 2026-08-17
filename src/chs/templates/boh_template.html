@@ -900,7 +900,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
               <div class="flex items-start justify-between gap-2">
                 <div class="flex items-center gap-1.5 min-w-0">
                   <div class="font-bold text-slate-900 text-sm truncate" title="${item.display_name}">${item.display_name}</div>
-                  ${item.description ? `<span class="relative group/tip inline-flex items-center shrink-0"><span class="cursor-help text-slate-400 hover:text-slate-600 inline-flex items-center justify-center w-4 h-4 rounded-full border border-slate-300 text-[10px] font-bold transition">?</span><span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block w-48 p-2 bg-slate-900/95 text-white text-[11px] font-normal rounded shadow-lg z-50 whitespace-normal leading-snug">${item.description}</span></span>` : ''}
+                  ${item.long_description ? `<span class="relative group/tip inline-flex items-center shrink-0"><span class="cursor-help text-slate-400 hover:text-slate-600 inline-flex items-center justify-center w-4 h-4 rounded-full border border-slate-300 text-[10px] font-bold transition">?</span><span class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block w-64 p-2 bg-slate-900/95 text-white text-[11px] font-normal rounded shadow-lg z-50 whitespace-normal leading-snug">${item.long_description}</span></span>` : ''}
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
                   <span class="shrink-0 inline-block text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${item.badge_style}">
@@ -940,7 +940,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
           testDescBody.innerHTML = sortedBreaks.map(t => `
             <tr class="hover:bg-slate-50 transition">
               <td class="px-4 py-3 font-bold text-slate-900 align-top">${escapeHtml(t.display_name)}</td>
-              <td class="px-4 py-3 text-slate-700 font-sans whitespace-pre-wrap leading-relaxed break-words ${t.description ? '' : 'italic text-slate-400'}">${escapeHtml(t.description || 'No description provided')}</td>
+              <td class="px-4 py-3 text-slate-700 font-sans whitespace-pre-wrap leading-relaxed break-words ${t.long_description ? '' : 'italic text-slate-400'}">${escapeHtml(t.long_description || 'No description provided')}</td>
             </tr>
           `).join('');
         } else {
