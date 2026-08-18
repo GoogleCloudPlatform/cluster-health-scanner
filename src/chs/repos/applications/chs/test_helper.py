@@ -552,12 +552,38 @@ podAntiAffinity:
         ]
 
     @staticmethod
-    def tpu_network_diagnostics_test(variables, experiment_name, configs):
+    def tpu_network_stress_test(variables, experiment_name, configs):
         slice_contexts = TestHelper._prepare_slice_context_dicts(
             variables,
             experiment_name,
             configs,
-            ramble_app_name="tpu-network-diagnostics",
+            ramble_app_name="tpu-network-stress",
+            extra_context={"modifiers": []},
+        )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
+
+    @staticmethod
+    def tpu_compute_stress_test(variables, experiment_name, configs):
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-compute-stress",
+            extra_context={"modifiers": []},
+        )
+        return [
+            create_context_from_dict(name, dct) for name, dct in slice_contexts
+        ]
+
+    @staticmethod
+    def tpu_hbm_stress_test(variables, experiment_name, configs):
+        slice_contexts = TestHelper._prepare_slice_context_dicts(
+            variables,
+            experiment_name,
+            configs,
+            ramble_app_name="tpu-hbm-stress",
             extra_context={"modifiers": []},
         )
         return [

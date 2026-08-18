@@ -275,8 +275,8 @@ ct6e-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       benchmarks_yaml_file: "tpuv6e/gemm_16384_bf16.yaml"
-      container_name: "accelerator-microbenchmarks:latest"
-      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+      container_name: "accelerator-microbenchmarks:1.0.0"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:1.0.0"
       srun_args: "--cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60"
   tpu-hbm:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}, {name: "tpu-error-detector"}]
@@ -289,8 +289,8 @@ ct6e-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       benchmarks_yaml_file: "tpuv6e/hbm_copy_bf16.yaml"
-      container_name: "accelerator-microbenchmarks:latest"
-      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+      container_name: "accelerator-microbenchmarks:1.0.0"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:1.0.0"
       srun_args: "--cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60"
   tpu-host-device:
     modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}, {name: "tpu-error-detector"}]
@@ -303,6 +303,6 @@ ct6e-standard-4t:
       processes_per_node: 1
       n_nodes: 1
       benchmarks_yaml_file: "tpuv6e/host_device.yaml"
-      container_name: "accelerator-microbenchmarks:latest"
-      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:latest"
+      container_name: "accelerator-microbenchmarks:1.0.0"
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:1.0.0"
       srun_args: "--cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60"

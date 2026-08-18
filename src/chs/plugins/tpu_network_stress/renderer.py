@@ -21,8 +21,8 @@ from chs.plugins.utils.rendering import format_nodes, format_val
 from chs.protos import bill_of_health_pb2 as pb
 
 
-class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
-    """Renders details for tpu-network-diagnostics tests."""
+class TpuNetworkStressRenderer(DefaultRenderer):
+    """Renders details for tpu-network-stress tests."""
 
     def get_column_schema(self) -> list[ColumnDef]:
         return [
@@ -33,7 +33,7 @@ class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
     def get_detail_data(
         self, test_results: list[pb.TestResult]
     ) -> PluginDetailReport | None:
-        """Extracts structured network diagnostics detail table data model."""
+        """Extracts structured network stress detail table data model."""
         if not test_results:
             return None
 
@@ -53,7 +53,7 @@ class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
             )
 
         table_model = TableDataModel(
-            title="TPU Network Diagnostics Detail",
+            title="TPU Network Stress Detail",
             headers=self.get_column_schema(),
             rows=rows,
         )
@@ -68,7 +68,7 @@ class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
         )
 
     def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
-        """Renders detail tables for network diagnostic tests per node."""
+        """Renders detail tables for network stress tests per node."""
         report = self.get_detail_data(test_results)
         if not report or not report.tables:
             return Text("No detailed metrics available.", style="yellow")
@@ -107,7 +107,7 @@ class TpuNetworkDiagnosticsRenderer(DefaultRenderer):
                 if not metric.value.HasField("number_value"):
                     continue
 
-                if metric.key not in ("Bandwidth", "Axis Bandwidth"):
+                if metric.key.lower() not in ("bandwidth", "axis bandwidth"):
                     continue
 
                 context_field = metric.metadata.fields.get("context")

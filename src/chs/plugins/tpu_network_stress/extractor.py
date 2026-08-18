@@ -19,12 +19,12 @@ from chs.core.default_plugin.extractor import DefaultExtractor
 from chs.protos import bill_of_health_pb2 as pb
 
 
-class TpuNetworkDiagnosticsExtractor(DefaultExtractor):
+class TpuNetworkStressExtractor(DefaultExtractor):
     """Overrides DefaultExtractor to preserve test naming and contexts."""
 
     def extract_test_info(self, exp: dict[str, Any]) -> tuple[str, str, str]:
         return (
-            "tpu-network-diagnostics",
+            "tpu-network-stress",
             exp.get("workload_name", ""),
             self.get_description(),
         )
@@ -44,7 +44,7 @@ class TpuNetworkDiagnosticsExtractor(DefaultExtractor):
         min_bandwidth_by_node: dict[str, float] = {}
 
         for metric in test_result.metrics:
-            if metric.key == "Bandwidth" and metric.value.HasField(
+            if metric.key.lower() == "bandwidth" and metric.value.HasField(
                 "number_value"
             ):
                 context_name = (

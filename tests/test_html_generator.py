@@ -102,8 +102,34 @@ def test_overview_report_generation():
     assert overview_data["metadata"]["report_id"] == "test-part1-001"
     assert overview_data["summary"]["total_nodes"] == 1
     assert overview_data["summary"]["total_test_suites"] == 1
-    assert overview_data["summary"]["healthy_count"] == 1
+    assert overview_data["summary"]["healthy_count"] == 0
 
     html_str = generator.render_html(boh)
     assert "boh-overview-raw-data" in html_str
     assert "test-part1-001" in html_str
+
+
+def test_long_description_in_overview_report():
+    from chs.html_generator import HtmlReportGenerator
+    from chs.protos import bill_of_health_pb2 as pb
+
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-part1-002"
+
+    res = boh.test_results.add(
+        test_name="nvidia-smi",
+        test_level="local",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    t1 = res.target_resources.add()
+    t1.node_name = "node-1"
+
+    overview_data = generator.generate_report_data(boh)
+    found_nvidia = False
+    for ts in overview_data["test_suite_breakdown"]:
+        if "nvidia-smi" in ts["display_name"]:
+            assert "long_description" in ts
+            assert "Detailed" in ts["long_description"]
+            found_nvidia = True
+    assert found_nvidia

@@ -14,10 +14,25 @@
 
 from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import Any, TypedDict
 
 from chs import resources
 from chs.utils.config import load_yaml_config
+
+
+class TestPlatform(TypedDict, total=False):
+    scheduler: str
+    machine_type: str
+
+
+class TestDetails(TypedDict, total=False):
+    name: str
+    plugin_name: str
+    category: str
+    description: str
+    long_description: str
+    platforms: list[TestPlatform]
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +48,7 @@ def get_all_supported_tests() -> list[str]:
     return [test.get("name") for test in data.get("tests", [])]
 
 
-def get_all_supported_tests_details() -> list[dict[str, Any]]:
+def get_all_supported_tests_details() -> list[TestDetails]:
     """Derives list of all supported test details from tests.yaml."""
     data = _load_tests()
     return data.get("tests", [])

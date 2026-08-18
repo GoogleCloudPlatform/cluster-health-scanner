@@ -29,7 +29,15 @@ default:
 
 
 tpu7x-standard-4t:
-  tpu-network-diagnostics:
+  tpu-compute-stress:
+    type: min
+    thresholds:
+      performance: 915.0
+  tpu-hbm-stress:
+    type: min
+    thresholds:
+      bandwidth: 6430.0
+  tpu-network-stress:
     type: min
     thresholds:
       bandwidth: 160.0
@@ -114,7 +122,15 @@ tpu7x-standard-4t:
             workload_name: "all_to_all"
 
 ct6e-standard-4t:
-  tpu-network-diagnostics:
+  tpu-compute-stress:
+    type: min
+    thresholds:
+      performance: 685.0
+  tpu-hbm-stress:
+    type: min
+    thresholds:
+      bandwidth: 1150.0
+  tpu-network-stress:
     type: min
     thresholds:
       bandwidth: 150.0
@@ -208,6 +224,18 @@ ct6e-standard-4t:
         - value: 40.0
           conditions:
             tpu_topology: "8x16"
+            workload_name: "all_to_all"
+        - value: 290.0
+          conditions:
+            tpu_topology: "16x16"
+            workload_name: "all_gather"
+        - value: 260.0
+          conditions:
+            tpu_topology: "16x16"
+            workload_name: "psum"
+        - value: 44.0
+          conditions:
+            tpu_topology: "16x16"
             workload_name: "all_to_all"
 
 a3-ultragpu-8g:

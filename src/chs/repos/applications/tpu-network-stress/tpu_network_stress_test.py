@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from tpu_network_diagnostics import (
-    build_permutation_pairs,
-    calculate_bandwidth,
-)
-import unittest
+import os
 import sys
+import unittest
 from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.dirname(__file__))
 
 sys.modules["jax"] = MagicMock()
 sys.modules["jax.numpy"] = MagicMock()
@@ -26,8 +25,13 @@ sys.modules["jax.sharding"] = MagicMock()
 sys.modules["jax.experimental"] = MagicMock()
 sys.modules["jax.experimental.multihost_utils"] = MagicMock()
 
+from tpu_network_stress import (
+    build_permutation_pairs,
+    calculate_bandwidth,
+)
 
-class TpuNetworkDiagnosticsTest(unittest.TestCase):
+
+class TpuNetworkStressTest(unittest.TestCase):
     def test_build_permutation_pairs_even_no_wrap(self):
         # 2x2x4 mesh, axis size 4, even pass
         pairs = build_permutation_pairs(4, False, (2, 2, 4))
@@ -82,6 +86,39 @@ class TpuNetworkDiagnosticsTest(unittest.TestCase):
             pairs,
             [(1, 2), (2, 1), (3, 4), (4, 3), (5, 6), (6, 5), (7, 0), (0, 7)],
         )
+
+    def test_libtpu_init_args_set(self):
+        self.assertIn(
+            "--tpu_link_up_check_timeout=15s",
+            os.environ.get("LIBTPU_INIT_ARGS", ""),
+        )
+        self.assertIn(
+            "--megascale_error_reporter_abort_on_hang=true",
+            os.environ.get("LIBTPU_INIT_ARGS", ""),
+        )
+
+    def test_run_swap(self):
+        sys.modules["jax"].numpy.int32.return_value = "mocked_int32"
+        from tpu_network_stress import run_swap, get_jitted_swap
+
+        payload_mock = MagicMock()
+        mesh_mock = MagicMock()
+
+        # We need to test how run_swap interacts with JAX components.
+        # Since get_jitted_swap is lru_cached, we bypass it or patch it?
+        # Because we re-import, it caches the jax.jit mock return.
+
+        # Calling run_swap
+        ret = run_swap(payload_mock, [(0, 1)], "x", 100, mesh_mock)
+
+        # Assert jnp.int32 was called
+        sys.modules["jax"].numpy.int32.assert_called_with(100)
+
+        # Check that get_jitted_swap returned mock was called with payload and mocked_int32
+        # Since jax.jit(...) returns a MagicMock, and get_jitted_swap returns that MagicMock:
+        jitted_swap_mock = get_jitted_swap(((0, 1),), "x", mesh_mock)
+        jitted_swap_mock.assert_called_with(payload_mock, "mocked_int32")
+        self.assertEqual(ret, jitted_swap_mock.return_value)
 
 
 if __name__ == "__main__":

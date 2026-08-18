@@ -22,7 +22,11 @@ import unittest
 import json
 import yaml
 from unittest import mock
-from chs.schedulers.kubernetes import KubernetesScheduler, TpuSliceData
+from chs.schedulers.kubernetes import (
+    KubernetesScheduler,
+    TpuSliceData,
+    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+)
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import detect_scheduler
 from chs.exceptions import ChsSchedulerException
@@ -267,6 +271,53 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertCountEqual(
             scheduler.get_nodes_under_test(), ["node1", "node2"]
         )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_is_node_busy_true(self, mock_run_kubectl, mock_logger):
+        """Test _is_node_busy returns True for nodes with TPU/GPU requests."""
+        scheduler = KubernetesScheduler()
+        # Header + 1 row with TPU request
+        mock_run_kubectl.return_value = (
+            "NODE PHASE CREQ CLIM IREQ ILIM\n"
+            "node1 Running map[google.com/tpu:4] <none> <none> <none>\n"
+        )
+        self.assertTrue(scheduler._is_node_busy("node1"))
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_is_node_busy_false(self, mock_run_kubectl, mock_logger):
+        """Test _is_node_busy returns False if no accelerator pods exist."""
+        scheduler = KubernetesScheduler()
+        # Header + 1 row with CPU request
+        mock_run_kubectl.return_value = (
+            "NODE PHASE CREQ CLIM IREQ ILIM\n"
+            "node1 Running map[cpu:4] <none> <none> <none>\n"
+        )
+        self.assertFalse(scheduler._is_node_busy("node1"))
+
+    @mock.patch("time.sleep", return_value=None)
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_is_node_busy_error_retries(
+        self, mock_run_kubectl, mock_sleep, mock_logger
+    ):
+        """Test _is_node_busy raises exception after kubectl fails."""
+        scheduler = KubernetesScheduler()
+        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
+            1, "kubectl"
+        )
+        with self.assertRaises(ChsSchedulerException):
+            scheduler._is_node_busy("node1")
+        self.assertEqual(mock_run_kubectl.call_count, 3)
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._is_node_busy")
+    def test_get_busy_nodes(self, mock_is_node_busy, mock_logger):
+        """Test _get_busy_nodes batches calls and returns busy nodes."""
+        scheduler = KubernetesScheduler()
+        mock_is_node_busy.side_effect = lambda n: n == "node2"
+        target_nodes = ["node1", "node2", "node3"]
+
+        busy_nodes = scheduler._get_busy_nodes(target_nodes)
+        self.assertEqual(busy_nodes, {"node2"})
+        self.assertEqual(mock_is_node_busy.call_count, 3)
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_get_not_ready_nodes(self, mock_run_kubectl, mock_logger):
@@ -1489,6 +1540,123 @@ ramble:
         self.assertEqual(failed, [])
         mock_kubectl.assert_called_once()
         mock_wait.assert_called_once_with(["pool1"], 300)
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_provision_only_healthy(
+        self, mock_fetch, mock_logger
+    ):
+        """Test topology parsing for healthy PROVISION_ONLY nodepools."""
+        mock_fetch.return_value = [
+            {
+                "metadata": {
+                    "name": "node1",
+                    "labels": {
+                        "cloud.google.com/gke-tpu-accelerator": "tpu-v4",
+                        "cloud.google.com/gke-nodepool": "pool1",
+                        (
+                            "cloud.google.com/" "gke-accelerator-topology-mode"
+                        ): "PROVISION_ONLY",
+                        (
+                            f"cloud.google.com/gke-tpu-partition-"
+                            f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
+                        ): ("HEALTHY"),
+                        (
+                            f"cloud.google.com/gke-tpu-partition-"
+                            f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
+                        ): ("partition1"),
+                    },
+                }
+            }
+        ]
+
+        scheduler = KubernetesScheduler()
+        res = scheduler._get_tpu_slices()
+
+        self.assertEqual(res.pools["pool1"], ["node1"])
+        self.assertEqual(res.node_to_pool["node1"], "pool1")
+        self.assertEqual(
+            res.pool_to_topology["pool1"], SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
+        )
+        self.assertEqual(res.dynamic_slice_partitions["pool1"], "partition1")
+        self.assertEqual(res.pool_to_accelerator["pool1"], "tpu-v4")
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_provision_only_unhealthy(
+        self, mock_fetch, mock_logger
+    ):
+        """Test topology parsing skips unhealthy PROVISION_ONLY nodepools."""
+        mock_fetch.return_value = [
+            {
+                "metadata": {
+                    "name": "node1",
+                    "labels": {
+                        "cloud.google.com/gke-tpu-accelerator": "tpu-v4",
+                        "cloud.google.com/gke-nodepool": "pool1",
+                        (
+                            "cloud.google.com/" "gke-accelerator-topology-mode"
+                        ): "PROVISION_ONLY",
+                        (
+                            f"cloud.google.com/gke-tpu-partition-"
+                            f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
+                        ): ("UNHEALTHY"),
+                    },
+                }
+            }
+        ]
+
+        scheduler = KubernetesScheduler()
+        res = scheduler._get_tpu_slices()
+
+        self.assertNotIn("pool1", res.pools)
+        mock_logger.warning.assert_any_call(
+            (
+                "Skipping nodepool '%s' because the %s "
+                "topology is currently unhealthy."
+            ),
+            "pool1",
+            SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_provision_only_unsupported(
+        self, mock_fetch, mock_logger
+    ):
+        """Test topology parsing skips unsupported PROVISION_ONLY nodepools."""
+        mock_fetch.return_value = [
+            {
+                "metadata": {
+                    "name": "node1",
+                    "labels": {
+                        "cloud.google.com/gke-tpu-accelerator": "tpu-v4",
+                        "cloud.google.com/gke-nodepool": "pool1",
+                        (
+                            "cloud.google.com/" "gke-accelerator-topology-mode"
+                        ): "PROVISION_ONLY",
+                        # Missing the topology state label completely
+                    },
+                }
+            }
+        ]
+
+        scheduler = KubernetesScheduler()
+        res = scheduler._get_tpu_slices()
+
+        self.assertNotIn("pool1", res.pools)
+        mock_logger.warning.assert_any_call(
+            (
+                "Skipping nodepool '%s' because the %s "
+                "topology is unsupported."
+            ),
+            "pool1",
+            SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+        )
 
 
 class TestSchedulerDetection(unittest.TestCase):
