@@ -9,17 +9,17 @@ description = "CHS provides a comprehensive suite of tools for validating the he
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "click",
+    "click>=8.1.0,<9.0.0",
     "ramble @ git+https://github.com/GoogleCloudPlatform/ramble.git@fbe8ae277e411ffc3e87b8069529a223e62c6a9e",  # May 13, 2026
-    "platformdirs",
-    "protobuf",
-    "rich",
-    "questionary",
-    "pre_commit",
-    "google-cloud-storage",
-    "google-cloud-compute",
+    "platformdirs>=3.0.0,<5.0.0",
+    "protobuf>=4.21.0",
+    "rich>=13.0.0",
+    "questionary>=2.0.0,<3.0.0",
+    "pre-commit>=3.5.0",
+    "google-cloud-storage>=2.10.0",
+    "google-cloud-compute>=1.14.0,<2.0.0",
     "pyOpenSSL<24.1.0",
-    "packaging",
+    "packaging>=23.0",
 ]
 
 [project.optional-dependencies]
