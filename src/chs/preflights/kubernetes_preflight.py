@@ -109,8 +109,6 @@ class KubernetesPreflightChecker:
         version = self._extract_version_from_deployment(
             healthy_dep, app_name="jobset"
         )
-        if not version:
-            version = self._get_jobset_version()
 
         if version and not self._is_jobset_version_supported(version):
             raise ChsPreflightException(
@@ -134,6 +132,20 @@ class KubernetesPreflightChecker:
     def _check_jobset_deployment_health(self) -> dict[str, Any]:
         """Verifies that JobSet controller deployment is in Available state."""
         deployments = self._discover_deployments("jobset")
+        if not deployments:
+            raise ChsPreflightException(
+                (
+                    "JobSet CRD is installed, but no JobSet controller "
+                    "deployment could be found using standard "
+                    "labels or in the default 'jobset-system' "
+                    "namespace. If you are using a custom "
+                    "deployment name, please add the required "
+                    "label by running: `kubectl label deployment "
+                    "<your-deployment-name> -n <your-namespace> "
+                    "app.kubernetes.io/name=jobset --overwrite`"
+                )
+            )
+
         healthy_dep = next(
             (dep for dep in deployments if self._is_deployment_healthy(dep)),
             None,
@@ -149,8 +161,9 @@ class KubernetesPreflightChecker:
 
     def _discover_deployments(self, app_name: str) -> list[dict[str, Any]]:
         """Discovers controller deployments cluster-wide using app label."""
+        discovered_deployments = []
         try:
-            output = self._run_kubectl(
+            label_query_result = self._run_kubectl(
                 [
                     "get",
                     "deployment",
@@ -161,14 +174,49 @@ class KubernetesPreflightChecker:
                     "json",
                 ]
             )
-            return json.loads(output).get("items", [])
+            discovered_deployments = json.loads(label_query_result).get(
+                "items", []
+            )
         except (
             subprocess.CalledProcessError,
             json.JSONDecodeError,
             FileNotFoundError,
             subprocess.TimeoutExpired,
-        ):
-            return []
+        ) as e:
+            logger.debug("Label query failed: %s", e)
+
+        if not discovered_deployments:
+            logger.debug(
+                (
+                    "%s deployment not found by label, checking for deployment "  # noqa: E501
+                    "'%s-controller-manager' in namespace '%s-system'"
+                ),
+                app_name.capitalize(),
+                app_name,
+                app_name,
+            )
+            try:
+                namespace_query_result = self._run_kubectl(
+                    [
+                        "get",
+                        "deployment",
+                        "-n",
+                        f"{app_name}-system",
+                        f"{app_name}-controller-manager",
+                        "-o",
+                        "json",
+                    ]
+                )
+                discovered_deployments = [json.loads(namespace_query_result)]
+            except (
+                subprocess.CalledProcessError,
+                json.JSONDecodeError,
+                FileNotFoundError,
+                subprocess.TimeoutExpired,
+            ) as e:
+                logger.debug("Namespace fallback query failed: %s", e)
+
+        return discovered_deployments
 
     def _check_kueue(self, installed_crds: list[str]) -> bool:
         """Checks if Kueue CRD is installed and version is compatible.
@@ -196,10 +244,6 @@ class KubernetesPreflightChecker:
             if version:
                 return self._is_kueue_version_supported(version)
             return True
-
-        version = self._get_kueue_version()
-        if version:
-            return self._is_kueue_version_supported(version)
 
         return True
 
@@ -243,46 +287,6 @@ class KubernetesPreflightChecker:
                 return self._parse_version_string(image_output)
         return None
 
-    def _get_kueue_version(self) -> str | None:
-        """Retrieves Kueue version string from cluster deployment."""
-        logger.debug("Checking version compatibility")
-        try:
-            deployments = self._discover_deployments("kueue")
-            if deployments:
-                healthy_dep = self._get_healthy_kueue_deployment(deployments)
-                if healthy_dep:
-                    return self._extract_version_from_deployment(
-                        healthy_dep, app_name="kueue"
-                    )
-
-            output = self._run_kubectl(
-                [
-                    "get",
-                    "deployment",
-                    "-n",
-                    "kueue-system",
-                    "kueue-controller-manager",
-                    "-o",
-                    "json",
-                ]
-            )
-            if output:
-                try:
-                    dep_json = json.loads(output)
-                    return self._extract_version_from_deployment(
-                        dep_json, app_name="kueue"
-                    )
-                except json.JSONDecodeError:
-                    return self._parse_version_string(output)
-            return None
-        except (
-            subprocess.SubprocessError,
-            FileNotFoundError,
-            ValueError,
-            json.JSONDecodeError,
-        ):
-            return None
-
     def _parse_version_string(self, text: str) -> str | None:
         """Helper to parse SemVer from image or version text."""
         match = re.search(
@@ -310,37 +314,6 @@ class KubernetesPreflightChecker:
                 MIN_JOBSET_VERSION,
             )
             return True
-
-    def _get_jobset_version(self) -> str | None:
-        """Retrieves JobSet version string from cluster deployment."""
-        try:
-            output = self._run_kubectl(
-                [
-                    "get",
-                    "deployment",
-                    "-n",
-                    "jobset-system",
-                    "jobset-controller-manager",
-                    "-o",
-                    "json",
-                ]
-            )
-            if output:
-                try:
-                    dep_json = json.loads(output)
-                    return self._extract_version_from_deployment(
-                        dep_json, app_name="jobset"
-                    )
-                except json.JSONDecodeError:
-                    return self._parse_version_string(output)
-            return None
-        except (
-            subprocess.SubprocessError,
-            FileNotFoundError,
-            ValueError,
-            json.JSONDecodeError,
-        ):
-            return None
 
     def _is_kueue_version_supported(self, version: str) -> bool:
         """Validates if the installed Kueue version is supported."""
