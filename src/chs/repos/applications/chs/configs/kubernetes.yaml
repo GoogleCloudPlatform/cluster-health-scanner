@@ -382,20 +382,35 @@ a4x-highgpu-4g:
         value: arm64
         effect: NoSchedule
     extra_volumes_yaml: |
+      - name: nvidia
+        hostPath:
+          path: /home/kubernetes/bin/nvidia
+      - name: gib
+        hostPath:
+          path: /home/kubernetes/bin/gib
+      - name: imex-channel
+        hostPath:
+          path: /dev/nvidia-caps-imex-channels
       - name: shared-memory
         emptyDir:
           medium: "Memory"
     extra_volume_mounts_yaml: |
+      - name: nvidia
+        mountPath: /usr/local/nvidia
+      - name: gib
+        mountPath: /usr/local/gib
+      - name: imex-channel
+        mountPath: /dev/nvidia-caps-imex-channels
       - name: shared-memory
         mountPath: /dev/shm
     container_resources_yaml: |
       limits:
         nvidia.com/gpu: {gpus_per_node}
+      requests:
+        nvidia.com/gpu: {gpus_per_node}
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
-    claims:
-      - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
         resourceClaimTemplateName: {job_name}-cdc
@@ -419,7 +434,15 @@ a4x-highgpu-4g:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
         NCCL_NET: gIB
+        LD_LIBRARY_PATH: "/usr/local/nvidia/lib64:/usr/local/gib/lib64:/usr/local/gib/lib"
     variables:
+      container_resources_yaml: |
+        limits:
+          nvidia.com/gpu: {gpus_per_node}
+        requests:
+          nvidia.com/gpu: {gpus_per_node}
+        claims:
+        - name: compute-domain-channel
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
       ssh_port: 222
@@ -432,7 +455,7 @@ a4x-highgpu-4g:
           --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
           --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
           -x PATH="{nccl-tests_path}/build:$PATH" \
-          -x {mpi_env_vars}
+          -x {mpi_env_vars} bash -c 'if [ -f /usr/local/gib/scripts/set_nccl_env.sh ]; then source /usr/local/gib/scripts/set_nccl_env.sh; fi; "$@"' --
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
