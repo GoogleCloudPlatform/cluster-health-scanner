@@ -1,8 +1,32 @@
 .git
-.venv
-venv
+*venv*/
 __pycache__
 .pytest_cache
 .ruff_cache
 workspaces/
 *.pyc
+
+# Local build artifacts
+build/
+dist/
+*.egg-info/
+*_pb2.py
+
+# Non-production & developer-only directories
+tests/
+docs/
+scratch/
+examples/
+.agents/
+.gemini/
+
+# Development & build tooling configs
+cloudbuild.yaml
+pytest.ini
+.pre-commit-config.yaml
+.coverage
+
+# Extra developer documentation (Note: README.md is included because pyproject.toml requires it)
+CONTRIBUTING.md
+DEVELOPMENT.md
+RELEASING.md

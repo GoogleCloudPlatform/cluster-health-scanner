@@ -1,6 +1,6 @@
 __pycache__/
 *.py[cod]
-venv/
+*venv*/
 build/
 *.egg-info/
 .pytest_cache/
