@@ -1,4 +1,4 @@
-FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine
+FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:580.0.0-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
