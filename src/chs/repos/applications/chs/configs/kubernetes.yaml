@@ -413,21 +413,6 @@ a4x-highgpu-4g:
           resourceClaimTemplate:
             name: {job_name}-cdc
       ---
-      apiVersion: resource.k8s.io/v1beta1
-      kind: ResourceClaimTemplate
-      metadata:
-        name: {job_name}-cdc
-        namespace: "{kubernetes_namespace}"
-      spec:
-        spec:
-          devices:
-            requests:
-            - name: gpu-channel
-              deviceClassName: compute-domain-default-channel.nvidia.com
-              selectors:
-              - cel:
-                  expression: {cel_filter_expression}
-      ---
   nccl-tests:
     modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
     env_vars:
@@ -554,21 +539,6 @@ a4x-maxgpu-4g-metal:
         channel:
           resourceClaimTemplate:
             name: {job_name}-cdc
-      ---
-      apiVersion: resource.k8s.io/v1beta1
-      kind: ResourceClaimTemplate
-      metadata:
-        name: {job_name}-cdc
-        namespace: "{kubernetes_namespace}"
-      spec:
-        spec:
-          devices:
-            requests:
-            - name: gpu-channel
-              deviceClassName: compute-domain-default-channel.nvidia.com
-              selectors:
-              - cel:
-                  expression: {cel_filter_expression}
       ---
 
   nccl-tests:
