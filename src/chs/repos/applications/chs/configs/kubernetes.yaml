@@ -388,9 +388,6 @@ a4x-highgpu-4g:
       - name: gib
         hostPath:
           path: /home/kubernetes/bin/gib
-      - name: imex-channel
-        hostPath:
-          path: /dev/nvidia-caps-imex-channels
       - name: shared-memory
         emptyDir:
           medium: "Memory"
@@ -399,8 +396,6 @@ a4x-highgpu-4g:
         mountPath: /usr/local/nvidia
       - name: gib
         mountPath: /usr/local/gib
-      - name: imex-channel
-        mountPath: /dev/nvidia-caps-imex-channels
       - name: shared-memory
         mountPath: /dev/shm
     container_resources_yaml: |
@@ -408,6 +403,8 @@ a4x-highgpu-4g:
         nvidia.com/gpu: {gpus_per_node}
       requests:
         nvidia.com/gpu: {gpus_per_node}
+      claims:
+      - name: compute-domain-channel
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
@@ -436,13 +433,6 @@ a4x-highgpu-4g:
         NCCL_NET: gIB
         LD_LIBRARY_PATH: "/usr/local/nvidia/lib64:/usr/local/gib/lib64:/usr/local/gib/lib"
     variables:
-      container_resources_yaml: |
-        limits:
-          nvidia.com/gpu: {gpus_per_node}
-        requests:
-          nvidia.com/gpu: {gpus_per_node}
-        claims:
-        - name: compute-domain-channel
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
       ssh_port: 222
