@@ -549,6 +549,27 @@ class KubernetesScheduler(BaseScheduler):
             self._resolved_node_resources = [
                 n for n in node_resources if isinstance(n, dict)
             ]
+
+            if self.nodepools_arg:
+                requested_pools = {
+                    p.strip()
+                    for p in self.nodepools_arg.split(",")
+                    if p.strip()
+                }
+                found_pools = set()
+                for n in self._resolved_node_resources:
+                    labels = (n.get("metadata") or {}).get("labels") or {}
+                    pool = labels.get("cloud.google.com/gke-nodepool")
+                    if pool:
+                        found_pools.add(pool)
+                missing_pools = requested_pools - found_pools
+                if missing_pools:
+                    missing_str = ", ".join(sorted(missing_pools))
+                    raise ChsValidationError(
+                        "No nodes were found for the following requested "
+                        f"nodepool(s): {missing_str}"
+                    )
+
             return self._resolved_node_resources
         except json.JSONDecodeError as e:
             raise ChsSchedulerException(
