@@ -54,7 +54,38 @@ class TestTestHelper(unittest.TestCase):
         )
         self.assertEqual(headers_dict["-w"], "node1")
         self.assertEqual(headers_dict["--time"], "20")
-        self.assertIn("--deadline", headers_dict)
+        self.assertEqual(headers_dict["--deadline"], "now+4800seconds")
+
+    def test_build_common_sbatch_headers_missing_deadline(self):
+        ctx_vars = {"timeout": 1200}
+        with self.assertRaisesRegex(
+            ValueError, "Invalid deadline value 'None'"
+        ):
+            _TestHelper._build_common_sbatch_headers(ctx_vars, "node1")
+
+    def test_build_common_sbatch_headers_missing_timeout(self):
+        ctx_vars = {"deadline": 3600}
+        with self.assertRaisesRegex(ValueError, "Invalid timeout value 'None'"):
+            _TestHelper._build_common_sbatch_headers(ctx_vars, "node1")
+
+    def test_build_common_sbatch_headers_missing_both(self):
+        ctx_vars = {}
+        with self.assertRaisesRegex(ValueError, "Invalid timeout value 'None'"):
+            _TestHelper._build_common_sbatch_headers(ctx_vars, "node1")
+
+    def test_build_common_sbatch_headers_invalid_deadline(self):
+        ctx_vars = {"timeout": 1200, "deadline": "invalid"}
+        with self.assertRaisesRegex(
+            ValueError, "Invalid deadline value 'invalid'"
+        ):
+            _TestHelper._build_common_sbatch_headers(ctx_vars, "node1")
+
+    def test_build_common_sbatch_headers_invalid_timeout(self):
+        ctx_vars = {"timeout": "invalid", "deadline": 3600}
+        with self.assertRaisesRegex(
+            ValueError, "Invalid timeout value 'invalid'"
+        ):
+            _TestHelper._build_common_sbatch_headers(ctx_vars, "node1")
 
     def test_merge_configs_variables(self):
         context_dict = {"variables": {"a": 1}}
