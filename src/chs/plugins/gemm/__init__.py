@@ -15,11 +15,56 @@
 from chs.core.plugin_base import TestPlugin
 from .extractor import GemmExtractor
 from .renderer import GemmRenderer
+from chs.protos import bill_of_health_pb2 as pb
 
 
 class GemmPlugin(GemmRenderer, GemmExtractor, TestPlugin):
     def get_fom_aliases(self) -> dict[str, str]:
         return {"performance": "Value"}
+
+    def _filter_validation_results(
+        self, test_results: list[pb.TestResult], sorted_nodes: list[str]
+    ) -> list[pb.TestResult]:
+        """Filters validation results to keep only the MEDIAN metric."""
+        if not test_results:
+            return test_results
+
+        filtered_results = []
+        for res in test_results:
+            filtered_result = pb.TestResult()
+            filtered_result.CopyFrom(res)
+
+            median_metrics = [
+                m
+                for m in filtered_result.metrics
+                if m.key == "Value"
+                and m.HasField("metadata")
+                and "context" in m.metadata.fields
+                and m.metadata.fields["context"].string_value == "MEDIAN"
+            ]
+
+            del filtered_result.metrics[:]
+            if median_metrics:
+                filtered_result.metrics.extend(median_metrics)
+
+            if filtered_result.metrics:
+                all_success = all(
+                    m.validation_criteria.result_status
+                    == pb.RESULT_STATUS_SUCCESS
+                    for m in filtered_result.metrics
+                    if m.HasField("validation_criteria")
+                )
+                filtered_result.result_status = (
+                    pb.RESULT_STATUS_SUCCESS
+                    if all_success
+                    else pb.RESULT_STATUS_FAILED
+                )
+            else:
+                filtered_result.result_status = pb.RESULT_STATUS_UNKNOWN
+
+            filtered_results.append(filtered_result)
+
+        return filtered_results
 
 
 __chs_plugin__ = {
