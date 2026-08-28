@@ -130,6 +130,6 @@ def test_long_description_in_overview_report():
     for ts in overview_data["test_suite_breakdown"]:
         if "nvidia-smi" in ts["display_name"]:
             assert "long_description" in ts
-            assert "Detailed" in ts["long_description"]
+            assert "Queries GPU status" in ts["long_description"]
             found_nvidia = True
     assert found_nvidia
