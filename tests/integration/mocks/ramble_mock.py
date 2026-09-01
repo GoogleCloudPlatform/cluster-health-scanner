@@ -77,7 +77,7 @@ def mock_ramble_workloads(output_generator):
                     jobset_name = doc.get("metadata", {}).get("name")
                     for rj in doc.get("spec", {}).get("replicatedJobs", []):
                         job_spec = rj.get("template", {}).get("spec", {})
-                        job_spec["activeDeadlineSeconds"] = 30
+                        job_spec["activeDeadlineSeconds"] = 75
                         pod_template = job_spec.get("template", {})
 
                         if pod_template.get("metadata") is None:
@@ -92,7 +92,7 @@ def mock_ramble_workloads(output_generator):
                         specs.append(pod_template.get("spec", {}))
                 elif doc.get("kind") == "Job":
                     job_spec = doc.get("spec", {})
-                    job_spec["activeDeadlineSeconds"] = 30
+                    job_spec["activeDeadlineSeconds"] = 75
                     specs.append(job_spec.get("template", {}).get("spec", {}))
                 elif doc.get("kind") == "Pod":
                     specs.append(doc.get("spec", {}))
@@ -123,7 +123,9 @@ def mock_ramble_workloads(output_generator):
                             c["command"] = [
                                 "/bin/sh",
                                 "-c",
-                                f"sleep 1 && {final_cmd}",
+                                'MY_NODE_NAME="${MY_NODE_NAME:-'
+                                '$(hostname)}"; '
+                                f"sleep 1; {final_cmd}",
                             ]
                             if "resources" in c:
                                 c["resources"] = {}

@@ -17,7 +17,7 @@ from tests.integration.create_kind_cluster import resolve_config_path
 from tests.integration.mocks.mock_utils import resolve_node_mapping
 
 TPU_HBM_TEMPLATE = (
-    "HOST {node}: Running benchmark with params: 'num_elements': 1024, "
+    "HOST {node}: Running benchmark with params: 'num_elements': {elements}, "
     "'dtype': <class 'jax.numpy.bfloat16'>\n"
     "HOST {node}: bandwidth (median): {bandwidth}\n"
     "HOST {node}: time taken (median): 0.5\n"
@@ -50,12 +50,12 @@ TPU_COLLECTIVES_TEMPLATE = (
 )
 
 TPU_COMPUTE_STRESS_TEMPLATE = (
-    "HOST {node}: NODE: {node} EVENT:MEASURE_END DURATION: 10s "
+    "HOST {node}: NODE:{node} EVENT:MEASURE_END DURATION: 10s "
     "TFLOPs: {performance}\n"
 )
 
 TPU_HBM_STRESS_TEMPLATE = (
-    "HOST {node}: NODE: {node} EVENT:MEASURE_END DURATION: 10s "
+    "HOST {node}: NODE:{node} EVENT:MEASURE_END DURATION: 10s "
     "BANDWIDTH_GBPS:{bandwidth}\n"
 )
 
@@ -112,6 +112,7 @@ MAX = {tflops}
 
 class RambleOutputGenerator:
     HEALTHY_HBM = 5000.0
+    HEALTHY_HBM_ELEMENTS = 2147483648
     HEALTHY_CHIPS = 4
     HEALTHY_TFLOPS = 5000.0
     HEALTHY_GPU_BW = 1000.0
@@ -273,8 +274,7 @@ class RambleOutputGenerator:
         tflops = self.HEALTHY_TFLOPS
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
-            if "Throughput" in metrics:
-                tflops = metrics["Throughput"]
+            tflops = metrics.get("Throughput", tflops)
 
         return TPU_GEMM_TEMPLATE.replace("{tflops}", str(tflops))
 
@@ -292,10 +292,12 @@ class RambleOutputGenerator:
             if "Bandwidth (median)" in metrics:
                 bandwidth = metrics["Bandwidth (median)"]
 
-        return TPU_HBM_TEMPLATE.replace("{bandwidth}", str(bandwidth))
+        return TPU_HBM_TEMPLATE.replace("{bandwidth}", str(bandwidth)).replace(
+            "{elements}", str(self.HEALTHY_HBM_ELEMENTS)
+        )
 
     def populate_tpu_info_logs(self, scenario: dict | None) -> str:
-        chips = self.HEALTHY_CHIPS
+        chips = 8 if "tpu7x" in self.config_path.lower() else self.HEALTHY_CHIPS
         stderr = ""
         if scenario and scenario.get("outcome") == "FAILED":
             stderr = "HOST {node}: " + str(scenario.get("stderr", "Info crash"))
@@ -313,7 +315,8 @@ class RambleOutputGenerator:
                 + "\n"
             )
 
-        bandwidth = 150.0  # Default healthy bandwidth for mock
+        # Default healthy bandwidth for mock (exceeds TPU 7x threshold)
+        bandwidth = 250.0
         time = 2.0  # Default healthy time for mock
 
         if scenario and scenario.get("outcome") == "DEGRADED":
@@ -360,7 +363,9 @@ class RambleOutputGenerator:
                 + "\n"
             )
 
-        bandwidth = self.HEALTHY_HBM
+        bandwidth = (
+            7000.0 if "tpu7x" in self.config_path.lower() else self.HEALTHY_HBM
+        )
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
             if "bandwidth" in metrics or "Bandwidth" in metrics:

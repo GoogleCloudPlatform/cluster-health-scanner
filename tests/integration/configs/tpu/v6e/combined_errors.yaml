@@ -56,4 +56,4 @@ test_scenarios:
   test: tpu-info
   outcome: FAILED
   error_code: TPU_CHIP_INITIALIZATION_ERROR
-  stderr: 'RuntimeError: Unable to initialize TPU device 3: HbmTimeoutError'
+  stderr: 'RuntimeError: Failed to initialize PJRT client: ICI link failure'

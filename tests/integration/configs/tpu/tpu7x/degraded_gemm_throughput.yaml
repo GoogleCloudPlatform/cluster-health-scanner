@@ -39,4 +39,4 @@ test_scenarios:
   test: tpu-gemm
   outcome: DEGRADED
   metrics:
-    TFLOPS: 120.0
+    Throughput: 120.0

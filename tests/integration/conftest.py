@@ -43,14 +43,10 @@ def get_gpu_configs():
 
 def pytest_generate_tests(metafunc):
     if "active_cluster" in metafunc.fixturenames:
-        if metafunc.definition.get_closest_marker("tpu"):
-            metafunc.parametrize(
-                "active_cluster", get_tpu_configs(), indirect=True
-            )
-        elif metafunc.definition.get_closest_marker("gpu"):
-            metafunc.parametrize(
-                "active_cluster", get_gpu_configs(), indirect=True
-            )
+        params = [
+            pytest.param(c, marks=pytest.mark.tpu) for c in get_tpu_configs()
+        ] + [pytest.param(c, marks=pytest.mark.gpu) for c in get_gpu_configs()]
+        metafunc.parametrize("active_cluster", params, indirect=True)
 
 
 @pytest.fixture(scope="module")

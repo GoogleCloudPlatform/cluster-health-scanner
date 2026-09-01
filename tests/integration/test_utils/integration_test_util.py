@@ -13,24 +13,111 @@
 # limitations under the License.
 
 import contextlib
+import io
+import json
+import os
+from typing import Any, Dict, Optional, Tuple
 import pytest
 
 from chs.cli import cli
+from chs.utils.app_data import ChsAppData
 from tests.integration.mocks.gcp_mock import mock_gce_instances, mock_gcs_bucket
 from tests.integration.mocks.ramble_mock import mock_ramble_workloads
+from tests.integration.test_utils.validator import (
+    IntegrationValidator,
+    ValidationReport,
+)
 
 
-def run_suite(suite_name: str, nodepools: str) -> None:
-    cli(
-        [
-            "run",
-            "--suite",
-            suite_name,
-            "--nodepools",
-            nodepools,
-            "-y",
-        ],
-        standalone_mode=False,
+import sys
+
+
+class TeeStream:
+    """Stream wrapper that writes to a stream and StringIO buffer."""
+
+    def __init__(self, original_stream, buffer_io):
+        self.original_stream = original_stream
+        self.buffer_io = buffer_io
+
+    def write(self, data: str) -> int:
+        ret = self.original_stream.write(data)
+        self.buffer_io.write(data)
+        return ret
+
+    def flush(self) -> None:
+        self.original_stream.flush()
+        self.buffer_io.flush()
+
+    def isatty(self) -> bool:
+        return getattr(self.original_stream, "isatty", lambda: False)()
+
+
+def run_suite_and_capture(
+    suite_name: str, nodepools: str
+) -> Tuple[int, str, str]:
+    """Runs a CHS suite while capturing exit code, stdout, and stderr."""
+    stdout_io = io.StringIO()
+    stderr_io = io.StringIO()
+    tee_stdout = TeeStream(sys.stdout, stdout_io)
+    tee_stderr = TeeStream(sys.stderr, stderr_io)
+    exit_code = 0
+    try:
+        with (
+            contextlib.redirect_stdout(tee_stdout),
+            contextlib.redirect_stderr(tee_stderr),
+        ):
+            cli(
+                [
+                    "run",
+                    "--suite",
+                    suite_name,
+                    "--nodepools",
+                    nodepools,
+                    "-y",
+                ],
+                standalone_mode=False,
+            )
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else 1
+    except Exception as e:
+        exit_code = 1
+        tee_stderr.write(str(e))
+
+    return exit_code, stdout_io.getvalue(), stderr_io.getvalue()
+
+
+def get_latest_boh() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Retrieves the Bill of Health dict and file path for the latest run."""
+    app_data = ChsAppData()
+    latest_run_id = app_data.get_latest_run_id()
+    if not latest_run_id:
+        return None, None
+
+    workspace_name = app_data.resolve_run_id(latest_run_id)
+    workspace_path = os.path.join(app_data.get_workspaces_dir(), workspace_name)
+    boh_file = os.path.join(workspace_path, "bill_of_health.json")
+
+    if os.path.exists(boh_file):
+        with open(boh_file, "r") as f:
+            return json.load(f), boh_file
+    return None, None
+
+
+def validate_integration_run(
+    blueprint_config: Dict[str, Any],
+    exit_code: int,
+    stdout: str = "",
+    stderr: str = "",
+) -> ValidationReport:
+    """Evaluates the integration test run using IntegrationValidator."""
+    boh, _ = get_latest_boh()
+    validator = IntegrationValidator()
+    return validator.validate_boh_and_output(
+        blueprint_config=blueprint_config,
+        boh=boh,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
     )
 
 
