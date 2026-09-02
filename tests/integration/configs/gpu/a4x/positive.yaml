@@ -23,14 +23,13 @@ dependencies:
   gke_multinetwork:
     enabled: true
 nodepools:
-- name: tpu-v6e-pool-01
-  count: 4
-  machine_type: ct6e-standard-4t
-  accelerator: tpu-v6e-slice
-  topology: 2x4
+- name: gpu-a4x-pool-01
+  count: 2
+  machine_type: a4x-highgpu-4g
+  accelerator: nvidia-gpu
   zone: us-east5-c
   health:
-    ready_count: 3
+    ready_count: 2
     unschedulable_count: 0
     busy_count: 0
 test_scenarios: []

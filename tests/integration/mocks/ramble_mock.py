@@ -19,10 +19,11 @@ import base64
 import yaml
 from unittest import mock
 from chs.ramble_manager import RambleManager
+from tests.integration.mocks.mock_utils import generate_pod_mock_command
 
 
 @contextlib.contextmanager
-def mock_ramble_workloads():
+def mock_ramble_workloads(output_generator):
     """Intercepts Ramble YAML generation to replace heavy TPU tests
     with simple alpine mocks.
     """
@@ -39,58 +40,109 @@ def mock_ramble_workloads():
             recursive=True,
         )
         for manifest_path in manifest_files:
-            exp_dir = os.path.dirname(manifest_path)
-            test_name = os.path.basename(exp_dir)
+            # manifest_path looks like:
+            # .../experiments/<test_name>/<level>/<run>/manifest.yaml
+            # We want to extract <test_name> after "experiments"
+            parts = manifest_path.split(os.sep)
+            try:
+                exp_index = parts.index("experiments")
+                test_name = parts[exp_index + 1]
+            except (ValueError, IndexError):
+                # Fallback to basename if structure is unusual
+                exp_dir = os.path.dirname(manifest_path)
+                test_name = os.path.basename(exp_dir)
 
-            mock_text = f"Simulated output for {test_name}"
+            output_data = output_generator.get_output_dict(test_name)
 
-            b64_payload = base64.b64encode(mock_text.encode("utf-8")).decode(
-                "utf-8"
-            )
+            if not output_data:
+                raise ValueError(
+                    "Output generator provided an empty output_map for test "
+                    f"'{test_name}'."
+                )
 
             with open(manifest_path, "r") as f:
                 docs = list(yaml.safe_load_all(f))
 
+            cleaned_docs = []
             for doc in docs:
+                if not doc:
+                    continue
+                # Filter out CRDs not installed in Kind (e.g. ComputeDomain)
+                if doc.get("kind") in ("ComputeDomain",):
+                    continue
+                cleaned_docs.append(doc)
+
                 specs = []
-                if doc and doc.get("kind") == "JobSet":
+                if doc.get("kind") == "JobSet":
+                    jobset_name = doc.get("metadata", {}).get("name")
                     for rj in doc.get("spec", {}).get("replicatedJobs", []):
-                        specs.append(
-                            rj.get("template", {})
-                            .get("spec", {})
-                            .get("template", {})
-                            .get("spec", {})
-                        )
-                elif doc and doc.get("kind") == "Job":
-                    specs.append(
-                        doc.get("spec", {}).get("template", {}).get("spec", {})
-                    )
-                elif doc and doc.get("kind") == "Pod":
+                        job_spec = rj.get("template", {}).get("spec", {})
+                        job_spec["activeDeadlineSeconds"] = 30
+                        pod_template = job_spec.get("template", {})
+
+                        if pod_template.get("metadata") is None:
+                            pod_template["metadata"] = {}
+                        if "labels" not in pod_template["metadata"]:
+                            pod_template["metadata"]["labels"] = {}
+
+                        pod_template["metadata"]["labels"][
+                            "jobset.sigs.k8s.io/jobset-name"
+                        ] = jobset_name
+
+                        specs.append(pod_template.get("spec", {}))
+                elif doc.get("kind") == "Job":
+                    job_spec = doc.get("spec", {})
+                    job_spec["activeDeadlineSeconds"] = 30
+                    specs.append(job_spec.get("template", {}).get("spec", {}))
+                elif doc.get("kind") == "Pod":
                     specs.append(doc.get("spec", {}))
 
                 for spec in specs:
                     if not spec:
                         continue
+
+                    # Strip DRA / hardware-specific resource claims
+                    spec.pop("resourceClaims", None)
+
+                    node_map = output_data.get("nodes", {})
+
+                    b64_map = {
+                        k: base64.b64encode(v.encode("utf-8")).decode("utf-8")
+                        for k, v in node_map.items()
+                    }
+                    default_b64 = base64.b64encode(
+                        output_data["default"].encode("utf-8")
+                    ).decode("utf-8")
+
+                    final_cmd = generate_pod_mock_command(b64_map, default_b64)
+
                     for list_key in ("containers", "initContainers"):
                         for c in spec.get(list_key, []):
                             c["image"] = "alpine:latest"
+                            c["imagePullPolicy"] = "IfNotPresent"
                             c["command"] = [
                                 "/bin/sh",
                                 "-c",
-                                f"sleep 1 && echo {b64_payload} | base64 -d",
+                                f"sleep 1 && {final_cmd}",
                             ]
                             if "resources" in c:
-                                for res_type in ("limits", "requests"):
-                                    if res_type in c["resources"]:
-                                        c["resources"][res_type].pop(
-                                            "google.com/tpu", None
-                                        )
-                                        c["resources"][res_type].pop(
-                                            "nvidia.com/gpu", None
-                                        )
+                                c["resources"] = {}
 
             with open(manifest_path, "w") as f:
-                yaml.dump_all(docs, f)
+                yaml.dump_all(cleaned_docs, f)
+
+        # Strip the topologyName constraint so mock nodes don't deadlock
+        # Kueue TAS
+        kueue_yaml = os.path.join(self.path, "configs", "kueue-configs.yaml")
+        if os.path.exists(kueue_yaml):
+            with open(kueue_yaml, "r") as f:
+                content = f.read()
+            content = content.replace(
+                "topologyName: chs-node-topology",
+                "# topologyName: chs-node-topology",
+            )
+            with open(kueue_yaml, "w") as f:
+                f.write(content)
 
     with mock.patch(
         "chs.ramble_manager.RambleManager.setup_workspace",

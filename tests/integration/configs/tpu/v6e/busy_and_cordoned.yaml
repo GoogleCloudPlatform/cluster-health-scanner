@@ -14,7 +14,7 @@
 
 cluster_name: chs-kind-cluster
 project: chs-test-project
-default_zone: us-central1-a
+default_zone: us-east5-c
 dependencies:
   jobset:
     version: v0.6.0
@@ -23,14 +23,25 @@ dependencies:
   gke_multinetwork:
     enabled: true
 nodepools:
-- name: tpu-v7-pool-01
-  count: 4
-  machine_type: tpu7x-standard-4t
-  accelerator: tpu-v7x-slice
-  topology: 2x2x4
-  zone: us-central1-a
+- name: tpu-v6e-pool-01
+  count: 2
+  machine_type: ct6e-standard-4t
+  accelerator: tpu-v6e-slice
+  topology: 2x4
+  zone: us-east5-c
   health:
-    ready_count: 4
-    unschedulable_count: 0
+    ready_count: 1
+    unschedulable_count: 1
     busy_count: 0
+- name: tpu-v6e-pool-02
+  count: 2
+  machine_type: ct6e-standard-4t
+  accelerator: tpu-v6e-slice
+  topology: 2x4
+  zone: us-east5-c
+  health:
+    ready_count: 2
+    unschedulable_count: 0
+    busy_count: 1
+    busy_pod_namespace: default
 test_scenarios: []

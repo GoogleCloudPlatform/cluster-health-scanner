@@ -34,7 +34,7 @@ nodepools:
     unschedulable_count: 0
     busy_count: 0
 - name: tpu-v6e-pool-02
-  count: 2
+  count: 4
   machine_type: ct6e-standard-4t
   accelerator: tpu-v6e-slice
   topology: 4x4

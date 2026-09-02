@@ -29,11 +29,6 @@ def get_node_metadata(cluster_name: str) -> dict:
     for item in data.get("items", []):
         name = item["metadata"]["name"]
 
-        # Ensure we only mock nodes belonging to the requested KIND cluster
-        # KIND nodes are always prefixed with the cluster name
-        if not name.startswith(cluster_name):
-            continue
-
         labels = item["metadata"].get("labels", {})
 
         # Exclude control planes from the GCP mock entirely
@@ -48,3 +43,43 @@ def get_node_metadata(cluster_name: str) -> dict:
         }
 
     return node_meta
+
+
+def resolve_node_mapping() -> dict[str, list[str]]:
+    """Maps configured nodepools to their sorted node hostnames."""
+    res = subprocess.run(
+        ["kubectl", "get", "nodes", "-o", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(res.stdout)
+    pool_nodes = {}
+    for item in data.get("items", []):
+        name = item["metadata"]["name"]
+        labels = item["metadata"].get("labels", {})
+        pool = labels.get("chs-integration-nodepool")
+        if pool:
+            pool_nodes.setdefault(pool, []).append(name)
+
+    for pool in pool_nodes:
+        pool_nodes[pool].sort()
+    return pool_nodes
+
+
+def generate_pod_mock_command(
+    node_b64_map: dict[str, str], default_b64: str
+) -> str:
+    """Generates shell command to route pod logs by node hostname."""
+    script_lines = []
+    for node, v in node_b64_map.items():
+        script_lines.append(
+            f'if [ "$MY_NODE_NAME" = "{node}" ]; then '
+            f'echo {v} | base64 -d | sed "s/{{node}}/$MY_NODE_NAME/g"; '
+            "exit 0; fi"
+        )
+
+    script_lines.append(
+        f'echo {default_b64} | base64 -d | sed "s/{{node}}/$MY_NODE_NAME/g"'
+    )
+    return " && ".join(script_lines)

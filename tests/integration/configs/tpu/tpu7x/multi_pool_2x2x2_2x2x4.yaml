@@ -28,7 +28,7 @@ nodepools:
   - name: "tpu-v7-pool-01"
     count: 2
     machine_type: "tpu7x-standard-4t"
-    accelerator: "tpu-v7x-slice"
+    accelerator: "tpu7x"
     topology: "2x2x2"
     zone: "us-central1-a"
     health:
@@ -37,9 +37,9 @@ nodepools:
       busy_count: 0
 
   - name: "tpu-v7-pool-02"
-    count: 2
+    count: 4
     machine_type: "tpu7x-standard-4t"
-    accelerator: "tpu-v7x-slice"
+    accelerator: "tpu7x"
     topology: "2x2x4"
     zone: "us-central1-a"
     health:

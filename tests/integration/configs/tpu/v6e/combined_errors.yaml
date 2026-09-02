@@ -14,7 +14,7 @@
 
 cluster_name: chs-kind-cluster
 project: chs-test-project
-default_zone: us-central1-a
+default_zone: us-east5-c
 dependencies:
   jobset:
     version: v0.6.0
@@ -23,14 +23,37 @@ dependencies:
   gke_multinetwork:
     enabled: true
 nodepools:
-- name: tpu-v7-pool-01
+- name: tpu-v6e-pool-01
   count: 4
-  machine_type: tpu7x-standard-4t
-  accelerator: tpu-v7x-slice
-  topology: 2x2x4
-  zone: us-central1-a
+  machine_type: ct6e-standard-4t
+  accelerator: tpu-v6e-slice
+  topology: 4x4
+  zone: us-east5-c
   health:
-    ready_count: 3
-    unschedulable_count: 1
+    ready_count: 4
+    unschedulable_count: 0
     busy_count: 0
-test_scenarios: []
+test_scenarios:
+- nodepool: tpu-v6e-pool-01
+  node_index: 0
+  test: tpu-hbm
+  outcome: DEGRADED
+  metrics:
+    Bandwidth (median): 34.0
+- test: tpu-network-stress
+  outcome: DEGRADED
+  degraded_links:
+    - source:
+        nodepool: tpu-v6e-pool-01
+        node_index: 1
+      target:
+        nodepool: tpu-v6e-pool-01
+        node_index: 2
+      metrics:
+        Bandwidth: 15.0
+- nodepool: tpu-v6e-pool-01
+  node_index: 3
+  test: tpu-info
+  outcome: FAILED
+  error_code: TPU_CHIP_INITIALIZATION_ERROR
+  stderr: 'RuntimeError: Unable to initialize TPU device 3: HbmTimeoutError'

@@ -234,6 +234,8 @@ def create_kind_cluster(
     config_content = (
         "kind: Cluster\n"
         "apiVersion: kind.x-k8s.io/v1alpha4\n"
+        "networking:\n"
+        "  apiServerPort: 26443\n"
         "nodes:\n"
         "- role: control-plane\n"
         "  kubeadmConfigPatches:\n"
@@ -612,6 +614,7 @@ def _build_node_labels(
 
     labels = {
         "cloud.google.com/gke-nodepool": pool_name,
+        "chs-integration-nodepool": pool_name,
         "container.googleapis.com/cluster_name": cluster_name,
         "kubernetes.io/os": "linux",
         "kubernetes.io/arch": "amd64",
@@ -866,6 +869,7 @@ def main() -> None:
             "get",
             "nodes",
             "-L",
+            "chs-integration-nodepool,"
             "cloud.google.com/gke-nodepool,"
             "cloud.google.com/gke-tpu-accelerator,"
             "cloud.google.com/gke-tpu-topology",
