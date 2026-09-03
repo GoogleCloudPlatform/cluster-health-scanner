@@ -100,10 +100,13 @@ class ValidationContext:
             "Avg. Bus Bandwidth": "bandwidth",
             "bandwidth (median)": "bandwidth",
             "Throughput (median)": "Throughput",
+            "Value": "Throughput",
         }
         for orig_k, alias_k in alias_map.items():
             if orig_k in metrics_dict and alias_k not in metrics_dict:
                 metrics_dict[alias_k] = metrics_dict[orig_k]
+        if "Value" in metrics_dict and "performance" not in metrics_dict:
+            metrics_dict["performance"] = metrics_dict["Value"]
 
         raw_degraded = boh_match.get("degraded_links") or target_scenario.get(
             "degraded_links", []
@@ -676,6 +679,76 @@ class IntegrationValidator:
             )
             return ValidationReport(passed=passed, results=results)
 
+        # Check for preflight dependency failures (e.g. JobSet or Kueue missing)
+        deps = (
+            blueprint_config.get("dependencies", {})
+            if isinstance(blueprint_config.get("dependencies"), dict)
+            else {}
+        )
+        jobset_dep = (
+            deps.get("jobset", {})
+            if isinstance(deps.get("jobset"), dict)
+            else {}
+        )
+        jobset_disabled = jobset_dep.get("enabled") is False or str(
+            jobset_dep.get("state", "")
+        ).upper() in ("DISABLED", "MISSING", "MISSING_JOBSET")
+        if jobset_disabled:
+            passed = (
+                exit_code != 0
+                and "JobSet is missing or incompatible" in combined_output
+            )
+            results.append(
+                CheckResult(
+                    check_name="jobset_preflight_failure_expected",
+                    passed=passed,
+                    message=(
+                        "JobSet missing preflight error verified in CHS output"
+                        if passed
+                        else "Expected JobSet missing error missing from output"
+                    ),
+                    expected=(
+                        "exit_code != 0 and 'JobSet is missing or incompatible'"
+                    ),
+                    actual=(
+                        f"exit_code={exit_code}, "
+                        f"output={combined_output[-200:]}"
+                    ),
+                )
+            )
+            return ValidationReport(passed=passed, results=results)
+
+        kueue_dep = (
+            deps.get("kueue", {}) if isinstance(deps.get("kueue"), dict) else {}
+        )
+        kueue_disabled = kueue_dep.get("enabled") is False or str(
+            kueue_dep.get("state", "")
+        ).upper() in ("DISABLED", "MISSING", "MISSING_KUEUE")
+        if kueue_disabled:
+            passed = (
+                exit_code != 0
+                and "Kueue is missing or incompatible" in combined_output
+            )
+            results.append(
+                CheckResult(
+                    check_name="kueue_preflight_failure_expected",
+                    passed=passed,
+                    message=(
+                        "Kueue missing preflight error verified in CHS output"
+                        if passed
+                        else "Expected Kueue missing error missing from output"
+                    ),
+                    expected=(
+                        "exit_code != 0 and 'Kueue is missing or incompatible'"
+                    ),
+                    actual=(
+                        f"exit_code={exit_code}, "
+                        f"output={combined_output[-200:]}"
+                    ),
+                )
+            )
+            return ValidationReport(passed=passed, results=results)
+
         passed_exit = exit_code == 0
         results.append(
             CheckResult(
@@ -751,6 +824,7 @@ class IntegrationValidator:
                     eval_scenario = {**scenario, "metrics": def_metrics}
 
             boh_match = None
+            candidate_matches = []
             if isinstance(boh_results, list):
                 for r in boh_results:
                     if not isinstance(r, dict):
@@ -825,8 +899,40 @@ class IntegrationValidator:
                             matched = True
 
                     if matched:
-                        boh_match = r
-                        break
+                        candidate_matches.append(r)
+
+                if candidate_matches:
+                    expected_outcome = eval_scenario.get("outcome")
+                    expected_metrics = eval_scenario.get("metrics")
+                    if expected_outcome:
+                        for cand in candidate_matches:
+                            cand_ctx = ValidationContext.from_boh_result(
+                                boh_match=cand,
+                                target_scenario=eval_scenario,
+                            )
+                            if check_outcome(cand_ctx, expected_outcome).passed:
+                                if expected_metrics:
+                                    if check_metrics(
+                                        cand_ctx, expected_metrics
+                                    ).passed:
+                                        boh_match = cand
+                                        break
+                                else:
+                                    boh_match = cand
+                                    break
+                        if not boh_match:
+                            for cand in candidate_matches:
+                                cand_ctx = ValidationContext.from_boh_result(
+                                    boh_match=cand,
+                                    target_scenario=eval_scenario,
+                                )
+                                if check_outcome(
+                                    cand_ctx, expected_outcome
+                                ).passed:
+                                    boh_match = cand
+                                    break
+                    if not boh_match:
+                        boh_match = candidate_matches[0]
 
             if not boh_match:
                 if target_nodepool and nodepool_unusable.get(

@@ -36,23 +36,29 @@ chmod +x ./kubectl
 mv ./kubectl ~/.local/bin/kubectl
 ```
 
+### 4. First Time Setup (Pre-pull Images)
+To speed up test runs and avoid timeouts on the first run, pre-pull the required Docker images:
+```bash
+for img in "registry.k8s.io/jobset/jobset:v0.6.0" "registry.k8s.io/kueue/kueue:v0.14.5" "quay.io/brancz/kube-rbac-proxy:v0.13.1" "kindest/node:v1.30.0"; do docker pull "$img"; done
+```
+
 ---
 
 ## Running Integration Tests on Specific Clusters
 
-You can run integration tests for a particular set of clusters using pytest's marker (`-m`) or keyword filtering (`-k`) flags.
+You can run integration tests for a particular set of clusters using pytest's marker (`-m`) or keyword filtering (`-k`) flags. (Adding `-s` prints logs during test execution).
 
 ### By Accelerator Type (Using Markers)
 The test suite utilizes custom markers for different accelerator types. You can run tests exclusively for one type:
 
 - **TPU clusters only**:
   ```bash
-  pytest -m tpu tests/integration/
+  pytest -m tpu tests/integration/ -s
   ```
 
 - **GPU clusters only**:
   ```bash
-  pytest -m gpu tests/integration/
+  pytest -m gpu tests/integration/ -s
   ```
 
 ### By Cluster Topology/Version (Using Keyword Filtering)
@@ -60,15 +66,15 @@ Because test parameters include the configuration file paths (e.g., `tpu/v6e/mul
 
 - **v6e clusters only**:
   ```bash
-  pytest -k "v6e" tests/integration/
+  pytest -k "v6e" tests/integration/ -s
   ```
 
 - **tpu7x clusters only**:
   ```bash
-  pytest -k "tpu7x" tests/integration/
+  pytest -k "tpu7x" tests/integration/ -s
   ```
 
 - **Specific configuration**:
   ```bash
-  pytest -k "multi_pool_2x4_4x4" tests/integration/
+  pytest -k "multi_pool_2x4_4x4" tests/integration/ -s
   ```

@@ -180,7 +180,7 @@ class RambleOutputGenerator:
             test_specific = {
                 k: v
                 for k, v in self.scenarios.items()
-                if k[2] == config_test_name
+                if k[2] in (test_name, config_test_name)
             }
 
         node_mapping = None
@@ -224,15 +224,15 @@ class RambleOutputGenerator:
             return self.populate_tpu_host_device_logs(scenario)
         elif test_name == "tpu-network-stress":
             return self.populate_tpu_network_stress_logs(scenario)
-        elif test_name == "nvidia-smi":
+        elif test_name in ("nvidia-smi", "smi"):
             return self.populate_nvidia_smi_logs(scenario)
-        elif test_name == "nvidia-dcgm":
+        elif test_name in ("nvidia-dcgm", "dcgm"):
             return self.populate_dcgm_logs(scenario)
-        elif test_name == "nvidia-stream":
+        elif test_name in ("nvidia-stream", "stream"):
             return self.populate_stream_logs(scenario)
-        elif test_name.startswith("nccl-"):
+        elif test_name.startswith("nccl"):
             return self.populate_nccl_logs(scenario)
-        elif test_name == "nvidia-gemm":
+        elif test_name in ("nvidia-gemm", "gemm"):
             return self.populate_gemm_logs(scenario)
         else:
             if scenario and scenario.get("outcome") == "FAILED":
@@ -316,7 +316,7 @@ class RambleOutputGenerator:
             )
 
         # Default healthy bandwidth for mock (exceeds TPU 7x threshold)
-        bandwidth = 250.0
+        bandwidth = 600.0
         time = 2.0  # Default healthy time for mock
 
         if scenario and scenario.get("outcome") == "DEGRADED":
@@ -393,10 +393,58 @@ class RambleOutputGenerator:
 
         return TPU_HOST_DEVICE_TEMPLATE.replace("{bandwidth}", str(bandwidth))
 
+    def _get_machine_type(self, scenario: dict | None = None) -> str:
+        if scenario and "nodepool" in scenario:
+            pool_name = scenario["nodepool"]
+            for pool in self.config.get("nodepools", []):
+                if isinstance(pool, dict) and pool.get("name") == pool_name:
+                    return pool.get("machine_type", "")
+        for pool in self.config.get("nodepools", []):
+            if isinstance(pool, dict) and pool.get("machine_type"):
+                return pool["machine_type"]
+        return ""
+
+    def _get_gpu_info(self, scenario: dict | None = None) -> tuple[int, str]:
+        machine_type = self._get_machine_type(scenario).lower()
+        if "a3-ultra" in machine_type or machine_type == "a3-ultragpu-8g":
+            return 8, "NVIDIA H200"
+        elif "a3-mega" in machine_type or machine_type == "a3-megagpu-8g":
+            return 8, "NVIDIA H100"
+        elif "a4-highgpu" in machine_type or machine_type == "a4-highgpu-8g":
+            return 8, "NVIDIA B200"
+        elif "a4x" in machine_type:
+            return 4, "NVIDIA A4X"
+        elif "8g" in machine_type:
+            return 8, "NVIDIA GPU"
+        return 4, "NVIDIA A4X"
+
     def populate_nvidia_smi_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
             return "HOST {node}: " + str(scenario.get("stderr", "Crash")) + "\n"
-        return GPU_SMI_TEMPLATE
+
+        gpu_count, gpu_name = self._get_gpu_info(scenario)
+        if scenario and scenario.get("outcome") == "DEGRADED":
+            metrics = scenario.get("metrics", {})
+            gpu_count = int(
+                metrics.get(
+                    "gpus",
+                    metrics.get(
+                        "gpu_count", metrics.get("GPU Count", gpu_count)
+                    ),
+                )
+            )
+
+        lines = []
+        for i in range(gpu_count):
+            lines.append(
+                f"{i}, {gpu_name}, 535.104, P0, 00000000:00:{i+4:02x}.0, "
+                f"000000000000{i}, "
+                f"00000000-0000-0000-0000-00000000000{i}, "
+                "100.0, 200.0, 1000, 1000"
+            )
+        lines.append(f"GPU Count: {gpu_count}")
+        lines.append("CUDA Version: 12.2\n")
+        return "\n".join(lines)
 
     def populate_dcgm_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
@@ -409,7 +457,9 @@ class RambleOutputGenerator:
         bandwidth = self.HEALTHY_GPU_BW
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
-            bandwidth = metrics.get("Bandwidth", bandwidth)
+            bandwidth = metrics.get(
+                "Bandwidth", metrics.get("bandwidth", bandwidth)
+            )
         return GPU_STREAM_TEMPLATE.replace("{bandwidth}", str(bandwidth))
 
     def populate_nccl_logs(self, scenario: dict | None) -> str:
@@ -418,8 +468,12 @@ class RambleOutputGenerator:
         bandwidth = self.HEALTHY_NCCL_BW
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
-            bandwidth = metrics.get("Bandwidth", bandwidth)
-        return GPU_NCCL_TEMPLATE.replace("{bandwidth}", str(bandwidth))
+            bandwidth = metrics.get(
+                "Bandwidth", metrics.get("bandwidth", bandwidth)
+            )
+        return GPU_NCCL_TEMPLATE.replace(
+            "{bandwidth}", f"{float(bandwidth):.1f}"
+        )
 
     def populate_gemm_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
@@ -427,5 +481,11 @@ class RambleOutputGenerator:
         tflops = self.HEALTHY_GPU_TFLOPS
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
-            tflops = metrics.get("Throughput", tflops)
-        return GPU_GEMM_TEMPLATE.replace("{tflops}", str(tflops))
+            tflops = metrics.get(
+                "Throughput",
+                metrics.get(
+                    "performance",
+                    metrics.get("Value", tflops),
+                ),
+            )
+        return GPU_GEMM_TEMPLATE.replace("{tflops}", f"{float(tflops):.1f}")

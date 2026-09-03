@@ -508,6 +508,62 @@ class TestIntegrationValidator(unittest.TestCase):
         )
         self.assertTrue(report.passed)
 
+    def test_multi_workload_candidate_selection(self):
+        """Verifies multi-workload test selects degraded candidate when
+        expecting DEGRADED.
+        """
+        validator = IntegrationValidator()
+        blueprint_config = {
+            "nodepools": [{"name": "gpu-a4x-pool-01", "count": 2}],
+            "test_scenarios": [
+                {
+                    "test": "nccl-pairwise",
+                    "outcome": "DEGRADED",
+                    "degraded_links": [
+                        {
+                            "source": {
+                                "nodepool": "gpu-a4x-pool-01",
+                                "node_index": 0,
+                            },
+                            "target": {
+                                "nodepool": "gpu-a4x-pool-01",
+                                "node_index": 1,
+                            },
+                            "metrics": {"Bandwidth": 200.0},
+                        }
+                    ],
+                }
+            ],
+        }
+        mock_boh = {
+            "results": [
+                {
+                    "test_name": "nccl-pairwise",
+                    "status": "PASSED",
+                    "target_resources": [
+                        {"node_name": "node-1"},
+                        {"node_name": "node-2"},
+                    ],
+                    "metrics": [{"key": "Avg. Bus Bandwidth", "value": 5500.0}],
+                },
+                {
+                    "test_name": "nccl-pairwise",
+                    "status": "FAILED",
+                    "target_resources": [
+                        {"node_name": "node-1"},
+                        {"node_name": "node-2"},
+                    ],
+                    "metrics": [{"key": "Avg. Bus Bandwidth", "value": 200.0}],
+                },
+            ]
+        }
+        report = validator.validate_boh_and_output(
+            blueprint_config, mock_boh, exit_code=0
+        )
+        self.assertTrue(
+            report.passed, f"Report failed: {report.format_summary()}"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

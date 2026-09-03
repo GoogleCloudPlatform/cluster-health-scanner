@@ -173,7 +173,10 @@ def _is_disabled(config: dict[str, Any]) -> bool:
     if not isinstance(config, dict):
         return False
     state = str(config.get("state", "")).upper()
-    return state == "DISABLED" or config.get("enabled") is False
+    return (
+        state in ("DISABLED", "MISSING", "MISSING_JOBSET", "MISSING_KUEUE")
+        or config.get("enabled") is False
+    )
 
 
 def load_manifest(filename: str, **kwargs: Any) -> str:
@@ -388,6 +391,88 @@ def _load_image(img: str, kind_name: str) -> None:
     )
 
 
+def _crd_exists(crd_fragment: str) -> bool:
+    """Checks whether any CRD matching crd_fragment exists on the cluster."""
+    res = run(["kubectl", "get", "crd", "-o", "name"], check=False)
+    if res.returncode == 0:
+        return any(
+            crd_fragment.lower() in line.lower()
+            for line in res.stdout.splitlines()
+        )
+    return False
+
+
+def _uninstall_preflight_deployment(dep_name: str) -> None:
+    """Uninstalls a preflight controller deployment, CRDs, and webhooks."""
+    logger.info(f"[INFO] Removing preflight deployment '{dep_name}'...")
+    run(
+        [
+            "kubectl",
+            "delete",
+            "mutatingwebhookconfiguration",
+            f"{dep_name}-mutating-webhook-configuration",
+            "--ignore-not-found",
+        ],
+        check=False,
+    )
+    run(
+        [
+            "kubectl",
+            "delete",
+            "validatingwebhookconfiguration",
+            f"{dep_name}-validating-webhook-configuration",
+            "--ignore-not-found",
+        ],
+        check=False,
+    )
+    run(
+        [
+            "kubectl",
+            "delete",
+            "deployment",
+            f"{dep_name}-controller-manager",
+            "-n",
+            f"{dep_name}-system",
+            "--ignore-not-found",
+        ],
+        check=False,
+    )
+    if dep_name == "jobset":
+        run(
+            [
+                "kubectl",
+                "delete",
+                "crd",
+                "jobsets.jobset.x-k8s.io",
+                "--ignore-not-found",
+            ],
+            check=False,
+        )
+    elif dep_name == "kueue":
+        run(
+            [
+                "kubectl",
+                "delete",
+                "crd",
+                "-l",
+                "app.kubernetes.io/name=kueue",
+                "--ignore-not-found",
+            ],
+            check=False,
+        )
+    run(
+        [
+            "kubectl",
+            "delete",
+            "namespace",
+            f"{dep_name}-system",
+            "--ignore-not-found",
+            "--timeout=30s",
+        ],
+        check=False,
+    )
+
+
 def apply_preflight_deployments(
     dependencies: dict[str, Any] | None = None,
     cluster_name: str = "chs-tpu-v6e-cluster",
@@ -405,7 +490,13 @@ def apply_preflight_deployments(
     deployments_to_apply: list[tuple[str, str, str]] = []
 
     for dep_name, info in deps.items():
-        if not isinstance(info, dict) or _is_disabled(info):
+        if not isinstance(info, dict):
+            continue
+
+        if _is_disabled(info):
+            if dep_name in OFFICIAL_MANIFEST_URLS:
+                if _is_deployment_ready(dep_name) or _crd_exists(dep_name):
+                    _uninstall_preflight_deployment(dep_name)
             continue
 
         if dep_name in OFFICIAL_MANIFEST_URLS:

@@ -102,7 +102,9 @@ def mock_ramble_workloads(output_generator):
                         continue
 
                     # Strip DRA / hardware-specific resource claims
+                    # and init containers
                     spec.pop("resourceClaims", None)
+                    spec.pop("initContainers", None)
 
                     node_map = output_data.get("nodes", {})
 
@@ -116,19 +118,18 @@ def mock_ramble_workloads(output_generator):
 
                     final_cmd = generate_pod_mock_command(b64_map, default_b64)
 
-                    for list_key in ("containers", "initContainers"):
-                        for c in spec.get(list_key, []):
-                            c["image"] = "alpine:latest"
-                            c["imagePullPolicy"] = "IfNotPresent"
-                            c["command"] = [
-                                "/bin/sh",
-                                "-c",
-                                'MY_NODE_NAME="${MY_NODE_NAME:-'
-                                '$(hostname)}"; '
-                                f"sleep 1; {final_cmd}",
-                            ]
-                            if "resources" in c:
-                                c["resources"] = {}
+                    for c in spec.get("containers", []):
+                        c["image"] = "alpine:latest"
+                        c["imagePullPolicy"] = "IfNotPresent"
+                        c["command"] = [
+                            "/bin/sh",
+                            "-c",
+                            'MY_NODE_NAME="${MY_NODE_NAME:-'
+                            '$(hostname)}"; '
+                            f"sleep 1; {final_cmd}",
+                        ]
+                        if "resources" in c:
+                            c["resources"] = {}
 
             with open(manifest_path, "w") as f:
                 yaml.dump_all(cleaned_docs, f)
