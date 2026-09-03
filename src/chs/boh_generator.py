@@ -608,9 +608,13 @@ class BOHGenerator:
                     metrics = self._parse_foms(foms)
 
                     ctx_name = ctx.get("name", "unknown")
-                    parsed_metadata = plugin.parse_context_metadata(ctx_name)
-                    if "context" not in parsed_metadata:
-                        parsed_metadata["context"] = ctx_name
+                    parsed_metadata = (
+                        plugin.parse_context_metadata(ctx_name) or {}
+                    )
+                    context = parsed_metadata.get("context", ctx_name)
+                    if context in ("null", "unknown", None):
+                        context = ""
+                    parsed_metadata["context"] = context
 
                     for metric in metrics:
                         for k, v in parsed_metadata.items():

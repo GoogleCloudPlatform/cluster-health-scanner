@@ -26,6 +26,40 @@ default:
     type: min
     thresholds:
       bandwidth: 50
+  dcgm:
+    type: scalar
+    thresholds:
+      Result:
+        - value: "Pass"
+          conditions:
+            context: "memory"
+        - value: "Pass"
+          conditions:
+            context: "pcie"
+        - value: "Pass"
+          conditions:
+            context: "software"
+        - value: "Pass"
+          conditions:
+            context: "diagnostic"
+        - value: "Pass"
+          conditions:
+            context: "nvbandwidth"
+        - value: "Pass"
+          conditions:
+            context: "pulse_test"
+        - value: "Pass"
+          conditions:
+            context: "memtest"
+        - value: "Pass"
+          conditions:
+            context: "memory_bandwidth"
+        - value: "Pass"
+          conditions:
+            context: "targeted_stress"
+        - value: "Pass"
+          conditions:
+            context: "targeted_power"
 
 
 tpu7x-standard-4t:

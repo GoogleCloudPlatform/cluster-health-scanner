@@ -264,6 +264,108 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(report.test_results[2].metrics[0].key, "m1")
         self.assertEqual(report.test_results[2].metrics[1].key, "m2")
 
+    @mock.patch("chs.core.plugin_manager.PluginManager.get_plugin")
+    def test_generate_context_metadata_normalization(self, mock_get_plugin):
+        """Test normalization of context metadata (null, unknown, None)."""
+        mock_plugin = mock.Mock()
+        mock_plugin.get_required_contexts.side_effect = lambda x: x
+        mock_plugin.get_fom_aliases.return_value = {}
+        mock_plugin.get_relative_fom_keys.return_value = []
+        mock_plugin.creates_per_node_results.return_value = False
+        mock_plugin.extract_test_info.side_effect = lambda exp: (
+            exp.get("experiment_name", "test_name"),
+            exp.get("workload_name", "test_level"),
+            "desc",
+        )
+
+        def mock_parse_context_metadata(ctx_name):
+            if ctx_name == "ctx_normal":
+                return {"context": "normalized_normal", "other_meta": "val"}
+            elif ctx_name == "ctx_null":
+                return {"context": "null"}
+            elif ctx_name == "ctx_unknown":
+                return {"context": "unknown"}
+            elif ctx_name == "ctx_none":
+                return {"context": None}
+            elif ctx_name == "ctx_missing":
+                return {"other_meta": "val"}
+            return {"context": ctx_name}
+
+        mock_plugin.parse_context_metadata.side_effect = (
+            mock_parse_context_metadata
+        )
+        mock_get_plugin.return_value = mock_plugin
+
+        data = {
+            "experiments": [
+                {
+                    "name": "test_exp",
+                    "CONTEXTS": [
+                        {
+                            "name": "ctx_normal",
+                            "foms": [{"name": "m_normal", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_null",
+                            "foms": [{"name": "m_null", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_unknown",
+                            "foms": [{"name": "m_unknown", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_none",
+                            "foms": [{"name": "m_none", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_missing",
+                            "foms": [{"name": "m_missing", "value": "1"}],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+
+        generator = BOHGenerator(self.test_json_path)
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        metrics = report.test_results[0].metrics
+        self.assertEqual(len(metrics), 5)
+
+        def find_metric(key):
+            for m in metrics:
+                if m.key == key:
+                    return m
+            self.fail(f"Metric {key} not found")
+
+        m_normal = find_metric("m_normal")
+        self.assertEqual(
+            m_normal.metadata.fields["context"].string_value,
+            "normalized_normal",
+        )
+        self.assertEqual(
+            m_normal.metadata.fields["other_meta"].string_value, "val"
+        )
+
+        m_null = find_metric("m_null")
+        self.assertEqual(m_null.metadata.fields["context"].string_value, "")
+
+        m_unknown = find_metric("m_unknown")
+        self.assertEqual(m_unknown.metadata.fields["context"].string_value, "")
+
+        m_none = find_metric("m_none")
+        self.assertEqual(m_none.metadata.fields["context"].string_value, "")
+
+        m_missing = find_metric("m_missing")
+        self.assertEqual(
+            m_missing.metadata.fields["context"].string_value, "ctx_missing"
+        )
+        self.assertEqual(
+            m_missing.metadata.fields["other_meta"].string_value, "val"
+        )
+
     def test_generate_metadata(self):
         """Test extraction of tags and log files."""
         data = {
