@@ -48,7 +48,7 @@ pip cache purge
 pip install -e .
 ```
 
-**Note:** CHS depends on a specific branch of [Ramble](https://github.com/GoogleCloudPlatform/ramble). The `pyproject.toml` is configured to fetch it from the correct fork/branch.
+**Note:** CHS depends on a specific branch of [Ramble](https://github.com/Ramble-Project/ramble). The `pyproject.toml` is configured to fetch it from the correct fork/branch.
 
 
 ### Protobuf Compilation
