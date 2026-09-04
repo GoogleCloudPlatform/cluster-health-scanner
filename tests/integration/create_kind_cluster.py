@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 """Kind Integration Cluster Provisioner for Cluster Health Scanner (CHS)."""
 
+from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json

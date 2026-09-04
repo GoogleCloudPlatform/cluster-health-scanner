@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 import yaml
 from tests.integration.create_kind_cluster import resolve_config_path
 from tests.integration.mocks.mock_utils import resolve_node_mapping
