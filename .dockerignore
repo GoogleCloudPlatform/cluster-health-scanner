@@ -9,6 +9,7 @@ workspaces/
 # Local build artifacts
 build/
 dist/
+lib/
 *.egg-info/
 *_pb2.py
 

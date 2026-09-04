@@ -15,19 +15,20 @@ dependencies = [
     "protobuf>=4.21.0",
     "rich>=13.0.0",
     "questionary>=2.0.0,<3.0.0",
-    "pre-commit>=3.5.0",
     "google-cloud-storage>=2.10.0",
     "google-cloud-compute>=1.14.0,<2.0.0",
-    "pyOpenSSL<24.1.0",
-    "packaging>=23.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+dev = [
+    "pre-commit>=3.5.0",
+]
 test = [
     "pytest",
     "pytest-mock",
-    "pyyaml",
     "coverage",
+    "pre-commit>=3.5.0",
 ]
 
 [project.scripts]
