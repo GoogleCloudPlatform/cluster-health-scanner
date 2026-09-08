@@ -426,7 +426,7 @@ a4x-highgpu-4g:
             name: {job_name}-cdc
       ---
   nccl-tests:
-    modifiers: [{name: "gpu-persistence-mode"},{name: "nccl-gib"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_ALLOW_RUN_AS_ROOT: 1
@@ -448,7 +448,7 @@ a4x-highgpu-4g:
           -x {mpi_env_vars} bash -c 'if [ -f /usr/local/gib/scripts/set_nccl_env.sh ]; then source /usr/local/gib/scripts/set_nccl_env.sh; fi; "$@"' --
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -459,7 +459,7 @@ a4x-highgpu-4g:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
@@ -469,7 +469,7 @@ a4x-highgpu-4g:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -483,7 +483,7 @@ a4x-highgpu-4g:
       mem_affinity: "0:0:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
@@ -580,7 +580,7 @@ a4x-maxgpu-4g-metal:
           -x {mpi_env_vars}
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -591,7 +591,7 @@ a4x-maxgpu-4g-metal:
       mpi_command: ""
 
   nvidia-smi:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
@@ -601,7 +601,7 @@ a4x-maxgpu-4g-metal:
       mpi_command: ""
 
   nvidia-stream:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
@@ -615,7 +615,7 @@ a4x-maxgpu-4g-metal:
       mem_affinity: "0:0:1:1"
 
   nvidia-gemm:
-    modifiers: [{name: "gpu-persistence-mode"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "generic-error-detector"}]
     variables:
       jobset_template: jobset_standard.yaml.tpl
       container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
