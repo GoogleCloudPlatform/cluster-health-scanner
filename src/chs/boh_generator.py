@@ -287,12 +287,11 @@ class BOHGenerator:
                     threshold_value = threshold_config
                     conditions = {}
 
-                # Reduce numeric TPU test thresholds by 5% at runtime
+                # Reduce numeric TPU/GPU test thresholds by 5% at runtime
                 # to account for typical performance variance and our
                 # rounding logic requirements.
                 if (
-                    test_name.startswith("tpu-")
-                    and isinstance(threshold_value, (int, float))
+                    isinstance(threshold_value, (int, float))
                     and comp_type == "min"
                 ):
                     reduced_value = float(threshold_value) * 0.95

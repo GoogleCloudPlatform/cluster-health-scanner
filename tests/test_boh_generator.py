@@ -1586,6 +1586,88 @@ class TestBOHGenerator(unittest.TestCase):
                     )
                     self.assertTrue(test_name.startswith("tpu-"), msg)
 
+    def test_stream_and_nvidia_smi_thresholds(self):
+        """Test default stream and nvidia-smi thresholds across GPU types."""
+        generator = BOHGenerator(self.test_json_path)
+        thresholds = generator._load_thresholds()
+
+        # Check stream is in default configuration
+        self.assertIn("stream", thresholds.get("default", {}))
+        self.assertEqual(thresholds["default"]["stream"]["type"], "relative")
+        self.assertEqual(
+            thresholds["default"]["stream"]["thresholds"]["efficiency"], 0.85
+        )
+
+        # Check nvidia-smi for 8-GPU and 4-GPU machine types
+        eight_gpu_machines = [
+            "a3-ultragpu-8g",
+            "a3-megagpu-8g",
+            "a4-highgpu-8g",
+        ]
+        four_gpu_machines = ["a4x-highgpu-4g", "a4x-maxgpu-4g-metal"]
+
+        for mtype in eight_gpu_machines:
+            self.assertIn(mtype, thresholds)
+            self.assertIn("nvidia-smi", thresholds[mtype])
+            self.assertEqual(thresholds[mtype]["nvidia-smi"]["type"], "scalar")
+            self.assertEqual(
+                thresholds[mtype]["nvidia-smi"]["thresholds"]["gpus"], 8
+            )
+
+        for mtype in four_gpu_machines:
+            self.assertIn(mtype, thresholds)
+            self.assertIn("nvidia-smi", thresholds[mtype])
+            self.assertEqual(thresholds[mtype]["nvidia-smi"]["type"], "scalar")
+            self.assertEqual(
+                thresholds[mtype]["nvidia-smi"]["thresholds"]["gpus"], 4
+            )
+
+    def test_gpu_min_threshold_5_percent_reduction(self):
+        """Test GPU min thresholds 5% reduction at runtime."""
+        thresholds_data = {
+            "a3-ultragpu-8g": {
+                "my-gpu-test": {
+                    "type": "min",
+                    "thresholds": {"performance": 100},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        # 100 * 0.95 = 95. Value 96 passes reduced threshold (95), though < 100.
+        data_pass_reduced = {
+            "experiments": [
+                {
+                    "experiment_name": "my-gpu-test",
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "performance", "value": 96}],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass_reduced)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+        self.assertEqual(
+            report.test_results[0]
+            .metrics[0]
+            .validation_criteria.expected_value.number_value,
+            95.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
