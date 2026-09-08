@@ -149,7 +149,7 @@ class StreamRenderer(DefaultRenderer):
 
                 if (
                     not ctx_str or ctx_str == "null"
-                ) and m.key == "PEAK Bandwidth":
+                ) and m.key == "Peak Bandwidth":
                     node_peak_bw[node] = val
                     continue
 
@@ -167,11 +167,12 @@ class StreamRenderer(DefaultRenderer):
                         node=node, device_id=device_id
                     )
 
-                # Convert rates from MB/s to GB/s
-                if m.key == "Rate":
+                # Convert rates from MB/s to GB/s if not already converted
+                if m.key == "Achieved Bandwidth":
                     attr_name = func_attr_map.get(function)
                     if attr_name:
-                        setattr(results_map[key], attr_name, val / 1000.0)
+                        rate_val = val if m.unit == "GB/s" else val / 1000.0
+                        setattr(results_map[key], attr_name, rate_val)
 
         return results_map, node_peak_bw
 

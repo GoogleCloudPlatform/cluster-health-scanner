@@ -360,6 +360,11 @@ class BOHGenerator:
                                 ratio = 0
                                 is_pass = False
 
+                            m.metadata.fields["relative"].number_value = ratio
+                            m.metadata.fields[
+                                "relative_formula"
+                            ].string_value = f"{ach_key} / {peak_key}"
+
                             m_validation = pb.ValidationCriteria()
                             m_validation.CopyFrom(validation)
                             m_validation.result_status = (

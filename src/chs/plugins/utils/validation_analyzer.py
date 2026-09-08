@@ -43,6 +43,8 @@ class ValidationGroupData:
     target_nodes: list[str]
     nodes_str: str
     rows: list[ValidationRowData]
+    formula: str = ""
+    validation_name: str = ""
 
 
 def has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
@@ -104,21 +106,22 @@ def extract_validation_data(
         if not has_validation_criteria(group):
             continue
 
-        if plugin_manager:
-            plugin = plugin_manager.get_plugin(test_name)
-            if hasattr(plugin, "_filter_validation_results"):
-                sorted_nodes = sorted(
-                    list(
-                        {
-                            target.node_name
-                            for res in group
-                            for target in res.target_resources
-                        }
-                    )
+        plugin = (
+            plugin_manager.get_plugin(test_name) if plugin_manager else None
+        )
+        if plugin and hasattr(plugin, "_filter_validation_results"):
+            sorted_nodes = sorted(
+                list(
+                    {
+                        target.node_name
+                        for res in group
+                        for target in res.target_resources
+                    }
                 )
-                group = plugin._filter_validation_results(group, sorted_nodes)
-                if not group or not has_validation_criteria(group):
-                    continue
+            )
+            group = plugin._filter_validation_results(group, sorted_nodes)
+            if not group or not has_validation_criteria(group):
+                continue
 
         all_success = all(
             res.result_status == pb.RESULT_STATUS_SUCCESS for res in group
@@ -149,13 +152,31 @@ def extract_validation_data(
         else:
             nodes_str = rendering.format_nodes(all_targets)
 
+        formula_str = ""
+        validation_name = ""
+        for res in group:
+            for m in res.metrics:
+                if (
+                    m.HasField("metadata")
+                    and "relative_formula" in m.metadata.fields
+                ):
+                    formula_str = m.metadata.fields[
+                        "relative_formula"
+                    ].string_value
+                    if (
+                        m.HasField("validation_criteria")
+                        and m.validation_criteria.name
+                    ):
+                        validation_name = m.validation_criteria.name.title()
+                    break
+            if formula_str:
+                break
+
         rows = []
         for res in group:
             target_str = rendering.format_nodes(res.target_resources)
             for metric in res.metrics:
                 metric_target = target_str
-                if hasattr(metric, "metadata") and "context" in metric.metadata:
-                    metric_target = metric.metadata["context"]
                 if not metric.HasField("validation_criteria"):
                     continue
 
@@ -163,7 +184,37 @@ def extract_validation_data(
                 if not validation_criteria.name:
                     continue
 
-                metric_value = rendering.parse_value(metric.value)
+                is_relative = (
+                    metric.HasField("metadata")
+                    and "relative" in metric.metadata.fields
+                )
+
+                ctx_name = ""
+                if hasattr(metric, "metadata") and "context" in metric.metadata:
+                    ctx_name = metric.metadata["context"]
+
+                show_context = False
+                if plugin and hasattr(plugin, "show_context_in_validation"):
+                    show_context = plugin.show_context_in_validation()
+
+                ctx_suffix = (
+                    f" ({ctx_name})" if show_context and ctx_name else ""
+                )
+
+                if is_relative:
+                    metric_value = metric.metadata.fields[
+                        "relative"
+                    ].number_value
+                    val_name = (
+                        validation_criteria.name.title()
+                        if validation_criteria.name
+                        else "Efficiency"
+                    )
+                    metric_name = f"{val_name}{ctx_suffix}"
+                else:
+                    metric_value = rendering.parse_value(metric.value)
+                    metric_name = f"{metric.key}{ctx_suffix}"
+
                 threshold_str = parse_threshold(validation_criteria)
                 status_str, status_style = parse_status(validation_criteria)
 
@@ -179,10 +230,10 @@ def extract_validation_data(
                         target_nodes=rendering.extract_node_names(
                             res.target_resources
                         ),
-                        metric=metric.key,
+                        metric=metric_name,
                         value=metric_value,
                         formatted_value=metric_value_2f,
-                        unit=metric.unit,
+                        unit="" if is_relative else metric.unit,
                         threshold=threshold_str,
                         status=status_str,
                         status_style=status_style,
@@ -198,6 +249,8 @@ def extract_validation_data(
                 target_nodes=rendering.extract_node_names(all_targets),
                 nodes_str=nodes_str,
                 rows=rows,
+                formula=formula_str,
+                validation_name=validation_name,
             )
         )
 

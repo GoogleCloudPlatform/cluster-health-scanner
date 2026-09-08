@@ -635,7 +635,7 @@ class TestBOHGenerator(unittest.TestCase):
 
             yaml.dump(thresholds_data, f)
 
-        # Pass case: Rate=85, PEAK=100 -> 0.85 >= 0.8
+        # Pass case: Achieved Bandwidth=85, PEAK=100 -> 0.85 >= 0.8
         data_pass = {
             "experiments": [
                 {
@@ -643,11 +643,13 @@ class TestBOHGenerator(unittest.TestCase):
                     "CONTEXTS": [
                         {
                             "name": "null",
-                            "foms": [{"name": "PEAK Bandwidth", "value": 100}],
+                            "foms": [{"name": "Peak Bandwidth", "value": 100}],
                         },
                         {
                             "name": "Device 0",
-                            "foms": [{"name": "Rate", "value": 85}],
+                            "foms": [
+                                {"name": "Achieved Bandwidth", "value": 85}
+                            ],
                         },
                     ],
                 }
@@ -662,7 +664,7 @@ class TestBOHGenerator(unittest.TestCase):
             report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
         )
 
-        # Fail case: Rate=75, PEAK=100 -> 0.75 < 0.8
+        # Fail case: Achieved Bandwidth=75, PEAK=100 -> 0.75 < 0.8
         data_fail = {
             "experiments": [
                 {
@@ -670,11 +672,13 @@ class TestBOHGenerator(unittest.TestCase):
                     "CONTEXTS": [
                         {
                             "name": "null",
-                            "foms": [{"name": "PEAK Bandwidth", "value": 100}],
+                            "foms": [{"name": "Peak Bandwidth", "value": 100}],
                         },
                         {
                             "name": "Device 0",
-                            "foms": [{"name": "Rate", "value": 75}],
+                            "foms": [
+                                {"name": "Achieved Bandwidth", "value": 75}
+                            ],
                         },
                     ],
                 }
@@ -688,6 +692,115 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(
             report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
         )
+
+    def test_generate_with_thresholds_relative_unit_conversion(self):
+        """Test 'relative' thresholds with unit normalization."""
+        thresholds_data = {
+            "default": {
+                "stream": {
+                    "type": "relative",
+                    "thresholds": {"efficiency": 0.8},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh_unit.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        # Pass case: 85000 MB/s -> 85 GB/s. 85/100 = 0.85 >= 0.8
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [
+                                {
+                                    "name": "Peak Bandwidth",
+                                    "value": 100,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Device 0 Copy",
+                            "foms": [
+                                {
+                                    "name": "Achieved Bandwidth",
+                                    "value": 85000,
+                                    "units": "MB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+        # Verify the unit and value were updated in the report
+        rate_metric = next(
+            m
+            for m in report.test_results[0].metrics
+            if m.key == "Achieved Bandwidth"
+        )
+        self.assertEqual(rate_metric.unit, "GB/s")
+        self.assertEqual(rate_metric.value.number_value, 85.0)
+
+        # Fail case: 75000 MB/s -> 75 GB/s. 75/100 = 0.75 < 0.8
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [
+                                {
+                                    "name": "Peak Bandwidth",
+                                    "value": 100,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Device 0 Copy",
+                            "foms": [
+                                {
+                                    "name": "Achieved Bandwidth",
+                                    "value": 75000,
+                                    "units": "MB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+        rate_metric = next(
+            m
+            for m in report.test_results[0].metrics
+            if m.key == "Achieved Bandwidth"
+        )
+        self.assertEqual(rate_metric.unit, "GB/s")
+        self.assertEqual(rate_metric.value.number_value, 75.0)
 
     def test_generate_fallback_string_match(self):
         """Test fallback string match is disabled when no thresholds defined."""
@@ -816,11 +929,13 @@ class TestBOHGenerator(unittest.TestCase):
                     "CONTEXTS": [
                         {
                             "name": "null",
-                            "foms": [{"name": "PEAK Bandwidth", "value": 0}],
+                            "foms": [{"name": "Peak Bandwidth", "value": 0}],
                         },
                         {
                             "name": "Device 0",
-                            "foms": [{"name": "Rate", "value": 50}],
+                            "foms": [
+                                {"name": "Achieved Bandwidth", "value": 50}
+                            ],
                         },
                     ],
                 }
