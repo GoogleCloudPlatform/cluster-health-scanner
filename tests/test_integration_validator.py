@@ -564,6 +564,30 @@ class TestIntegrationValidator(unittest.TestCase):
             report.passed, f"Report failed: {report.format_summary()}"
         )
 
+    def test_stream_efficiency_calculation(self):
+        """Verifies efficiency metric is computed from Rate and PEAK
+        Bandwidth.
+        """
+        ctx = ValidationContext.from_boh_result(
+            boh_match={
+                "test_name": "stream",
+                "status": "PASSED",
+                "metrics": [
+                    {"key": "Rate", "value": 2400.0},
+                    {"key": "PEAK Bandwidth", "value": 3000.0},
+                ],
+            },
+            target_scenario={"test": "stream", "nodepool": "gpu-pool"},
+        )
+        self.assertIn("efficiency", ctx.metrics)
+        self.assertAlmostEqual(ctx.metrics["efficiency"], 0.8)
+
+        validator = IntegrationValidator()
+        report = validator.validate(
+            ctx, {"outcome": "PASSED", "metrics": {"efficiency": {"min": 0.8}}}
+        )
+        self.assertTrue(report.passed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -107,6 +107,18 @@ class ValidationContext:
                 metrics_dict[alias_k] = metrics_dict[orig_k]
         if "Value" in metrics_dict and "performance" not in metrics_dict:
             metrics_dict["performance"] = metrics_dict["Value"]
+        if (
+            "Rate" in metrics_dict
+            and "PEAK Bandwidth" in metrics_dict
+            and "efficiency" not in metrics_dict
+        ):
+            try:
+                rate_val = float(metrics_dict["Rate"])
+                peak_val = float(metrics_dict["PEAK Bandwidth"])
+                if peak_val > 0:
+                    metrics_dict["efficiency"] = rate_val / peak_val
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
 
         raw_degraded = boh_match.get("degraded_links") or target_scenario.get(
             "degraded_links", []
