@@ -280,19 +280,40 @@ a3-ultragpu-8g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 332.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 318.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 453.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 393.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 450.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 334.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 60.0
+          conditions:
+            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
-      performance: 100
+      performance: 50000
   nvidia-smi:
     type: scalar
     thresholds:
@@ -302,15 +323,40 @@ a3-megagpu-8g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 167.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 166.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 455.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 393.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 320.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 190.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 40.0
+          conditions:
+            workload_name: "all-to-all"
+  gemm:
+    type: min
+    thresholds:
+      performance: 50000
   nvidia-smi:
     type: scalar
     thresholds:
