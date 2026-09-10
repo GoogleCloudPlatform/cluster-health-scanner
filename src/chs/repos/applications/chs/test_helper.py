@@ -19,6 +19,10 @@ import textwrap
 from chs.constants import TOPOLOGY_TO_MESH
 from chs.utils import sanitize_dns_1123
 from ramble.context import Context, create_context_from_dict
+from chs.utils.topology import (
+    build_node_to_location,
+    get_topology,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +121,9 @@ podAntiAffinity:
         return headers_dict
 
     @staticmethod
-    def _merge_configs(context_dict, configs, machine_type, ramble_app_name):
+    def _merge_configs(
+        context_dict, configs, machine_type, ramble_app_name, domain_type=None
+    ):
         if not isinstance(configs, dict) or not isinstance(context_dict, dict):
             raise ValueError(
                 f"Expected both configs and context_dict to be dictionaries, "
@@ -128,7 +134,7 @@ podAntiAffinity:
                 f"Machine type '{machine_type}' not found in configs"
             )
 
-        def _merge(src_dict, src_key, dst_dict, dst_key):
+        def _merge(src_dict, src_key, dst_dict, dst_key, override=False):
             if not isinstance(src_dict, dict) or not isinstance(dst_dict, dict):
                 raise ValueError(
                     f"Expected both source and destination to be dictionaries, "
@@ -150,7 +156,11 @@ podAntiAffinity:
                 dst_dict[dst_key], dict
             ):
                 for k, v in src_dict[src_key].items():
-                    if k not in dst_dict[dst_key] or not dst_dict[dst_key][k]:
+                    if (
+                        override
+                        or k not in dst_dict[dst_key]
+                        or not dst_dict[dst_key][k]
+                    ):
                         dst_dict[dst_key][k] = v
             elif isinstance(src_dict[src_key], list) and isinstance(
                 dst_dict[dst_key], list
@@ -179,6 +189,17 @@ podAntiAffinity:
         _merge(app_cfg, "modifiers", context_dict, "modifiers")
         _merge(app_cfg, "variables", context_dict, "variables")
 
+        if domain_type:
+            domain_cfg = app_cfg.get(domain_type)
+            if domain_cfg:
+                _merge(
+                    domain_cfg,
+                    "variables",
+                    context_dict,
+                    "variables",
+                    override=True,
+                )
+
     @staticmethod
     def _prepare_base_context(
         ctx_vars: dict,
@@ -187,9 +208,13 @@ podAntiAffinity:
         nodes_str: str,
         extra_context: dict = None,
         extra_sbatch_headers: dict = None,
+        domain_type: str = None,
     ) -> dict:
         scheduler = ctx_vars.get("scheduler", "kubernetes")
         machine_type = ctx_vars.get("machine_type", "a3-ultragpu-8g")
+
+        if domain_type:
+            ctx_vars["domain_type"] = domain_type
 
         context_dict = {
             "variables": ctx_vars,
@@ -198,7 +223,11 @@ podAntiAffinity:
             context_dict.update(extra_context)
 
         TestHelper._merge_configs(
-            context_dict, configs, machine_type, ramble_app_name
+            context_dict,
+            configs,
+            machine_type,
+            ramble_app_name,
+            domain_type=domain_type,
         )
 
         if scheduler == "slurm":
@@ -225,6 +254,7 @@ podAntiAffinity:
         nodes_list: list[str] = None,
         extra_context: dict = None,
         default_config_file: str = None,
+        domain_type: str = None,
     ) -> dict:
         ctx_vars = copy.deepcopy(variables)
         scheduler = ctx_vars.get("scheduler", "kubernetes")
@@ -243,6 +273,7 @@ podAntiAffinity:
             ramble_app_name,
             nodes_str=sched_nodes_str,
             extra_context=extra_context,
+            domain_type=domain_type,
         )
 
         if default_config_file:
@@ -397,20 +428,34 @@ podAntiAffinity:
         configs,
         nodes_list,
         test_type="nccl-cluster",
+        node_to_loc=None,
     ):
-        context_dict = TestHelper._prepare_cluster_context(
-            variables,
-            configs,
-            ramble_app_name="nccl-tests",
-            nodes_list=nodes_list,
-        )
-
+        domain_type = None
         if test_type == "nccl-pairwise":
+            if node_to_loc and len(nodes_list) == 2:
+                topo_val = get_topology(
+                    nodes_list[0], nodes_list[1], node_to_loc
+                )
+                domain_type = (
+                    topo_val if topo_val != "unknown" else "interdomain"
+                )
+            else:
+                domain_type = "interdomain"
             experiment_name = (
                 f"{experiment_name}-{nodes_list[0]}-{nodes_list[1]}"
             )
         elif test_type == "nccl-single-node":
             experiment_name = f"{experiment_name}-{nodes_list[0]}"
+
+        context_dict = TestHelper._prepare_cluster_context(
+            variables,
+            configs,
+            ramble_app_name="nccl-tests",
+            nodes_list=nodes_list,
+            domain_type=domain_type,
+        )
+
+        if test_type == "nccl-single-node":
             context_dict.setdefault("env_vars", {}).setdefault("set", {})[
                 "NCCL_NET"
             ] = "Socket"
@@ -471,7 +516,7 @@ podAntiAffinity:
         variables, experiment_name, configs, test_type, topology=None
     ):
         all_nodes = variables.get("nodes", [])
-
+        node_to_loc = None
         if test_type in ("nccl-pairwise", "nccl-cluster"):
             if not all_nodes or len(all_nodes) < 3:
                 logger.warning(
@@ -482,6 +527,7 @@ podAntiAffinity:
         if test_type == "nccl-pairwise":
             if topology:
                 node_groups = TestHelper.generate_topological_pairs(topology)
+                node_to_loc = build_node_to_location(topology)
             else:
                 # Fallback: create a dummy topology with all nodes in a single block
                 dummy_topology = {"default": {"default-subblock": all_nodes}}
@@ -500,6 +546,7 @@ podAntiAffinity:
                 copy.deepcopy(configs),
                 nodes,
                 test_type,
+                node_to_loc,
             )
             for nodes in node_groups
         ]

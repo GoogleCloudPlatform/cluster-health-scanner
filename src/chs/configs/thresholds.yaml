@@ -421,11 +421,21 @@ a4x-highgpu-4g:
     type: min
     thresholds:
       bandwidth:
-        - value: 780.0
+        - value: 795.0
           conditions:
+            domain_type: "intradomain"
             workload_name: "all-reduce"
-        - value: 680.0
+        - value: 734.0
           conditions:
+            domain_type: "intradomain"
+            workload_name: "all-gather"
+        - value: 314.0
+          conditions:
+            domain_type: "interdomain"
+            workload_name: "all-reduce"
+        - value: 205.0
+          conditions:
+            domain_type: "interdomain"
             workload_name: "all-gather"
   gemm:
     type: min

@@ -95,6 +95,12 @@ class KubernetesJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="extra_pod_annotations_yaml",
+        default="",
+        description="Raw YAML string for extra Pod spec.template.metadata.annotations",
+    )
+
+    workflow_manager_variable(
         name="node_selector_yaml",
         default="",
         description="Raw YAML string for spec.template.spec.nodeSelector",
@@ -158,6 +164,12 @@ class KubernetesJobset(WorkflowManagerBase):
         name="container_resources_yaml",
         default="",
         description="Raw YAML for container resources (e.g. nvidia.com/gpu)",
+    )
+
+    workflow_manager_variable(
+        name="extra_container_resources_yaml",
+        default="",
+        description="Raw YAML string for extra container resources (e.g. claims)",
     )
 
     workflow_manager_variable(
@@ -265,9 +277,12 @@ class KubernetesJobset(WorkflowManagerBase):
         pl = self._yaml_block("pod_labels_yaml", "labels", 14).replace(
             raw_job_name, sanitized_job_name
         )
-        pa = self._yaml_block(
-            "pod_annotations_yaml", "annotations", 14
-        ).replace(raw_job_name, sanitized_job_name)
+        base_pa = self._yaml_append("pod_annotations_yaml", 16)
+        extra_pa = self._yaml_append("extra_pod_annotations_yaml", 16)
+        all_pa = "\n".join(s for s in [base_pa, extra_pa] if s).replace(
+            raw_job_name, sanitized_job_name
+        )
+        pa = f"{' ' * 14}annotations:\n{all_pa}" if all_pa else ""
         ns = self._yaml_block("node_selector_yaml", "nodeSelector", 14).replace(
             raw_job_name, sanitized_job_name
         )
@@ -278,7 +293,10 @@ class KubernetesJobset(WorkflowManagerBase):
             raw_job_name, sanitized_job_name
         )
 
-        c_res = self._yaml_block("container_resources_yaml", "resources", 16)
+        base_cr = self._yaml_append("container_resources_yaml", 18)
+        extra_cr = self._yaml_append("extra_container_resources_yaml", 18)
+        all_cr = "\n".join(s for s in [base_cr, extra_cr] if s)
+        c_res = f"{' ' * 16}resources:\n{all_cr}" if all_cr else ""
         c_sec = self._yaml_block(
             "container_security_context_yaml", "securityContext", 16
         )

@@ -1668,6 +1668,114 @@ class TestBOHGenerator(unittest.TestCase):
             95.0,
         )
 
+    def test_pairwise_interdomain_and_intradomain_thresholds(self):
+        """Test thresholds for interdomain and intradomain pairs."""
+        thresholds_data = {
+            "default": {
+                "nccl-pairwise": {
+                    "type": "min",
+                    "thresholds": {
+                        "bandwidth": [
+                            {
+                                "value": 100,
+                                "conditions": {"domain_type": "intradomain"},
+                            },
+                            {
+                                "value": 50,
+                                "conditions": {"domain_type": "interdomain"},
+                            },
+                        ]
+                    },
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh_domain.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        data = {
+            "experiments": [
+                {
+                    "experiment_name": "nccl-pairwise-node-1-node-2",
+                    "RAMBLE_VARIABLES": {
+                        "chs_test_name": "nccl-pairwise",
+                        "domain_type": "intradomain",
+                    },
+                    "RAMBLE_RAW_VARIABLES": {"nodes": ["node-1", "node-2"]},
+                    "CONTEXTS": [
+                        {
+                            "name": "1073741824",
+                            "foms": [
+                                {"name": "out-of-place Bandwidth", "value": 90}
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "experiment_name": "nccl-pairwise-node-1-node-3",
+                    "RAMBLE_VARIABLES": {
+                        "chs_test_name": "nccl-pairwise",
+                        "domain_type": "interdomain",
+                    },
+                    "RAMBLE_RAW_VARIABLES": {"nodes": ["node-1", "node-3"]},
+                    "CONTEXTS": [
+                        {
+                            "name": "1073741824",
+                            "foms": [
+                                {"name": "out-of-place Bandwidth", "value": 60}
+                            ],
+                        }
+                    ],
+                },
+            ]
+        }
+        self._write_json(data)
+        generator = BOHGenerator(
+            self.test_json_path,
+            thresholds_path=thresh_file,
+        )
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 2)
+
+        # Pair 1: node-1 <-> node-2 (intradomain) -> evaluated vs 95
+        # (100 * 0.95) -> 90 < 95 => FAILED
+        result_intra = next(
+            r
+            for r in report.test_results
+            if {t.node_name for t in r.target_resources} == {"node-1", "node-2"}
+        )
+        self.assertEqual(result_intra.result_status, pb.RESULT_STATUS_FAILED)
+        metric_intra = next(
+            m
+            for m in result_intra.metrics
+            if m.validation_criteria.expected_value.number_value > 0
+        )
+        self.assertEqual(
+            metric_intra.validation_criteria.expected_value.number_value,
+            95.0,
+        )
+
+        # Pair 2: node-1 <-> node-3 (interdomain) -> evaluated vs 48
+        # (50 * 0.95) -> 60 >= 48 => SUCCESS
+        result_inter = next(
+            r
+            for r in report.test_results
+            if {t.node_name for t in r.target_resources} == {"node-1", "node-3"}
+        )
+        self.assertEqual(result_inter.result_status, pb.RESULT_STATUS_SUCCESS)
+        metric_inter = next(
+            m
+            for m in result_inter.metrics
+            if m.validation_criteria.expected_value.number_value > 0
+        )
+        self.assertEqual(
+            metric_inter.validation_criteria.expected_value.number_value,
+            48.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

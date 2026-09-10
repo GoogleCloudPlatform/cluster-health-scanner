@@ -17,6 +17,10 @@ from chs.core.plugin_base import ColumnDef, PluginDetailReport, TableDataModel
 from chs.protos import bill_of_health_pb2 as pb
 from chs.plugins.utils.rendering import extract_node_names, format_val
 from chs.utils import theme
+from chs.utils.topology import (
+    build_node_to_location,
+    get_topological_context,
+)
 from . import validation_renderer
 
 from rich.table import Table
@@ -48,26 +52,6 @@ def get_peak_metrics(metrics: list[pb.Metric]) -> PeakMetrics:
                     except ValueError:
                         max_size = "Unknown"
     return PeakMetrics(max_bw, max_size)
-
-
-def get_topological_context(
-    node1: str, node2: str, node_to_location: dict[str, dict[str, str]]
-) -> str:
-    if not node_to_location:
-        return "Unknown"
-
-    loc1 = node_to_location.get(node1)
-    loc2 = node_to_location.get(node2)
-
-    if loc1 and loc2:
-        if loc1["block"] != loc2["block"]:
-            return "Inter-Block"
-        elif loc1["subblock"] != loc2["subblock"]:
-            return "Inter-Subblock"
-        else:
-            return "Intra-Subblock"
-
-    return "Unknown"
 
 
 def create_nccl_table(
@@ -117,15 +101,7 @@ def extract_nccl_detail_data(
         r.result_status == pb.RESULT_STATUS_UNKNOWN for r in test_results
     )
 
-    node_to_location = {}
-    if topology:
-        for block, subblocks in topology.items():
-            for subblock, nodes in subblocks.items():
-                for node in nodes:
-                    node_to_location[node] = {
-                        "block": block,
-                        "subblock": subblock,
-                    }
+    node_to_location = build_node_to_location(topology)
 
     include_topology = False
     if node_to_location:

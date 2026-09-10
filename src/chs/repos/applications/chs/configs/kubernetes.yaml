@@ -359,8 +359,6 @@ a3-megagpu-8g:
 a4x-highgpu-4g:
   variables:
     pod_annotations_yaml: |
-      compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
-      compute-domain.nvidia.com/domain-name: {job_name}-cd
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
@@ -398,28 +396,9 @@ a4x-highgpu-4g:
         nvidia.com/gpu: {gpus_per_node}
       requests:
         nvidia.com/gpu: {gpus_per_node}
-      claims:
-      - name: compute-domain-channel
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
-    pod_resource_claims_yaml: |
-      - name: compute-domain-channel
-        resourceClaimTemplateName: {job_name}-cdc
-    custom_resources_yaml: |
-      apiVersion: resource.nvidia.com/v1beta1
-      kind: ComputeDomain
-      metadata:
-        name: {job_name}-cd
-        namespace: "{kubernetes_namespace}"
-        labels:
-          chs-run: {job_name}
-      spec:
-        numNodes: {n_nodes}
-        channel:
-          resourceClaimTemplate:
-            name: {job_name}-cdc
-      ---
   nccl-tests:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
@@ -441,6 +420,33 @@ a4x-highgpu-4g:
           --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars} bash -c 'if [ -f /usr/local/gib/scripts/set_nccl_env.sh ]; then source /usr/local/gib/scripts/set_nccl_env.sh; fi; "$@"' --
+    intradomain:
+      variables:
+        extra_pod_annotations_yaml: |
+          compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+          compute-domain.nvidia.com/domain-name: {job_name}-cd
+        extra_container_resources_yaml: |
+          claims:
+          - name: compute-domain-channel
+        pod_resource_claims_yaml: |
+          - name: compute-domain-channel
+            resourceClaimTemplateName: {job_name}-cdc
+        custom_resources_yaml: |
+          apiVersion: resource.nvidia.com/v1beta1
+          kind: ComputeDomain
+          metadata:
+            name: {job_name}-cd
+            namespace: "{kubernetes_namespace}"
+            labels:
+              chs-run: {job_name}
+          spec:
+            numNodes: {n_nodes}
+            channel:
+              resourceClaimTemplate:
+                name: {job_name}-cdc
+          ---
+    interdomain:
+      variables: {}
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]

@@ -34,6 +34,11 @@ from chs.utils.theme import (
     CHS_FAILURE_STYLE,
     CHS_NEUTRAL_STYLE,
 )
+from chs.utils.topology import (
+    build_node_to_location,
+    get_topological_context,
+    get_topology,
+)
 
 __all__ = [
     "ChsAppData",
@@ -53,4 +58,7 @@ __all__ = [
     "get_sanitized_cluster_name",
     "generate_random_suffix",
     "is_in_cluster",
+    "build_node_to_location",
+    "get_topological_context",
+    "get_topology",
 ]
