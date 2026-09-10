@@ -324,11 +324,30 @@ a4-highgpu-8g:
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 768.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 725.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 642.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 381.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 73.0
+          conditions:
+            workload_name: "all-to-all"
+  gemm:
+    type: min
+    thresholds:
+      performance: 70000
   nvidia-smi:
     type: scalar
     thresholds:
