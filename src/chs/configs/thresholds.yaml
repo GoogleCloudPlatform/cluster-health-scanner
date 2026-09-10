@@ -366,7 +366,16 @@ a4-highgpu-8g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 357.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 368.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 60.0
+          conditions:
+            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
