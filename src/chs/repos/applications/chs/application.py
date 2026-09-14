@@ -220,10 +220,7 @@ class Chs(ExecutableApplication):
             ]:
                 topology = None
                 if test.name == "nccl-pairwise":
-                    workspace_dir = self.expander.expand_var_name(
-                        "workspace_dir"
-                    )
-                    topo_path = os.path.join(workspace_dir, "topology.json")
+                    topo_path = os.path.join(workspace.root, "topology.json")
 
                     if os.path.exists(topo_path):
                         try:

@@ -149,12 +149,6 @@ class KubernetesJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
-        name="container_work_dir",
-        default="/workspace",
-        description="Path in container for experiment directory tree mapping",
-    )
-
-    workflow_manager_variable(
         name="app_workdir",
         default="",
         description="Optional working directory override defaults to experiment dir",
@@ -252,16 +246,7 @@ class KubernetesJobset(WorkflowManagerBase):
         experiment_run_dir = expander.expand_var_name("experiment_run_dir")
         app_workdir = expander.expand_var_name("app_workdir")
 
-        container_work_dir = expander.expand_var_name("container_work_dir")
-        workspace_dir = expander.expand_var_name("workspace_dir")
         container_image = expander.expand_var_name("container_image")
-
-        if container_work_dir and workspace_dir:
-            raw_cmd = raw_cmd.replace(workspace_dir, container_work_dir)
-            experiment_run_dir = experiment_run_dir.replace(
-                workspace_dir, container_work_dir
-            )
-            app_workdir = app_workdir.replace(workspace_dir, container_work_dir)
 
         workdir = app_workdir if app_workdir else experiment_run_dir
 
