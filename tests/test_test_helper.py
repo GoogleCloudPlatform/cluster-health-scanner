@@ -161,6 +161,56 @@ class TestTestHelper(unittest.TestCase):
             self.assertEqual(results[0].context_name, "test-exp-node1-node2")
             self.assertEqual(results[1].context_name, "test-exp-node3-node4")
 
+    def test_nccl_cluster_skipped_when_few_nodes(self):
+        configs = {
+            "a3-ultragpu-8g": {
+                "nccl-tests": {
+                    "variables": {},
+                    "env_vars": {},
+                    "success_criteria": [],
+                    "modifiers": [],
+                }
+            }
+        }
+        for node_list in [[], ["node1"], ["node1", "node2"]]:
+            variables = {
+                "nodes": node_list,
+                "timeout": 600,
+                "deadline": 2400,
+            }
+            results = _TestHelper.nccl_test(
+                variables, "test-exp", configs, "nccl-cluster"
+            )
+            self.assertEqual(results, [])
+
+    def test_nccl_cluster_runs_when_three_or_more_nodes(self):
+        variables = {
+            "nodes": ["node1", "node2", "node3"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a3-ultragpu-8g": {
+                "nccl-tests": {
+                    "variables": {},
+                    "env_vars": {},
+                    "success_criteria": [],
+                    "modifiers": [],
+                }
+            }
+        }
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict"
+        ) as mock_create:
+            mock_create.side_effect = lambda name, ctx: mock.Mock(
+                context_name=name
+            )
+            results = _TestHelper.nccl_test(
+                variables, "test-exp", configs, "nccl-cluster"
+            )
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].context_name, "test-exp")
+
     def test_prepare_base_context(self):
         ctx_vars = {
             "scheduler": "slurm",

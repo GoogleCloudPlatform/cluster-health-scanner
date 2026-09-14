@@ -472,13 +472,14 @@ podAntiAffinity:
     ):
         all_nodes = variables.get("nodes", [])
 
-        if test_type == "nccl-pairwise":
+        if test_type in ("nccl-pairwise", "nccl-cluster"):
             if not all_nodes or len(all_nodes) < 3:
                 logger.warning(
-                    f"The 'nccl-pairwise' diagnostic requires a minimum of 3 nodes, but only {len(all_nodes)} are available. Skipping this test."
+                    f"The '{test_type}' diagnostic requires a minimum of 3 nodes, but only {len(all_nodes)} are available. Skipping this test."
                 )
                 return []
 
+        if test_type == "nccl-pairwise":
             if topology:
                 node_groups = TestHelper.generate_topological_pairs(topology)
             else:
