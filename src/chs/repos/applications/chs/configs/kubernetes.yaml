@@ -531,11 +531,13 @@ a4x-maxgpu-4g-metal:
     container_resources_yaml: |
       limits:
         nvidia.com/gpu: {gpus_per_node}
+      requests:
+        nvidia.com/gpu: {gpus_per_node}
+      claims:
+      - name: compute-domain-channel
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
-    claims:
-      - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
         resourceClaimTemplateName: {job_name}-cdc
@@ -563,7 +565,6 @@ a4x-maxgpu-4g-metal:
         NCCL_DEBUG: INFO
         NCCL_TESTS_SPLIT_MASK: "0x0"
         LD_LIBRARY_PATH: "/usr/local/nvidia/lib64:/usr/local/gib/lib64"
-        NCCL_MNNVL_ENABLE: "0"
     variables:
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
