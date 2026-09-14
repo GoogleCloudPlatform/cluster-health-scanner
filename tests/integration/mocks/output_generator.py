@@ -85,11 +85,11 @@ GPU_DCGM_TEMPLATE = """\
 """
 
 GPU_STREAM_TEMPLATE = """\
-0: Device 0: ... = {bandwidth} GB/s PEAK
-0: Copy: {bandwidth} 0.1 0.1 0.1
-0: Scale: {bandwidth} 0.1 0.1 0.1
-0: Add: {bandwidth} 0.1 0.1 0.1
-0: Triad: {bandwidth} 0.1 0.1 0.1
+0: Device 0: ... = {peak_bw} GB/s PEAK
+0: Copy: {rate} 0.1 0.1 0.1
+0: Scale: {rate} 0.1 0.1 0.1
+0: Add: {rate} 0.1 0.1 0.1
+0: Triad: {rate} 0.1 0.1 0.1
 """
 
 GPU_NCCL_TEMPLATE = (
@@ -119,6 +119,13 @@ class RambleOutputGenerator:
     HEALTHY_GPU_BW = 1000.0
     HEALTHY_NCCL_BW = 5500.0
     HEALTHY_GPU_TFLOPS = 45000.0
+
+    HEALTHY_GEMM_TFLOPS_BY_FAMILY = (
+        ("a4x", 45000.0),
+        ("a4-highgpu", 80000.0),
+        ("a3-ultra", 60000.0),
+        ("a3-mega", 60000.0),
+    )
 
     def __init__(self, config_path: str):
         self.config_path = config_path
@@ -438,7 +445,7 @@ class RambleOutputGenerator:
         lines = []
         for i in range(gpu_count):
             lines.append(
-                f"{i}, {gpu_name}, 535.104, P0, 00000000:00:{i+4:02x}.0, "
+                f"{i}, {gpu_name}, 535.104, P0, 00000000:00:{i + 4:02x}.0, "
                 f"000000000000{i}, "
                 f"00000000-0000-0000-0000-00000000000{i}, "
                 "100.0, 200.0, 1000, 1000"
@@ -455,13 +462,21 @@ class RambleOutputGenerator:
     def populate_stream_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
             return "HOST {node}: " + str(scenario.get("stderr", "Crash")) + "\n"
-        bandwidth = self.HEALTHY_GPU_BW
+
+        peak_bw_gb_s = self.HEALTHY_GPU_BW
+        achieved_gb_s = peak_bw_gb_s * 0.90
+
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
-            bandwidth = metrics.get(
-                "Bandwidth", metrics.get("bandwidth", bandwidth)
+            achieved_gb_s = float(
+                metrics.get(
+                    "Bandwidth", metrics.get("bandwidth", peak_bw_gb_s * 0.50)
+                )
             )
-        return GPU_STREAM_TEMPLATE.replace("{bandwidth}", str(bandwidth))
+
+        return GPU_STREAM_TEMPLATE.replace(
+            "{peak_bw}", f"{peak_bw_gb_s:.1f}"
+        ).replace("{rate}", f"{achieved_gb_s * 1000.0:.1f}")
 
     def populate_nccl_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
@@ -479,7 +494,13 @@ class RambleOutputGenerator:
     def populate_gemm_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
             return "HOST {node}: " + str(scenario.get("stderr", "Crash")) + "\n"
+        machine_type = self._get_machine_type(scenario).lower()
         tflops = self.HEALTHY_GPU_TFLOPS
+        for family, healthy_tflops in self.HEALTHY_GEMM_TFLOPS_BY_FAMILY:
+            if family in machine_type:
+                tflops = healthy_tflops
+                break
+
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
             tflops = metrics.get(
@@ -489,4 +510,5 @@ class RambleOutputGenerator:
                     metrics.get("Value", tflops),
                 ),
             )
+
         return GPU_GEMM_TEMPLATE.replace("{tflops}", f"{float(tflops):.1f}")

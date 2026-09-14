@@ -564,29 +564,77 @@ class TestIntegrationValidator(unittest.TestCase):
             report.passed, f"Report failed: {report.format_summary()}"
         )
 
-    def test_stream_efficiency_calculation(self):
-        """Verifies efficiency metric is computed from Rate and PEAK
-        Bandwidth.
-        """
-        ctx = ValidationContext.from_boh_result(
+    def _stream_ctx(self, metrics):
+        return ValidationContext.from_boh_result(
             boh_match={
                 "test_name": "stream",
                 "status": "PASSED",
-                "metrics": [
-                    {"key": "Rate", "value": 2400.0},
-                    {"key": "PEAK Bandwidth", "value": 3000.0},
-                ],
+                "metrics": [{"key": k, "value": v} for k, v in metrics.items()],
             },
             target_scenario={"test": "stream", "nodepool": "gpu-pool"},
         )
-        self.assertIn("efficiency", ctx.metrics)
-        self.assertAlmostEqual(ctx.metrics["efficiency"], 0.8)
+
+    def test_stream_efficiency_calculation(self):
+        """Verifies efficiency is derived from the achieved/peak bandwidth
+        pair, for both the standardized and the legacy metric names.
+        """
+        cases = [
+            (
+                "standardized",
+                {"Achieved Bandwidth": 2700.0, "Peak Bandwidth": 3000.0},
+                0.9,
+            ),
+            (
+                "legacy",
+                {"Rate": 2400.0, "PEAK Bandwidth": 3000.0},
+                0.8,
+            ),
+            (
+                "mixed_precedence",
+                {
+                    "Achieved Bandwidth": 2700.0,
+                    "Peak Bandwidth": 3000.0,
+                    "Rate": 1500.0,
+                    "PEAK Bandwidth": 3000.0,
+                },
+                0.9,
+            ),
+        ]
 
         validator = IntegrationValidator()
-        report = validator.validate(
-            ctx, {"outcome": "PASSED", "metrics": {"efficiency": {"min": 0.8}}}
+        for name, metrics, expected in cases:
+            with self.subTest(keys=name):
+                ctx = self._stream_ctx(metrics)
+                self.assertIn("efficiency", ctx.metrics)
+                self.assertAlmostEqual(ctx.metrics["efficiency"], expected)
+
+                report = validator.validate(
+                    ctx,
+                    {
+                        "outcome": "PASSED",
+                        "metrics": {"efficiency": {"min": expected}},
+                    },
+                )
+                self.assertTrue(report.passed)
+
+    def test_stream_efficiency_zero_peak(self):
+        """A zero peak bandwidth must not raise or emit a bogus efficiency."""
+        ctx = self._stream_ctx(
+            {"Achieved Bandwidth": 2700.0, "Peak Bandwidth": 0.0}
         )
-        self.assertTrue(report.passed)
+        self.assertNotIn("efficiency", ctx.metrics)
+
+    def test_stream_efficiency_non_numeric_falls_back_to_legacy(self):
+        """An unparsable standardized value falls back to the legacy key."""
+        ctx = self._stream_ctx(
+            {
+                "Achieved Bandwidth": "N/A",
+                "Rate": 2400.0,
+                "Peak Bandwidth": 3000.0,
+            }
+        )
+        self.assertIn("efficiency", ctx.metrics)
+        self.assertAlmostEqual(ctx.metrics["efficiency"], 0.8)
 
 
 if __name__ == "__main__":

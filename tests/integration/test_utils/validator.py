@@ -23,6 +23,26 @@ from typing import Any, Callable, Dict, List, Optional
 import yaml
 
 
+def _first_numeric_metric(
+    metrics: Dict[str, Any], keys: tuple[str, ...]
+) -> Optional[float]:
+    """Returns the first key in `keys` that holds a numeric value.
+
+    Keys are tried in order so that standardized metric names take precedence
+    over legacy aliases. Values that cannot be coerced to a float are skipped
+    rather than aborting the lookup.
+    """
+    for key in keys:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 @dataclass(frozen=True)
 class ValidationContext:
     """Normalized, scheduler-agnostic test execution context."""
@@ -107,18 +127,20 @@ class ValidationContext:
                 metrics_dict[alias_k] = metrics_dict[orig_k]
         if "Value" in metrics_dict and "performance" not in metrics_dict:
             metrics_dict["performance"] = metrics_dict["Value"]
+        rate_val = _first_numeric_metric(
+            metrics_dict, ("Achieved Bandwidth", "Rate")
+        )
+        peak_val = _first_numeric_metric(
+            metrics_dict, ("Peak Bandwidth", "PEAK Bandwidth")
+        )
+
         if (
-            "Rate" in metrics_dict
-            and "PEAK Bandwidth" in metrics_dict
+            rate_val is not None
+            and peak_val is not None
+            and peak_val > 0
             and "efficiency" not in metrics_dict
         ):
-            try:
-                rate_val = float(metrics_dict["Rate"])
-                peak_val = float(metrics_dict["PEAK Bandwidth"])
-                if peak_val > 0:
-                    metrics_dict["efficiency"] = rate_val / peak_val
-            except (ValueError, TypeError, ZeroDivisionError):
-                pass
+            metrics_dict["efficiency"] = rate_val / peak_val
 
         raw_degraded = boh_match.get("degraded_links") or target_scenario.get(
             "degraded_links", []
