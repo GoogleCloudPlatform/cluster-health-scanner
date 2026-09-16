@@ -68,12 +68,12 @@ suites:
     variables:
       timeout: 210
   - name: nccl-cluster
-    workloads: [all-gather, all-reduce, all-to-all]
+    workloads: [all-gather, all-reduce]
     variables:
       begin_message_size: 256M
       end_message_size: 8G
   - name: nccl-pairwise
-    workloads: [all-gather, all-reduce, all-to-all]
+    workloads: [all-gather, all-reduce]
     variables:
       begin_message_size: 256M
       end_message_size: 8G

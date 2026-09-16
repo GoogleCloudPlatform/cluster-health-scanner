@@ -295,12 +295,7 @@ a3-megagpu-8g:
       processes_per_node: {gpus_per_node}
       mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
       mpi_command: |
-        WORKLOAD_NAME=$(basename $(dirname $(pwd)))
-        case "$WORKLOAD_NAME" in
-          all-to-all) BINARY="alltoall_perf" ;;
-          send-recv) BINARY="sendrecv_perf" ;;
-          *) BINARY=$(echo $WORKLOAD_NAME | tr '-' '_')_perf ;;
-        esac
+        BINARY=$(basename $(dirname $(pwd)) | tr '-' '_')_perf
         mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 \
           --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_args "-p {ssh_port}" \
           -np $(( {n_nodes} * {processes_per_node} )) \

@@ -307,9 +307,6 @@ a3-ultragpu-8g:
         - value: 334.0
           conditions:
             workload_name: "all-gather"
-        - value: 60.0
-          conditions:
-            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
@@ -350,9 +347,6 @@ a3-megagpu-8g:
         - value: 190.0
           conditions:
             workload_name: "all-gather"
-        - value: 40.0
-          conditions:
-            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
@@ -373,9 +367,6 @@ a4-highgpu-8g:
         - value: 368.0
           conditions:
             workload_name: "all-gather"
-        - value: 60.0
-          conditions:
-            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
@@ -396,9 +387,6 @@ a4-highgpu-8g:
         - value: 381.0
           conditions:
             workload_name: "all-gather"
-        - value: 73.0
-          conditions:
-            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
@@ -419,9 +407,6 @@ a4x-highgpu-4g:
         - value: 600.0
           conditions:
             workload_name: "all-gather"
-        - value: 580.0
-          conditions:
-            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
@@ -432,9 +417,6 @@ a4x-highgpu-4g:
         - value: 800.0
           conditions:
             workload_name: "all-gather"
-        - value: 550.0
-          conditions:
-            workload_name: "all-to-all"
   nccl-pairwise:
     type: min
     thresholds:
@@ -445,9 +427,6 @@ a4x-highgpu-4g:
         - value: 680.0
           conditions:
             workload_name: "all-gather"
-        - value: 660.0
-          conditions:
-            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
@@ -468,9 +447,6 @@ a4x-maxgpu-4g-metal:
         - value: 340.0
           conditions:
             workload_name: "all-gather"
-        - value: 80.0
-          conditions:
-            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
@@ -491,9 +467,6 @@ a4x-maxgpu-4g-metal:
         - value: 380.0
           conditions:
             workload_name: "all-gather"
-        - value: 40.0
-          conditions:
-            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
