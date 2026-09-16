@@ -97,7 +97,7 @@ def test_stream_renderer_get_detail_data():
     res = pb.TestResult(test_name="stream", test_level="standard")
     res.target_resources.add(node_name="node-1")
 
-    m1 = res.metrics.add(key="Rate")
+    m1 = res.metrics.add(key="Achieved Bandwidth")
     m1.value.number_value = 950500.0
     m1.metadata.fields["context"].string_value = "Device 0 Copy"
 

@@ -115,6 +115,10 @@ class TestPlugin(ABC):
         """Returns True if the test generates one TestResult per node."""
         return False
 
+    def show_context_in_validation(self) -> bool:
+        """Returns True if context should be shown in validation tables."""
+        return False
+
     def post_process_test_result(self, test_result: pb.TestResult) -> None:
         """Hook to modify the TestResult before threshold evaluation."""
         pass

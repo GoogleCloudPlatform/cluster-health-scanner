@@ -16,7 +16,7 @@ tests:
   - name: nvidia-smi
     category: GPU Diagnostics
     description: Basic GPU health and driver check
-    long_description: Basic GPU health and driver check (Detailed)
+    long_description: Queries GPU status to measure power draw, clock frequencies, and performance states, while verifying driver health and GPU count.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -39,7 +39,7 @@ tests:
   - name: dcgm
     category: GPU Diagnostics
     description: Deep hardware diagnostics
-    long_description: Deep hardware diagnostics (Detailed)
+    long_description: Runs DCGM diagnostic suites to stress-test PCIe, memory, and compute engines, measuring hardware stability and identifying faults, thermal issues, or power throttling.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -62,7 +62,7 @@ tests:
   - name: gemm
     category: Compute
     description: General Matrix Multiply benchmark
-    long_description: General Matrix Multiply benchmark (Detailed)
+    long_description: Runs General Matrix Multiply (GEMM) benchmarks to measure peak floating-point compute throughput (TFLOPS) and verify computation correctness.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -85,7 +85,7 @@ tests:
   - name: nccl-single-node
     category: Network & Collectives
     description: Single node network testing
-    long_description: Single node network testing (Detailed)
+    long_description: Runs NCCL benchmarks within a single node to measure intra-node GPU-to-GPU bandwidth (GB/s) and latency.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -108,7 +108,7 @@ tests:
   - name: nccl-cluster
     category: Network & Collectives
     description: Full cluster ring bandwidth
-    long_description: Full cluster ring bandwidth (Detailed)
+    long_description: Runs NCCL benchmarks across multiple nodes to measure inter-node bandwidth (GB/s) and latency under collective workloads.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -131,7 +131,7 @@ tests:
   - name: nccl-pairwise
     category: Network & Collectives
     description: Node-to-node latency check
-    long_description: Node-to-node latency check (Detailed)
+    long_description: Runs NCCL benchmarks between node pairs to measure point-to-point bandwidth (GB/s) and latency, helping isolate degraded network links.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g
@@ -154,7 +154,7 @@ tests:
   - name: stream
     category: Memory
     description: Memory bandwidth benchmark
-    long_description: Memory bandwidth benchmark (Detailed)
+    long_description: Measures sustainable GPU memory bandwidth (GB/s) using the STREAM benchmark to verify memory subsystem throughput.
     platforms:
       - scheduler: slurm
         machine_type: a3-ultragpu-8g

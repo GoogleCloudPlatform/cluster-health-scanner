@@ -26,6 +26,44 @@ default:
     type: min
     thresholds:
       bandwidth: 50
+  stream:
+    type: relative
+    thresholds:
+      efficiency: 0.85
+  dcgm:
+    type: scalar
+    thresholds:
+      Result:
+        - value: "Pass"
+          conditions:
+            context: "memory"
+        - value: "Pass"
+          conditions:
+            context: "pcie"
+        - value: "Pass"
+          conditions:
+            context: "software"
+        - value: "Pass"
+          conditions:
+            context: "diagnostic"
+        - value: "Pass"
+          conditions:
+            context: "nvbandwidth"
+        - value: "Pass"
+          conditions:
+            context: "pulse_test"
+        - value: "Pass"
+          conditions:
+            context: "memtest"
+        - value: "Pass"
+          conditions:
+            context: "memory_bandwidth"
+        - value: "Pass"
+          conditions:
+            context: "targeted_stress"
+        - value: "Pass"
+          conditions:
+            context: "targeted_power"
 
 
 tpu7x-standard-4t:
@@ -242,23 +280,40 @@ a3-ultragpu-8g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 332.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 318.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 453.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 393.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
-  stream:
-    type: relative
-    thresholds:
-      efficiency: 0.8
+      bandwidth:
+        - value: 450.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 334.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 60.0
+          conditions:
+            workload_name: "all-to-all"
   gemm:
     type: min
     thresholds:
-      performance: 100
+      performance: 50000
   nvidia-smi:
     type: scalar
     thresholds:
@@ -268,29 +323,90 @@ a3-megagpu-8g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 167.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 166.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 455.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 393.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 320.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 190.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 40.0
+          conditions:
+            workload_name: "all-to-all"
+  gemm:
+    type: min
+    thresholds:
+      performance: 50000
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 8
 
 a4-highgpu-8g:
   nccl-cluster:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 357.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 368.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 60.0
+          conditions:
+            workload_name: "all-to-all"
   nccl-single-node:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 768.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 725.0
+          conditions:
+            workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
-      bandwidth: 80
+      bandwidth:
+        - value: 642.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 381.0
+          conditions:
+            workload_name: "all-gather"
+        - value: 73.0
+          conditions:
+            workload_name: "all-to-all"
+  gemm:
+    type: min
+    thresholds:
+      performance: 70000
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 8
 
 a4x-highgpu-4g:
   nccl-cluster:
@@ -332,10 +448,6 @@ a4x-highgpu-4g:
         - value: 660.0
           conditions:
             workload_name: "all-to-all"
-  stream:
-    type: relative
-    thresholds:
-      efficiency: 0.8
   gemm:
     type: min
     thresholds:
@@ -382,10 +494,6 @@ a4x-maxgpu-4g-metal:
         - value: 40.0
           conditions:
             workload_name: "all-to-all"
-  stream:
-    type: relative
-    thresholds:
-      efficiency: 0.8
   gemm:
     type: min
     thresholds:

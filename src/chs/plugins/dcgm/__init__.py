@@ -18,7 +18,8 @@ from .renderer import DcgmRenderer
 
 
 class DcgmPlugin(DcgmRenderer, DcgmExtractor, TestPlugin):
-    pass
+    def show_context_in_validation(self) -> bool:
+        return True
 
 
 __chs_plugin__ = {

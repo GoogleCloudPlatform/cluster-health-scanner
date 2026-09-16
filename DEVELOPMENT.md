@@ -48,7 +48,7 @@ pip cache purge
 pip install -e .
 ```
 
-**Note:** CHS depends on a specific branch of [Ramble](https://github.com/GoogleCloudPlatform/ramble). The `pyproject.toml` is configured to fetch it from the correct fork/branch.
+**Note:** CHS depends on a specific branch of [Ramble](https://github.com/Ramble-Project/ramble). The `pyproject.toml` is configured to fetch it from the correct fork/branch.
 
 
 ### Protobuf Compilation
@@ -99,19 +99,22 @@ pre-commit run --all-files
 
 ## 3. Running Tests
 
-All code changes must be tested. We use `unittest` (or `pytest` if configured) for testing.
+All code changes must be tested. We use the standard `unittest` module along with `coverage` to measure code coverage.
 
-### Running Unit Tests
+### Running Unit Tests with Coverage
 
-We use the standard `unittest` module for unit testing.
+You can execute tests and check coverage manually:
 
 ```bash
-# Run all tests
-python3 -m unittest discover tests
+# Run all tests and check coverage
+coverage run -m unittest discover tests
+coverage report --fail-under=65
 
 # Run a specific test file
 python3 -m unittest tests/test_ramble_manager.py
 ```
+
+Code coverage is also enforced locally via our `pre-commit` hooks. You can run them manually with `pre-commit run --all-files`.
 
 Tests should be run from the root of the repository. Ensure your virtual environment is activated and dependencies are installed.
 

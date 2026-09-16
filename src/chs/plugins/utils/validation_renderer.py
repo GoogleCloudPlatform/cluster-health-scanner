@@ -60,9 +60,13 @@ def render_validation_results(
     renderables = []
 
     for group in groups:
+        val_name = group.validation_name or "Efficiency"
+        formula_suffix = (
+            f" ({val_name} = {group.formula})" if group.formula else ""
+        )
         header = (
             f"\nValidation Results: {group.test_name} "
-            f"({group.test_level}) - [{group.nodes_str}]"
+            f"({group.test_level}){formula_suffix} - [{group.nodes_str}]"
         )
         title_text = Text(
             header,

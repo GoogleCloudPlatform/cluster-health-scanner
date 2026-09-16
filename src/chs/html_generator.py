@@ -431,6 +431,8 @@ class HtmlReportGenerator:
                 "status_summary": vg.status_summary,
                 "target_nodes": vg.target_nodes,
                 "nodes_str": vg.nodes_str,
+                "formula": vg.formula,
+                "validation_name": vg.validation_name,
                 "rows": [
                     {
                         "target": r.target,

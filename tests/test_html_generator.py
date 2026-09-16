@@ -130,6 +130,43 @@ def test_long_description_in_overview_report():
     for ts in overview_data["test_suite_breakdown"]:
         if "nvidia-smi" in ts["display_name"]:
             assert "long_description" in ts
-            assert "Detailed" in ts["long_description"]
+            assert "Queries GPU status" in ts["long_description"]
             found_nvidia = True
     assert found_nvidia
+
+
+def test_html_report_generator_validation_formula():
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-formula-123"
+
+    res = boh.test_results.add(
+        test_name="stream",
+        test_level="standard",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    t = res.target_resources.add()
+    t.node_name = "node-1"
+
+    m = res.metrics.add(key="Achieved Bandwidth", unit="GB/s")
+    m.value.number_value = 85.0
+    m.metadata.fields["relative"].number_value = 0.85
+    m.metadata.fields[
+        "relative_formula"
+    ].string_value = "Achieved Bandwidth / Peak Bandwidth"
+
+    crit = m.validation_criteria
+    crit.name = "efficiency"
+    crit.comparator = pb.Comparator.COMPARATOR_GTE
+    crit.expected_value.number_value = 0.8
+    crit.result_status = pb.RESULT_STATUS_SUCCESS
+
+    report_data = generator.generate_report_data(boh)
+
+    assert len(report_data["validation_tables"]) == 1
+    table = report_data["validation_tables"][0]
+    assert table["test_name"] == "stream"
+    assert table["formula"] == "Achieved Bandwidth / Peak Bandwidth"
+    assert table["validation_name"] == "Efficiency"
+    assert len(table["rows"]) == 1
+    assert table["rows"][0]["metric"] == "Efficiency"

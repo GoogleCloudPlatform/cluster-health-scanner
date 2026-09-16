@@ -264,6 +264,108 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(report.test_results[2].metrics[0].key, "m1")
         self.assertEqual(report.test_results[2].metrics[1].key, "m2")
 
+    @mock.patch("chs.core.plugin_manager.PluginManager.get_plugin")
+    def test_generate_context_metadata_normalization(self, mock_get_plugin):
+        """Test normalization of context metadata (null, unknown, None)."""
+        mock_plugin = mock.Mock()
+        mock_plugin.get_required_contexts.side_effect = lambda x: x
+        mock_plugin.get_fom_aliases.return_value = {}
+        mock_plugin.get_relative_fom_keys.return_value = []
+        mock_plugin.creates_per_node_results.return_value = False
+        mock_plugin.extract_test_info.side_effect = lambda exp: (
+            exp.get("experiment_name", "test_name"),
+            exp.get("workload_name", "test_level"),
+            "desc",
+        )
+
+        def mock_parse_context_metadata(ctx_name):
+            if ctx_name == "ctx_normal":
+                return {"context": "normalized_normal", "other_meta": "val"}
+            elif ctx_name == "ctx_null":
+                return {"context": "null"}
+            elif ctx_name == "ctx_unknown":
+                return {"context": "unknown"}
+            elif ctx_name == "ctx_none":
+                return {"context": None}
+            elif ctx_name == "ctx_missing":
+                return {"other_meta": "val"}
+            return {"context": ctx_name}
+
+        mock_plugin.parse_context_metadata.side_effect = (
+            mock_parse_context_metadata
+        )
+        mock_get_plugin.return_value = mock_plugin
+
+        data = {
+            "experiments": [
+                {
+                    "name": "test_exp",
+                    "CONTEXTS": [
+                        {
+                            "name": "ctx_normal",
+                            "foms": [{"name": "m_normal", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_null",
+                            "foms": [{"name": "m_null", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_unknown",
+                            "foms": [{"name": "m_unknown", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_none",
+                            "foms": [{"name": "m_none", "value": "1"}],
+                        },
+                        {
+                            "name": "ctx_missing",
+                            "foms": [{"name": "m_missing", "value": "1"}],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data)
+
+        generator = BOHGenerator(self.test_json_path)
+        report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        metrics = report.test_results[0].metrics
+        self.assertEqual(len(metrics), 5)
+
+        def find_metric(key):
+            for m in metrics:
+                if m.key == key:
+                    return m
+            self.fail(f"Metric {key} not found")
+
+        m_normal = find_metric("m_normal")
+        self.assertEqual(
+            m_normal.metadata.fields["context"].string_value,
+            "normalized_normal",
+        )
+        self.assertEqual(
+            m_normal.metadata.fields["other_meta"].string_value, "val"
+        )
+
+        m_null = find_metric("m_null")
+        self.assertEqual(m_null.metadata.fields["context"].string_value, "")
+
+        m_unknown = find_metric("m_unknown")
+        self.assertEqual(m_unknown.metadata.fields["context"].string_value, "")
+
+        m_none = find_metric("m_none")
+        self.assertEqual(m_none.metadata.fields["context"].string_value, "")
+
+        m_missing = find_metric("m_missing")
+        self.assertEqual(
+            m_missing.metadata.fields["context"].string_value, "ctx_missing"
+        )
+        self.assertEqual(
+            m_missing.metadata.fields["other_meta"].string_value, "val"
+        )
+
     def test_generate_metadata(self):
         """Test extraction of tags and log files."""
         data = {
@@ -533,7 +635,7 @@ class TestBOHGenerator(unittest.TestCase):
 
             yaml.dump(thresholds_data, f)
 
-        # Pass case: Rate=85, PEAK=100 -> 0.85 >= 0.8
+        # Pass case: Achieved Bandwidth=85, PEAK=100 -> 0.85 >= 0.8
         data_pass = {
             "experiments": [
                 {
@@ -541,11 +643,13 @@ class TestBOHGenerator(unittest.TestCase):
                     "CONTEXTS": [
                         {
                             "name": "null",
-                            "foms": [{"name": "PEAK Bandwidth", "value": 100}],
+                            "foms": [{"name": "Peak Bandwidth", "value": 100}],
                         },
                         {
                             "name": "Device 0",
-                            "foms": [{"name": "Rate", "value": 85}],
+                            "foms": [
+                                {"name": "Achieved Bandwidth", "value": 85}
+                            ],
                         },
                     ],
                 }
@@ -560,7 +664,7 @@ class TestBOHGenerator(unittest.TestCase):
             report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
         )
 
-        # Fail case: Rate=75, PEAK=100 -> 0.75 < 0.8
+        # Fail case: Achieved Bandwidth=75, PEAK=100 -> 0.75 < 0.8
         data_fail = {
             "experiments": [
                 {
@@ -568,11 +672,13 @@ class TestBOHGenerator(unittest.TestCase):
                     "CONTEXTS": [
                         {
                             "name": "null",
-                            "foms": [{"name": "PEAK Bandwidth", "value": 100}],
+                            "foms": [{"name": "Peak Bandwidth", "value": 100}],
                         },
                         {
                             "name": "Device 0",
-                            "foms": [{"name": "Rate", "value": 75}],
+                            "foms": [
+                                {"name": "Achieved Bandwidth", "value": 75}
+                            ],
                         },
                     ],
                 }
@@ -586,6 +692,115 @@ class TestBOHGenerator(unittest.TestCase):
         self.assertEqual(
             report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
         )
+
+    def test_generate_with_thresholds_relative_unit_conversion(self):
+        """Test 'relative' thresholds with unit normalization."""
+        thresholds_data = {
+            "default": {
+                "stream": {
+                    "type": "relative",
+                    "thresholds": {"efficiency": 0.8},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh_unit.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        # Pass case: 85000 MB/s -> 85 GB/s. 85/100 = 0.85 >= 0.8
+        data_pass = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [
+                                {
+                                    "name": "Peak Bandwidth",
+                                    "value": 100,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Device 0 Copy",
+                            "foms": [
+                                {
+                                    "name": "Achieved Bandwidth",
+                                    "value": 85000,
+                                    "units": "MB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+        # Verify the unit and value were updated in the report
+        rate_metric = next(
+            m
+            for m in report.test_results[0].metrics
+            if m.key == "Achieved Bandwidth"
+        )
+        self.assertEqual(rate_metric.unit, "GB/s")
+        self.assertEqual(rate_metric.value.number_value, 85.0)
+
+        # Fail case: 75000 MB/s -> 75 GB/s. 75/100 = 0.75 < 0.8
+        data_fail = {
+            "experiments": [
+                {
+                    "experiment_name": "stream",
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [
+                                {
+                                    "name": "Peak Bandwidth",
+                                    "value": 100,
+                                    "units": "GB/s",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Device 0 Copy",
+                            "foms": [
+                                {
+                                    "name": "Achieved Bandwidth",
+                                    "value": 75000,
+                                    "units": "MB/s",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_fail)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_FAILED
+        )
+        rate_metric = next(
+            m
+            for m in report.test_results[0].metrics
+            if m.key == "Achieved Bandwidth"
+        )
+        self.assertEqual(rate_metric.unit, "GB/s")
+        self.assertEqual(rate_metric.value.number_value, 75.0)
 
     def test_generate_fallback_string_match(self):
         """Test fallback string match is disabled when no thresholds defined."""
@@ -714,11 +929,13 @@ class TestBOHGenerator(unittest.TestCase):
                     "CONTEXTS": [
                         {
                             "name": "null",
-                            "foms": [{"name": "PEAK Bandwidth", "value": 0}],
+                            "foms": [{"name": "Peak Bandwidth", "value": 0}],
                         },
                         {
                             "name": "Device 0",
-                            "foms": [{"name": "Rate", "value": 50}],
+                            "foms": [
+                                {"name": "Achieved Bandwidth", "value": 50}
+                            ],
                         },
                     ],
                 }
@@ -1368,6 +1585,88 @@ class TestBOHGenerator(unittest.TestCase):
                         "must start with 'tpu-' prefix."
                     )
                     self.assertTrue(test_name.startswith("tpu-"), msg)
+
+    def test_stream_and_nvidia_smi_thresholds(self):
+        """Test default stream and nvidia-smi thresholds across GPU types."""
+        generator = BOHGenerator(self.test_json_path)
+        thresholds = generator._load_thresholds()
+
+        # Check stream is in default configuration
+        self.assertIn("stream", thresholds.get("default", {}))
+        self.assertEqual(thresholds["default"]["stream"]["type"], "relative")
+        self.assertEqual(
+            thresholds["default"]["stream"]["thresholds"]["efficiency"], 0.85
+        )
+
+        # Check nvidia-smi for 8-GPU and 4-GPU machine types
+        eight_gpu_machines = [
+            "a3-ultragpu-8g",
+            "a3-megagpu-8g",
+            "a4-highgpu-8g",
+        ]
+        four_gpu_machines = ["a4x-highgpu-4g", "a4x-maxgpu-4g-metal"]
+
+        for mtype in eight_gpu_machines:
+            self.assertIn(mtype, thresholds)
+            self.assertIn("nvidia-smi", thresholds[mtype])
+            self.assertEqual(thresholds[mtype]["nvidia-smi"]["type"], "scalar")
+            self.assertEqual(
+                thresholds[mtype]["nvidia-smi"]["thresholds"]["gpus"], 8
+            )
+
+        for mtype in four_gpu_machines:
+            self.assertIn(mtype, thresholds)
+            self.assertIn("nvidia-smi", thresholds[mtype])
+            self.assertEqual(thresholds[mtype]["nvidia-smi"]["type"], "scalar")
+            self.assertEqual(
+                thresholds[mtype]["nvidia-smi"]["thresholds"]["gpus"], 4
+            )
+
+    def test_gpu_min_threshold_5_percent_reduction(self):
+        """Test GPU min thresholds 5% reduction at runtime."""
+        thresholds_data = {
+            "a3-ultragpu-8g": {
+                "my-gpu-test": {
+                    "type": "min",
+                    "thresholds": {"performance": 100},
+                }
+            }
+        }
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            import yaml
+
+            yaml.dump(thresholds_data, f)
+
+        # 100 * 0.95 = 95. Value 96 passes reduced threshold (95), though < 100.
+        data_pass_reduced = {
+            "experiments": [
+                {
+                    "experiment_name": "my-gpu-test",
+                    "RAMBLE_VARIABLES": {"machine_type": "a3-ultragpu-8g"},
+                    "CONTEXTS": [
+                        {
+                            "name": "null",
+                            "foms": [{"name": "performance", "value": 96}],
+                        }
+                    ],
+                }
+            ]
+        }
+        self._write_json(data_pass_reduced)
+        generator = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        )
+        report = generator.generate()
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_SUCCESS
+        )
+        self.assertEqual(
+            report.test_results[0]
+            .metrics[0]
+            .validation_criteria.expected_value.number_value,
+            95.0,
+        )
 
 
 if __name__ == "__main__":

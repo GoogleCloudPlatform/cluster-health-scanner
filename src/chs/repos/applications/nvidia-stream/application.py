@@ -87,7 +87,7 @@ class NvidiaStream(ExecutableApplication):
     )
 
     figure_of_merit(
-        "PEAK Bandwidth",
+        "Peak Bandwidth",
         fom_regex=device_regex,
         group_name="peak_bw",
         units="GB/s",
@@ -95,7 +95,7 @@ class NvidiaStream(ExecutableApplication):
     )
 
     figure_of_merit(
-        "Rate",
+        "Achieved Bandwidth",
         fom_regex=function_regex,
         group_name="rate",
         units="MB/s",

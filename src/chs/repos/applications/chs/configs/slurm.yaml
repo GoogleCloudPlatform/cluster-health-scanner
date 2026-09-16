@@ -67,6 +67,7 @@ a3-megagpu-8g:
       begin_message_size: "256M"
       end_message_size: "8G"
   nvidia-smi:
+    modifiers: [{name: "generic-error-detector"}]
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -124,6 +125,7 @@ a3-ultragpu-8g:
       n: 20480
       k: 20480
   nvidia-smi:
+    modifiers: [{name: "generic-error-detector"}]
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -181,6 +183,7 @@ a4-highgpu-8g:
       n: 32768
       k: 32768
   nvidia-smi:
+    modifiers: [{name: "generic-error-detector"}]
     variables:
       n_ranks: 1
       processes_per_node: 1
@@ -223,12 +226,13 @@ a4x-highgpu-4g:
       n: 51200
       k: 51200
   nvidia-smi:
+    modifiers: [{name: "generic-error-detector"}]
     variables:
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
   nccl-tests:
-    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
       set:
         OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"

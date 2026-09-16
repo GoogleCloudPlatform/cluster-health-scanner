@@ -4,29 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chs"
-version = "0.1.0"
+version = "0.3.0"
 description = "CHS provides a comprehensive suite of tools for validating the health and performance of Accelerators."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.0,<9.0.0",
-    "ramble @ git+https://github.com/GoogleCloudPlatform/ramble.git@fbe8ae277e411ffc3e87b8069529a223e62c6a9e",  # May 13, 2026
+    "ramble @ git+https://github.com/Ramble-Project/ramble.git@fbe8ae277e411ffc3e87b8069529a223e62c6a9e",  # May 13, 2026
     "platformdirs>=3.0.0,<5.0.0",
     "protobuf>=4.21.0",
     "rich>=13.0.0",
     "questionary>=2.0.0,<3.0.0",
-    "pre-commit>=3.5.0",
     "google-cloud-storage>=2.10.0",
     "google-cloud-compute>=1.14.0,<2.0.0",
-    "pyOpenSSL<24.1.0",
-    "packaging>=23.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+dev = [
+    "pre-commit>=3.5.0",
+]
 test = [
     "pytest",
     "pytest-mock",
-    "pyyaml",
+    "coverage",
+    "pre-commit>=3.5.0",
 ]
 
 [project.scripts]
@@ -38,6 +40,13 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "chs" = ["**/*.yaml", "**/*.tpl", "**/*.html", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+
+[tool.coverage.run]
+source = ["chs"]
+omit = [
+    "*_pb2.py",
+    "src/chs/protos/*",
+]
 
 [tool.ruff]
 exclude = [

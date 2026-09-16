@@ -1,22 +1,26 @@
-FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:580.0.0-alpine
+FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine
 
-# Install system dependencies
-RUN apk add --no-cache \
+# Install system dependencies, latest security patches, and standalone kubectl
+RUN apk update && apk upgrade --no-cache && apk add --no-cache \
     build-base \
     git \
     python3 \
-    kubectl \
-    && gcloud components install gke-gcloud-auth-plugin --quiet
+    curl \
+    && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && chmod +x /usr/local/bin/kubectl \
+    && gcloud components install gke-gcloud-auth-plugin --quiet \
+    && pip install --no-cache-dir --upgrade pip cryptography pyopenssl
 
 WORKDIR /workspace
 ENV HOME=/workspace
 # Route Ramble's caches and repos into the CHS data directory
 ENV RAMBLE_USER_DIR=/workspace/.local/share/chs/.ramble
 
-# Create a virtual environment
+# Create a virtual environment and upgrade pip
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip
 
 # Copy the CHS source code and install
 COPY . /app

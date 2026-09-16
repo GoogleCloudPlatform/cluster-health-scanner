@@ -568,11 +568,12 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
           ? 'bg-red-50 text-red-700 border-red-300'
           : 'bg-amber-50 text-amber-700 border-amber-300';
 
+        const formulaSuffix = table.formula ? ` (${table.validation_name || 'Efficiency'} = ${table.formula})` : '';
         const tableHtml = `
           <div class="glass-card rounded-md p-4 space-y-3 border-slate-200 shadow-sm">
             <div class="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
               <div class="flex items-center gap-2">
-                <span class="font-bold text-slate-900 text-sm">Validation Results: ${table.test_name} (${table.test_level})</span>
+                <span class="font-bold text-slate-900 text-sm">Validation Results: ${table.test_name} (${table.test_level})${formulaSuffix}</span>
                 <span class="text-xs text-slate-500 font-mono">[${formatNodeListSummary(headerNodesInput)}]</span>
               </div>
               <span class="shrink-0 inline-block text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider border ${summaryBadgeClass}">

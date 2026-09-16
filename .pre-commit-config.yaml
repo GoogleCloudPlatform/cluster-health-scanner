@@ -36,9 +36,9 @@ repos:
         additional_dependencies: [github.com/google/addlicense@v1.1.1]
         args: [-c, "Google LLC"]
         types_or: [python, yaml, shell]
-    -   id: unittest
-        name: unittest
-        entry: env PYTHONPATH=src python3 -m unittest discover tests
+    -   id: coverage
+        name: unit tests and coverage
+        entry: bash -c 'env PYTHONPATH=src coverage run -m unittest discover tests && coverage report --fail-under=65'
         language: system
         types: [python]
         pass_filenames: false

@@ -1,3 +1,4 @@
+{custom_resources_section}
 apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
 metadata:
@@ -30,6 +31,7 @@ spec:
 {node_selector_section}
 {affinity_section}
 {tolerations_section}
+{pod_resource_claims_section}
 {standard_volumes_section}
               containers:
               - name: standard-container

@@ -384,7 +384,24 @@ class TestKubernetesScheduler(unittest.TestCase):
     ):
         """Test _get_not_ready_nodes sends nodepools filter to kubectl."""
         scheduler = KubernetesScheduler(nodepools="pool1,pool2")
-        mock_run_kubectl.return_value = json.dumps({"items": []})
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {
+                    "metadata": {
+                        "name": "node1",
+                        "labels": {"cloud.google.com/gke-nodepool": "pool1"},
+                    }
+                },
+                {
+                    "metadata": {
+                        "name": "node2",
+                        "labels": {"cloud.google.com/gke-nodepool": "pool2"},
+                    }
+                },
+            ],
+        }
+        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
 
         scheduler._get_not_ready_nodes()
 
@@ -426,6 +443,28 @@ class TestKubernetesScheduler(unittest.TestCase):
         resources = scheduler._fetch_raw_node_resources()
 
         self.assertEqual(resources, [{"metadata": {"name": "node1"}}])
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_fetch_raw_node_resources_missing_nodepool(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """Test _fetch_raw_node_resources raises error for missing nodepool."""
+        scheduler = KubernetesScheduler(nodepools="pool-a,pool-b")
+        mock_nodes_json = {
+            "kind": "List",
+            "items": [
+                {
+                    "metadata": {
+                        "name": "node1",
+                        "labels": {"cloud.google.com/gke-nodepool": "pool-a"},
+                    }
+                }
+            ],
+        }
+        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+
+        with self.assertRaisesRegex(ex.ChsValidationError, "pool-b"):
+            scheduler._fetch_raw_node_resources()
 
     def test_classify_unhealthy_nodes(self, mock_logger):
         """Test _classify_unhealthy_nodes filters unschedulable nodes."""
@@ -511,8 +550,22 @@ class TestKubernetesScheduler(unittest.TestCase):
             {
                 "kind": "List",
                 "items": [
-                    {"metadata": {"name": "node-1"}},
-                    {"metadata": {"name": "node-2"}},
+                    {
+                        "metadata": {
+                            "name": "node-1",
+                            "labels": {
+                                "cloud.google.com/gke-nodepool": "pool-1"
+                            },
+                        }
+                    },
+                    {
+                        "metadata": {
+                            "name": "node-2",
+                            "labels": {
+                                "cloud.google.com/gke-nodepool": "pool-1"
+                            },
+                        }
+                    },
                 ],
             }
         )

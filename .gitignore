@@ -4,5 +4,6 @@ __pycache__/
 build/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 .coverage
 *_pb2.py

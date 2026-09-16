@@ -287,12 +287,11 @@ class BOHGenerator:
                     threshold_value = threshold_config
                     conditions = {}
 
-                # Reduce numeric TPU test thresholds by 5% at runtime
+                # Reduce numeric TPU/GPU test thresholds by 5% at runtime
                 # to account for typical performance variance and our
                 # rounding logic requirements.
                 if (
-                    test_name.startswith("tpu-")
-                    and isinstance(threshold_value, (int, float))
+                    isinstance(threshold_value, (int, float))
                     and comp_type == "min"
                 ):
                     reduced_value = float(threshold_value) * 0.95
@@ -359,6 +358,11 @@ class BOHGenerator:
                             else:
                                 ratio = 0
                                 is_pass = False
+
+                            m.metadata.fields["relative"].number_value = ratio
+                            m.metadata.fields[
+                                "relative_formula"
+                            ].string_value = f"{ach_key} / {peak_key}"
 
                             m_validation = pb.ValidationCriteria()
                             m_validation.CopyFrom(validation)
@@ -608,9 +612,13 @@ class BOHGenerator:
                     metrics = self._parse_foms(foms)
 
                     ctx_name = ctx.get("name", "unknown")
-                    parsed_metadata = plugin.parse_context_metadata(ctx_name)
-                    if "context" not in parsed_metadata:
-                        parsed_metadata["context"] = ctx_name
+                    parsed_metadata = (
+                        plugin.parse_context_metadata(ctx_name) or {}
+                    )
+                    context = parsed_metadata.get("context", ctx_name)
+                    if context in ("null", "unknown", None):
+                        context = ""
+                    parsed_metadata["context"] = context
 
                     for metric in metrics:
                         for k, v in parsed_metadata.items():

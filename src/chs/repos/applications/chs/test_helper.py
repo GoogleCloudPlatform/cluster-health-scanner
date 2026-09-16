@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import copy
-import datetime
 import logging
 import os
 import textwrap
@@ -95,16 +94,25 @@ podAntiAffinity:
         return "\n".join(headers)
 
     @staticmethod
+    def _get_int_var(ctx_vars, name):
+        val = ctx_vars.get(name)
+        try:
+            return int(val)
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"Invalid {name} value '{val}': must be an integer"
+            ) from e
+
+    @staticmethod
     def _build_common_sbatch_headers(ctx_vars, nodes_str):
         headers_dict = {"-w": nodes_str}
-        timeout = ctx_vars.get("timeout")
+        timeout_seconds = TestHelper._get_int_var(ctx_vars, "timeout")
+        deadline_seconds = TestHelper._get_int_var(ctx_vars, "deadline")
 
-        headers_dict["--time"] = str(int(timeout) // 60)
-
-        deadline_dt = datetime.datetime.now() + datetime.timedelta(
-            seconds=int(ctx_vars.get("deadline"))
+        headers_dict["--time"] = str(timeout_seconds // 60)
+        headers_dict["--deadline"] = (
+            f"now+{deadline_seconds + timeout_seconds}seconds"
         )
-        headers_dict["--deadline"] = deadline_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
         return headers_dict
 
