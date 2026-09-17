@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chs"
-version = "0.3.0"
+version = "0.2.0"
 description = "CHS provides a comprehensive suite of tools for validating the health and performance of Accelerators."
 readme = "README.md"
 requires-python = ">=3.10"
