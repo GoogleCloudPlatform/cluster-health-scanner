@@ -20,17 +20,29 @@ import os
 import subprocess
 from typing import Any
 
+from chs.constants import (
+    CHS_NAMESPACE,
+    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+)
 from chs.exceptions import KueueException
 from chs.resources import MACHINE_TYPE_RESOURCE_MAP
-from chs.constants import CHS_NAMESPACE
 
 logger = logging.getLogger(__name__)
+
+TOPOLOGY_NAMES = [
+    "chs-node-topology-dynamic",
+    "chs-node-topology-static",
+]
+FLAVOR_NAMES = [
+    "chs-flavor-dynamic",
+    "chs-flavor-static",
+]
 
 
 class KueueManager:
     """Manages Kueue resources for CHS runs.
 
-    Resources include ResourceFlavor, ClusterQueue, and LocalQueue.
+    Resources include ResourceFlavor, ClusterQueue, LocalQueue, and Topology.
     """
 
     def __init__(self, scheduler: Any) -> None:
@@ -100,7 +112,11 @@ class KueueManager:
             ) from e
 
     def generate_configs(
-        self, workspace_config_dir: str, machine_type: str, nodes: list[str]
+        self,
+        workspace_config_dir: str,
+        machine_type: str,
+        nodes: list[str],
+        dynamic_slicing: bool = False,
     ) -> str:
         """Renders Kueue config to disk without applying.
 
@@ -108,6 +124,8 @@ class KueueManager:
             workspace_config_dir: Directory where Kueue configs will be written.
             machine_type: The machine type string (e.g., 'a3-mega').
             nodes: List of target nodes under test.
+            dynamic_slicing: If True, renders configs with dynamic slice
+              topology and flavor alongside static ones.
 
         Returns:
             The Kueue local queue label string to be injected into JobSet
@@ -128,8 +146,13 @@ class KueueManager:
         nominal_quota = len(nodes) * accelerators_per_node
         resource_name = resource_map.get("resource_name", "nvidia.com/gpu")
 
+        tpl_name = (
+            "kueue-dynamic-configs.yaml.tpl"
+            if dynamic_slicing
+            else "kueue-configs.yaml.tpl"
+        )
         kueue_tpl_path = pkg_resources.files("chs.schedulers").joinpath(
-            "kueue-configs.yaml.tpl"
+            tpl_name
         )
         with pkg_resources.as_file(kueue_tpl_path) as p:
             with open(p, "r") as f:
@@ -141,6 +164,7 @@ class KueueManager:
             resource_name=resource_name,
             namespace=CHS_NAMESPACE,
             kueue_api_version=self._get_kueue_api_version(),
+            dynamic_topology=SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
         )
 
         kueue_config_path = os.path.join(
@@ -193,7 +217,15 @@ class KueueManager:
                 [
                     "delete",
                     "resourceflavor",
-                    "chs-flavor",
+                    *FLAVOR_NAMES,
+                    "--ignore-not-found",
+                ]
+            )
+            self._run_kubectl(
+                [
+                    "delete",
+                    "topology",
+                    *TOPOLOGY_NAMES,
                     "--ignore-not-found",
                 ]
             )

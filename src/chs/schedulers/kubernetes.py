@@ -43,7 +43,7 @@ from chs.exceptions import (
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
-from chs.constants import CHS_NAMESPACE
+from chs.constants import CHS_NAMESPACE, SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
 
 _BUSY_NODES_BATCH_SIZE = 32
 _BUSY_NODES_MAX_RETRIES = 3
@@ -69,8 +69,6 @@ def boolean_representer(dumper, data):
 yaml.Dumper.add_representer(bool, boolean_representer)
 
 logger = logging.getLogger(__name__)
-
-SUPPORTED_DYNAMIC_SLICE_TOPOLOGY = "4x4x4"
 
 
 class KubernetesScheduler(BaseScheduler):
@@ -143,10 +141,21 @@ class KubernetesScheduler(BaseScheduler):
         os.makedirs(workspace_config_dir, exist_ok=True)
 
         if self.kueue_supported:
-            nodes = self.get_nodes_under_test()
+            nodes = self.get_nodes_under_test() or []
+            dynamic_slicing = bool(
+                self._tpu_slice_data
+                and any(
+                    self._tpu_slice_data.node_to_pool.get(n)
+                    in self._tpu_slice_data.dynamic_slice_partitions
+                    for n in nodes
+                )
+            )
             kueue_mgr = KueueManager(self)
             self._jobset_labels_yaml = kueue_mgr.generate_configs(
-                workspace_config_dir, machine_type, nodes or []
+                workspace_config_dir,
+                machine_type,
+                nodes,
+                dynamic_slicing=dynamic_slicing,
             )
             self._suspend_jobset = "true"
 

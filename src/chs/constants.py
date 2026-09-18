@@ -16,6 +16,8 @@
 
 CHS_NAMESPACE = "chs"
 
+SUPPORTED_DYNAMIC_SLICE_TOPOLOGY = "4x4x4"
+
 TOPOLOGY_TO_MESH = {
     # tpu7x
     "2x2x1": "2x2x2",
