@@ -432,18 +432,19 @@ podAntiAffinity:
         test_type="nccl-cluster",
         node_to_loc=None,
         group_label=None,
+        allow_interdomain_pairs=True,
     ):
         domain_type = None
         if test_type == "nccl-pairwise":
+            fallback = (
+                "interdomain" if allow_interdomain_pairs else "intradomain"
+            )
+            topo_val = "unknown"
             if node_to_loc and len(nodes_list) == 2:
                 topo_val = get_topology(
                     nodes_list[0], nodes_list[1], node_to_loc
                 )
-                domain_type = (
-                    topo_val if topo_val != "unknown" else "interdomain"
-                )
-            else:
-                domain_type = "interdomain"
+            domain_type = topo_val if topo_val != "unknown" else fallback
             experiment_name = (
                 f"{experiment_name}-{nodes_list[0]}-{nodes_list[1]}"
             )
@@ -472,52 +473,53 @@ podAntiAffinity:
         return create_context_from_dict(experiment_name, context_dict)
 
     @staticmethod
+    def _pair_adjacent(nodes: list[str]) -> list[list[str]]:
+        """Pairs adjacent nodes, pairing any trailing odd node with its predecessor."""
+        pairs = [[nodes[i], nodes[i + 1]] for i in range(0, len(nodes) - 1, 2)]
+        if len(nodes) % 2 != 0 and len(nodes) > 1:
+            pairs.append([nodes[-2], nodes[-1]])
+        return pairs
+
+    @staticmethod
     def generate_topological_pairs(
         topology: dict[str, dict[str, list[str]]],
+        allow_interdomain_pairs: bool = True,
     ) -> list[list[str]]:
-        """Generates pairs ordered by topology hierarchy.
+        """Generates disjoint node pairs ordered by topology hierarchy.
 
-        Note: This method generates disjoint pairs (e.g., [n1, n2], [n3, n4]) rather
-        than a fully connected ring or all-to-all coverage, as we moved away from
-        n-ring pairs.
+        Args:
+            topology: Mapping from block names to dicts of subblocks to node lists.
+            allow_interdomain_pairs: If False, only generates intra-subblock pairs.
 
-        topology: dict mapping block names to dicts of subblocks to lists of nodes.
+        Returns:
+            List of 2-element node pair lists.
         """
-        all_pairs = []
-        inter_block_nodes = []
+        all_pairs: list[list[str]] = []
+        inter_block_nodes: list[str] = []
 
         # 1. Intra-subblock pairs
         for block in sorted(topology.keys()):
             subblocks = topology[block]
-            block_nodes = []
+            block_nodes: list[str] = []
             for subblock in sorted(subblocks.keys()):
                 nodes = sorted(subblocks[subblock])
-                for i in range(0, len(nodes) - 1, 2):
-                    all_pairs.append([nodes[i], nodes[i + 1]])
-
-                if len(nodes) % 2 != 0 and len(nodes) > 1:
-                    all_pairs.append([nodes[-2], nodes[-1]])
-
+                all_pairs.extend(TestHelper._pair_adjacent(nodes))
                 if nodes:
                     block_nodes.append(nodes[0])
 
+            if not allow_interdomain_pairs:
+                continue
+
             # 2. Inter-subblock pairs (within the same block)
-            for i in range(0, len(block_nodes) - 1, 2):
-                all_pairs.append([block_nodes[i], block_nodes[i + 1]])
-
-            if len(block_nodes) % 2 != 0 and len(block_nodes) > 1:
-                all_pairs.append([block_nodes[-2], block_nodes[-1]])
-
+            all_pairs.extend(TestHelper._pair_adjacent(block_nodes))
             if block_nodes:
                 inter_block_nodes.append(block_nodes[0])
 
+        if not allow_interdomain_pairs:
+            return all_pairs
+
         # 3. Inter-block pairs
-        for i in range(0, len(inter_block_nodes) - 1, 2):
-            all_pairs.append([inter_block_nodes[i], inter_block_nodes[i + 1]])
-
-        if len(inter_block_nodes) % 2 != 0 and len(inter_block_nodes) > 1:
-            all_pairs.append([inter_block_nodes[-2], inter_block_nodes[-1]])
-
+        all_pairs.extend(TestHelper._pair_adjacent(inter_block_nodes))
         return all_pairs
 
     @staticmethod
@@ -547,16 +549,34 @@ podAntiAffinity:
             )
             return []
 
+        allow_interdomain_pairs = variables.get("allow_interdomain_pairs", True)
         if test_type == "nccl-pairwise":
+            if not topology and not allow_interdomain_pairs:
+                logger.warning(
+                    "The 'nccl-pairwise' diagnostic requires cluster topology "
+                    "data when allow_interdomain_pairs is False. Skipping this test."
+                )
+                return []
+
             if topology:
-                node_groups = TestHelper.generate_topological_pairs(topology)
+                node_groups = TestHelper.generate_topological_pairs(
+                    topology, allow_interdomain_pairs=allow_interdomain_pairs
+                )
                 node_to_loc = build_node_to_location(topology)
             else:
                 # Fallback: create a dummy topology with all nodes in a single block
                 dummy_topology = {"default": {"default-subblock": all_nodes}}
                 node_groups = TestHelper.generate_topological_pairs(
-                    dummy_topology
+                    dummy_topology,
+                    allow_interdomain_pairs=allow_interdomain_pairs,
                 )
+
+            if not node_groups:
+                logger.warning(
+                    f"No node pairs could be formed from {len(all_nodes)} nodes for '{test_type}'. "
+                    "Skipping this test."
+                )
+                return []
             labeled_groups = [(None, nodes) for nodes in node_groups]
         elif test_type == "nccl-single-node":
             labeled_groups = [(None, [node]) for node in all_nodes]
@@ -589,6 +609,7 @@ podAntiAffinity:
                 test_type,
                 node_to_loc=node_to_loc,
                 group_label=label,
+                allow_interdomain_pairs=allow_interdomain_pairs,
             )
             for label, nodes in labeled_groups
         ]

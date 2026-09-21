@@ -299,6 +299,43 @@ a4x-maxgpu-4g-metal:
       n_ranks: 1
       processes_per_node: 1
       n_nodes: 1
+  nccl-tests:
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
+        LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
+        NCCL_NET: gIB
+        NCCL_DEBUG: INFO
+        NCCL_TESTS_SPLIT_MASK: "0x0"
+        NCCL_MNNVL_ENABLE: "{mnnvl_enable}"
+        NCCL_NVLS_ENABLE: "{nvls_enable}"
+    variables:
+      mnnvl_enable: 2
+      nvls_enable: 2
+      container_name: nccl-gib-a4x-max-arm64-v1.1.1
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1"
+      srun_args: >-
+        --mpi=pmix
+        --container-workdir /third_party/nccl-tests/build/
+        --container-env {container_env_vars}
+        --container-image {container_path}
+        --container-mounts "/usr/local/gib,/var/tmp"
+        --container-writable
+        --wait=60
+        --kill-on-bad-exit=1
+      nccl-tests_path: "/third_party/nccl-tests/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
+    intradomain:
+      variables:
+        mnnvl_enable: 1
+        nvls_enable: 2
+    interdomain:
+      variables:
+        mnnvl_enable: 0
+        nvls_enable: 0
 
 ct6e-standard-4t:
   variables:

@@ -141,7 +141,7 @@ def _domain_result() -> pb.TestResult:
     res.target_resources.add(node_name="node-2")
 
     m1 = res.metrics.add()
-    m1.key = "BusBandwidth"
+    m1.key = "Bus Bandwidth"
     m1.value.number_value = 805.4
     m1.metadata.fields["context"].string_value = str(1024**3)
     return res

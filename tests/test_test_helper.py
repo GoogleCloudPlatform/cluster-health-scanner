@@ -14,6 +14,7 @@
 
 """Unit tests for TestHelper."""
 
+import copy
 import sys
 import unittest
 from unittest import mock
@@ -215,7 +216,7 @@ class TestTestHelper(unittest.TestCase):
         self.assertEqual(domain_types["exp-node3-node4"], "intradomain")
         self.assertEqual(domain_types["exp-node1-node3"], "interdomain")
 
-        # Fallback to interdomain when topology is None
+        # Fallback to interdomain when topology is None on Kubernetes
         contexts_none = []
         with mock.patch(
             "chs.repos.applications.chs.test_helper.create_context_from_dict",
@@ -230,6 +231,30 @@ class TestTestHelper(unittest.TestCase):
         for _, ctx in contexts_none:
             self.assertEqual(
                 ctx.get("variables", {}).get("domain_type"), "interdomain"
+            )
+
+        # Fallback to intradomain when topology is None and
+        # allow_interdomain_pairs is False
+        contexts_none = []
+        variables_no_interdomain = copy.deepcopy(variables)
+        variables_no_interdomain["allow_interdomain_pairs"] = False
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=lambda name, ctx: (
+                contexts_none.append((name, ctx)),
+                mock.Mock(context_name=name),
+            )[1],
+        ):
+            _TestHelper.nccl_test(
+                variables_no_interdomain,
+                "exp",
+                configs,
+                "nccl-pairwise",
+                topology=None,
+            )
+        for _, ctx in contexts_none:
+            self.assertEqual(
+                ctx.get("variables", {}).get("domain_type"), "intradomain"
             )
 
         # Fallback to interdomain when node is unmapped
@@ -410,6 +435,171 @@ class TestTestHelper(unittest.TestCase):
                 }
             }
         }
+
+    def test_nccl_test_domain_type_variable_slurm(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        variables = {
+            "machine_type": "a4x-maxgpu-4g-metal",
+            "scheduler": "slurm",
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a4x-maxgpu-4g-metal": {
+                "nccl-tests": {
+                    "variables": {},
+                }
+            }
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-pairwise", topology=topology
+            )
+
+        pair_names = [name for name, _ in contexts_created]
+        self.assertEqual(len(pair_names), 3)
+        self.assertIn("exp-node1-node2", pair_names)
+        self.assertIn("exp-node3-node4", pair_names)
+        self.assertIn("exp-node1-node3", pair_names)
+        domain_types = {
+            name: ctx.get("variables", {}).get("domain_type")
+            for name, ctx in contexts_created
+        }
+        self.assertEqual(domain_types["exp-node1-node2"], "intradomain")
+        self.assertEqual(domain_types["exp-node3-node4"], "intradomain")
+        self.assertEqual(domain_types["exp-node1-node3"], "interdomain")
+
+    def test_nccl_test_allow_interdomain_pairs_false(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        variables = {
+            "machine_type": "a4x-highgpu-4g",
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+            "allow_interdomain_pairs": False,
+        }
+        configs = {
+            "a4x-highgpu-4g": {
+                "nccl-tests": {
+                    "variables": {},
+                }
+            }
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-pairwise", topology=topology
+            )
+
+        pair_names = [name for name, _ in contexts_created]
+        self.assertEqual(len(pair_names), 2)
+        self.assertIn("exp-node1-node2", pair_names)
+        self.assertIn("exp-node3-node4", pair_names)
+        for _, ctx in contexts_created:
+            self.assertEqual(
+                ctx.get("variables", {}).get("domain_type"), "intradomain"
+            )
+
+    def test_nccl_test_block_topology_no_pairs_warning(self):
+        # 4 subblocks with 1 node each: cannot form any intra-subblock pairs
+        topology = {
+            f"block{i}": {f"subblock{i}": [f"node{i}"]} for i in range(4)
+        }
+        variables = {
+            "machine_type": "a4x-maxgpu-4g-metal",
+            "scheduler": "slurm",
+            "allow_interdomain_pairs": False,
+            "nodes": [f"node{i}" for i in range(4)],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a4x-maxgpu-4g-metal": {
+                "nccl-tests": {
+                    "variables": {},
+                }
+            }
+        }
+        with mock.patch.object(_TestHelper, "_nccl_context") as mock_ctx:
+            with mock.patch(
+                "chs.repos.applications.chs.test_helper.logger.warning"
+            ) as mock_warn:
+                res = _TestHelper.nccl_test(
+                    variables,
+                    "exp",
+                    configs,
+                    "nccl-pairwise",
+                    topology=topology,
+                )
+            self.assertEqual(res, [])
+            mock_ctx.assert_not_called()
+            mock_warn.assert_called_once()
+            self.assertIn(
+                "No node pairs could be formed",
+                mock_warn.call_args[0][0],
+            )
+
+    def test_nccl_test_single_node_slurm(self):
+        variables = {
+            "machine_type": "a4x-maxgpu-4g-metal",
+            "scheduler": "slurm",
+            "nodes": ["node1", "node2"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a4x-maxgpu-4g-metal": {
+                "nccl-tests": {
+                    "variables": {
+                        "container_name": "nccl-gib-a4x-max",
+                    },
+                }
+            }
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(variables, "exp", configs, "nccl-single-node")
+
+        pair_names = [name for name, _ in contexts_created]
+        self.assertEqual(pair_names, ["exp-node1", "exp-node2"])
+        for _, ctx in contexts_created:
+            self.assertEqual(ctx["env_vars"]["set"]["NCCL_NET"], "Socket")
 
     def test_nccl_test_domain(self):
         variables = {
@@ -842,6 +1032,92 @@ class TestTestHelper(unittest.TestCase):
             "limits:\n  nvidia.com/gpu: 4",
             ctx_inter["container_resources_yaml"],
         )
+
+    def test_nccl_pairwise_slurm_domain_variables(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        variables = {
+            "machine_type": "a4x-maxgpu-4g-metal",
+            "scheduler": "slurm",
+            "allow_interdomain_pairs": False,
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a4x-maxgpu-4g-metal": {
+                "nccl-tests": {
+                    "env_vars": {
+                        "set": {
+                            "NCCL_NET": "gIB",
+                            "NCCL_DEBUG": "INFO",
+                            "NCCL_MNNVL_ENABLE": "{mnnvl_enable}",
+                            "NCCL_NVLS_ENABLE": "{nvls_enable}",
+                        }
+                    },
+                    "variables": {
+                        "container_name": "nccl-gib-a4x-max",
+                        "mnnvl_enable": 2,
+                        "nvls_enable": 2,
+                    },
+                    "intradomain": {
+                        "variables": {"mnnvl_enable": 1, "nvls_enable": 2}
+                    },
+                    "interdomain": {
+                        "variables": {"mnnvl_enable": 0, "nvls_enable": 0}
+                    },
+                },
+            }
+        }
+        contexts_created = {}
+
+        def mock_create(name, ctx):
+            contexts_created[name] = ctx
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-pairwise", topology=topology
+            )
+
+        intra = contexts_created["exp-node1-node2"]["variables"]
+
+        self.assertEqual(intra["mnnvl_enable"], 1)
+        self.assertEqual(intra["nvls_enable"], 2)
+
+        for name in ("exp-node1-node2", "exp-node3-node4"):
+            env = contexts_created[name]["env_vars"]["set"]
+            self.assertEqual(env["NCCL_NET"], "gIB")
+            self.assertEqual(env["NCCL_DEBUG"], "INFO")
+            self.assertEqual(env["NCCL_MNNVL_ENABLE"], "{mnnvl_enable}")
+            self.assertEqual(env["NCCL_NVLS_ENABLE"], "{nvls_enable}")
+
+        # Verify interdomain config merges when domain_type is interdomain
+        from chs.utils.topology import build_node_to_location
+
+        node_to_loc = build_node_to_location(topology)
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper._nccl_context(
+                variables,
+                "exp",
+                configs,
+                ["node1", "node3"],
+                test_type="nccl-pairwise",
+                node_to_loc=node_to_loc,
+            )
+        inter = contexts_created["exp-node1-node3"]["variables"]
+        self.assertEqual(inter["mnnvl_enable"], 0)
+        self.assertEqual(inter["nvls_enable"], 0)
 
     def test_kubernetes_jobset_extra_annotations_and_resources(self):
         wm = KubernetesJobset(mock.Mock())

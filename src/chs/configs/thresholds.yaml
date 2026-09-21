@@ -485,21 +485,31 @@ a4x-maxgpu-4g-metal:
     type: min
     thresholds:
       bandwidth:
-        - value: 600.0
+        - value: 616.0
           conditions:
             workload_name: "all-reduce"
-        - value: 800.0
+        - value: 607.0
           conditions:
             workload_name: "all-gather"
   nccl-pairwise:
     type: min
     thresholds:
       bandwidth:
-        - value: 240.0
+        - value: 794.0
           conditions:
+            domain_type: "intradomain"
             workload_name: "all-reduce"
-        - value: 380.0
+        - value: 616.0
           conditions:
+            domain_type: "intradomain"
+            workload_name: "all-gather"
+        - value: 360.0
+          conditions:
+            domain_type: "interdomain"
+            workload_name: "all-reduce"
+        - value: 353.0
+          conditions:
+            domain_type: "interdomain"
             workload_name: "all-gather"
   gemm:
     type: min

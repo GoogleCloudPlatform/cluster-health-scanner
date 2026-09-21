@@ -212,6 +212,16 @@ class TestSlurmScheduler(unittest.TestCase):
         ):
             scheduler._resolve_project_id("node1")
 
+    def test_allow_interdomain_pairs(self, mock_logger):
+        scheduler = SlurmScheduler()
+        self.assertFalse(scheduler.allow_interdomain_pairs("a4x-highgpu-4g"))
+        self.assertFalse(
+            scheduler.allow_interdomain_pairs("a4x-maxgpu-4g-metal")
+        )
+        self.assertTrue(scheduler.allow_interdomain_pairs("a3-megagpu-8g"))
+        self.assertTrue(scheduler.allow_interdomain_pairs("a3-ultragpu-8g"))
+        self.assertTrue(scheduler.allow_interdomain_pairs())
+
 
 @mock.patch("chs.schedulers.kubernetes.logger")
 class TestKubernetesScheduler(unittest.TestCase):
@@ -224,6 +234,13 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.addCleanup(self.tmp_dir_obj.cleanup)
         self.mock_app_data = mock.Mock()
         self.mock_app_data.get_run.return_value = {}
+
+    def test_allow_interdomain_pairs(self, mock_logger):
+        scheduler = KubernetesScheduler()
+        self.assertTrue(scheduler.allow_interdomain_pairs())
+        self.assertTrue(
+            scheduler.allow_interdomain_pairs("a4x-maxgpu-4g-metal")
+        )
 
     def test_init(self, mock_logger):
         """Test initialization."""

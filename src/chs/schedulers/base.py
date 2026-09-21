@@ -128,6 +128,10 @@ class BaseScheduler(abc.ABC):
         """Determine the network topology of the cluster."""
         pass
 
+    def allow_interdomain_pairs(self, machine_type: str = "") -> bool:
+        """Returns whether the scheduler allows cross-domain node pairs."""
+        return True
+
     def _write_topology_json(self, workspace_config_dir: str) -> None:
         """Writes the topology to topology.json in the workspace directory."""
         workspace_dir = os.path.dirname(workspace_config_dir)
