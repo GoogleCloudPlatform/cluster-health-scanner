@@ -515,14 +515,16 @@ podAntiAffinity:
     def nccl_test(
         variables, experiment_name, configs, test_type, topology=None
     ):
-        all_nodes = variables.get("nodes", [])
+        all_nodes = variables.get("nodes", []) or []
         node_to_loc = None
-        if test_type in ("nccl-pairwise", "nccl-cluster"):
-            if not all_nodes or len(all_nodes) < 3:
-                logger.warning(
-                    f"The '{test_type}' diagnostic requires a minimum of 3 nodes, but only {len(all_nodes)} are available. Skipping this test."
-                )
-                return []
+        min_reqs = {"nccl-pairwise": 2, "nccl-cluster": 3}
+        if (min_nodes := min_reqs.get(test_type)) and len(
+            all_nodes
+        ) < min_nodes:
+            logger.warning(
+                f"The '{test_type}' diagnostic requires a minimum of {min_nodes} nodes, but only {len(all_nodes)} are available. Skipping this test."
+            )
+            return []
 
         if test_type == "nccl-pairwise":
             if topology:
