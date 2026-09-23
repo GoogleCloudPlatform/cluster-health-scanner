@@ -51,6 +51,7 @@ from chs.storage import StorageProviderFactory
 from chs.utils import theme
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
+from chs.utils.topology import load_topology
 
 logger = logging.getLogger(__name__)
 
@@ -1122,7 +1123,9 @@ class RambleManager:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
 
         try:
-            html_gen = HtmlReportGenerator()
+            html_gen = HtmlReportGenerator(
+                topology=load_topology(workspace_dir)
+            )
             html_path = workspace_dir / "bill_of_health.html"
             html_gen.save_html(boh, str(html_path))
             logger.debug("Interactive health report generated successfully.")

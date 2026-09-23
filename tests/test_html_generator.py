@@ -170,3 +170,39 @@ def test_html_report_generator_validation_formula():
     assert table["validation_name"] == "Efficiency"
     assert len(table["rows"]) == 1
     assert table["rows"][0]["metric"] == "Efficiency"
+
+
+def test_html_report_generator_with_topology():
+    topology = {
+        "block-0": {
+            "subblock-A": ["node-1", "node-2", "node-3"],
+        }
+    }
+    generator = HtmlReportGenerator(topology=topology)
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-domain-123"
+
+    res = boh.test_results.add(
+        test_name="nccl-domain",
+        test_level="all-reduce",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    for n in ["node-1", "node-2", "node-3"]:
+        t = res.target_resources.add()
+        t.node_name = n
+
+    m = res.metrics.add(key="Peak Detected Bandwidth", unit="GB/s")
+    m.value.number_value = 850.0
+
+    report_data = generator.generate_report_data(boh)
+    assert len(report_data["detailed_reports"]) == 1
+    tables = report_data["detailed_reports"][0]["tables"]
+    assert len(tables) == 1
+    rows = tables[0]["rows"]
+    assert len(rows) == 1
+    assert rows[0]["resource"] == "subblock-A (3 nodes)"
+    assert rows[0]["target_nodes"] == ["node-1", "node-2", "node-3"]
+    assert (
+        report_data["test_suite_breakdown"][0]["ratio_str"]
+        == "1 / 1 domains met threshold"
+    )

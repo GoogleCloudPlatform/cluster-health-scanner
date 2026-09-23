@@ -230,6 +230,8 @@ def aggregate_boh_summary(
 
         test_nodes_count = len(test_nodes)
         is_pairwise = "pairwise" in canonical_name.lower()
+        is_domain = "domain" in canonical_name.lower()
+        is_grouped_entity = is_pairwise or is_domain
         unmet_threshold_resources = []
         missing_metrics_resources = []
         failed_to_execute_resources = []
@@ -265,13 +267,19 @@ def aggregate_boh_summary(
                     failed_threshold = True
 
             if res.result_status == pb.RESULT_STATUS_SUCCESS:
-                met_threshold += 1 if is_pairwise else len(res.target_resources)
+                met_threshold += (
+                    1 if is_grouped_entity else len(res.target_resources)
+                )
             elif res.result_status in (
                 pb.RESULT_STATUS_TIMEOUT,
                 pb.RESULT_STATUS_DEADLINE,
                 pb.RESULT_STATUS_CANCELLED,
             ):
-                cnt = 1 if is_pairwise else max(1, len(res.target_resources))
+                cnt = (
+                    1
+                    if is_grouped_entity
+                    else max(1, len(res.target_resources))
+                )
                 if res.result_status == pb.RESULT_STATUS_TIMEOUT:
                     timeout_count += cnt
                 elif res.result_status == pb.RESULT_STATUS_DEADLINE:
@@ -290,7 +298,7 @@ def aggregate_boh_summary(
             elif res.result_status == pb.RESULT_STATUS_UNKNOWN:
                 pass
             else:
-                count = 1 if is_pairwise else len(res.target_resources)
+                count = 1 if is_grouped_entity else len(res.target_resources)
                 if failed_threshold:
                     unmet_threshold += count
                     if is_pairwise and len(res.target_resources) == 2:
@@ -312,13 +320,23 @@ def aggregate_boh_summary(
                         for t in res.target_resources:
                             missing_metrics_resources.append(t.node_name)
 
-        entity_noun = "pairs" if is_pairwise else "nodes"
-        denominator = len(results) if is_pairwise else test_nodes_count
+        if is_pairwise:
+            entity_noun = "pairs"
+        elif is_domain:
+            entity_noun = "domains"
+        else:
+            entity_noun = "nodes"
+
+        denominator = len(results) if is_grouped_entity else test_nodes_count
         if group_has_no_thresholds:
             failed_to_execute = 0
             for r in results:
                 if len(r.metrics) == 0:
-                    cnt = 1 if is_pairwise else max(1, len(r.target_resources))
+                    cnt = (
+                        1
+                        if is_grouped_entity
+                        else max(1, len(r.target_resources))
+                    )
                     failed_to_execute += cnt
                     if is_pairwise and len(r.target_resources) == 2:
                         failed_to_execute_resources.append(

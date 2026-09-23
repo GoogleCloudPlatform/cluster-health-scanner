@@ -18,6 +18,10 @@ default:
     type: min
     thresholds:
       bandwidth: 50
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth: 50
   nccl-single-node:
     type: min
     thresholds:
@@ -407,6 +411,16 @@ a4x-highgpu-4g:
         - value: 600.0
           conditions:
             workload_name: "all-gather"
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 780.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 600.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
@@ -455,6 +469,16 @@ a4x-maxgpu-4g-metal:
           conditions:
             workload_name: "all-reduce"
         - value: 340.0
+          conditions:
+            workload_name: "all-gather"
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 780.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 600.0
           conditions:
             workload_name: "all-gather"
   nccl-single-node:

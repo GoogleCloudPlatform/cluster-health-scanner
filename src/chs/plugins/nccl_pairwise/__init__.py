@@ -20,8 +20,7 @@ from .renderer import NcclPairwiseRenderer
 class NcclPairwisePlugin(
     NcclPairwiseRenderer, NcclPairwiseExtractor, TestPlugin
 ):
-    def get_fom_aliases(self) -> dict[str, str]:
-        return {"bandwidth": "Peak Detected Bandwidth"}
+    pass
 
 
 __chs_plugin__ = {

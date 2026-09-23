@@ -37,8 +37,13 @@ logger = logging.getLogger(__name__)
 class HtmlReportGenerator:
     """Generates standalone, interactive HTML Bill of Health reports."""
 
-    def __init__(self, template_path: str | None = None):
+    def __init__(
+        self,
+        template_path: str | None = None,
+        topology: dict[str, Any] | None = None,
+    ):
         self.template_path = template_path or DEFAULT_TEMPLATE_PATH
+        self.topology = topology or {}
 
     def _extract_tier2_mappings(self) -> dict[str, list[str]]:
         """Extracts tier1-to-tier2 test mappings."""
@@ -499,6 +504,8 @@ class HtmlReportGenerator:
 
         for (canonical_name, test_level), results in grouped_results.items():
             plugin = plugin_manager.get_plugin(canonical_name)
+            if hasattr(plugin, "set_topology") and self.topology:
+                plugin.set_topology(self.topology)
             detail_report = plugin.get_detail_data(results)
             if detail_report and detail_report.tables:
                 tables_data = [

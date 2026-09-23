@@ -16,8 +16,8 @@ from copy import deepcopy
 import logging
 import sys
 import os
-import json
 import spack.util.spack_yaml as yaml
+from chs.utils.topology import load_topology
 from ramble.repository import ObjectTypes, paths
 
 config_dir = (
@@ -217,33 +217,11 @@ class Chs(ExecutableApplication):
                 "nccl-cluster",
                 "nccl-pairwise",
                 "nccl-single-node",
+                "nccl-domain",
             ]:
                 topology = None
-                if test.name == "nccl-pairwise":
-                    topo_path = os.path.join(workspace.root, "topology.json")
-
-                    if os.path.exists(topo_path):
-                        try:
-                            with open(topo_path, "r") as f:
-                                topology = json.load(f)
-                        except json.JSONDecodeError as e:
-                            logger.debug(
-                                "Failed to parse the cluster topology JSON file at '%s'. Ensure the file is correctly formatted. Error: %s",
-                                topo_path,
-                                e,
-                            )
-                            logger.warning(
-                                "Could not load cluster topology data. Some node-specific diagnostics will be skipped."
-                            )
-                        except IOError as e:
-                            logger.debug(
-                                "Failed to read the cluster topology file at '%s'. Network discovery may be incomplete. Error: %s",
-                                topo_path,
-                                e,
-                            )
-                            logger.warning(
-                                "Could not load cluster topology data. Some node-specific diagnostics will be skipped."
-                            )
+                if test.name in ("nccl-pairwise", "nccl-domain"):
+                    topology = load_topology(workspace.root, warn_on_error=True)
 
                 workloads = (
                     test.workloads

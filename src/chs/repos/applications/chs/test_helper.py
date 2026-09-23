@@ -21,6 +21,7 @@ from chs.utils import sanitize_dns_1123
 from ramble.context import Context, create_context_from_dict
 from chs.utils.topology import (
     build_node_to_location,
+    generate_domain_groups,
     get_topology,
 )
 
@@ -429,6 +430,7 @@ podAntiAffinity:
         nodes_list,
         test_type="nccl-cluster",
         node_to_loc=None,
+        group_label=None,
     ):
         domain_type = None
         if test_type == "nccl-pairwise":
@@ -446,6 +448,8 @@ podAntiAffinity:
             )
         elif test_type == "nccl-single-node":
             experiment_name = f"{experiment_name}-{nodes_list[0]}"
+        elif test_type == "nccl-domain":
+            domain_type = "intradomain"
 
         context_dict = TestHelper._prepare_cluster_context(
             variables,
@@ -459,6 +463,10 @@ podAntiAffinity:
             context_dict.setdefault("env_vars", {}).setdefault("set", {})[
                 "NCCL_NET"
             ] = "Socket"
+        elif test_type == "nccl-domain":
+            experiment_name = (
+                f"{experiment_name}-{sanitize_dns_1123(str(group_label))}"
+            )
 
         return create_context_from_dict(experiment_name, context_dict)
 
@@ -512,6 +520,18 @@ podAntiAffinity:
         return all_pairs
 
     @staticmethod
+    def generate_domain_groups(
+        topology: dict[str, dict[str, list[str]]] | None,
+        target_nodes: list[str] | None = None,
+        min_nodes_per_domain: int = 3,
+    ) -> list[tuple[str, list[str]]]:
+        return generate_domain_groups(
+            topology=topology,
+            target_nodes=target_nodes,
+            min_nodes_per_domain=min_nodes_per_domain,
+        )
+
+    @staticmethod
     def nccl_test(
         variables, experiment_name, configs, test_type, topology=None
     ):
@@ -536,10 +556,28 @@ podAntiAffinity:
                 node_groups = TestHelper.generate_topological_pairs(
                     dummy_topology
                 )
+            labeled_groups = [(None, nodes) for nodes in node_groups]
         elif test_type == "nccl-single-node":
-            node_groups = [[n] for n in all_nodes]
+            labeled_groups = [(None, [node]) for node in all_nodes]
+        elif test_type == "nccl-domain":
+            if not topology:
+                logger.warning(
+                    "The 'nccl-domain' diagnostic requires cluster topology "
+                    "data, but none was found. Skipping this test."
+                )
+                return []
+
+            labeled_groups = TestHelper.generate_domain_groups(
+                topology, all_nodes, min_nodes_per_domain=3
+            )
+            if not labeled_groups:
+                logger.warning(
+                    "The 'nccl-domain' diagnostic requires domains with more "
+                    "than 2 nodes, but none met this criteria. Skipping this test."
+                )
+                return []
         else:
-            node_groups = [all_nodes]
+            labeled_groups = [(None, all_nodes)]
 
         return [
             TestHelper._nccl_context(
@@ -548,9 +586,10 @@ podAntiAffinity:
                 copy.deepcopy(configs),
                 nodes,
                 test_type,
-                node_to_loc,
+                node_to_loc=node_to_loc,
+                group_label=label,
             )
-            for nodes in node_groups
+            for label, nodes in labeled_groups
         ]
 
     @staticmethod

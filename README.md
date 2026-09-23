@@ -192,7 +192,7 @@ Executes a test suite on a specified cluster.
   - Supported values: `lite`, `standard`.
 - `--tests` / `-t`: Comma-separated list of individual hardware and network benchmarks (e.g., `nccl-cluster`, `gemm`).
   - Default (if not provided): Loads tests from the selected suite.
-  - Supported values: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-pairwise`, `tpu-info`, `hbm`, `host-device`, `collectives`, `collectives-single-node`.
+  - Supported values: `nvidia-smi`, `dcgm`, `gemm`, `nccl-single-node`, `stream`, `nccl-cluster`, `nccl-domain`, `nccl-pairwise`, `tpu-info`, `hbm`, `host-device`, `collectives`, `collectives-single-node`.
 - `--nodes`: Comma-separated list of individual nodes to run on (e.g., `node-01,node-02`).
 - `--nodelists`: Slurm node list pattern/lists to run on (e.g., `node-[1-3]`).
 - `--nodepools`: Kubernetes node pools to run on.
@@ -213,7 +213,8 @@ Below are the details of the supported test suites and the tests included in eac
 - `gemm`: Matrix multiplication performance test.
 - `stream`: Sustainable memory bandwidth measurement.
 - `nccl-single-node`: NCCL performance tests on a single node.
-- `nccl-cluster`: NCCL performance tests across all nodes in the cluster.
+- `nccl-cluster`: NCCL performance tests across all nodes in the cluster (requires >=3 nodes).
+- `nccl-domain`: NCCL performance tests run separately within each NVLink domain on IMEX/NVLD platforms (`a4x-highgpu-4g`, `a4x-maxgpu-4g-metal`) (requires >=3 nodes per domain).
 - `nccl-pairwise`: NCCL performance tests between pairs of nodes.
 
 **TPU Tests**
@@ -499,6 +500,7 @@ To keep configurations simple and readable, CHS plugins translate complex raw be
 |---|---|---|---|
 | `nccl-single-node` | `bandwidth` | "Avg. Bus Bandwidth" | `min` |
 | `nccl-cluster` | `bandwidth` | "Avg. Bus Bandwidth" | `min` |
+| `nccl-domain` | `bandwidth` | "Avg. Bus Bandwidth" | `min` |
 | `nccl-pairwise` | `bandwidth` | "Avg. Bus Bandwidth" | `min` |
 | `gemm` | `performance` | "Value" | `min` |
 | `nvidia-smi` | `gpus` | "GPU Count" | `scalar` |

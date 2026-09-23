@@ -16,7 +16,6 @@
 
 import logging
 import os
-import json
 from google.protobuf import text_format, json_format
 from rich.console import Console
 from rich.panel import Panel
@@ -26,6 +25,7 @@ from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
 from chs.plugins.utils import rendering
 from chs.utils import lifecycle
+from chs.utils.topology import load_topology
 from chs.core.summary_aggregator import (
     RunSummaryData,
     aggregate_boh_summary,
@@ -49,36 +49,9 @@ class ResultsViewer:
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
-        self.topology = {}
 
         workspace_dir = os.path.dirname(self.boh_path)
-        topo_path = os.path.join(workspace_dir, "topology.json")
-        if os.path.exists(topo_path):
-            try:
-                with open(topo_path, "r") as f:
-                    self.topology = json.load(f)
-            except json.JSONDecodeError as e:
-                logger.debug(
-                    "Failed to parse the cluster topology "
-                    "file at '%s'. Error: %s",
-                    topo_path,
-                    e,
-                )
-                logger.warning(
-                    "Could not load cluster topology data. Some "
-                    "node-specific diagnostics will be skipped."
-                )
-            except IOError as e:
-                logger.debug(
-                    "Failed to read the cluster topology "
-                    "file at '%s'. Error: %s",
-                    topo_path,
-                    e,
-                )
-                logger.warning(
-                    "Could not load cluster topology data. Some "
-                    "node-specific diagnostics will be skipped."
-                )
+        self.topology = load_topology(workspace_dir, warn_on_error=True)
 
         try:
             with open(self.boh_path, "r") as f:

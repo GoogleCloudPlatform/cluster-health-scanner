@@ -128,6 +128,15 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+  - name: nccl-domain
+    category: Network & Collectives
+    description: Per-NVLink-domain ring bandwidth
+    long_description: Runs NCCL benchmarks separately within each NVLink domain (IMEX/NVLD racks) to measure intra-domain MNNVL bandwidth (GB/s), isolating a degraded domain without invalidating the rest of the cluster.
+    platforms:
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
   - name: nccl-pairwise
     category: Network & Collectives
     description: Node-to-node latency check

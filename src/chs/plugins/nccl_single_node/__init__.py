@@ -20,8 +20,7 @@ from .renderer import NcclSingleNodeRenderer
 class NcclSingleNodePlugin(
     NcclSingleNodeRenderer, NcclSingleNodeExtractor, TestPlugin
 ):
-    def get_fom_aliases(self) -> dict[str, str]:
-        return {"bandwidth": "Peak Detected Bandwidth"}
+    pass
 
 
 __chs_plugin__ = {

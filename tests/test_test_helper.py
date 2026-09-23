@@ -241,6 +241,284 @@ class TestTestHelper(unittest.TestCase):
             contexts_unmapped[-1][1]["variables"]["domain_type"], "interdomain"
         )
 
+    def test_generate_domain_groups(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node2", "node1", "node3"],
+                "subblock2": ["node4", "node5", "node6"],
+            },
+            "block2": {
+                "subblock3": ["node7", "node8", "node9"],
+            },
+        }
+        expected = [
+            ("subblock1", ["node1", "node2", "node3"]),
+            ("subblock2", ["node4", "node5", "node6"]),
+            ("subblock3", ["node7", "node8", "node9"]),
+        ]
+        self.assertEqual(_TestHelper.generate_domain_groups(topology), expected)
+
+    def test_generate_domain_groups_filters_smaller_domains(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2", "node3"],
+                "subblock2": ["node4", "node5"],
+            },
+        }
+        # By default (min_nodes_per_domain=3), subblock2 with 2 nodes is
+        # filtered out and logs a warning.
+        with mock.patch("chs.utils.topology.logger.warning") as mock_warn:
+            self.assertEqual(
+                _TestHelper.generate_domain_groups(topology),
+                [
+                    ("subblock1", ["node1", "node2", "node3"]),
+                ],
+            )
+            mock_warn.assert_called_once()
+            self.assertIn("subblock2", mock_warn.call_args[0])
+        # When min_nodes_per_domain=2, smaller domains are retained.
+        self.assertEqual(
+            _TestHelper.generate_domain_groups(
+                topology, min_nodes_per_domain=2
+            ),
+            [
+                ("subblock1", ["node1", "node2", "node3"]),
+                ("subblock2", ["node4", "node5"]),
+            ],
+        )
+
+    def test_generate_domain_groups_filters_untargeted_nodes(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2", "node3", "node4"],
+                "subblock2": ["node5", "node6", "node7", "node8"],
+            },
+        }
+        target_nodes = ["node1", "node2", "node3", "node5", "node6", "node7"]
+        groups = _TestHelper.generate_domain_groups(
+            topology,
+            target_nodes=target_nodes,
+        )
+        self.assertEqual(
+            groups,
+            [
+                ("subblock1", ["node1", "node2", "node3"]),
+                ("subblock2", ["node5", "node6", "node7"]),
+            ],
+        )
+
+    def test_generate_domain_groups_disambiguates_repeated_subblocks(self):
+        topology = {
+            "block1": {"default-subblock": ["node1", "node2", "node3"]},
+            "block2": {"default-subblock": ["node4", "node5", "node6"]},
+        }
+        self.assertEqual(
+            _TestHelper.generate_domain_groups(topology),
+            [
+                ("block1-default-subblock", ["node1", "node2", "node3"]),
+                ("block2-default-subblock", ["node4", "node5", "node6"]),
+            ],
+        )
+
+    def test_generate_domain_groups_empty_topology(self):
+        self.assertEqual(_TestHelper.generate_domain_groups(None), [])
+        self.assertEqual(_TestHelper.generate_domain_groups({}), [])
+
+    def test_generate_domain_groups_empty_target_list_targets_nothing(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2", "node3"],
+                "subblock2": ["node4", "node5", "node6"],
+            },
+        }
+        self.assertEqual(
+            _TestHelper.generate_domain_groups(topology, target_nodes=[]), []
+        )
+
+    def test_generate_domain_groups_ignores_unknown_target_nodes(self):
+        topology = {"block1": {"subblock1": ["node1", "node2", "node3"]}}
+        groups = _TestHelper.generate_domain_groups(
+            topology,
+            target_nodes=["node1", "node2", "node3", "ghost1", "ghost2"],
+        )
+        self.assertEqual(groups, [("subblock1", ["node1", "node2", "node3"])])
+
+    def test_generate_domain_groups_skips_empty_subblock(self):
+        topology = {
+            "block1": {
+                "subblock1": [],
+                "subblock2": ["node1", "node2", "node3"],
+            },
+        }
+        self.assertEqual(
+            _TestHelper.generate_domain_groups(topology),
+            [("subblock2", ["node1", "node2", "node3"])],
+        )
+
+    def test_generate_domain_groups_filters_domains_below_minimum(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1"],
+                "subblock2": ["node2", "node3"],
+            },
+            "block2": {"subblock3": ["node4"]},
+        }
+        # All domains have <= 2 nodes, so default min_nodes_per_domain=3
+        # yields none.
+        self.assertEqual(
+            _TestHelper.generate_domain_groups(topology),
+            [],
+        )
+        # When min_nodes_per_domain=1, all nonempty domains are included.
+        self.assertEqual(
+            _TestHelper.generate_domain_groups(
+                topology, min_nodes_per_domain=1
+            ),
+            [
+                ("subblock1", ["node1"]),
+                ("subblock2", ["node2", "node3"]),
+                ("subblock3", ["node4"]),
+            ],
+        )
+
+    def _nccl_configs(self):
+        return {
+            "a4x-highgpu-4g": {
+                "nccl-tests": {
+                    "variables": {},
+                    "env_vars": {},
+                    "success_criteria": [],
+                    "modifiers": [],
+                    "intradomain": {
+                        "variables": {
+                            "custom_resources_yaml": "kind: ComputeDomain",
+                        },
+                    },
+                }
+            }
+        }
+
+    def test_nccl_test_domain(self):
+        variables = {
+            "nodes": [
+                "node1",
+                "node2",
+                "node3",
+                "node4",
+                "node5",
+                "node6",
+            ],
+            "machine_type": "a4x-highgpu-4g",
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2", "node3"],
+                "subblock2": ["node4", "node5", "node6"],
+            },
+        }
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict"
+        ) as mock_create:
+            mock_create.side_effect = lambda name, ctx: (name, ctx)
+            results = _TestHelper.nccl_test(
+                variables,
+                "test-exp",
+                self._nccl_configs(),
+                "nccl-domain",
+                topology=topology,
+            )
+
+        self.assertEqual(
+            [name for name, _ in results],
+            ["test-exp-subblock1", "test-exp-subblock2"],
+        )
+        self.assertEqual(
+            [ctx["variables"]["nodes"] for _, ctx in results],
+            [["node1", "node2", "node3"], ["node4", "node5", "node6"]],
+        )
+        self.assertEqual(
+            [ctx["variables"]["n_nodes"] for _, ctx in results], [3, 3]
+        )
+        self.assertEqual(
+            [ctx["variables"]["domain_type"] for _, ctx in results],
+            ["intradomain", "intradomain"],
+        )
+        self.assertEqual(
+            [ctx["variables"]["custom_resources_yaml"] for _, ctx in results],
+            ["kind: ComputeDomain", "kind: ComputeDomain"],
+        )
+
+    def test_nccl_test_domain_with_varied_domain_sizes(self):
+        variables = {
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "machine_type": "a4x-highgpu-4g",
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        topology = {
+            "block1": {
+                "subblock1": ["node1"],
+                "subblock2": ["node2", "node3", "node4"],
+            },
+        }
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict"
+        ) as mock_create:
+            mock_create.side_effect = lambda name, ctx: (name, ctx)
+            results = _TestHelper.nccl_test(
+                variables,
+                "test-exp",
+                self._nccl_configs(),
+                "nccl-domain",
+                topology=topology,
+            )
+
+        # subblock1 has only 1 node, so it is filtered out (requires >= 3
+        # nodes per domain)
+        self.assertEqual(
+            [name for name, _ in results],
+            ["test-exp-subblock2"],
+        )
+        self.assertEqual(
+            [ctx["variables"]["nodes"] for _, ctx in results],
+            [["node2", "node3", "node4"]],
+        )
+
+    def test_nccl_test_domain_skips_fewer_than_3_nodes(self):
+        variables = {
+            "nodes": ["node1", "node2"],
+            "machine_type": "a4x-highgpu-4g",
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        topology = {"block1": {"subblock1": ["node1", "node2"]}}
+        results = _TestHelper.nccl_test(
+            variables,
+            "test-exp",
+            self._nccl_configs(),
+            "nccl-domain",
+            topology=topology,
+        )
+        self.assertEqual(results, [])
+
+    def test_nccl_test_domain_without_topology(self):
+        variables = {
+            "nodes": ["node1", "node2", "node3"],
+            "machine_type": "a4x-highgpu-4g",
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        results = _TestHelper.nccl_test(
+            variables,
+            "test-exp",
+            self._nccl_configs(),
+            "nccl-domain",
+            topology=None,
+        )
+        self.assertEqual(results, [])
+
     def test_nccl_test_fallback_disjoint(self):
         variables = {
             "nodes": ["node1", "node2", "node3", "node4"],
