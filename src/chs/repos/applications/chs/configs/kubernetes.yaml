@@ -295,12 +295,7 @@ a3-megagpu-8g:
       processes_per_node: {gpus_per_node}
       mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
       mpi_command: |
-        WORKLOAD_NAME=$(basename $(dirname $(pwd)))
-        case "$WORKLOAD_NAME" in
-          all-to-all) BINARY="alltoall_perf" ;;
-          send-recv) BINARY="sendrecv_perf" ;;
-          *) BINARY=$(echo $WORKLOAD_NAME | tr '-' '_')_perf ;;
-        esac
+        BINARY=$(basename $(dirname $(pwd)) | tr '-' '_')_perf
         mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 \
           --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_args "-p {ssh_port}" \
           -np $(( {n_nodes} * {processes_per_node} )) \
@@ -364,8 +359,6 @@ a3-megagpu-8g:
 a4x-highgpu-4g:
   variables:
     pod_annotations_yaml: |
-      compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
-      compute-domain.nvidia.com/domain-name: {job_name}-cd
       networking.gke.io/default-interface: {default_interface_name}
       networking.gke.io/interfaces: |
         {all_interfaces_json}
@@ -403,28 +396,9 @@ a4x-highgpu-4g:
         nvidia.com/gpu: {gpus_per_node}
       requests:
         nvidia.com/gpu: {gpus_per_node}
-      claims:
-      - name: compute-domain-channel
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
-    pod_resource_claims_yaml: |
-      - name: compute-domain-channel
-        resourceClaimTemplateName: {job_name}-cdc
-    custom_resources_yaml: |
-      apiVersion: resource.nvidia.com/v1beta1
-      kind: ComputeDomain
-      metadata:
-        name: {job_name}-cd
-        namespace: "{kubernetes_namespace}"
-        labels:
-          chs-run: {job_name}
-      spec:
-        numNodes: {n_nodes}
-        channel:
-          resourceClaimTemplate:
-            name: {job_name}-cdc
-      ---
   nccl-tests:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "nccl-gib"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
     env_vars:
@@ -446,6 +420,33 @@ a4x-highgpu-4g:
           --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
           -x PATH="{nccl-tests_path}/build:$PATH" \
           -x {mpi_env_vars} bash -c 'if [ -f /usr/local/gib/scripts/set_nccl_env.sh ]; then source /usr/local/gib/scripts/set_nccl_env.sh; fi; "$@"' --
+    intradomain:
+      variables:
+        extra_pod_annotations_yaml: |
+          compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+          compute-domain.nvidia.com/domain-name: {job_name}-cd
+        extra_container_resources_yaml: |
+          claims:
+          - name: compute-domain-channel
+        pod_resource_claims_yaml: |
+          - name: compute-domain-channel
+            resourceClaimTemplateName: {job_name}-cdc
+        custom_resources_yaml: |
+          apiVersion: resource.nvidia.com/v1beta1
+          kind: ComputeDomain
+          metadata:
+            name: {job_name}-cd
+            namespace: "{kubernetes_namespace}"
+            labels:
+              chs-run: {job_name}
+          spec:
+            numNodes: {n_nodes}
+            channel:
+              resourceClaimTemplate:
+                name: {job_name}-cdc
+          ---
+    interdomain:
+      variables: {}
 
   nvidia-dcgm:
     modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
@@ -531,11 +532,13 @@ a4x-maxgpu-4g-metal:
     container_resources_yaml: |
       limits:
         nvidia.com/gpu: {gpus_per_node}
+      requests:
+        nvidia.com/gpu: {gpus_per_node}
+      claims:
+      - name: compute-domain-channel
     container_security_context_yaml: |
       privileged: true
       runAsUser: 0
-    claims:
-      - name: compute-domain-channel
     pod_resource_claims_yaml: |
       - name: compute-domain-channel
         resourceClaimTemplateName: {job_name}-cdc
@@ -563,7 +566,6 @@ a4x-maxgpu-4g-metal:
         NCCL_DEBUG: INFO
         NCCL_TESTS_SPLIT_MASK: "0x0"
         LD_LIBRARY_PATH: "/usr/local/nvidia/lib64:/usr/local/gib/lib64"
-        NCCL_MNNVL_ENABLE: "0"
     variables:
       jobset_template: jobset_mpi.yaml.tpl
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1

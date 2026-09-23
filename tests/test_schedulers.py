@@ -1149,10 +1149,15 @@ ramble:
         mock_run.return_value.stdout = "chs-job1-ssh"
         scheduler.cleanup_scheduler_resources()
 
-        args = mock_run.call_args_list[6][0][0]
-        self.assertIn("delete", args)
-        self.assertIn("secrets", args)
-        self.assertIn("chs-job1-ssh", args)
+        # Located by content rather than call index so that adding unrelated
+        # cleanup steps does not break this assertion.
+        secret_deletes = [
+            call[0][0]
+            for call in mock_run.call_args_list
+            if "delete" in call[0][0] and "secrets" in call[0][0]
+        ]
+        self.assertEqual(len(secret_deletes), 1)
+        self.assertIn("chs-job1-ssh", secret_deletes[0])
 
     @mock.patch("subprocess.run")
     def test_resolve_project_id_kubernetes_success(self, mock_run, mock_logger):

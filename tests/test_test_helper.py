@@ -21,10 +21,38 @@ from unittest import mock
 # Mock ramble module dependencies
 ramble_mock = mock.Mock()
 ramble_mock.context = mock.Mock()
+ramble_mock.wmkit = mock.Mock()
+
+
+class _MockWorkflowManagerBase:
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+ramble_mock.wmkit.WorkflowManagerBase = _MockWorkflowManagerBase
+ramble_mock.wmkit.workflow_manager_variable = mock.Mock()
+ramble_mock.wmkit.maintainers = mock.Mock()
+ramble_mock.wmkit.tags = mock.Mock()
+ramble_mock.wmkit.variable = mock.Mock()
+ramble_mock.wmkit.register_template = mock.Mock()
+ramble_mock.wmkit.__all__ = [
+    "WorkflowManagerBase",
+    "workflow_manager_variable",
+    "maintainers",
+    "tags",
+    "variable",
+    "register_template",
+]
+ramble_mock.experiment_result = mock.Mock()
 sys.modules["ramble"] = ramble_mock
 sys.modules["ramble.context"] = ramble_mock.context
+sys.modules["ramble.wmkit"] = ramble_mock.wmkit
+sys.modules["ramble.experiment_result"] = ramble_mock.experiment_result
 
 from chs.repos.applications.chs.test_helper import TestHelper as _TestHelper  # noqa: E402
+from chs.repos.workflow_managers.kubernetes_jobset.workflow_manager import (  # noqa: E402
+    KubernetesJobset,
+)
 
 
 class TestTestHelper(unittest.TestCase):
@@ -132,6 +160,87 @@ class TestTestHelper(unittest.TestCase):
         pairs = _TestHelper.generate_topological_pairs(topology)
         self.assertEqual(pairs, [])
 
+    def test_nccl_test_domain_type_variable(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        variables = {
+            "machine_type": "a4x-highgpu-4g",
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a4x-highgpu-4g": {
+                "nccl-tests": {
+                    "variables": {},
+                }
+            }
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-pairwise", topology=topology
+            )
+
+        domain_types = {
+            name: ctx.get("variables", {}).get("domain_type")
+            for name, ctx in contexts_created
+        }
+        self.assertEqual(domain_types["exp-node1-node2"], "intradomain")
+        self.assertEqual(domain_types["exp-node3-node4"], "intradomain")
+        self.assertEqual(domain_types["exp-node1-node3"], "interdomain")
+
+        # Fallback to interdomain when topology is None
+        contexts_none = []
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=lambda name, ctx: (
+                contexts_none.append((name, ctx)),
+                mock.Mock(context_name=name),
+            )[1],
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-pairwise", topology=None
+            )
+        for _, ctx in contexts_none:
+            self.assertEqual(
+                ctx.get("variables", {}).get("domain_type"), "interdomain"
+            )
+
+        # Fallback to interdomain when node is unmapped
+        partial_loc = {"node1": {"block": "b1", "subblock": "sb1"}}
+        contexts_unmapped = []
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=lambda name, ctx: (
+                contexts_unmapped.append((name, ctx)),
+                mock.Mock(context_name=name),
+            )[1],
+        ):
+            _TestHelper._nccl_context(
+                variables,
+                "exp",
+                configs,
+                ["node1", "node3"],
+                test_type="nccl-pairwise",
+                node_to_loc=partial_loc,
+            )
+        self.assertEqual(
+            contexts_unmapped[-1][1]["variables"]["domain_type"], "interdomain"
+        )
+
     def test_nccl_test_fallback_disjoint(self):
         variables = {
             "nodes": ["node1", "node2", "node3", "node4"],
@@ -160,6 +269,56 @@ class TestTestHelper(unittest.TestCase):
             self.assertEqual(len(results), 2)
             self.assertEqual(results[0].context_name, "test-exp-node1-node2")
             self.assertEqual(results[1].context_name, "test-exp-node3-node4")
+
+    def test_nccl_cluster_skipped_when_few_nodes(self):
+        configs = {
+            "a3-ultragpu-8g": {
+                "nccl-tests": {
+                    "variables": {},
+                    "env_vars": {},
+                    "success_criteria": [],
+                    "modifiers": [],
+                }
+            }
+        }
+        for node_list in [[], ["node1"], ["node1", "node2"]]:
+            variables = {
+                "nodes": node_list,
+                "timeout": 600,
+                "deadline": 2400,
+            }
+            results = _TestHelper.nccl_test(
+                variables, "test-exp", configs, "nccl-cluster"
+            )
+            self.assertEqual(results, [])
+
+    def test_nccl_cluster_runs_when_three_or_more_nodes(self):
+        variables = {
+            "nodes": ["node1", "node2", "node3"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a3-ultragpu-8g": {
+                "nccl-tests": {
+                    "variables": {},
+                    "env_vars": {},
+                    "success_criteria": [],
+                    "modifiers": [],
+                }
+            }
+        }
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict"
+        ) as mock_create:
+            mock_create.side_effect = lambda name, ctx: mock.Mock(
+                context_name=name
+            )
+            results = _TestHelper.nccl_test(
+                variables, "test-exp", configs, "nccl-cluster"
+            )
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].context_name, "test-exp")
 
     def test_prepare_base_context(self):
         ctx_vars = {
@@ -293,6 +452,177 @@ class TestTestHelper(unittest.TestCase):
 
             self.assertIn('mesh_shape: "2x2x2"', unescaped)
             self.assertIn("ici_size: 4", unescaped)
+
+    def test_nccl_pairwise_intradomain_and_interdomain_configs(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        variables = {
+            "machine_type": "a4x-highgpu-4g",
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        configs = {
+            "a4x-highgpu-4g": {
+                "variables": {
+                    "pod_annotations_yaml": (
+                        "networking.gke.io/default-interface: eth0\n"
+                    ),
+                    "container_resources_yaml": (
+                        "limits:\n  nvidia.com/gpu: 4\n"
+                    ),
+                },
+                "nccl-tests": {
+                    "variables": {},
+                    "intradomain": {
+                        "variables": {
+                            "custom_resources_yaml": (
+                                "apiVersion: resource.nvidia.com/v1beta1\n"
+                                "kind: ComputeDomain\n"
+                            ),
+                            "pod_resource_claims_yaml": (
+                                "- name: compute-domain-channel\n"
+                            ),
+                            "extra_pod_annotations_yaml": (
+                                "compute-domain.nvidia.com/domain-name: cd\n"
+                            ),
+                            "extra_container_resources_yaml": (
+                                "claims:\n- name: compute-domain-channel\n"
+                            ),
+                        }
+                    },
+                    "interdomain": {"variables": {}},
+                },
+            }
+        }
+        contexts_created = {}
+
+        def mock_create(name, ctx):
+            contexts_created[name] = ctx
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-pairwise", topology=topology
+            )
+
+        # Pair 1: node1-node2 (intradomain) -> merges intradomain config
+        ctx_intra = contexts_created["exp-node1-node2"]["variables"]
+        self.assertEqual(ctx_intra["domain_type"], "intradomain")
+        self.assertIn("ComputeDomain", ctx_intra["custom_resources_yaml"])
+        self.assertIn(
+            "compute-domain-channel", ctx_intra["pod_resource_claims_yaml"]
+        )
+        self.assertIn(
+            "compute-domain.nvidia.com", ctx_intra["extra_pod_annotations_yaml"]
+        )
+        self.assertIn(
+            "networking.gke.io/default-interface: eth0",
+            ctx_intra["pod_annotations_yaml"],
+        )
+        self.assertIn(
+            "claims:\n- name: compute-domain-channel",
+            ctx_intra["extra_container_resources_yaml"],
+        )
+        self.assertIn(
+            "limits:\n  nvidia.com/gpu: 4",
+            ctx_intra["container_resources_yaml"],
+        )
+
+        # Pair 3: node1-node3 (interdomain) -> base config without ComputeDomain
+        ctx_inter = contexts_created["exp-node1-node3"]["variables"]
+        self.assertEqual(ctx_inter["domain_type"], "interdomain")
+        self.assertNotIn("custom_resources_yaml", ctx_inter)
+        self.assertNotIn("pod_resource_claims_yaml", ctx_inter)
+        self.assertNotIn("extra_pod_annotations_yaml", ctx_inter)
+        self.assertNotIn("extra_container_resources_yaml", ctx_inter)
+        self.assertIn(
+            "networking.gke.io/default-interface: eth0",
+            ctx_inter["pod_annotations_yaml"],
+        )
+        self.assertIn(
+            "limits:\n  nvidia.com/gpu: 4",
+            ctx_inter["container_resources_yaml"],
+        )
+
+    def test_kubernetes_jobset_extra_annotations_and_resources(self):
+        wm = KubernetesJobset(mock.Mock())
+        wm.app_inst = mock.Mock()
+
+        var_map = {
+            "job_name": "test-job",
+            "command": "echo test",
+            "experiment_run_dir": "/tmp/exp",
+            "app_workdir": "",
+            "container_image": "image:latest",
+            "jobset_labels_yaml": "",
+            "jobset_annotations_yaml": "",
+            "pod_labels_yaml": "",
+            "pod_annotations_yaml": "networking.gke.io/default-interface: eth0",
+            "extra_pod_annotations_yaml": (
+                "compute-domain.nvidia.com/domain-name: cd"
+            ),
+            "node_selector_yaml": "",
+            "affinity_yaml": "",
+            "tolerations_yaml": "",
+            "container_resources_yaml": (
+                "limits:\n  nvidia.com/gpu: 4\nrequests:\n  nvidia.com/gpu: 4"
+            ),
+            "extra_container_resources_yaml": (
+                "claims:\n- name: compute-domain-channel"
+            ),
+            "container_security_context_yaml": "",
+            "extra_volumes_yaml": "",
+            "extra_volume_mounts_yaml": "",
+            "init_containers_yaml": "",
+            "custom_resources_yaml": "",
+            "pod_resource_claims_yaml": "",
+            "suspend_jobset": "false",
+        }
+        wm.app_inst.expander.expand_var_name.side_effect = (
+            lambda k: var_map.get(k, "")
+        )
+        res = wm._jobset_vars()
+
+        # Check annotations merged
+        self.assertIn(
+            "networking.gke.io/default-interface: eth0",
+            res["pod_annotations_section"],
+        )
+        self.assertIn(
+            "compute-domain.nvidia.com/domain-name: cd",
+            res["pod_annotations_section"],
+        )
+
+        # Check container resources merged
+        self.assertIn(
+            "limits:\n                    nvidia.com/gpu: 4",
+            res["container_resources_section"],
+        )
+        self.assertIn(
+            "claims:\n                  - name: compute-domain-channel",
+            res["container_resources_section"],
+        )
+
+        # When extra fields are empty
+        var_map["extra_pod_annotations_yaml"] = ""
+        var_map["extra_container_resources_yaml"] = ""
+        res_empty = wm._jobset_vars()
+        self.assertIn(
+            "networking.gke.io/default-interface: eth0",
+            res_empty["pod_annotations_section"],
+        )
+        self.assertNotIn(
+            "compute-domain.nvidia.com", res_empty["pod_annotations_section"]
+        )
+        self.assertNotIn("claims:", res_empty["container_resources_section"])
 
 
 if __name__ == "__main__":

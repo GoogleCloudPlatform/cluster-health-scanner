@@ -73,3 +73,60 @@ def test_nccl_pairwise_renderer():
     assert "Pairwise Detail" in output
     assert "node-1 <-> node-2" in output
     assert "60.20" in output
+
+
+def test_build_node_to_location_and_get_topology(caplog):
+    from chs.utils.topology import (
+        build_node_to_location,
+        get_topology,
+        get_topological_context,
+    )
+    import logging
+
+    # Test empty / None / invalid topology with debug log
+    with caplog.at_level(logging.DEBUG):
+        loc_empty = build_node_to_location(None)
+        assert loc_empty == {}
+        assert "Topology is missing or not a dictionary" in caplog.text
+
+        caplog.clear()
+        loc_invalid = build_node_to_location(
+            "invalid"
+        )  # pyrefly: ignore[bad-argument-type]
+        assert loc_invalid == {}
+        assert "Topology is missing or not a dictionary" in caplog.text
+
+    # Test topology mapping
+    topology = {
+        "block1": {
+            "subblock1": ["node1", "node2"],
+            "subblock2": ["node3"],
+        },
+        "block2": {
+            "subblock3": ["node4"],
+        },
+    }
+    loc_map = build_node_to_location(topology)
+    assert loc_map["node1"] == {"block": "block1", "subblock": "subblock1"}
+    assert loc_map["node2"] == {"block": "block1", "subblock": "subblock1"}
+    assert loc_map["node3"] == {"block": "block1", "subblock": "subblock2"}
+    assert loc_map["node4"] == {"block": "block2", "subblock": "subblock3"}
+
+    # Test topological context & get_topology
+    assert (
+        get_topological_context("node1", "node2", loc_map) == "Intra-Subblock"
+    )
+    assert get_topology("node1", "node2", loc_map) == "intradomain"
+
+    assert (
+        get_topological_context("node1", "node3", loc_map) == "Inter-Subblock"
+    )
+    assert get_topology("node1", "node3", loc_map) == "interdomain"
+
+    assert get_topological_context("node1", "node4", loc_map) == "Inter-Block"
+    assert get_topology("node1", "node4", loc_map) == "interdomain"
+
+    assert (
+        get_topological_context("node1", "unknown_node", loc_map) == "Unknown"
+    )
+    assert get_topology("node1", "unknown_node", loc_map) == "unknown"

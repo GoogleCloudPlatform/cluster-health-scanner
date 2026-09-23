@@ -20,6 +20,9 @@ import tempfile
 import unittest
 from unittest import mock
 
+import yaml
+
+from chs.constants import SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
 from chs.exceptions import KueueException
 from chs.utils.kueue import KueueManager
 
@@ -58,11 +61,19 @@ class TestKueueManager(unittest.TestCase):
         config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
         self.assertTrue(os.path.exists(config_path))
         with open(config_path, "r") as f:
-            content = f.read()
-            self.assertIn("a3-megagpu-8g", content)
-            self.assertIn("nvidia.com/gpu", content)
-            self.assertIn('nominalQuota: "16"', content)
-            self.assertIn("apiVersion: kueue.x-k8s.io/v1beta2", content)
+            docs = list(yaml.safe_load_all(f))
+            self.assertTrue(
+                any(
+                    d.get("apiVersion") == "kueue.x-k8s.io/v1beta2"
+                    for d in docs
+                )
+            )
+            cq = next(d for d in docs if d["kind"] == "ClusterQueue")
+            flavor_res = cq["spec"]["resourceGroups"][0]["flavors"][0][
+                "resources"
+            ][0]
+            self.assertEqual(flavor_res["name"], "nvidia.com/gpu")
+            self.assertEqual(flavor_res["nominalQuota"], "16")
 
     def test_generate_configs_tpu_success_renders(self):
         """Test generate_configs for TPU renders correct flavor and
@@ -76,11 +87,135 @@ class TestKueueManager(unittest.TestCase):
         config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
         self.assertTrue(os.path.exists(config_path))
         with open(config_path, "r") as f:
-            content = f.read()
-            self.assertIn("tpu7x-standard-4t", content)
-            self.assertIn("google.com/tpu", content)
-            self.assertIn("apiVersion: kueue.x-k8s.io/v1beta1", content)
-            self.assertIn('nominalQuota: "8"', content)
+            docs = list(yaml.safe_load_all(f))
+            self.assertTrue(
+                any(
+                    d.get("apiVersion") == "kueue.x-k8s.io/v1beta1"
+                    for d in docs
+                )
+            )
+            cq = next(d for d in docs if d["kind"] == "ClusterQueue")
+            flavor_res = cq["spec"]["resourceGroups"][0]["flavors"][0][
+                "resources"
+            ][0]
+            self.assertEqual(flavor_res["name"], "google.com/tpu")
+            self.assertEqual(flavor_res["nominalQuota"], "8")
+
+    def _render_all(
+        self,
+        machine_type: str,
+        dynamic_slicing: bool = False,
+    ) -> list[dict]:
+        """Renders configs and returns all parsed YAML documents."""
+        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir,
+            machine_type,
+            ["node1", "node2"],
+            dynamic_slicing=dynamic_slicing,
+        )
+        config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
+        with open(config_path, "r") as f:
+            return [d for d in yaml.safe_load_all(f) if d]
+
+    def test_generate_configs_flat_topology_omits_slice_levels(self):
+        """Non-dynamic clusters get a hostname-only topology.
+
+        TAS requires every node in the flavor to carry a label for every
+        level, so GPU and statically sliced TPU nodes must not be given the
+        slice controller's block or sub-block levels.
+        """
+        docs = self._render_all("a3-megagpu-8g", dynamic_slicing=False)
+        topologies = [d for d in docs if d["kind"] == "Topology"]
+        flavors = [d for d in docs if d["kind"] == "ResourceFlavor"]
+
+        self.assertEqual(len(topologies), 1)
+        self.assertEqual(
+            topologies[0]["metadata"]["name"], "chs-node-topology-static"
+        )
+        self.assertEqual(
+            [level["nodeLabel"] for level in topologies[0]["spec"]["levels"]],
+            ["kubernetes.io/hostname"],
+        )
+        self.assertEqual(len(flavors), 1)
+        self.assertEqual(
+            flavors[0]["metadata"]["name"],
+            "chs-flavor-static",
+        )
+        self.assertEqual(
+            flavors[0]["spec"]["topologyName"],
+            "chs-node-topology-static",
+        )
+
+    def test_generate_configs_dynamic_topology_adds_slice_levels(self):
+        """Dynamic slicing creates dynamic and static topologies and flavors."""
+        docs = self._render_all("tpu7x-standard-4t", dynamic_slicing=True)
+        topologies = {
+            d["metadata"]["name"]: d for d in docs if d["kind"] == "Topology"
+        }
+        flavors = {
+            d["metadata"]["name"]: d
+            for d in docs
+            if d["kind"] == "ResourceFlavor"
+        }
+        cluster_queue = next(d for d in docs if d["kind"] == "ClusterQueue")
+
+        self.assertIn("chs-node-topology-dynamic", topologies)
+        self.assertIn("chs-node-topology-static", topologies)
+
+        self.assertEqual(
+            [
+                level["nodeLabel"]
+                for level in topologies["chs-node-topology-dynamic"]["spec"][
+                    "levels"
+                ]
+            ],
+            [
+                "cloud.google.com/gce-topology-block",
+                f"cloud.google.com/gke-tpu-partition-{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id",
+                "kubernetes.io/hostname",
+            ],
+        )
+        self.assertEqual(
+            [
+                level["nodeLabel"]
+                for level in topologies["chs-node-topology-static"]["spec"][
+                    "levels"
+                ]
+            ],
+            ["kubernetes.io/hostname"],
+        )
+
+        self.assertIn("chs-flavor-dynamic", flavors)
+        self.assertIn("chs-flavor-static", flavors)
+        self.assertEqual(
+            flavors["chs-flavor-dynamic"]["spec"]["topologyName"],
+            "chs-node-topology-dynamic",
+        )
+        self.assertEqual(
+            flavors["chs-flavor-static"]["spec"]["topologyName"],
+            "chs-node-topology-static",
+        )
+
+        cq_flavor_names = [
+            f["name"]
+            for f in cluster_queue["spec"]["resourceGroups"][0]["flavors"]
+        ]
+        self.assertEqual(
+            cq_flavor_names, ["chs-flavor-dynamic", "chs-flavor-static"]
+        )
+
+    def test_generate_configs_never_renders_admission_check(self):
+        """CHS drives slice formation itself, so Kueue must not gate on it."""
+        for dynamic_slicing in (True, False):
+            with self.subTest(dynamic_slicing=dynamic_slicing):
+                docs = self._render_all(
+                    "tpu7x-standard-4t", dynamic_slicing=dynamic_slicing
+                )
+                kinds = [d["kind"] for d in docs]
+                self.assertNotIn("AdmissionCheck", kinds)
+                cq = next(d for d in docs if d["kind"] == "ClusterQueue")
+                self.assertNotIn("admissionChecks", cq["spec"])
 
     def test_apply_configs_success(self):
         """Test apply_configs cleans up and applies configurations."""
@@ -88,11 +223,12 @@ class TestKueueManager(unittest.TestCase):
             "",  # cleanup localqueue
             "",  # cleanup clusterqueue
             "",  # cleanup resourceflavor
+            "",  # cleanup topology
             "",  # apply
             "",  # wait
         ]
         self.kueue_mgr.apply_configs(self.tmp_dir)
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 5)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 6)
 
     def test_apply_and_verify_permission_error_raises(self):
         """Test applying config with kubectl error raises KueueException."""
@@ -154,7 +290,7 @@ class TestKueueManager(unittest.TestCase):
         """Test cleanup deletes resources via kubectl."""
         self.mock_scheduler._run_kubectl.return_value = ""
         self.kueue_mgr.cleanup()
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 4)
         self.mock_scheduler._run_kubectl.assert_any_call(
             [
                 "delete",
@@ -176,8 +312,37 @@ class TestKueueManager(unittest.TestCase):
             timeout=None,
         )
         self.mock_scheduler._run_kubectl.assert_any_call(
-            ["delete", "resourceflavor", "chs-flavor", "--ignore-not-found"],
+            [
+                "delete",
+                "resourceflavor",
+                "chs-flavor-dynamic",
+                "chs-flavor-static",
+                "--ignore-not-found",
+            ],
             timeout=None,
+        )
+        self.mock_scheduler._run_kubectl.assert_any_call(
+            [
+                "delete",
+                "topology",
+                "chs-node-topology-dynamic",
+                "chs-node-topology-static",
+                "--ignore-not-found",
+            ],
+            timeout=None,
+        )
+
+    def test_cleanup_deletes_topology_after_resource_flavor(self):
+        """Topologies must outlive the ResourceFlavor that references them."""
+        self.mock_scheduler._run_kubectl.return_value = ""
+        self.kueue_mgr.cleanup()
+
+        resources = [
+            call.args[0][1]
+            for call in self.mock_scheduler._run_kubectl.call_args_list
+        ]
+        self.assertLess(
+            resources.index("resourceflavor"), resources.index("topology")
         )
 
     def test_cleanup_failure_raises(self):

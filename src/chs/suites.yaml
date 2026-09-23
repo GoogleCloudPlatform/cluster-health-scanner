@@ -16,19 +16,25 @@ suites:
 - name: lite
   est_time: "~5 mins"
   description: "Quick health check."
-  deadline: 600
+  deadline: 1080
   tests:
   - name: nvidia-smi
+    variables:
+      timeout: 150
   - name: dcgm
     variables:
       diag_level: [2]
+      timeout: 510
   - name: gemm
     workloads: [check]
+    variables:
+      timeout: 690
   - name: nccl-single-node
     workloads: [all-gather, all-reduce]
     variables:
       begin_message_size: 256M
       end_message_size: 8G
+      timeout: 240
   - name: tpu-info
     variables:
       timeout: 120
@@ -49,24 +55,31 @@ suites:
 - name: standard
   est_time: "~30 mins"
   description: "Thorough network & collective testing."
-  deadline: 2400
+  deadline: 3600
   tests:
   - name: nvidia-smi
+    variables:
+      timeout: 150
   - name: dcgm
     variables:
       diag_level: [3]
+      timeout: 1830
   - name: stream
+    variables:
+      timeout: 210
   - name: nccl-cluster
-    workloads: [all-gather, all-reduce, all-to-all]
+    workloads: [all-gather, all-reduce]
     variables:
       begin_message_size: 256M
       end_message_size: 8G
   - name: nccl-pairwise
-    workloads: [all-gather, all-reduce, all-to-all]
+    workloads: [all-gather, all-reduce]
     variables:
       begin_message_size: 256M
       end_message_size: 8G
   - name: gemm
+    variables:
+      timeout: 690
   - name: tpu-info
     variables:
       timeout: 120

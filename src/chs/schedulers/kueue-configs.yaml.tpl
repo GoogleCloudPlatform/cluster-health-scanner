@@ -2,7 +2,7 @@
 apiVersion: kueue.x-k8s.io/{kueue_api_version}
 kind: Topology
 metadata:
-  name: chs-node-topology
+  name: chs-node-topology-static
 spec:
   levels:
   - nodeLabel: kubernetes.io/hostname
@@ -10,9 +10,9 @@ spec:
 apiVersion: kueue.x-k8s.io/{kueue_api_version}
 kind: ResourceFlavor
 metadata:
-  name: chs-flavor
+  name: chs-flavor-static
 spec:
-  topologyName: chs-node-topology
+  topologyName: chs-node-topology-static
   nodeLabels:
     node.kubernetes.io/instance-type: {instance_type}
 ---
@@ -25,7 +25,7 @@ spec:
   resourceGroups:
   - coveredResources: ["{resource_name}"]
     flavors:
-    - name: chs-flavor
+    - name: chs-flavor-static
       resources:
       - name: "{resource_name}"
         nominalQuota: "{nominal_quota}"
