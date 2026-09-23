@@ -39,7 +39,7 @@ where = ["src"]
 
 
 [tool.setuptools.package-data]
-"chs" = ["**/*.yaml", "**/*.tpl", "**/*.html", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**"]
+"chs" = ["**/*.yaml", "**/*.tpl", "**/*.html", "repos/applications/**", "repos/workflow_managers/**", "repos/modifiers/**", "repos/tests/**"]
 
 [tool.coverage.run]
 source = ["chs"]
