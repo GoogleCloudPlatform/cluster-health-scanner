@@ -28,7 +28,7 @@ def test_nccl_cluster_renderer_without_errors():
 
     # Add peak metric
     m1 = res.metrics.add()
-    m1.key = "BusBandwidth"
+    m1.key = "Bus Bandwidth"
     m1.value.number_value = 120.5
     m1.metadata.fields["context"].string_value = str(1024**3)  # 1 GB
 
@@ -58,7 +58,7 @@ def test_nccl_pairwise_renderer():
 
     # Add peak metric
     m1 = res.metrics.add()
-    m1.key = "BusBandwidth"
+    m1.key = "Bus Bandwidth"
     m1.value.number_value = 60.2
     m1.metadata.fields["context"].string_value = str(1024**3)  # 1 GB
 

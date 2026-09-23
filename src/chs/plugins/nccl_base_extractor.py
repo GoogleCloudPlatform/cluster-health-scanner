@@ -56,7 +56,7 @@ class NcclBaseExtractor(DefaultExtractor):
             for fom in foms:
                 name = fom.get("name", "")
                 val = fom.get("value")
-                if "Bandwidth" in name:
+                if "Bus Bandwidth" in name:
                     try:
                         max_bw = max(max_bw, float(val))
                     except (ValueError, TypeError):

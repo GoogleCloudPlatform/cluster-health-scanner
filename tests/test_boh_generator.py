@@ -1708,7 +1708,10 @@ class TestBOHGenerator(unittest.TestCase):
                         {
                             "name": "1073741824",
                             "foms": [
-                                {"name": "out-of-place Bandwidth", "value": 90}
+                                {
+                                    "name": "Out of Place Bus Bandwidth",
+                                    "value": 90,
+                                }
                             ],
                         }
                     ],
@@ -1724,7 +1727,10 @@ class TestBOHGenerator(unittest.TestCase):
                         {
                             "name": "1073741824",
                             "foms": [
-                                {"name": "out-of-place Bandwidth", "value": 60}
+                                {
+                                    "name": "Out of Place Bus Bandwidth",
+                                    "value": 60,
+                                }
                             ],
                         }
                     ],
