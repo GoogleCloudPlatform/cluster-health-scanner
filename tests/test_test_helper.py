@@ -84,6 +84,19 @@ class TestTestHelper(unittest.TestCase):
         self.assertEqual(headers_dict["--time"], "20")
         self.assertEqual(headers_dict["--deadline"], "now+4800seconds")
 
+        # Verify ceiling rounding for non-multiples of 60 seconds
+        ctx_vars_non_multiple = {"timeout": 150, "deadline": 3600}
+        headers_dict_nm = _TestHelper._build_common_sbatch_headers(
+            ctx_vars_non_multiple, "node1"
+        )
+        self.assertEqual(headers_dict_nm["--time"], "3")
+
+        ctx_vars_small = {"timeout": 30, "deadline": 3600}
+        headers_dict_small = _TestHelper._build_common_sbatch_headers(
+            ctx_vars_small, "node1"
+        )
+        self.assertEqual(headers_dict_small["--time"], "1")
+
     def test_build_common_sbatch_headers_missing_deadline(self):
         ctx_vars = {"timeout": 1200}
         with self.assertRaisesRegex(

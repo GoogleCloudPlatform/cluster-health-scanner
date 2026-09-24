@@ -26,6 +26,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -49,6 +51,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -72,6 +76,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -173,6 +179,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes

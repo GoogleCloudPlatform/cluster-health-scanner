@@ -60,7 +60,7 @@ a3-ultragpu-8g:
           -x {mpi_env_vars}
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -161,7 +161,7 @@ a4-highgpu-8g:
           -x {mpi_env_vars}
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -304,7 +304,7 @@ a3-megagpu-8g:
           taskset -c 32-63 /scripts/demo_mpi_entry_with_config_profile.sh $BINARY -b 8 -e 8G -f 2 -g 1 -w 5 --iters 20
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -449,7 +449,7 @@ a4x-highgpu-4g:
       variables: {}
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl
@@ -582,7 +582,7 @@ a4x-maxgpu-4g-metal:
           -x {mpi_env_vars}
 
   nvidia-dcgm:
-    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "gpu-persistence-mode"}, {name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       jobset_template: jobset_standard.yaml.tpl

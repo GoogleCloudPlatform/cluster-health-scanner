@@ -14,6 +14,7 @@
 
 import copy
 import logging
+import math
 import os
 import textwrap
 from chs.constants import TOPOLOGY_TO_MESH
@@ -114,7 +115,7 @@ podAntiAffinity:
         timeout_seconds = TestHelper._get_int_var(ctx_vars, "timeout")
         deadline_seconds = TestHelper._get_int_var(ctx_vars, "deadline")
 
-        headers_dict["--time"] = str(timeout_seconds // 60)
+        headers_dict["--time"] = str(max(1, math.ceil(timeout_seconds / 60)))
         headers_dict["--deadline"] = (
             f"now+{deadline_seconds + timeout_seconds}seconds"
         )
