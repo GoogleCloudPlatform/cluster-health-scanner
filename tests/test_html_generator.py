@@ -16,6 +16,7 @@
 
 import os
 import tempfile
+from unittest import mock
 
 from chs.html_generator import HtmlReportGenerator
 from chs.protos import bill_of_health_pb2 as pb
@@ -206,3 +207,31 @@ def test_html_report_generator_with_topology():
         report_data["test_suite_breakdown"][0]["ratio_str"]
         == "1 / 1 domains met threshold"
     )
+
+
+def test_html_report_generator_chs_version_from_boh():
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-run"
+    boh.chs_version = "1.2.3"
+    report_data = generator.generate_report_data(boh)
+    assert report_data["metadata"]["chs_version"] == "1.2.3"
+
+
+def test_html_report_generator_chs_version_from_run_info():
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-run"
+    report_data = generator.generate_report_data(
+        boh, run_info={"chs_version": "2.3.4"}
+    )
+    assert report_data["metadata"]["chs_version"] == "2.3.4"
+
+
+def test_html_report_generator_chs_version_fallback():
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-run"
+    with mock.patch("chs.html_generator.get_version", return_value="9.9.9"):
+        report_data = generator.generate_report_data(boh)
+        assert report_data["metadata"]["chs_version"] == "9.9.9"

@@ -22,8 +22,12 @@ from chs import exceptions
 from chs import preflights
 from chs import resources
 from chs import validators
+from chs.version import get_version
+
+__version__ = get_version()
 
 __all__ = [
+    "__version__",
     "RambleManager",
     "ResultsViewer",
     "get_scheduler",

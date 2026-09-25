@@ -126,7 +126,7 @@ class TestBOHGenerator(unittest.TestCase):
         report = generator.generate()
 
         self.assertEqual(report.report_id, "test_hash")
-        self.assertEqual(report.chs_version, "1.0.0")
+        self.assertTrue(report.chs_version)
         self.assertEqual(report.system_info.type, "SLURM_CLUSTER")
         self.assertEqual(len(report.test_results), 0)
 
