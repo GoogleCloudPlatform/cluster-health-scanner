@@ -16,16 +16,16 @@ ENV HOME=/workspace
 # Route Ramble's caches and repos into the CHS data directory
 ENV RAMBLE_USER_DIR=/workspace/.local/share/chs/.ramble
 
-# Create a virtual environment and upgrade pip
 ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-RUN pip install --no-cache-dir --upgrade pip
 
 # Copy the CHS source code and install
 COPY . /app
 WORKDIR /app
-RUN pip install --no-cache-dir .
+RUN python3 -m venv $VIRTUAL_ENV \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir . \
+    && rm -f /usr/lib/python*/ensurepip/_bundled/pip-*.whl /usr/local/lib/python*/ensurepip/_bundled/pip-*.whl
 
 WORKDIR /workspace
 
