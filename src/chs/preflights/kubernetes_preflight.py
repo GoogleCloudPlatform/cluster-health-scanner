@@ -229,23 +229,28 @@ class KubernetesPreflightChecker:
             return False
 
         deployments = self._discover_deployments("kueue")
-        if deployments:
-            healthy_dep = self._get_healthy_kueue_deployment(deployments)
-            if not healthy_dep:
-                logger.warning(
-                    "Kueue controller deployment is NOT in an Available "
-                    "state. Please check controller health with "
-                    "'kubectl get deployment -A -l "
-                    "app.kubernetes.io/name=kueue'."
-                )
-                return False
-            version = self._extract_version_from_deployment(
-                healthy_dep, app_name="kueue"
+        if not deployments:
+            logger.warning(
+                "Kueue CRD is installed, but no Kueue controller deployment "
+                "could be found. Please check controller installation with "
+                "'kubectl get deployment -A -l app.kubernetes.io/name=kueue'."
             )
-            if version:
-                return self._is_kueue_version_supported(version)
-            return True
+            return False
 
+        healthy_dep = self._get_healthy_kueue_deployment(deployments)
+        if not healthy_dep:
+            logger.warning(
+                "Kueue controller deployment is NOT in an Available "
+                "state. Please check controller health with "
+                "'kubectl get deployment -A -l "
+                "app.kubernetes.io/name=kueue'."
+            )
+            return False
+        version = self._extract_version_from_deployment(
+            healthy_dep, app_name="kueue"
+        )
+        if version:
+            return self._is_kueue_version_supported(version)
         return True
 
     def _check_kueue_crd_exists(self, installed_crds: list[str]) -> bool:

@@ -17,10 +17,11 @@ from unittest import mock
 from chs.utils.gcp import query_gce_instances_info
 from chs.exceptions import ChsSchedulerException
 from google.api_core.exceptions import GoogleAPICallError
+from google.auth.exceptions import DefaultCredentialsError, GoogleAuthError
 
 
 class TestGcpUtils(unittest.TestCase):
-    @mock.patch("chs.utils.gcp.compute_v1.InstancesClient")
+    @mock.patch("google.cloud.compute_v1.InstancesClient")
     def test_query_gce_instances_info_success(self, mock_client_class):
         mock_client = mock.MagicMock()
         mock_client_class.return_value = mock_client
@@ -52,14 +53,23 @@ class TestGcpUtils(unittest.TestCase):
         self.assertEqual(request.project, "my-project")
         self.assertIn('name = "node1"', request.filter)
 
-    @mock.patch("chs.utils.gcp.compute_v1.InstancesClient")
-    def test_query_gce_instances_info_api_error(self, mock_client_class):
+    @mock.patch("google.cloud.compute_v1.InstancesClient")
+    def test_query_gce_instances_info_api_and_auth_errors(
+        self, mock_client_class
+    ):
         mock_client = mock.MagicMock()
         mock_client_class.return_value = mock_client
-        mock_client.aggregated_list.side_effect = GoogleAPICallError(
-            "API failed"
-        )
+        for exc in (
+            GoogleAPICallError("API failed"),
+            GoogleAuthError("token refresh failed"),
+        ):
+            mock_client.aggregated_list.side_effect = exc
+            with self.assertRaisesRegex(
+                ChsSchedulerException, "Failed to query GCE API"
+            ):
+                query_gce_instances_info("my-project", ["node1"])
 
+        mock_client_class.side_effect = DefaultCredentialsError("no ADC")
         with self.assertRaisesRegex(
             ChsSchedulerException, "Failed to query GCE API"
         ):

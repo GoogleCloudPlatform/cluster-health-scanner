@@ -224,15 +224,12 @@ class TestKueueManager(unittest.TestCase):
     def test_apply_configs_success(self):
         """Test apply_configs cleans up and applies configurations."""
         self.mock_scheduler._run_kubectl.side_effect = [
-            "",  # cleanup localqueue
-            "",  # cleanup clusterqueue
-            "",  # cleanup resourceflavor
-            "",  # cleanup topology
+            "",  # cleanup (one batched delete)
             "",  # apply
             "",  # wait
         ]
         self.kueue_mgr.apply_configs(self.tmp_dir)
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 6)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
 
     def test_apply_and_verify_permission_error_raises(self):
         """Test applying config with kubectl error raises KueueException."""
@@ -291,49 +288,20 @@ class TestKueueManager(unittest.TestCase):
         )
 
     def test_cleanup_success(self):
-        """Test cleanup deletes resources via kubectl."""
+        """Test cleanup deletes all resources with one kubectl call."""
         self.mock_scheduler._run_kubectl.return_value = ""
         self.kueue_mgr.cleanup()
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 4)
-        self.mock_scheduler._run_kubectl.assert_any_call(
+        self.mock_scheduler._run_kubectl.assert_called_once_with(
             [
                 "delete",
-                "localqueue",
-                "chs-local-queue",
+                "localqueue/chs-local-queue",
+                "clusterqueue/chs-cluster-queue",
+                "resourceflavor/chs-flavor-dynamic",
+                "resourceflavor/chs-flavor-static",
+                "topology/chs-node-topology-dynamic",
+                "topology/chs-node-topology-static",
                 "-n",
                 "chs",
-                "--ignore-not-found",
-                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-            ],
-            timeout=KUBECTL_TIMEOUT_SEC,
-        )
-        self.mock_scheduler._run_kubectl.assert_any_call(
-            [
-                "delete",
-                "clusterqueue",
-                "chs-cluster-queue",
-                "--ignore-not-found",
-                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-            ],
-            timeout=KUBECTL_TIMEOUT_SEC,
-        )
-        self.mock_scheduler._run_kubectl.assert_any_call(
-            [
-                "delete",
-                "resourceflavor",
-                "chs-flavor-dynamic",
-                "chs-flavor-static",
-                "--ignore-not-found",
-                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-            ],
-            timeout=KUBECTL_TIMEOUT_SEC,
-        )
-        self.mock_scheduler._run_kubectl.assert_any_call(
-            [
-                "delete",
-                "topology",
-                "chs-node-topology-dynamic",
-                "chs-node-topology-static",
                 "--ignore-not-found",
                 f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
             ],
@@ -342,16 +310,40 @@ class TestKueueManager(unittest.TestCase):
 
     def test_cleanup_deletes_topology_after_resource_flavor(self):
         """Topologies must outlive the ResourceFlavor that references them."""
-        self.mock_scheduler._run_kubectl.return_value = ""
-        self.kueue_mgr.cleanup()
+        with self.subTest("batched"):
+            self.mock_scheduler._run_kubectl.return_value = ""
+            self.kueue_mgr.cleanup()
 
-        resources = [
-            call.args[0][1]
-            for call in self.mock_scheduler._run_kubectl.call_args_list
-        ]
-        self.assertLess(
-            resources.index("resourceflavor"), resources.index("topology")
-        )
+            # kubectl deletes the resources in argument order.
+            args = self.mock_scheduler._run_kubectl.call_args.args[0]
+            flavors = [
+                i for i, a in enumerate(args) if a.startswith("resourceflavor/")
+            ]
+            topologies = [
+                i for i, a in enumerate(args) if a.startswith("topology/")
+            ]
+            self.assertTrue(flavors)
+            self.assertTrue(topologies)
+            self.assertLess(max(flavors), min(topologies))
+
+        with self.subTest("sequential fallback"):
+            self.mock_scheduler._run_kubectl.reset_mock()
+            self.mock_scheduler._run_kubectl.side_effect = [
+                subprocess.CalledProcessError(1, "kubectl delete"),
+                "",
+                "",
+                "",
+                "",
+            ]
+            self.kueue_mgr.cleanup()
+
+            resources = [
+                call.args[0][1]
+                for call in self.mock_scheduler._run_kubectl.call_args_list[1:]
+            ]
+            self.assertLess(
+                resources.index("resourceflavor"), resources.index("topology")
+            )
 
     def test_cleanup_failure_raises(self):
         """Test cleanup error raises KueueException."""
@@ -368,13 +360,14 @@ class TestKueueManager(unittest.TestCase):
     def test_cleanup_timeout_raises(self):
         """A stuck finalizer must surface as KueueException, not hang."""
         self.mock_scheduler._run_kubectl.side_effect = [
+            subprocess.TimeoutExpired("kubectl delete", KUBECTL_TIMEOUT_SEC),
             "",
             subprocess.TimeoutExpired(
                 "kubectl delete clusterqueue", KUBECTL_TIMEOUT_SEC
             ),
         ]
         with self.assertRaisesRegex(
-            KueueException, r"Failed to delete Kueue resources \(clusterqueue\)"
+            KueueException, "Failed to delete Kueue resources"
         ):
             self.kueue_mgr.cleanup()
 
@@ -386,10 +379,10 @@ class TestKueueManager(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(
-            KueueException, r"Failed to delete Kueue resources \(localqueue\)"
+            KueueException, "Failed to delete Kueue resources"
         ):
             self.kueue_mgr.apply_configs(self.tmp_dir)
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 1)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 2)
 
     def test_apply_and_verify_apply_timeout_raises(self):
         """A kubectl apply timeout is reported as KueueException."""

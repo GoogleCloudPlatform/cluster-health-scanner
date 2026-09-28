@@ -15,6 +15,7 @@
 """GCS storage provider implementation for CHS."""
 
 import logging
+import threading
 import uuid
 from chs.exceptions import ChsValidationError, StorageObjectNotFoundException
 from chs.storage.base import StorageProvider
@@ -30,11 +31,20 @@ class GcsStorageProvider(StorageProvider):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.bucket_name = config.get("bucket_name", "")
+        self._client: storage.Client | None = None
+        self._client_lock = threading.Lock()
+
+    def _get_client(self) -> storage.Client:
+        """Returns a cached GCS client, initializing it on first use."""
+        with self._client_lock:
+            if self._client is None:
+                self._client = storage.Client()
+            return self._client
 
     def upload_file(self, local_src: str, remote_dest: str) -> None:
         """Uploads a local file to the GCS bucket."""
         try:
-            client = storage.Client()
+            client = self._get_client()
             bucket = client.bucket(self.bucket_name)
             blob = bucket.blob(remote_dest)
             blob.upload_from_filename(local_src)
@@ -53,7 +63,7 @@ class GcsStorageProvider(StorageProvider):
     def download_file(self, remote_src: str, local_dest: str) -> None:
         """Downloads a file from the GCS bucket to local path."""
         try:
-            client = storage.Client()
+            client = self._get_client()
             bucket = client.bucket(self.bucket_name)
             blob = bucket.blob(remote_src)
             blob.download_to_filename(local_dest)
@@ -78,7 +88,7 @@ class GcsStorageProvider(StorageProvider):
         if not self.bucket_name:
             raise ChsValidationError("GCS bucket name cannot be empty.")
 
-        client = storage.Client()
+        client = self._get_client()
         bucket = client.bucket(self.bucket_name)
 
         canary_name = f".chs-connectivity-test-{uuid.uuid4()}"
@@ -146,7 +156,7 @@ class GcsStorageProvider(StorageProvider):
     def exists(self, remote_path: str) -> bool:
         """Checks if blob exists in GCS bucket."""
         try:
-            client = storage.Client()
+            client = self._get_client()
             bucket = client.bucket(self.bucket_name)
             blob = bucket.blob(remote_path)
             return blob.exists()

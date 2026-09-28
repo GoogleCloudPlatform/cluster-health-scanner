@@ -195,6 +195,35 @@ class KueueManager:
             KueueException: If deletion fails or times out.
         """
         logger.debug("Cleaning up Kueue resources...")
+        try:
+            self._run_kubectl(
+                [
+                    "delete",
+                    "localqueue/chs-local-queue",
+                    "clusterqueue/chs-cluster-queue",
+                    *[f"resourceflavor/{name}" for name in FLAVOR_NAMES],
+                    *[f"topology/{name}" for name in TOPOLOGY_NAMES],
+                    "-n",
+                    CHS_NAMESPACE,
+                    "--ignore-not-found",
+                    f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
+                ]
+            )
+            logger.debug("Successfully deleted Kueue resources.")
+        except subprocess.SubprocessError as e:
+            logger.debug(
+                "Batched deletion of Kueue resources failed; deleting them "
+                "one kind at a time. Error: %s",
+                format_subprocess_error(e),
+            )
+            self._cleanup_sequentially()
+
+    def _cleanup_sequentially(self) -> None:
+        """Deletes Kueue resources by name, one kind at a time.
+
+        Raises:
+            KueueException: If deletion fails or times out.
+        """
         delete_targets = [
             ["localqueue", "chs-local-queue", "-n", CHS_NAMESPACE],
             ["clusterqueue", "chs-cluster-queue"],
@@ -212,12 +241,9 @@ class KueueManager:
                     ]
                 )
             except subprocess.SubprocessError as e:
+                err = format_subprocess_error(e)
                 raise KueueException(
-                    f"Failed to delete Kueue resources ({target[0]}). If the "
-                    "object is stuck in deletion, check that "
-                    "kueue-controller-manager is healthy and can reconcile (a "
-                    "blocked 'kueue.x-k8s.io/resource-in-use' finalizer is "
-                    f"the usual cause). Details: {format_subprocess_error(e)}"
+                    f"Failed to delete Kueue resources. Details: {err}"
                 ) from e
         logger.debug("Successfully deleted Kueue resources.")
 

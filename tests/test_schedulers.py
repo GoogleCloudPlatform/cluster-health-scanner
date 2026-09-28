@@ -633,11 +633,18 @@ class TestKubernetesScheduler(unittest.TestCase):
             str(cm.exception),
         )
 
+    # Keeps get_topology() away from the cluster of the current context.
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
+        side_effect=subprocess.CalledProcessError(1, "kubectl"),
+    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1"],
     )
-    def test_write_ramble_config(self, mock_filter, mock_logger):
+    def test_write_ramble_config(
+        self, mock_filter, mock_run_kubectl, mock_logger
+    ):
         """Test write_ramble_config generates correct YAML."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -670,11 +677,18 @@ ramble:
                         workspace_config_dir, ["test1"], "a3-megagpu-8g"
                     )
 
+    # Keeps get_topology() away from the cluster of the current context.
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
+        side_effect=subprocess.CalledProcessError(1, "kubectl"),
+    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1"],
     )
-    def test_write_ramble_config_integration(self, mock_filter, mock_logger):
+    def test_write_ramble_config_integration(
+        self, mock_filter, mock_run_kubectl, mock_logger
+    ):
         """Integration-like test for write_ramble_config using real template."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -730,11 +744,18 @@ ramble:
         self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
         self.assertEqual(all_interfaces[0]["network"], "default")
 
+    # Keeps get_topology() away from the cluster of the current context.
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
+        side_effect=subprocess.CalledProcessError(1, "kubectl"),
+    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
     )
-    def test_write_ramble_config_with_deadline(self, mock_filter, mock_logger):
+    def test_write_ramble_config_with_deadline(
+        self, mock_filter, mock_run_kubectl, mock_logger
+    ):
         """Test write_ramble_config injects timeout and deadline."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -822,12 +843,17 @@ ramble:
         )
         self.assertEqual(scheduler._suspend_jobset, "true")
 
+    # Keeps get_topology() away from the cluster of the current context.
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
+        side_effect=subprocess.CalledProcessError(1, "kubectl"),
+    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
     )
     def test_write_ramble_config_uses_cached_labels(
-        self, mock_filter, mock_logger
+        self, mock_filter, mock_run_kubectl, mock_logger
     ):
         """Test write_ramble_config writes cached properties."""
         scheduler = KubernetesScheduler(
@@ -1161,10 +1187,16 @@ ramble:
     def test_cleanup_scheduler_resources_deletes_secrets(
         self, mock_run, mock_logger
     ):
-        """Test that cleanup_scheduler_resources deletes secrets."""
+        """Test that cleanup_scheduler_resources deletes secrets when the
+        namespace, which would delete them too, cannot be deleted."""
         scheduler = KubernetesScheduler()
 
-        mock_run.return_value.stdout = "chs-job1-ssh"
+        def fake_run(cmd, **kwargs):
+            if cmd[1:3] == ["delete", "namespace"]:
+                raise subprocess.CalledProcessError(1, cmd, stderr="forbidden")
+            return mock.Mock(stdout="chs-job1-ssh")
+
+        mock_run.side_effect = fake_run
         scheduler.cleanup_scheduler_resources()
 
         # Located by content rather than call index so that adding unrelated
@@ -1230,6 +1262,12 @@ ramble:
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
     def test_detect_nodes_hardware_success(self, mock_query_info, mock_logger):
         scheduler = KubernetesScheduler()
+        # Node objects without GKE's instance-type label and instance_id
+        # annotation send every node to the GCE API.
+        scheduler._resolved_node_resources = [
+            {"metadata": {"name": "node1"}},
+            {"metadata": {"name": "node2"}},
+        ]
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -1255,6 +1293,12 @@ ramble:
         self, mock_query_info, mock_logger
     ):
         scheduler = KubernetesScheduler()
+        # Node objects without GKE's instance-type label and instance_id
+        # annotation send every node to the GCE API.
+        scheduler._resolved_node_resources = [
+            {"metadata": {"name": "node1"}},
+            {"metadata": {"name": "node2"}},
+        ]
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -1271,15 +1315,15 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "a3-ultragpu-8g"])
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
-    def test_detect_nodes_hardware_unknown(
-        self, mock_query_info, mock_run_kubectl, mock_logger
-    ):
-        mock_run_kubectl.return_value = json.dumps(
-            {"kind": "List", "items": []}
-        )
+    def test_detect_nodes_hardware_unknown(self, mock_query_info, mock_logger):
         scheduler = KubernetesScheduler()
+        # Node objects without GKE's instance-type label and instance_id
+        # annotation send every node to the GCE API.
+        scheduler._resolved_node_resources = [
+            {"metadata": {"name": "node1"}},
+            {"metadata": {"name": "node2"}},
+        ]
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -1293,29 +1337,24 @@ ramble:
             self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
             self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
     def test_detect_nodes_hardware_fallback_to_labels(
-        self, mock_query_info, mock_run_kubectl, mock_logger
+        self, mock_query_info, mock_logger
     ):
-        mock_run_kubectl.return_value = json.dumps(
-            {
-                "kind": "List",
-                "items": [
-                    {
-                        "metadata": {
-                            "name": "node2",
-                            "labels": {
-                                "node.kubernetes.io/instance-type": (
-                                    "a5x-highgpu-4g-metal"
-                                ),
-                            },
-                        }
-                    }
-                ],
-            }
-        )
         scheduler = KubernetesScheduler()
+        scheduler._resolved_node_resources = [
+            {"metadata": {"name": "node1"}},
+            {
+                "metadata": {
+                    "name": "node2",
+                    "labels": {
+                        "node.kubernetes.io/instance-type": (
+                            "a5x-highgpu-4g-metal"
+                        ),
+                    },
+                }
+            },
+        ]
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -2007,7 +2046,7 @@ class TestKubernetesFetchJobLog(unittest.TestCase):
     )
     def test_streams_logs_to_file_with_timeout(self, _, mock_run):
         def _write_log(cmd, stdout, **kwargs):
-            stdout.write(f"log {cmd[2]}\n")
+            stdout.write(f"log {cmd[2]}\n".encode())
 
         mock_run.side_effect = _write_log
         self.scheduler.fetch_job_log("job-1", self.log_path)
@@ -2017,7 +2056,6 @@ class TestKubernetesFetchJobLog(unittest.TestCase):
                 ["kubectl", "logs", pod, "-n", "chs"],
                 stdout=mock.ANY,
                 check=True,
-                text=True,
                 timeout=120,
             )
         with open(self.log_path) as f:

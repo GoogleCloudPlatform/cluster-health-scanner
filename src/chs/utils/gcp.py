@@ -14,8 +14,6 @@
 
 import logging
 from typing import Any
-from google.cloud import compute_v1
-from google.api_core.exceptions import GoogleAPICallError
 from chs.resources import normalize_machine_type
 from chs.exceptions import ChsSchedulerException
 
@@ -35,7 +33,16 @@ def query_gce_instances_info(
         A dict mapping instance name to a dict containing 'machine_type'
         and 'instance_id' (string representation of numeric ID).
     """
-    client = compute_v1.InstancesClient()
+    # Lazy import to avoid heavy compute_v1 import overhead on CLI startup.
+    from google.api_core.exceptions import GoogleAPICallError
+    from google.auth.exceptions import GoogleAuthError
+    from google.cloud import compute_v1
+
+    try:
+        client = compute_v1.InstancesClient()
+    except (GoogleAPICallError, GoogleAuthError) as e:
+        raise ChsSchedulerException(f"Failed to query GCE API: {e}") from e
+
     info_map = {}
 
     # Batch requests in chunks of 50 to avoid URL length limits
@@ -61,7 +68,7 @@ def query_gce_instances_info(
                             "machine_type": normalized_machine_type,
                             "instance_id": str(instance.id),
                         }
-        except GoogleAPICallError as e:
-            raise ChsSchedulerException(f"Failed to query GCE API: {e}")
+        except (GoogleAPICallError, GoogleAuthError) as e:
+            raise ChsSchedulerException(f"Failed to query GCE API: {e}") from e
 
     return info_map

@@ -55,6 +55,7 @@ from chs import (
 from chs.boh_generator import parse_tier_results_from_boh
 from chs.cli import help_command_text
 from chs.cli import list_formatting
+from chs.cli.background_cleanup import BackgroundCleanup
 from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
@@ -654,7 +655,10 @@ def _analyze_action(
             _show_results(app_data, run_id)
             return run_id
 
-        with archive_workspace(ramble_manager, on_success=True):
+        with (
+            BackgroundCleanup(run_id) as background_cleanup,
+            archive_workspace(ramble_manager, on_success=True),
+        ):
             try:
                 # 2. If results.latest.json exists (but no BoH), generate BoH
                 if results_json_path.exists() and is_boh_final:
@@ -663,26 +667,14 @@ def _analyze_action(
                         "of Health..."
                     )
                     with theme.get_progress_spinner(
-                        "Generating Bill of Health and cleaning up..."
+                        "Generating Bill of Health..."
                     ):
                         ramble_manager.generate_boh(
                             str(results_json_path),
                         )
-                        try:
-                            ramble_manager.cancel_experiments()
-                            logger.debug(
-                                "Cleaned up CHS resources for run %s", run_id
-                            )
-                        except (
-                            ex.ChsException,
-                            subprocess.CalledProcessError,
-                        ) as e:
-                            logger.warning(
-                                "Failed to clean CHS resources. Error: %s", e
-                            )
+                        background_cleanup.start(ramble_manager)
                     Console().print(
-                        f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
-                        "and CHS resources cleaned up."
+                        f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated."
                         f"[/{theme.CHS_SUCCESS_STYLE}]"
                     )
                     _show_results(app_data, run_id, suppress_boh_uri=True)
@@ -754,26 +746,12 @@ def _analyze_action(
                             )
 
                     if not next_tests:
-                        with theme.get_progress_spinner(
-                            "Cleaning up CHS resources..."
-                        ):
-                            try:
-                                ramble_manager.cancel_experiments()
-                                logger.debug(
-                                    "Cleaned up CHS resources for run %s",
-                                    run_id,
-                                )
-                            except (
-                                ex.ChsException,
-                                subprocess.CalledProcessError,
-                            ) as e:
-                                logger.warning(
-                                    "Failed to clean CHS resources. Error: %s",
-                                    e,
-                                )
+                        background_cleanup.start(ramble_manager)
 
                         run_entry["is_boh_final"] = True
-                        app_data.update_run(workspace_name, run_entry)
+                        app_data.update_run(
+                            workspace_name, {"is_boh_final": True}
+                        )
                         Console().print(
                             f"[{theme.CHS_SUCCESS_STYLE}]All checks completed. "
                             "Bill of Health generated."
@@ -825,13 +803,17 @@ def _show_results(
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
 
     boh_uri = None
-    if run_provider and not suppress_boh_uri:
-        html_remote = f"bills_of_health/{workspace_name}.html"
-        json_remote = f"bills_of_health/{workspace_name}.json"
-        if run_provider.exists(html_remote):
-            boh_uri = run_provider.get_uri(html_remote)
-        elif run_provider.exists(json_remote):
-            boh_uri = run_provider.get_uri(json_remote)
+    if not suppress_boh_uri:
+        run_data = app_data.get_run(workspace_name)
+        if isinstance(run_data, dict):
+            boh_uri = run_data.get("boh_html_uri") or run_data.get("boh_uri")
+        if not boh_uri and run_provider:
+            html_remote = f"bills_of_health/{workspace_name}.html"
+            json_remote = f"bills_of_health/{workspace_name}.json"
+            if run_provider.exists(html_remote):
+                boh_uri = run_provider.get_uri(html_remote)
+            elif run_provider.exists(json_remote):
+                boh_uri = run_provider.get_uri(json_remote)
 
     if not boh_path.exists():
         logger.debug(

@@ -55,6 +55,8 @@ from chs.utils.topology import load_topology
 
 logger = logging.getLogger(__name__)
 
+_JOB_POLL_INTERVAL_SECONDS = 5
+
 
 class RambleManager:
     """A manager for Ramble workspaces used in CHS runs."""
@@ -468,22 +470,24 @@ class RambleManager:
 
         return list(job_to_dir.keys())
 
-    def cancel_experiments(self) -> None:
+    def cancel_experiments(self, scheduler_name: str | None = None) -> None:
         """Cancels running experiments in the Ramble workspace.
 
         This calls the scheduler to cancel all jobs matching the workspace's
         unique prefix, guaranteeing stateless cleanup even if jobs weren't
         registered.
-
+        Args:
+          scheduler_name: Name of the scheduler that runs the jobs.
         Raises:
           click.ClickException: If the experiment cancellation command fails.
         """
-        registry_entry = self._app_data.get_run(self._workspace_name)
-        scheduler_name = (
-            registry_entry.get("scheduler", "slurm")
-            if registry_entry
-            else "slurm"
-        )
+        if scheduler_name is None:
+            registry_entry = self._app_data.get_run(self._workspace_name)
+            scheduler_name = (
+                registry_entry.get("scheduler", "slurm")
+                if registry_entry
+                else "slurm"
+            )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
         scheduler = get_scheduler(scheduler_name)
 
@@ -610,7 +614,7 @@ class RambleManager:
     def wait_for_jobs(
         self,
         app_data: ChsAppData,
-        poll_interval: int = 15,
+        poll_interval: int = _JOB_POLL_INTERVAL_SECONDS,
         tier: int | None = None,
     ) -> None:
         """Waits for all jobs in the workspace to complete and fetches logs.
@@ -831,8 +835,9 @@ class RambleManager:
                                     live_context.update(
                                         task_id,
                                         description=(
-                                            f"[{theme.CHS_HEADER_STYLE}]All "
-                                            "test logs fetched successfully."
+                                            f"[{theme.CHS_HEADER_STYLE}]"
+                                            "All test logs fetched "
+                                            "successfully."
                                             f"[/{theme.CHS_HEADER_STYLE}]"
                                         ),
                                     )
@@ -841,8 +846,8 @@ class RambleManager:
                                 live_context.update(
                                     task_id,
                                     description=(
-                                        f"[{theme.CHS_HEADER_STYLE}]Fetching "
-                                        "test logs..."
+                                        f"[{theme.CHS_HEADER_STYLE}]"
+                                        "Fetching test logs..."
                                         f"[/{theme.CHS_HEADER_STYLE}]"
                                     ),
                                 )
@@ -1189,8 +1194,9 @@ class RambleManager:
         """Returns the local workspace archive directory."""
         return os.path.join(self.path, "archive")
 
-    def _upload_workspace(self, provider) -> str | None:
-        """Archives workspace locally and uploads using the provider."""
+    def _create_workspace_archive(self) -> pathlib.Path | None:
+        """Archives the workspace into a local tarball."""
+
         if not os.path.exists(self.path):
             logger.debug(
                 "The workspace directory '%s' was not found. "
@@ -1201,7 +1207,6 @@ class RambleManager:
 
         logger.debug("Archiving workspace locally...")
         try:
-            # Archive locally (without --upload-url)
             self._execute_ramble_command(
                 "workspace",
                 [
@@ -1218,47 +1223,59 @@ class RambleManager:
                 error_context="Failed to archive workspace",
             )
 
-            # Scan for the generated tarball
             archive_dir = pathlib.Path(self._get_archive_dir())
-            archives = list(archive_dir.glob("*.tar.gz")) + list(
-                archive_dir.glob("*.tgz")
-            )
-
+            archives = [
+                p
+                for p in (
+                    *archive_dir.glob("*.tar.gz"),
+                    *archive_dir.glob("*.tgz"),
+                )
+                if not p.is_symlink() and p.is_file()
+            ]
             if not archives:
                 raise ex.ChsArchiveException(
                     "Workspace archive file not found."
                 )
+            return max(archives, key=lambda p: p.stat().st_mtime)
+        except Exception as e:
+            self._log_workspace_archive_failure(e)
+            return None
 
-            # Use the first match (should be only one if clean)
-            archive_file = archives[0]
+    def _upload_workspace_archive(
+        self, provider, archive_file: pathlib.Path
+    ) -> str | None:
+        """Uploads a local workspace tarball, then deletes it."""
+        try:
             logger.debug("Uploading workspace archive %s...", archive_file.name)
-
             dest = f"workspaces/{self._workspace_name}.tar.gz"
             provider.upload_file(str(archive_file), dest)
             logger.debug("Workspace archive uploaded successfully.")
-
-            # Clean up local archive
             try:
                 archive_file.unlink()
-                logger.debug("Deleted local archive file: %s", archive_file)
+                for entry in archive_file.parent.iterdir():
+                    if entry.is_symlink() and not entry.exists():
+                        entry.unlink(missing_ok=True)
             except OSError as e:
                 logger.debug(
-                    "Failed to delete local archive file %s: %s",
+                    "Failed to remove local workspace archive %s: %s",
                     archive_file,
                     e,
                 )
-
+            return dest
         except Exception as e:
-            logger.debug(
-                "Failed to archive and upload the workspace "
-                "archive to remote storage. Your "
-                "local CHS results under '%s' have been "
-                "preserved. Error: %s",
-                self.path,
-                e,
-            )
+            self._log_workspace_archive_failure(e)
             return None
-        return dest
+
+    def _log_workspace_archive_failure(self, error: Exception) -> None:
+        """Logs a failure to archive or upload the workspace."""
+        logger.debug(
+            "Failed to archive and upload the workspace "
+            "archive to remote storage. Your "
+            "local CHS results under '%s' have been "
+            "preserved. Error: %s",
+            self.path,
+            error,
+        )
 
     def has_bill_of_health(self) -> bool:
         """Returns True if bill_of_health.json exists in the workspace."""
@@ -1294,9 +1311,6 @@ class RambleManager:
                         all_uploads_succeeded). Returns local paths if no
             storage provider is configured.
         """
-        local_ws_path = os.path.join(
-            self._get_archive_dir(), f"{self._workspace_name}.tar.gz"
-        )
         local_json_path = os.path.join(self.path, "bill_of_health.json")
         local_html_path = os.path.join(self.path, "bill_of_health.html")
 
@@ -1323,20 +1337,29 @@ class RambleManager:
                 e,
             )
             return (
-                local_ws_path if os.path.exists(local_ws_path) else None,
+                None,
                 local_json_path if os.path.exists(local_json_path) else None,
                 local_html_path if os.path.exists(local_html_path) else None,
                 False,
             )
 
         all_uploads_succeeded = True
-        boh_json_dest, boh_html_dest, boh_success = self._upload_boh(provider)
-        ws_dest = None
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="chs-boh-upload"
+        ) as executor:
+            boh_future = executor.submit(self._upload_boh, provider)
+            archive_file = self._create_workspace_archive()
+            boh_json_dest, boh_html_dest, boh_success = boh_future.result()
+
         if not boh_success:
             logger.debug("Failed to upload Bill of Health.")
             all_uploads_succeeded = False
 
-        ws_dest = self._upload_workspace(provider)
+        ws_dest = (
+            self._upload_workspace_archive(provider, archive_file)
+            if archive_file
+            else None
+        )
         if not ws_dest:
             logger.debug("Failed to upload workspace archive.")
             all_uploads_succeeded = False
@@ -1344,7 +1367,11 @@ class RambleManager:
         return (
             provider.get_uri(ws_dest)
             if ws_dest
-            else (local_ws_path if os.path.exists(local_ws_path) else None),
+            else (
+                str(archive_file)
+                if archive_file and archive_file.exists()
+                else None
+            ),
             provider.get_uri(boh_json_dest)
             if boh_json_dest
             else (local_json_path if os.path.exists(local_json_path) else None),

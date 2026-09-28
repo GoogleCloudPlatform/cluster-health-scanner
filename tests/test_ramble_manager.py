@@ -16,6 +16,7 @@
 
 import logging
 import os
+import pathlib
 import subprocess
 import sys
 import sysconfig
@@ -540,7 +541,7 @@ mycriteria:
         self.assertFalse(upload_success)
 
     def test_upload_workspace_success(self):
-        """Test _upload_workspace archives and calls provider.upload_file."""
+        """Test creating and uploading a workspace archive."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
@@ -548,16 +549,25 @@ mycriteria:
         mock_provider = mock.Mock()
 
         # Mock glob to return a dummy archive file
-        mock_glob = mock.patch("pathlib.Path.glob").start()
+        mock_glob = self.enterContext(mock.patch("pathlib.Path.glob"))
         mock_archive_file = mock.Mock()
         mock_archive_file.name = "ws1.tar.gz"
+        mock_archive_file.is_symlink.return_value = False
+        mock_archive_file.is_file.return_value = True
+        mock_archive_file.stat.return_value.st_mtime = 1.0
+        mock_archive_file.parent.iterdir.return_value = []
         mock_glob.side_effect = (
             lambda pat: [mock_archive_file] if "tar.gz" in pat else []
         )
 
         with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager._upload_workspace(mock_provider)
+            archive_file = manager._create_workspace_archive()
+            self.assertEqual(archive_file, mock_archive_file)
+            dest = manager._upload_workspace_archive(
+                mock_provider, archive_file
+            )
 
+            self.assertEqual(dest, "workspaces/ws1.tar.gz")
             mock_exec.assert_called_once_with(
                 "workspace",
                 [
@@ -577,24 +587,29 @@ mycriteria:
                 str(mock_archive_file), "workspaces/ws1.tar.gz"
             )
             mock_archive_file.unlink.assert_called_once()
-        mock_glob.stop()
 
     def test_upload_workspace_no_archive_found(self):
-        """Test _upload_workspace logs warning if no archive found."""
+        """Test _create_workspace_archive logs failure if no archive found."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
         mock_provider = mock.Mock()
 
-        mock_glob = mock.patch("pathlib.Path.glob").start()
+        mock_glob = self.enterContext(mock.patch("pathlib.Path.glob"))
         mock_glob.return_value = []  # No files found
 
-        with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager._upload_workspace(mock_provider)
+        with (
+            mock.patch.object(manager, "_execute_ramble_command") as mock_exec,
+            mock.patch.object(
+                manager, "_log_workspace_archive_failure"
+            ) as mock_log_failure,
+        ):
+            archive_file = manager._create_workspace_archive()
+            self.assertIsNone(archive_file)
             mock_exec.assert_called_once()
+            mock_log_failure.assert_called_once()
             mock_provider.upload_file.assert_not_called()
-        mock_glob.stop()
 
     def test_archive_success(self):
         """Test archive retrieves provider and calls upload methods."""
@@ -603,6 +618,7 @@ mycriteria:
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
         mock_provider = mock.Mock()
+        archive_file = pathlib.Path(manager.path, "archive", "ws1.tar.gz")
 
         with (
             mock.patch(
@@ -614,11 +630,21 @@ mycriteria:
                 "_upload_boh",
                 return_value=("dest_json", "dest_html", True),
             ) as mock_boh,
-            mock.patch.object(manager, "_upload_workspace") as mock_workspace,
+            mock.patch.object(
+                manager,
+                "_create_workspace_archive",
+                return_value=archive_file,
+            ) as mock_create_archive,
+            mock.patch.object(
+                manager, "_upload_workspace_archive", return_value="dest_ws"
+            ) as mock_upload_archive,
         ):
             manager.archive()
             mock_boh.assert_called_once_with(mock_provider)
-            mock_workspace.assert_called_once_with(mock_provider)
+            mock_create_archive.assert_called_once_with()
+            mock_upload_archive.assert_called_once_with(
+                mock_provider, archive_file
+            )
 
     def test_archive_no_provider(self):
         """Test archive skips upload if provider cannot be loaded."""
@@ -632,11 +658,13 @@ mycriteria:
                 return_value=None,
             ),
             mock.patch.object(manager, "_upload_boh") as mock_boh,
-            mock.patch.object(manager, "_upload_workspace") as mock_workspace,
+            mock.patch.object(
+                manager, "_create_workspace_archive"
+            ) as mock_create_archive,
         ):
             manager.archive()
             mock_boh.assert_not_called()
-            mock_workspace.assert_not_called()
+            mock_create_archive.assert_not_called()
 
     def test_is_archived(self):
         """Test is_archived returns status based on storage provider."""

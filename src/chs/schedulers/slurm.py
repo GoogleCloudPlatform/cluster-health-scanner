@@ -21,9 +21,7 @@ import os
 import re
 import subprocess
 import yaml
-from google.cloud import compute_v1
 import google.auth
-from google.api_core.exceptions import GoogleAPICallError
 
 from chs.exceptions import NoActiveJobsException
 from chs.resources import normalize_machine_type
@@ -310,6 +308,10 @@ class SlurmScheduler(BaseScheduler):
         nodes = self.get_nodes_under_test()
         if not nodes:
             return {}
+
+        # Lazy import to avoid heavy compute_v1 import overhead on CLI startup.
+        from google.api_core.exceptions import GoogleAPICallError
+        from google.cloud import compute_v1
 
         try:
             credentials, project = google.auth.default()
