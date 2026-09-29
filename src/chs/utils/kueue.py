@@ -17,20 +17,23 @@
 import importlib.resources as pkg_resources
 import logging
 import os
-import subprocess
+import time
 from typing import Any
+
+import yaml
 
 from chs.constants import (
     CHS_NAMESPACE,
     DELETE_WAIT_TIMEOUT_SEC,
-    KUBECTL_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
-from chs.exceptions import KueueException, format_subprocess_error
+from chs.exceptions import KueueException
 from chs.resources import MACHINE_TYPE_RESOURCE_MAP
+from chs.utils import k8s_client
 
 logger = logging.getLogger(__name__)
 
+KUEUE_API_GROUP = "kueue.x-k8s.io"
 TOPOLOGY_NAMES = [
     "chs-node-topology-dynamic",
     "chs-node-topology-static",
@@ -39,82 +42,89 @@ FLAVOR_NAMES = [
     "chs-flavor-dynamic",
     "chs-flavor-static",
 ]
+_KIND_TO_PLURAL = {
+    "Topology": "topologies",
+    "ResourceFlavor": "resourceflavors",
+    "ClusterQueue": "clusterqueues",
+    "LocalQueue": "localqueues",
+}
+_CLUSTER_QUEUE_TIMEOUT_SECONDS = 300
 
 
 class KueueManager:
-    """Manages Kueue resources for CHS runs.
-
-    Resources include ResourceFlavor, ClusterQueue, LocalQueue, and Topology.
-    """
+    """Manages Kueue resources for CHS runs."""
 
     def __init__(self, scheduler: Any) -> None:
-        """Initializes the KueueManager.
-
-        Args:
-            scheduler: The scheduler instance providing _run_kubectl capability.
-        """
+        """Initializes the KueueManager."""
         self.scheduler = scheduler
 
-    def _run_kubectl(
-        self, args: list[str], timeout: int | None = KUBECTL_TIMEOUT_SEC
-    ) -> str:
-        """Runs kubectl command via the scheduler instance."""
-        if hasattr(self.scheduler, "_run_kubectl"):
-            return self.scheduler._run_kubectl(args, timeout=timeout)
-
-        cmd = ["kubectl"] + args
-        result = subprocess.run(
-            cmd,
-            text=True,
-            capture_output=True,
-            check=True,
-            timeout=timeout,
-        )
-        return result.stdout.strip()
-
     def apply_and_verify(self, kueue_config_path: str) -> None:
-        """Applies Kueue config and waits for ClusterQueue to become active.
-
-        Args:
-            kueue_config_path: Path to the rendered Kueue YAML config file.
-
-        Raises:
-            KueueException: If apply fails (e.g., permission error) or
-              verification times out.
-        """
+        """Applies Kueue config and waits for ClusterQueue to become active."""
         logger.debug("Applying Kueue configuration: %s", kueue_config_path)
         try:
-            self._run_kubectl(["apply", "-f", kueue_config_path])
-        except subprocess.SubprocessError as e:
+            with open(kueue_config_path) as f:
+                manifests = [
+                    manifest for manifest in yaml.safe_load_all(f) if manifest
+                ]
+            for manifest in manifests:
+                k8s_client.apply_custom_object(
+                    plural=_KIND_TO_PLURAL[manifest["kind"]], body=manifest
+                )
+        except k8s_client.KubeError as e:
             raise KueueException(
                 "Failed to create ResourceFlavors, ClusterQueues, and/or "
                 "LocalQueues. Details: "
-                f"{format_subprocess_error(e)}"
+                f"{e}"
             ) from e
+
+        cluster_queue = next(
+            (
+                manifest
+                for manifest in manifests
+                if manifest.get("kind") == "ClusterQueue"
+            ),
+            None,
+        )
+        if cluster_queue is None:
+            raise KueueException(
+                f"No ClusterQueue document found in {kueue_config_path}."
+            )
 
         logger.debug(
             "Waiting for Kueue ClusterQueue 'chs-cluster-queue' to become "
             "active."
         )
-
+        version = cluster_queue["apiVersion"].split("/")[1]
         try:
-            self._run_kubectl(
-                [
-                    "wait",
-                    "--for=condition=Active",
-                    "clusterqueue/chs-cluster-queue",
-                    "--timeout=300s",
-                ],
-                timeout=350,
-            )
+            self._wait_for_cluster_queue_active(version)
             logger.debug("Kueue ClusterQueue is active.")
-
-        except subprocess.SubprocessError as e:
+        except k8s_client.KubeError as e:
             raise KueueException(
                 "Timeout or error waiting for Kueue ClusterQueue "
-                "'chs-cluster-queue' to become active. Details: "
-                f"{format_subprocess_error(e)}"
+                f"'chs-cluster-queue' to become active. Details: {e}"
             ) from e
+
+    def _wait_for_cluster_queue_active(self, version: str) -> None:
+        deadline = time.monotonic() + _CLUSTER_QUEUE_TIMEOUT_SECONDS
+        while True:
+            queue = k8s_client.get_custom_object(
+                group=KUEUE_API_GROUP,
+                version=version,
+                plural="clusterqueues",
+                name="chs-cluster-queue",
+            )
+            conditions = (queue.get("status") or {}).get("conditions") or []
+            if any(
+                condition.get("type") == "Active"
+                and condition.get("status") == "True"
+                for condition in conditions
+            ):
+                return
+            if time.monotonic() > deadline:
+                raise k8s_client.KubeError(
+                    "timed out waiting for clusterqueues/chs-cluster-queue"
+                )
+            time.sleep(0.5)
 
     def generate_configs(
         self,
@@ -123,22 +133,7 @@ class KueueManager:
         nodes: list[str],
         dynamic_slicing: bool = False,
     ) -> str:
-        """Renders Kueue config to disk without applying.
-
-        Args:
-            workspace_config_dir: Directory where Kueue configs will be written.
-            machine_type: The machine type string (e.g., 'a3-mega').
-            nodes: List of target nodes under test.
-            dynamic_slicing: If True, renders configs with dynamic slice
-              topology and flavor alongside static ones.
-
-        Returns:
-            The Kueue local queue label string to be injected into JobSet
-            templates.
-
-        Raises:
-            KueueException: If machine_type is unsupported or setup fails.
-        """
+        """Renders Kueue config to disk without applying."""
         if machine_type not in MACHINE_TYPE_RESOURCE_MAP:
             raise KueueException(
                 f"Machine type '{machine_type}' is not recognized in "
@@ -189,80 +184,46 @@ class KueueManager:
         self.apply_and_verify(kueue_config_path)
 
     def cleanup(self) -> None:
-        """Deletes Kueue resources by name.
-
-        Raises:
-            KueueException: If deletion fails or times out.
-        """
+        """Deletes Kueue resources by name."""
         logger.debug("Cleaning up Kueue resources...")
-        try:
-            self._run_kubectl(
-                [
-                    "delete",
-                    "localqueue/chs-local-queue",
-                    "clusterqueue/chs-cluster-queue",
-                    *[f"resourceflavor/{name}" for name in FLAVOR_NAMES],
-                    *[f"topology/{name}" for name in TOPOLOGY_NAMES],
-                    "-n",
-                    CHS_NAMESPACE,
-                    "--ignore-not-found",
-                    f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-                ]
-            )
-            logger.debug("Successfully deleted Kueue resources.")
-        except subprocess.SubprocessError as e:
-            logger.debug(
-                "Batched deletion of Kueue resources failed; deleting them "
-                "one kind at a time. Error: %s",
-                format_subprocess_error(e),
-            )
-            self._cleanup_sequentially()
-
-    def _cleanup_sequentially(self) -> None:
-        """Deletes Kueue resources by name, one kind at a time.
-
-        Raises:
-            KueueException: If deletion fails or times out.
-        """
-        delete_targets = [
-            ["localqueue", "chs-local-queue", "-n", CHS_NAMESPACE],
-            ["clusterqueue", "chs-cluster-queue"],
-            ["resourceflavor", *FLAVOR_NAMES],
-            ["topology", *TOPOLOGY_NAMES],
+        version = self._get_kueue_api_version()
+        deletions = [
+            ("localqueues", ["chs-local-queue"], CHS_NAMESPACE),
+            ("clusterqueues", ["chs-cluster-queue"], None),
+            ("resourceflavors", FLAVOR_NAMES, None),
+            ("topologies", TOPOLOGY_NAMES, None),
         ]
-        for target in delete_targets:
-            try:
-                self._run_kubectl(
-                    [
-                        "delete",
-                        *target,
-                        "--ignore-not-found",
-                        f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-                    ]
+        try:
+            for plural, object_names, namespace in deletions:
+                k8s_client.delete_custom_objects(
+                    group=KUEUE_API_GROUP,
+                    version=version,
+                    plural=plural,
+                    object_names=object_names,
+                    namespace=namespace,
+                    wait_timeout_seconds=DELETE_WAIT_TIMEOUT_SEC,
                 )
-            except subprocess.SubprocessError as e:
-                err = format_subprocess_error(e)
-                raise KueueException(
-                    f"Failed to delete Kueue resources. Details: {err}"
-                ) from e
-        logger.debug("Successfully deleted Kueue resources.")
+            logger.debug("Successfully deleted Kueue resources.")
+        except k8s_client.KubeError as e:
+            raise KueueException(
+                f"Failed to delete Kueue resources. Details: {e}"
+            ) from e
 
     def _get_kueue_api_version(self) -> str:
-        """Determines whether to use v1beta2 or v1beta1 based on
-        cluster support."""
+        """Determines whether to use v1beta2 or v1beta1."""
         try:
-            output = self._run_kubectl(
-                [
-                    "get",
-                    "crd",
-                    "clusterqueues.kueue.x-k8s.io",
-                    "-o",
-                    "jsonpath={.spec.versions[*].name}",
-                ]
+            crd = k8s_client.get_crd(name="clusterqueues.kueue.x-k8s.io")
+        except k8s_client.KubeError as e:
+            logger.debug(
+                "Could not read the Kueue ClusterQueue CRD; defaulting to "
+                "v1beta1. Error: %s",
+                e,
             )
-            if "v1beta2" in output.split():
-                return "v1beta2"
             return "v1beta1"
-        except subprocess.SubprocessError:
-            # Default to v1beta1 if check fails
-            return "v1beta1"
+        version_names = [
+            version.get("name")
+            for version in crd.get("spec", {}).get("versions", [])
+        ]
+        if "v1beta2" in version_names:
+            return "v1beta2"
+        return "v1beta1"

@@ -12,21 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the kubectl call reductions in the Kubernetes scheduler.
-
-Every kubectl call is mocked: none of these tests reaches a cluster.
-"""
+"""Tests for the Kubernetes API call reductions in the Kubernetes scheduler."""
 
 import concurrent.futures
-import json
 import os
-import subprocess
 import tempfile
 import threading
 import unittest
 from unittest import mock
 
-from chs.constants import CHS_NAMESPACE, NAMESPACE_DELETE_TIMEOUT_SEC
+from chs.constants import (
+    CHS_NAMESPACE,
+    DELETE_WAIT_TIMEOUT_SEC,
+    NAMESPACE_DELETE_TIMEOUT_SEC,
+)
 from chs.exceptions import (
     ChsPreflightException,
     ChsSchedulerException,
@@ -35,21 +34,37 @@ from chs.exceptions import (
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs.schedulers import kubernetes
 from chs.schedulers.kubernetes import KubernetesScheduler, TpuSliceData
+from chs.utils import k8s_client
+from chs.utils.lifecycle import JobStatus
+from tests.k8s_fakes import Call, install_fake_client
 
 _INSTANCE_TYPE = "node.kubernetes.io/instance-type"
 _BETA_INSTANCE_TYPE = "beta.kubernetes.io/instance-type"
 _INSTANCE_ID = "container.googleapis.com/instance_id"
 _CLUSTER_NAME = "container.googleapis.com/cluster_name"
 _NODEPOOL = "cloud.google.com/gke-nodepool"
-_CRD_CHECK = ["get", "crd", "slices.accelerator.gke.io", "--ignore-not-found"]
-_SLICE_DELETE = [
-    "delete",
-    "slices.accelerator.gke.io",
-    "-A",
-    "-l",
-    "created-by=chs",
-    "--ignore-not-found",
-]
+_JOBSET_GROUP = "jobset.x-k8s.io"
+_JOBSET_VERSION = "v1alpha2"
+_SLICE_GROUP = "accelerator.gke.io"
+_SLICE_VERSION = "v1beta1"
+_SLICE_CRD = "slices.accelerator.gke.io"
+_SLICE_LIST = Call(
+    "list_custom_objects",
+    {
+        "group": _SLICE_GROUP,
+        "version": _SLICE_VERSION,
+        "plural": "slices",
+        "label_selector": "created-by=chs",
+    },
+)
+
+
+def _pod(name, namespace=CHS_NAMESPACE):
+    """Returns a minimal Kubernetes Pod object."""
+    return {
+        "metadata": {"name": name, "namespace": namespace},
+        "spec": {"containers": [{"name": "test"}]},
+    }
 
 
 def _node(name, labels=None, annotations=None, provider_id=None):
@@ -67,16 +82,18 @@ def _node(name, labels=None, annotations=None, provider_id=None):
     return node
 
 
-def _node_list(*nodes):
-    """Returns the kubectl JSON output for a list of nodes."""
-    return json.dumps({"kind": "List", "items": list(nodes)})
+def _node_pools_selector(*pools):
+    """Returns the node label selector of `--nodepools`."""
+    return f"{_NODEPOOL} in ({','.join(pools)})"
 
 
 class _KubernetesTestBase(unittest.TestCase):
-    """Mocks the scheduler logger and provides a temporary directory."""
+    """Fakes the Kubernetes API, mocks the scheduler logger and provides a
+    temporary directory."""
 
     def setUp(self):
         super().setUp()
+        self.kube = install_fake_client(self)
         self.mock_logger = self._patch(mock.patch.object(kubernetes, "logger"))
         tmp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(tmp_dir.cleanup)
@@ -95,7 +112,9 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.log_path = os.path.join(self.tmp_dir, "job.log")
-        self.mock_run = self._patch(mock.patch.object(subprocess, "run"))
+        self.mock_stream = self._patch(
+            mock.patch.object(k8s_client, "stream_pod_log")
+        )
         self._reset_log_fetch_executor()
 
     def tearDown(self):
@@ -113,11 +132,12 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
     def _fetch(self, pod_names, job_id="chs-tpu-test"):
         """Runs fetch_job_log for a JobSet with the given pods."""
         scheduler = KubernetesScheduler()
+        pod_objs = [_pod(name) for name in pod_names]
         with mock.patch.object(
-            scheduler, "_get_pod_names", return_value=pod_names
-        ) as mock_get_pod_names:
+            scheduler, "_get_pods", return_value=pod_objs
+        ) as mock_get_pods:
             scheduler.fetch_job_log(job_id, self.log_path)
-        return mock_get_pod_names
+        return mock_get_pods
 
     def _read_log(self):
         with open(self.log_path, "rb") as f:
@@ -137,84 +157,93 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
         finished = {pod: threading.Event() for pod in pods}
         finish_order = []
 
-        def fake_run(cmd, stdout, **kwargs):
-            pod = cmd[2]
-            index = pods.index(pod)
-            # Each pod waits for the next one, so they finish in reverse.
+        def fake_stream(pod, out):
+            name = pod["metadata"]["name"]
+            index = pods.index(name)
             if index + 1 < len(pods):
                 self.assertTrue(finished[pods[index + 1]].wait(timeout=10))
-            stdout.write(logs[pod])
-            finish_order.append(pod)
-            finished[pod].set()
+            out.write(logs[name])
+            finish_order.append(name)
+            finished[name].set()
 
-        self.mock_run.side_effect = fake_run
-        mock_get_pod_names = self._fetch(pods)
+        self.mock_stream.side_effect = fake_stream
+        mock_get_pods = self._fetch(pods)
 
-        mock_get_pod_names.assert_called_once_with(
+        mock_get_pods.assert_called_once_with(
             "chs-tpu-test", head_pod_only=False
         )
         self.assertEqual(finish_order, pods[::-1])
         self.assertEqual(self._read_log(), b"".join(logs[p] for p in pods))
+        calls = self.mock_stream.call_args_list
         self.assertEqual(
-            sorted(call.args[0] for call in self.mock_run.call_args_list),
-            [["kubectl", "logs", pod, "-n", CHS_NAMESPACE] for pod in pods],
+            sorted(call.kwargs["pod"]["metadata"]["name"] for call in calls),
+            sorted(pods),
         )
-        for call in self.mock_run.call_args_list:
-            self.assertEqual(set(call.kwargs), {"stdout", "check", "timeout"})
-            self.assertTrue(call.kwargs["check"])
-            self.assertEqual(call.kwargs["timeout"], 120)
+        for call in calls:
+            self.assertEqual(call.args, ())
+            self.assertEqual(set(call.kwargs), {"pod", "out"})
+        self.assertEqual(
+            len({call.kwargs["out"].name for call in calls}), len(pods)
+        )
         self.assertEqual(os.listdir(self.tmp_dir), ["job.log"])
 
     def test_first_failure_in_pod_order_is_reported(self):
         """Pod order, not completion time, picks the reported failure."""
         pods = [f"pod-{i}" for i in range(4)]
         pod_3_failed = threading.Event()
+        pod_1_error = k8s_client.KubeError("pod-1 log failed", status=500)
+        pod_3_error = k8s_client.KubeError("pod-3 log failed", status=500)
 
-        def fake_run(cmd, stdout, **kwargs):
-            pod = cmd[2]
-            if pod == "pod-3":
+        def fake_stream(pod, out):
+            name = pod["metadata"]["name"]
+            if name == "pod-3":
                 pod_3_failed.set()
-                raise subprocess.CalledProcessError(3, cmd)
-            if pod == "pod-1":
+                raise pod_3_error
+            if name == "pod-1":
                 self.assertTrue(pod_3_failed.wait(timeout=10))
-                raise subprocess.CalledProcessError(1, cmd)
-            stdout.write(pod.encode())
+                raise pod_1_error
+            out.write(name.encode())
 
-        self.mock_run.side_effect = fake_run
+        self.mock_stream.side_effect = fake_stream
         self._fetch(pods)
 
         self.assertEqual(self._read_log(), b"pod-0pod-2")
         self.mock_logger.error.assert_called_once()
-        error = self.mock_logger.error.call_args.args[-1]
-        self.assertIn("pod-1", error)
-        self.assertIn("exit status 1", error)
+        self.assertIs(self.mock_logger.error.call_args.args[-1], pod_1_error)
         self.assertEqual(self._temp_files(), [])
 
-    def test_interrupted_fetch_is_logged_at_debug(self):
-        """SIGINT-style exit codes keep today's debug-only message."""
-        for returncode in (130, -2):
-            with self.subTest(returncode=returncode):
-                self.mock_logger.reset_mock()
+    def test_interrupted_fetch_propagates_and_cleans_up(self):
+        """Ctrl+C is not logged as a failed fetch and leaves no temp files."""
+        with self.subTest("multi-pod"):
 
-                def fake_run(cmd, stdout, code=returncode, **kwargs):
-                    raise subprocess.CalledProcessError(code, cmd)
+            def fake_stream(pod, out):
+                name = pod["metadata"]["name"]
+                if name == "pod-1":
+                    raise KeyboardInterrupt
+                out.write(name.encode() + b"\n")
 
-                self.mock_run.side_effect = fake_run
-                self._fetch(["pod-0", "pod-1"], job_id="chs-tpu-job")
+            self.mock_stream.side_effect = fake_stream
+            with self.assertRaises(KeyboardInterrupt):
+                self._fetch(["pod-0", "pod-1", "pod-2"], job_id="chs-tpu-job")
 
-                self.mock_logger.error.assert_not_called()
-                self.mock_logger.debug.assert_any_call(
-                    "Log fetching interrupted by user for JobSet %s.",
-                    "chs-tpu-job",
-                )
+            self.mock_logger.error.assert_not_called()
+            self.assertEqual(self._temp_files(), [])
+
+        with self.subTest("single-pod"):
+            self.mock_logger.reset_mock()
+            self.mock_stream.side_effect = KeyboardInterrupt
+            with self.assertRaises(KeyboardInterrupt):
+                self._fetch(["chs-nccl-0"], job_id="chs-nccl-job")
+
+            self.mock_logger.error.assert_not_called()
 
     def test_gpu_job_fetches_head_pod_only(self):
         """Single-pod jobs stream directly to log_path without temp files."""
 
-        def fake_run(cmd, stdout, **kwargs):
-            stdout.write(b"head log\n")
+        def fake_stream(pod, out):
+            out.write(b"head log\n")
 
-        self.mock_run.side_effect = fake_run
+        self.mock_stream.side_effect = fake_stream
         with (
             mock.patch.object(
                 tempfile, "mkstemp", wraps=tempfile.mkstemp
@@ -225,21 +254,22 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
                 wraps=kubernetes._get_log_fetch_executor,
             ) as mock_get_executor,
         ):
-            mock_get_pod_names = self._fetch(
+            mock_get_pods = self._fetch(
                 ["chs-nccl-0-abc"], job_id="chs-nccl-test"
             )
 
-        mock_get_pod_names.assert_called_once_with(
+        mock_get_pods.assert_called_once_with(
             "chs-nccl-test", head_pod_only=True
         )
         mock_mkstemp.assert_not_called()
         mock_get_executor.assert_not_called()
         self.assertIsNone(kubernetes._LOG_FETCH_EXECUTOR)
-        self.mock_run.assert_called_once()
-        self.assertEqual(
-            self.mock_run.call_args.args[0],
-            ["kubectl", "logs", "chs-nccl-0-abc", "-n", CHS_NAMESPACE],
-        )
+        self.mock_stream.assert_called_once()
+        call = self.mock_stream.call_args
+        self.assertEqual(call.args, ())
+        self.assertEqual(set(call.kwargs), {"pod", "out"})
+        self.assertEqual(call.kwargs["pod"], _pod("chs-nccl-0-abc"))
+        self.assertEqual(call.kwargs["out"].name, self.log_path)
         self.assertEqual(self._read_log(), b"head log\n")
         self.assertEqual(os.listdir(self.tmp_dir), ["job.log"])
 
@@ -262,8 +292,9 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
         calls = 0
         saturated = threading.Event()
 
-        def fake_run(cmd, stdout, **kwargs):
+        def fake_stream(pod, out):
             nonlocal in_flight, peak, calls
+            name = pod["metadata"]["name"]
             with lock:
                 calls += 1
                 in_flight += 1
@@ -271,11 +302,11 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
                 if in_flight >= cap:
                     saturated.set()
             self.assertTrue(saturated.wait(timeout=5))
-            stdout.write(cmd[2].encode() + b"\n")
+            out.write(name.encode() + b"\n")
             with lock:
                 in_flight -= 1
 
-        self.mock_run.side_effect = fake_run
+        self.mock_stream.side_effect = fake_stream
         jobs = {
             f"chs-tpu-job-{j}": [f"job-{j}-pod-{i}" for i in range(20)]
             for j in range(3)
@@ -286,7 +317,9 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
             scheduler = KubernetesScheduler()
             try:
                 with mock.patch.object(
-                    scheduler, "_get_pod_names", return_value=jobs[job_id]
+                    scheduler,
+                    "_get_pods",
+                    return_value=[_pod(p) for p in jobs[job_id]],
                 ):
                     scheduler.fetch_job_log(
                         job_id, os.path.join(self.tmp_dir, f"{job_id}.log")
@@ -314,18 +347,16 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
         self.assertEqual(self._temp_files(), [])
 
     def test_no_pods_creates_no_file(self):
-        """Without pods there is no kubectl call and no log file."""
+        """Without pods there is no API call and no log file."""
         self._fetch([])
 
-        self.mock_run.assert_not_called()
+        self.mock_stream.assert_not_called()
         self.assertEqual(os.listdir(self.tmp_dir), [])
 
     def test_os_errors_are_logged_and_clean_up_temp_files(self):
-        """OSErrors during temp file creation, kubectl, or copy are logged."""
+        """OSErrors and config errors during log fetch are logged."""
         with self.subTest("concatenation failure"):
-            self.mock_run.side_effect = lambda cmd, stdout, **kw: stdout.write(
-                b"log\n"
-            )
+            self.mock_stream.side_effect = lambda pod, out: out.write(b"log\n")
             with mock.patch.object(
                 kubernetes.shutil,
                 "copyfileobj",
@@ -335,33 +366,35 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
             self.mock_logger.error.assert_called_once()
             self.assertEqual(self._temp_files(), [])
 
-        with self.subTest("missing kubectl"):
+        with self.subTest("missing kubeconfig"):
             self.mock_logger.reset_mock()
-            self.mock_run.side_effect = FileNotFoundError(
-                2, "No such file or directory", "kubectl"
+            self.mock_stream.side_effect = k8s_client.KubeError(
+                "Kubernetes configuration could not be loaded: no kubeconfig"
             )
-            self._fetch(["pod-0", "pod-1"])
+            self._fetch(["pod-0", "pod-1"], job_id="chs-tpu-job")
             self.mock_logger.error.assert_called_once()
             self.assertEqual(self._temp_files(), [])
 
     def test_failed_pod_does_not_stop_other_pods(self):
         """Queued pods are still fetched after pod 0 fails."""
         pods = [f"pod-{i}" for i in range(40)]
+        pod_0_error = k8s_client.KubeError("stream of pod-0 broke")
 
-        def fake_run(cmd, stdout, **kwargs):
-            if cmd[2] == "pod-0":
-                raise subprocess.CalledProcessError(1, cmd)
-            stdout.write(cmd[2].encode() + b"\n")
+        def fake_stream(pod, out):
+            name = pod["metadata"]["name"]
+            if name == "pod-0":
+                raise pod_0_error
+            out.write(name.encode() + b"\n")
 
-        self.mock_run.side_effect = fake_run
+        self.mock_stream.side_effect = fake_stream
         self._fetch(pods)
 
-        self.assertEqual(self.mock_run.call_count, len(pods))
+        self.assertEqual(self.mock_stream.call_count, len(pods))
         self.assertEqual(
             self._read_log(), b"".join(pod.encode() + b"\n" for pod in pods[1:])
         )
         self.mock_logger.error.assert_called_once()
-        self.assertIn("pod-0", self.mock_logger.error.call_args.args[-1])
+        self.assertIs(self.mock_logger.error.call_args.args[-1], pod_0_error)
         self.assertEqual(self._temp_files(), [])
 
     def test_interrupt_cancels_unstarted_fetches(self):
@@ -389,14 +422,14 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
             )
         )
 
-        def fake_run(cmd, stdout, **kwargs):
+        def fake_stream(pod, out):
             with lock:
-                started.append(cmd[2])
+                started.append(pod["metadata"]["name"])
                 if len(started) >= cap:
                     pool_saturated.set()
             self.assertTrue(release_workers.wait(timeout=5))
 
-        self.mock_run.side_effect = fake_run
+        self.mock_stream.side_effect = fake_stream
         with self.assertRaises(KeyboardInterrupt):
             self._fetch(pods)
 
@@ -405,15 +438,20 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
         self.assertEqual(self._temp_files(), [])
 
     def test_timeout_expired_is_logged_and_cleans_up_temp_files(self):
-        """A kubectl logs timeout is logged at error and removes temp files."""
+        """A pod log timeout is logged at error and removes temp files."""
         with self.subTest("multi-pod"):
 
-            def fake_multi_run(cmd, stdout, **kwargs):
-                if cmd[2] == "pod-1":
-                    raise subprocess.TimeoutExpired(cmd, 120)
-                stdout.write(cmd[2].encode() + b"\n")
+            def fake_multi_stream(pod, out):
+                name = pod["metadata"]["name"]
+                namespace = pod["metadata"]["namespace"]
+                if name == "pod-1":
+                    raise k8s_client.KubeError(
+                        f"GET /api/v1/namespaces/{namespace}/pods/{name}/log "
+                        "timed out"
+                    )
+                out.write(name.encode() + b"\n")
 
-            self.mock_run.side_effect = fake_multi_run
+            self.mock_stream.side_effect = fake_multi_stream
             self._fetch(["pod-0", "pod-1", "pod-2"], job_id="chs-tpu-timeout")
 
             self.assertEqual(self._read_log(), b"pod-0\npod-2\n")
@@ -423,14 +461,14 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
             )
             self.assertIsInstance(
                 self.mock_logger.error.call_args.args[-1],
-                subprocess.TimeoutExpired,
+                k8s_client.KubeError,
             )
             self.assertEqual(self._temp_files(), [])
 
         with self.subTest("single-pod"):
             self.mock_logger.reset_mock()
-            self.mock_run.side_effect = subprocess.TimeoutExpired(
-                ["kubectl", "logs"], 120
+            self.mock_stream.side_effect = k8s_client.KubeError(
+                "GET pod log timed out"
             )
             self._fetch(["chs-nccl-0"], job_id="chs-nccl-timeout")
 
@@ -440,7 +478,7 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
             )
             self.assertIsInstance(
                 self.mock_logger.error.call_args.args[-1],
-                subprocess.TimeoutExpired,
+                k8s_client.KubeError,
             )
 
 
@@ -450,9 +488,6 @@ class TestNodeObjectCache(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.scheduler = KubernetesScheduler()
-        self.mock_kubectl = self._patch(
-            mock.patch.object(KubernetesScheduler, "_run_kubectl")
-        )
 
     def test_cached_nodes_need_no_kubectl_and_preserve_order(self):
         """Nodes in the cached list are never fetched again and keep order."""
@@ -478,26 +513,23 @@ class TestNodeObjectCache(_KubernetesTestBase):
                 self.scheduler.get_topology(),
                 {"default-block": {"default-subblock": ["node1", "node2"]}},
             )
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
 
     def test_cold_cache_lists_nodes_once(self):
         """Without a cached list, the label-selected list is fetched once."""
-        node_1, node_2 = _node("node1"), _node("node2")
-        self.mock_kubectl.return_value = _node_list(node_1, node_2)
+        node_1 = self.kube.add_object("", "nodes", _node("node1"))
+        node_2 = self.kube.add_object("", "nodes", _node("node2"))
+        self.kube.add_object(
+            "", "nodes", _node("sys-node", {_NODEPOOL: "system"})
+        )
 
         self.assertEqual(
             self.scheduler._get_node_objects(["node1", "node2"]),
             [node_1, node_2],
         )
-        self.mock_kubectl.assert_called_once_with(
-            [
-                "get",
-                "nodes",
-                "-l",
-                "cloud.google.com/gke-nodepool!=system",
-                "-o",
-                "json",
-            ]
+        self.assertEqual(
+            self.kube.calls,
+            [Call("list_nodes", {"label_selector": f"{_NODEPOOL}!=system"})],
         )
         self.assertEqual(
             self.scheduler._resolved_node_resources, [node_1, node_2]
@@ -505,61 +537,67 @@ class TestNodeObjectCache(_KubernetesTestBase):
 
     def test_fetch_errors_keep_callers_error_handling(self):
         """Callers gracefully fall back when _fetch_raw_node_resources fails."""
-        cases = [
-            ("kubectl error", subprocess.CalledProcessError(1, "kubectl")),
-            ("invalid JSON", "not json"),
-            ("no kubectl", FileNotFoundError("kubectl")),
-        ]
-        for label, outcome in cases:
-            with self.subTest(label):
-                self.scheduler._resolved_node_resources = None
-                self.mock_kubectl.reset_mock(
-                    return_value=True, side_effect=True
-                )
-                if isinstance(outcome, Exception):
-                    self.mock_kubectl.side_effect = outcome
-                else:
-                    self.mock_kubectl.return_value = outcome
 
-                with mock.patch.object(
-                    self.scheduler, "get_nodes_under_test", return_value=["n1"]
-                ):
-                    self.assertEqual(self.scheduler.get_topology(), {})
-                self.assertEqual(
-                    self.scheduler._group_nodes_by_slice(["n1", "n2"]),
-                    {"failed-nodes": ["n1", "n2"]},
-                )
+        def assert_callers_handle_the_error():
+            self.scheduler._resolved_node_resources = None
+            with mock.patch.object(
+                self.scheduler, "get_nodes_under_test", return_value=["n1"]
+            ):
+                self.assertEqual(self.scheduler.get_topology(), {})
+            self.scheduler._resolved_node_resources = None
+            self.assertEqual(
+                self.scheduler._group_nodes_by_slice(["n1", "n2"]),
+                {"failed-nodes": ["n1", "n2"]},
+            )
+
+        cases = [
+            (
+                "API error",
+                k8s_client.KubeError(
+                    "Error from server (InternalError): boom", status=500
+                ),
+            ),
+            (
+                "timeout",
+                k8s_client.KubeError("GET /api/v1/nodes timed out"),
+            ),
+            (
+                "no kube config",
+                k8s_client.KubeError("no kubeconfig"),
+            ),
+        ]
+        for label, error in cases:
+            with self.subTest(label):
+                self.kube.fail_next("list_nodes", error, error)
+                assert_callers_handle_the_error()
 
     def test_project_id_comes_from_cached_provider_id(self):
-        """A cached providerID spares the kubectl call."""
+        """A cached providerID spares the API call."""
         self.scheduler._resolved_node_resources = [
             _node("node1", provider_id="gce://proj-x/us-central1-a/node1")
         ]
 
         self.assertEqual(self.scheduler._resolve_project_id("node1"), "proj-x")
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
 
     def test_project_id_without_cached_provider_id(self):
         """Without cached providerID, only that node's providerID is queried."""
+        self.kube.add_object(
+            "",
+            "nodes",
+            _node("node1", provider_id="gce://proj-y/us-central1-a/node1"),
+        )
         for cached in (None, [_node("node1")]):
             with self.subTest(cached=cached):
                 self.scheduler._resolved_node_resources = cached
-                self.mock_kubectl.reset_mock()
-                self.mock_kubectl.return_value = (
-                    "gce://proj-y/us-central1-a/node1\n"
-                )
+                self.kube.calls.clear()
 
                 self.assertEqual(
                     self.scheduler._resolve_project_id("node1"), "proj-y"
                 )
-                self.mock_kubectl.assert_called_once_with(
-                    [
-                        "get",
-                        "node",
-                        "node1",
-                        "-o",
-                        "jsonpath={.spec.providerID}",
-                    ]
+                self.assertEqual(
+                    self.kube.calls,
+                    [Call("get_node", {"name": "node1"})],
                 )
 
     def test_invalid_cached_provider_id_is_rejected(self):
@@ -572,18 +610,28 @@ class TestNodeObjectCache(_KubernetesTestBase):
             ChsSchedulerException, "Unexpected providerID format"
         ):
             self.scheduler._resolve_project_id("node1")
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
 
     def test_validation_error_from_list_propagates(self):
         """ChsValidationError from _fetch_raw_node_resources propagates."""
         scheduler = KubernetesScheduler(nodepools="pool-a,missing-pool")
-        self.mock_kubectl.return_value = _node_list(
-            _node("node1", {_NODEPOOL: "pool-a"})
-        )
+        self.kube.add_object("", "nodes", _node("node1", {_NODEPOOL: "pool-a"}))
 
         with self.assertRaisesRegex(ChsValidationError, "missing-pool"):
             scheduler._get_node_objects(["node1"])
-        self.mock_kubectl.assert_called_once()
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_nodes",
+                    {
+                        "label_selector": _node_pools_selector(
+                            "pool-a", "missing-pool"
+                        )
+                    },
+                )
+            ],
+        )
         self.assertIsNone(scheduler._resolved_node_resources)
 
 
@@ -593,50 +641,50 @@ class TestClusterNameMemoization(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.scheduler = KubernetesScheduler()
-        self.mock_kubectl = self._patch(
-            mock.patch.object(KubernetesScheduler, "_run_kubectl")
+        self.mock_current_context = self._patch(
+            mock.patch.object(k8s_client, "current_context", return_value=None)
         )
 
     def test_second_call_is_served_from_memory(self):
         """Only the first call looks the cluster name up."""
-        self.mock_kubectl.return_value = "gke_my-proj_us-central1_my-cluster"
+        self.mock_current_context.return_value = (
+            "gke_my-proj_us-central1_my-cluster"
+        )
 
         self.assertEqual(self.scheduler.get_cluster_name(), "my-cluster")
         self.assertEqual(self.scheduler.get_cluster_name(), "my-cluster")
-        self.mock_kubectl.assert_called_once_with(
-            ["config", "current-context"], timeout=5
-        )
+        self.assertEqual(self.kube.calls, [])
+        self.mock_current_context.assert_called_once_with()
 
     def test_failed_lookup_is_retried(self):
         """A None result is not cached."""
-        self.mock_kubectl.side_effect = subprocess.CalledProcessError(
-            1, "kubectl"
-        )
-
         self.assertIsNone(self.scheduler.get_cluster_name())
-        self.assertEqual(self.mock_kubectl.call_count, 1)
+        self.assertEqual(self.mock_current_context.call_count, 1)
         self.assertIsNone(self.scheduler.get_cluster_name())
-        self.assertEqual(self.mock_kubectl.call_count, 2)
+        self.assertEqual(self.mock_current_context.call_count, 2)
+        self.assertEqual(self.kube.calls, [])
 
     def test_label_on_cached_nodes_skips_kubectl(self):
-        """The cluster name label on a cached node spares any kubectl call."""
+        """The cluster name label on a cached node spares any API call."""
         self.scheduler._resolved_node_resources = [
             _node("node1"),
             _node("node2", {_CLUSTER_NAME: "labeled-cluster"}),
         ]
 
         self.assertEqual(self.scheduler.get_cluster_name(), "labeled-cluster")
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
+        self.mock_current_context.assert_not_called()
 
     def test_cached_nodes_without_label_fall_back_to_current_context(self):
-        """Cached nodes without cluster label fall back to current-context."""
+        """Cached nodes without cluster label fall back to current_context."""
         self.scheduler._resolved_node_resources = [_node("node1")]
-        self.mock_kubectl.return_value = "gke_my-proj_us-central1_ctx-cluster"
+        self.mock_current_context.return_value = (
+            "gke_my-proj_us-central1_ctx-cluster"
+        )
 
         self.assertEqual(self.scheduler.get_cluster_name(), "ctx-cluster")
-        self.mock_kubectl.assert_called_once_with(
-            ["config", "current-context"], timeout=5
-        )
+        self.assertEqual(self.kube.calls, [])
+        self.mock_current_context.assert_called_once_with()
 
 
 class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
@@ -645,9 +693,6 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.scheduler = KubernetesScheduler()
-        self.mock_kubectl = self._patch(
-            mock.patch.object(KubernetesScheduler, "_run_kubectl")
-        )
         self.mock_query_gce = self._patch(
             mock.patch("chs.schedulers.base.query_gce_instances_info")
         )
@@ -677,7 +722,7 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
             {"node1": "1111", "node2": "2222"},
         )
         self.mock_query_gce.assert_not_called()
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
 
     def test_incomplete_nodes_fall_back_to_gce(self):
         """Only nodes lacking the label or annotation go to the GCE API."""
@@ -712,6 +757,7 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
             self.scheduler.node_to_instance_id,
             {"node1": "1", "node2": "22", "node3": "33"},
         )
+        self.assertEqual(self.kube.calls, [])
 
     def test_machine_type_labels_are_normalized_and_beta_label_supported(self):
         """Label values are normalized and beta instance-type label works."""
@@ -761,7 +807,7 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
             )
 
         self.mock_query_gce.assert_called_once_with("proj", ["node2", "node3"])
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
         self.assertEqual(
             machine_types,
             ["a3-megagpu-8g", "a5x-highgpu-4g-metal", "unknown"],
@@ -815,21 +861,21 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
         self.mock_query_gce.return_value = {
             "node1": {"machine_type": "a3-megagpu-8g", "instance_id": "11"},
         }
+        error = k8s_client.KubeError(
+            "Error from server (InternalError): nodes unavailable", status=500
+        )
+        self.kube.fail_next("list_nodes", error)
 
-        with (
-            mock.patch.object(
-                self.scheduler,
-                "_get_node_objects",
-                side_effect=ChsSchedulerException("kubectl failed"),
-            ),
-            mock.patch.object(
-                self.scheduler, "_resolve_project_id", return_value="proj"
-            ),
+        with mock.patch.object(
+            self.scheduler, "_resolve_project_id", return_value="proj"
         ):
             machine_types = self.scheduler.detect_nodes_hardware(
                 ["node1", "node2"]
             )
 
+        self.assertEqual(
+            [call.method for call in self.kube.calls], ["list_nodes"]
+        )
         self.mock_query_gce.assert_called_once_with("proj", ["node1", "node2"])
         self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
         self.assertEqual(self.scheduler.node_to_instance_id, {"node1": "11"})
@@ -837,20 +883,30 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
     def test_validation_error_propagates_without_gce_fallback(self):
         """ChsValidationError from _fetch_raw_node_resources propagates."""
         scheduler = KubernetesScheduler(nodepools="pool-a,missing-pool")
-        self.mock_kubectl.return_value = _node_list(
-            _node("node1", {_NODEPOOL: "pool-a"})
-        )
+        self.kube.add_object("", "nodes", _node("node1", {_NODEPOOL: "pool-a"}))
 
         with self.assertRaisesRegex(ChsValidationError, "missing-pool"):
             scheduler.detect_nodes_hardware(["node1"])
-        self.mock_kubectl.assert_called_once()
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_nodes",
+                    {
+                        "label_selector": _node_pools_selector(
+                            "pool-a", "missing-pool"
+                        )
+                    },
+                )
+            ],
+        )
         self.mock_query_gce.assert_not_called()
         self.assertIsNone(scheduler._resolved_node_resources)
 
     def test_no_nodes(self):
         """An empty node list needs no lookup at all."""
         self.assertEqual(self.scheduler.detect_nodes_hardware([]), [])
-        self.mock_kubectl.assert_not_called()
+        self.assertEqual(self.kube.calls, [])
         self.mock_query_gce.assert_not_called()
 
 
@@ -860,104 +916,142 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.scheduler = KubernetesScheduler()
-        self.mock_kubectl = self._patch(
-            mock.patch.object(
-                KubernetesScheduler, "_run_kubectl", return_value=""
-            )
-        )
 
     def _slice_calls(self):
+        """Returns the client calls that concern Slices."""
         return [
-            call.args[0]
-            for call in self.mock_kubectl.call_args_list
-            if "slices.accelerator.gke.io" in call.args[0]
+            call
+            for call in self.kube.calls
+            if (
+                call.kwargs.get("group"),
+                call.kwargs.get("version"),
+                call.kwargs.get("plural"),
+            )
+            == (_SLICE_GROUP, _SLICE_VERSION, "slices")
         ]
 
     def test_back_to_back_cleanups_delete_slices_once(self):
         """cancel_jobs_by_prefix + cleanup deletes slices once statelessly."""
-
-        def fake_kubectl(args, **kwargs):
-            if args == _CRD_CHECK:
-                return "slices.accelerator.gke.io"
-            return ""
-
-        self.mock_kubectl.side_effect = fake_kubectl
+        self.kube.add_crd(_SLICE_CRD)
+        for name, labels in (
+            ("chs-slice", {"created-by": "chs"}),
+            ("user-slice", {}),
+        ):
+            self.kube.add_object(
+                _SLICE_GROUP,
+                "slices",
+                {"metadata": {"name": name, "labels": labels}},
+            )
+        self.kube.add_object(
+            _JOBSET_GROUP,
+            "jobsets",
+            {"metadata": {"name": "chs-run1-nccl"}},
+            namespace=CHS_NAMESPACE,
+        )
 
         self.scheduler.cancel_jobs_by_prefix("chs-")
         self.scheduler.cleanup_scheduler_resources()
 
-        self.assertEqual(self._slice_calls(), [_CRD_CHECK, _SLICE_DELETE])
+        self.assertEqual(
+            self._slice_calls(),
+            [
+                _SLICE_LIST,
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": _SLICE_GROUP,
+                        "version": _SLICE_VERSION,
+                        "plural": "slices",
+                        "object_names": ["chs-slice"],
+                        "wait_timeout_seconds": 300,
+                    },
+                ),
+            ],
+        )
+        self.assertEqual(self.kube.stored_names(_JOBSET_GROUP, "jobsets"), [])
+        self.assertEqual(
+            self.kube.stored_names(_SLICE_GROUP, "slices"), ["user-slice"]
+        )
 
     def test_cleanup_dynamic_slices_is_stateless(self):
         """_cleanup_dynamic_slices holds no flag and always queries cluster."""
         self.assertFalse(hasattr(self.scheduler, "_dynamic_slices_cleaned"))
-        self.mock_kubectl.side_effect = [
-            "slices.accelerator.gke.io",
-            "",
-            "slices.accelerator.gke.io",
-            "",
-        ]
+        self.kube.add_crd(_SLICE_CRD)
 
         self.scheduler._cleanup_dynamic_slices()
         self.scheduler._cleanup_dynamic_slices()
 
+        empty_delete = Call(
+            "delete_custom_objects",
+            {
+                "group": _SLICE_GROUP,
+                "version": _SLICE_VERSION,
+                "plural": "slices",
+                "object_names": [],
+                "wait_timeout_seconds": 300,
+            },
+        )
         self.assertEqual(
             self._slice_calls(),
-            [_CRD_CHECK, _SLICE_DELETE, _CRD_CHECK, _SLICE_DELETE],
+            [_SLICE_LIST, empty_delete, _SLICE_LIST, empty_delete],
         )
 
     def test_get_job_statuses_uses_namespaced_list_for_multiple_jobs(self):
-        """get_job_statuses lists chs namespace once for >1 job and filters."""
-        self.mock_kubectl.return_value = json.dumps(
-            {
-                "kind": "List",
-                "items": [
-                    {
-                        "metadata": {"name": "chs-run-job1"},
-                        "status": {
-                            "conditions": [
-                                {"type": "Completed", "status": "True"}
-                            ]
-                        },
-                    },
-                    {
-                        "metadata": {"name": "chs-run-job2"},
-                        "status": {"replicatedJobsStatus": [{"active": 1}]},
-                    },
-                    {
-                        "metadata": {"name": "unrelated-jobset"},
-                        "status": {
-                            "conditions": [
-                                {"type": "Completed", "status": "True"}
-                            ]
-                        },
-                    },
-                ],
-            }
-        )
+        """get_job_statuses lists chs namespace once and filters."""
+        completed = {"conditions": [{"type": "Completed", "status": "True"}]}
+        for name, status in (
+            ("chs-run-job1", completed),
+            ("chs-run-job2", {"replicatedJobsStatus": [{"active": 1}]}),
+            ("unrelated-jobset", completed),
+        ):
+            self.kube.add_object(
+                _JOBSET_GROUP,
+                "jobsets",
+                {"metadata": {"name": name}, "status": status},
+                namespace=CHS_NAMESPACE,
+            )
 
         statuses = self.scheduler.get_job_statuses(
             ["chs-run-job1", "chs-run-job2"]
         )
-        self.mock_kubectl.assert_called_once_with(
-            ["get", "jobset", "-o", "json", "--ignore-not-found"],
-            namespaced=True,
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_custom_objects",
+                    {
+                        "group": _JOBSET_GROUP,
+                        "version": _JOBSET_VERSION,
+                        "plural": "jobsets",
+                        "namespace": CHS_NAMESPACE,
+                    },
+                )
+            ],
         )
         self.assertNotIn("unrelated-jobset", statuses)
-        self.assertEqual(set(statuses.keys()), {"chs-run-job1", "chs-run-job2"})
+        self.assertEqual(
+            statuses,
+            {
+                "chs-run-job1": JobStatus.COMPLETED.value,
+                "chs-run-job2": JobStatus.RUNNING.value,
+            },
+        )
 
-        self.mock_kubectl.reset_mock()
+        self.kube.calls.clear()
         self.scheduler.get_job_statuses(["chs-run-job1"])
-        self.mock_kubectl.assert_called_once_with(
+        self.assertEqual(
+            self.kube.calls,
             [
-                "get",
-                "jobset",
-                "chs-run-job1",
-                "-o",
-                "json",
-                "--ignore-not-found",
+                Call(
+                    "list_custom_objects",
+                    {
+                        "group": _JOBSET_GROUP,
+                        "version": _JOBSET_VERSION,
+                        "plural": "jobsets",
+                        "namespace": CHS_NAMESPACE,
+                    },
+                )
             ],
-            namespaced=True,
         )
 
     def test_apply_cleans_slices_only_for_dynamic_pools(self):
@@ -999,6 +1093,7 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
 
                 self.assertEqual(mock_clean.called, cleans)
                 mock_prov.assert_called_once_with(target_pools)
+        self.assertEqual(self.kube.calls, [])
 
 
 class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
@@ -1007,11 +1102,6 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.scheduler = KubernetesScheduler()
-        self.mock_kubectl = self._patch(
-            mock.patch.object(
-                KubernetesScheduler, "_run_kubectl", return_value=""
-            )
-        )
         self.mock_cleanup_slices = self._patch(
             mock.patch.object(self.scheduler, "_cleanup_dynamic_slices")
         )
@@ -1029,15 +1119,26 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
         self.mock_cleanup_slices.assert_called_once_with()
         self.mock_kueue.return_value.cleanup.assert_called_once_with()
         self.mock_delete_secrets.assert_not_called()
-        self.mock_kubectl.assert_called_once_with(
-            ["delete", "namespace", CHS_NAMESPACE, "--ignore-not-found"],
-            timeout=NAMESPACE_DELETE_TIMEOUT_SEC,
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "delete_namespace",
+                    {
+                        "name": CHS_NAMESPACE,
+                        "wait_timeout_seconds": NAMESPACE_DELETE_TIMEOUT_SEC,
+                    },
+                )
+            ],
         )
 
     def test_failed_namespace_deletion_falls_back_to_secrets(self):
         """If the namespace survives, its secrets are deleted directly."""
-        self.mock_kubectl.side_effect = subprocess.CalledProcessError(
-            1, "kubectl delete namespace", stderr="forbidden"
+        self.kube.fail_next(
+            "delete_namespace",
+            k8s_client.KubeError(
+                "Error from server (Forbidden): forbidden", status=403
+            ),
         )
 
         self.scheduler.cleanup_scheduler_resources()
@@ -1049,11 +1150,31 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
         """cancel_jobs, also used on its own, keeps deleting secrets."""
         self.scheduler.cancel_jobs(["chs-job1"])
 
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": _JOBSET_GROUP,
+                        "version": _JOBSET_VERSION,
+                        "plural": "jobsets",
+                        "object_names": ["chs-job1"],
+                        "namespace": CHS_NAMESPACE,
+                        "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
+                    },
+                )
+            ],
+        )
         self.mock_delete_secrets.assert_called_once_with()
 
 
 class TestKueuePreflightEmptyDeployments(unittest.TestCase):
     """Tests _check_kueue when no Kueue controller deployment is found."""
+
+    def setUp(self):
+        super().setUp()
+        self.kube = install_fake_client(self)
 
     def test_check_kueue_returns_false_when_no_deployments_found(self):
         """_check_kueue logs a warning and returns False on empty list."""
@@ -1066,9 +1187,7 @@ class TestKueuePreflightEmptyDeployments(unittest.TestCase):
                 "chs.preflights.kubernetes_preflight.logger"
             ) as mock_logger,
         ):
-            result = checker._check_kueue(
-                ["customresourcedefinition.apiextensions.k8s.io/kueues.kueue"]
-            )
+            result = checker._check_kueue(["kueues.kueue"])
 
         self.assertFalse(result)
         mock_logger.warning.assert_called_once()
@@ -1077,6 +1196,7 @@ class TestKueuePreflightEmptyDeployments(unittest.TestCase):
             "could be found.",
             mock_logger.warning.call_args.args[0],
         )
+        self.assertEqual(self.kube.calls, [])
 
     def test_check_raises_when_kueue_crd_has_no_deployment(self):
         """check() raises ChsPreflightException when Kueue has no deployment."""
@@ -1100,6 +1220,7 @@ class TestKueuePreflightEmptyDeployments(unittest.TestCase):
             ),
         ):
             checker.check([{"name": "nccl-cluster"}])
+        self.assertEqual(self.kube.calls, [])
 
 
 if __name__ == "__main__":

@@ -14,16 +14,14 @@
 
 """Kubernetes preflight checker and cleaner."""
 
-import json
 import logging
 import re
-import subprocess
 from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from chs.constants import KUBECTL_TIMEOUT_SEC
-from chs.exceptions import ChsPreflightException, format_subprocess_error
+from chs.exceptions import ChsPreflightException
+from chs.utils import k8s_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +33,7 @@ MIN_JOBSET_VERSION = "0.6.0"
 
 
 class KubernetesPreflightChecker:
-    """Checks for JobSet and Kueue CRDs on Kubernetes.
-
-    Detects missing CRDs, extracts version info to fail first, warn or
-    filter tests based on the missing CRDs.
-    """
+    """Checks for JobSet and Kueue CRDs on Kubernetes."""
 
     def __init__(self, scheduler: Any | None = None) -> None:
         self.scheduler = scheduler
@@ -48,14 +42,7 @@ class KubernetesPreflightChecker:
         self,
         tests: list[dict[str, Any]] | None = None,
     ) -> tuple[list[dict[str, Any]] | None, bool]:
-        """Runs preflight checks on Kubernetes.
-
-        Args:
-            tests: Optional list of tests to be run and potentially filtered.
-
-        Returns:
-            A tuple of (filtered_tests, kueue_supported).
-        """
+        """Runs preflight checks on Kubernetes."""
         installed_crds = self._get_installed_crds()
         self._check_jobset(installed_crds)
 
@@ -74,27 +61,16 @@ class KubernetesPreflightChecker:
     def _get_installed_crds(self) -> list[str]:
         """Fetches installed CRDs from the cluster."""
         try:
-            output = self._run_kubectl(["get", "crd", "-o", "name"])
-            installed_crds = [
-                line.strip().lower()
-                for line in output.splitlines()
-                if line.strip()
-            ]
-            logger.debug(
-                "Found %d CRDs installed on the cluster.", len(installed_crds)
-            )
-            return installed_crds
-        except FileNotFoundError as e:
+            crds = k8s_client.list_crds()
+        except k8s_client.KubeError as e:
             raise ChsPreflightException(
-                "Kubernetes CLI tool 'kubectl' was not found in PATH. "
-                "Please ensure kubectl is installed and configured "
-                "to connect to your cluster."
+                f"Failed to query cluster CRDs from the Kubernetes API: {e}"
             ) from e
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            msg = format_subprocess_error(e)
-            raise ChsPreflightException(
-                f"Failed to query cluster CRDs via kubectl: {msg}"
-            ) from e
+        installed_crds = [crd["metadata"]["name"].lower() for crd in crds]
+        logger.debug(
+            "Found %d CRDs installed on the cluster.", len(installed_crds)
+        )
+        return installed_crds
 
     def _check_jobset(self, installed_crds: list[str]) -> None:
         """Checks if JobSet CRD is installed, healthy, and compatible."""
@@ -164,26 +140,10 @@ class KubernetesPreflightChecker:
         """Discovers controller deployments cluster-wide using app label."""
         discovered_deployments = []
         try:
-            label_query_result = self._run_kubectl(
-                [
-                    "get",
-                    "deployment",
-                    "-A",
-                    "-l",
-                    f"app.kubernetes.io/name={app_name}",
-                    "-o",
-                    "json",
-                ]
+            discovered_deployments = k8s_client.list_deployments(
+                label_selector=f"app.kubernetes.io/name={app_name}"
             )
-            discovered_deployments = json.loads(label_query_result).get(
-                "items", []
-            )
-        except (
-            subprocess.CalledProcessError,
-            json.JSONDecodeError,
-            FileNotFoundError,
-            subprocess.TimeoutExpired,
-        ) as e:
+        except k8s_client.KubeError as e:
             logger.debug("Label query failed: %s", e)
 
         if not discovered_deployments:
@@ -197,34 +157,19 @@ class KubernetesPreflightChecker:
                 app_name,
             )
             try:
-                namespace_query_result = self._run_kubectl(
-                    [
-                        "get",
-                        "deployment",
-                        "-n",
-                        f"{app_name}-system",
-                        f"{app_name}-controller-manager",
-                        "-o",
-                        "json",
-                    ]
-                )
-                discovered_deployments = [json.loads(namespace_query_result)]
-            except (
-                subprocess.CalledProcessError,
-                json.JSONDecodeError,
-                FileNotFoundError,
-                subprocess.TimeoutExpired,
-            ) as e:
+                discovered_deployments = [
+                    k8s_client.get_deployment(
+                        name=f"{app_name}-controller-manager",
+                        namespace=f"{app_name}-system",
+                    )
+                ]
+            except k8s_client.KubeError as e:
                 logger.debug("Namespace fallback query failed: %s", e)
 
         return discovered_deployments
 
     def _check_kueue(self, installed_crds: list[str]) -> bool:
-        """Checks if Kueue CRD is installed and version is compatible.
-
-        Returns:
-            True if Kueue is installed and compatible, False otherwise.
-        """
+        """Checks if Kueue CRD is installed and version is compatible."""
         if not self._check_kueue_crd_exists(installed_crds):
             return False
 
@@ -344,18 +289,3 @@ class KubernetesPreflightChecker:
                 MIN_KUEUE_VERSION,
             )
             return True
-
-    def _run_kubectl(self, args: list[str]) -> str:
-        """Runs a kubectl command and returns filtered output."""
-        if self.scheduler and hasattr(self.scheduler, "_run_kubectl"):
-            return self.scheduler._run_kubectl(args)
-
-        cmd = ["kubectl"] + args
-        result = subprocess.run(
-            cmd,
-            text=True,
-            capture_output=True,
-            check=True,
-            timeout=KUBECTL_TIMEOUT_SEC,
-        )
-        return result.stdout.strip()

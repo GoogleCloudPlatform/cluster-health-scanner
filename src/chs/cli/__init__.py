@@ -59,6 +59,7 @@ from chs.cli.background_cleanup import BackgroundCleanup
 from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
+from chs.utils.k8s_client import KubeError
 from chs.version import get_version
 
 warnings.filterwarnings(
@@ -597,7 +598,7 @@ def run_action(
                         "for details."
                     )
                 return job_ids
-            except (OSError, subprocess.CalledProcessError) as e:
+            except (OSError, subprocess.CalledProcessError, KubeError) as e:
                 raise ex.ChsExecutionException(
                     f"CHS execution failed: {ex.format_subprocess_error(e)}"
                 ) from e
@@ -770,7 +771,7 @@ def _analyze_action(
                     )
 
                 _show_results(app_data, run_id, suppress_boh_uri=True)
-            except (OSError, subprocess.CalledProcessError) as e:
+            except (OSError, subprocess.CalledProcessError, KubeError) as e:
                 err_msg = ex.format_subprocess_error(e)
                 raise ex.ChsAnalysisException(
                     f"CHS analysis failed for run_id={run_id}: {err_msg}"
@@ -871,6 +872,7 @@ def cancel_action(scheduler_name: str | None = None) -> None:
         scheduler.cleanup_scheduler_resources()
     except (
         subprocess.CalledProcessError,
+        KubeError,
         ex.ChsSchedulerException,
         ex.KueueException,
     ) as e:

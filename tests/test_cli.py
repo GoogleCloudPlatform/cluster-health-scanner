@@ -33,8 +33,12 @@ from click import testing
 
 from chs import cli
 from chs import exceptions
+from chs.cli import background_cleanup
 from chs.cli import list_formatting
+from chs.utils.k8s_client import KubeError
 from chs.utils.tests import TestsMap as _TestsMap
+
+from tests import k8s_fakes  # noqa: F401
 
 CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
@@ -891,6 +895,33 @@ class TestCli(unittest.TestCase):
             str(ctx.exception),
         )
 
+    def test_run_action_kube_error_raises_execution_exception(self):
+        """Test run_action wraps a Kubernetes API error like a CPE."""
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, **kwargs: tests
+        )
+        err = KubeError(
+            'Error from server (Forbidden): namespaces "chs" is forbidden: '
+            'User "chs" cannot create resource "namespaces"',
+            status=403,
+        )
+        mock_scheduler.apply_scheduler_resources.side_effect = err
+
+        with self.assertRaises(exceptions.ChsExecutionException) as ctx:
+            cli.run_action(
+                suite="custom",
+                scheduler_obj=mock_scheduler,
+                tests=[{"name": "tpu-info"}],
+                workspace_name="test_ws",
+                workspaces_base_dir="/tmp/test_ws",
+                machine_type="tpu7x-standard-4t",
+            )
+        self.assertEqual(str(ctx.exception), f"CHS execution failed: {err}")
+        self.assertIs(ctx.exception.__cause__, err)
+        self.mock_rm_instance.create_workspace.assert_not_called()
+
     def test_format_subprocess_error_helper(self):
         """Test format_subprocess_error formats command & output."""
         err_with_stderr = subprocess.CalledProcessError(
@@ -1163,6 +1194,32 @@ class TestCli(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
 
+    def test_cancel_action_kube_error_raises_cancellation_exception(self):
+        """Test cancel_action wraps a Kubernetes API error of either step."""
+        err = KubeError(
+            "Error from server (Forbidden): jobsets.jobset.x-k8s.io is "
+            "forbidden",
+            status=403,
+        )
+        for step in ("cancel_jobs_by_prefix", "cleanup_scheduler_resources"):
+            with self.subTest(step=step):
+                scheduler = mock.Mock()
+                getattr(scheduler, step).side_effect = err
+                self.mock_get_scheduler.return_value = scheduler
+
+                with self.assertRaises(
+                    exceptions.ChsCancellationException
+                ) as ctx:
+                    cli.cancel_action("kubernetes")
+
+                self.assertEqual(
+                    str(ctx.exception),
+                    "CHS cancellation failed: KubeError('Error from server "
+                    "(Forbidden): jobsets.jobset.x-k8s.io is forbidden')",
+                )
+                self.assertIs(ctx.exception.__cause__, err)
+                self.mock_get_scheduler.assert_called_with("kubernetes")
+
     @mock.patch("chs.cli.RambleManager")
     @mock.patch("chs.cli._show_results")
     @mock.patch("chs.cli.StorageProviderFactory.get_provider_for_run")
@@ -1225,6 +1282,48 @@ class TestCli(unittest.TestCase):
 
             cli._analyze_action(self.mock_app_data, "run1")
             mock_rm.archive.assert_called_once()
+
+    def test_analyze_action_kube_error_raises_analysis_exception(self):
+        """Test _analyze_action wraps a Kubernetes API error like a CPE."""
+        err = KubeError(
+            "Error from server (InternalError): etcdserver: request timed out",
+            status=500,
+        )
+        self.mock_app_data.get_run.return_value = {}
+        self.mock_rm_instance.wait_for_jobs.side_effect = err
+
+        with tempfile.TemporaryDirectory() as ws_dir:
+            self.mock_rm_instance.path = ws_dir
+            with self.assertRaises(exceptions.ChsAnalysisException) as ctx:
+                cli._analyze_action(self.mock_app_data, "run1")
+
+        self.assertEqual(
+            str(ctx.exception), f"CHS analysis failed for run_id=run1: {err}"
+        )
+        self.assertIs(ctx.exception.__cause__, err)
+        self.mock_rm_instance.analyze_experiments.assert_not_called()
+
+    def test_background_cleanup_logs_kube_error_as_warning(self):
+        """Test a Kubernetes API error of the cleanup is only logged."""
+        self.enterContext(mock.patch.object(cli.theme, "get_progress_spinner"))
+        err = KubeError(
+            'Error from server (Forbidden): namespaces "chs" is forbidden',
+            status=403,
+        )
+        ramble_manager = mock.Mock()
+        ramble_manager.get_scheduler_type.return_value = "kubernetes"
+        ramble_manager.cancel_experiments.side_effect = err
+
+        with mock.patch.object(background_cleanup, "logger") as mock_logger:
+            with background_cleanup.BackgroundCleanup("run1") as cleanup:
+                cleanup.start(ramble_manager)
+
+        mock_logger.warning.assert_called_once_with(
+            "Failed to clean CHS resources. Error: %s", err
+        )
+        ramble_manager.cancel_experiments.assert_called_once_with(
+            scheduler_name="kubernetes"
+        )
 
     @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
     def test_results_command_no_boh_no_storage(self, mock_get_provider_for_run):

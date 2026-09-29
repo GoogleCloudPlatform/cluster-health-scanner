@@ -16,12 +16,12 @@
 
 import os
 import shutil
-import subprocess
 
 from chs import exceptions as ex
 from chs.schedulers.base import BaseScheduler
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers.kubernetes import KubernetesScheduler
+from chs.utils import k8s_client
 
 
 def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
@@ -45,32 +45,14 @@ def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
     )
 
 
-def _has_kubeconfig() -> bool:
-    """Checks if a valid kubeconfig exists on the system."""
-    kubeconfig = os.environ.get("KUBECONFIG")
-    if kubeconfig:
-        for path in kubeconfig.split(os.pathsep):
-            if os.path.exists(os.path.expanduser(path.strip())):
-                return True
-        return False
-    return os.path.exists(os.path.expanduser("~/.kube/config"))
-
-
 def _get_kubectl_context() -> str | None:
     """Gets the current kubectl context."""
     if not shutil.which("kubectl"):
         return None
 
     try:
-        result = subprocess.run(
-            ["kubectl", "config", "current-context"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=5,
-        )
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return k8s_client.current_context()
+    except k8s_client.KubeError:
         return None
 
 
@@ -86,7 +68,7 @@ def detect_scheduler() -> str:
     ):
         return "kubernetes"
 
-    if _has_kubeconfig():
+    if k8s_client.has_kubeconfig():
         if not shutil.which("kubectl"):
             raise ex.ChsSchedulerException(
                 "Missing required executable: kubectl. "

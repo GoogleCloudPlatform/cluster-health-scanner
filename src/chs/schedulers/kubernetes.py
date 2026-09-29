@@ -27,20 +27,19 @@ import yaml
 import random
 
 
-import subprocess
 from typing import Any
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
 from chs.schedulers.base import BaseScheduler
+from chs.utils import k8s_client
 from chs.utils.kueue import KueueManager
 from chs.exceptions import (
     ChsSchedulerException,
     ChsValidationError,
     KueueException,
     NoActiveJobsException,
-    format_subprocess_error,
 )
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
@@ -48,7 +47,6 @@ from chs import resources
 from chs.constants import (
     CHS_NAMESPACE,
     DELETE_WAIT_TIMEOUT_SEC,
-    KUBECTL_TIMEOUT_SEC,
     NAMESPACE_DELETE_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
@@ -56,6 +54,11 @@ from chs.constants import (
 _BUSY_NODES_BATCH_SIZE = 32
 _BUSY_NODES_MAX_RETRIES = 3
 _MAX_NODES_UNDER_TEST = 500
+
+_JOBSET_GROUP = "jobset.x-k8s.io"
+_JOBSET_VERSION = "v1alpha2"
+_SLICE_GROUP = "accelerator.gke.io"
+_SLICE_VERSION = "v1beta1"
 
 _LOG_FETCH_MAX_CONCURRENCY = 32
 _LOG_TEMP_PREFIX = ".chs-log-"
@@ -140,9 +143,8 @@ class KubernetesScheduler(BaseScheduler):
             )
             provider_id = cached_node.get("spec", {}).get("providerID", "")
             if not provider_id.strip():
-                provider_id = self._run_kubectl(
-                    ["get", "node", node, "-o", "jsonpath={.spec.providerID}"]
-                )
+                node_obj = k8s_client.get_node(name=node)
+                provider_id = node_obj.get("spec", {}).get("providerID", "")
             provider_id = provider_id.strip()
             # providerID format: gce://project-id/zone/instance-name
             match = re.match(r"^gce://([^/]+)/([^/]+)/([^/]+)$", provider_id)
@@ -163,13 +165,13 @@ class KubernetesScheduler(BaseScheduler):
             node_objects = self._get_node_objects(nodes)
         except (
             ChsSchedulerException,
-            subprocess.SubprocessError,
+            k8s_client.KubeError,
             OSError,
         ) as e:
             logger.debug(
                 "Could not read node objects to detect hardware; querying "
                 "the GCE API instead. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
             return super().detect_nodes_hardware(nodes)
 
@@ -276,7 +278,6 @@ class KubernetesScheduler(BaseScheduler):
 
     def _lookup_cluster_name(self) -> str | None:
         """Looks up the cluster name from cached node labels or kubeconfig."""
-        # 1. Try cached node labels
         try:
             for node in self._resolved_node_resources or []:
                 labels = node.get("metadata", {}).get("labels", {})
@@ -288,73 +289,45 @@ class KubernetesScheduler(BaseScheduler):
         except Exception:
             pass
 
-        # 2. Try current-context (local execution)
         try:
-            val = self._run_kubectl(["config", "current-context"], timeout=5)
-            if val:
-                if val.startswith("gke_"):
-                    parts = val.split("_")
+            context = (k8s_client.current_context() or "").strip()
+            if context:
+                if context.startswith("gke_"):
+                    parts = context.split("_")
                     if len(parts) >= 4:
                         return parts[-1]
-                return val
+                return context
         except Exception:
             pass
         return None
 
     def _ensure_namespace_exists(self) -> None:
         """Ensures the chs namespace exists before deploying resources."""
-
-        try:
-            self._run_kubectl(["get", "namespace", CHS_NAMESPACE])
-        except subprocess.CalledProcessError:
-            self._run_kubectl(["create", "namespace", CHS_NAMESPACE])
+        k8s_client.create_namespace_if_not_exists(name=CHS_NAMESPACE)
 
     def _delete_namespace(self) -> bool:
         """Deletes the chs namespace during cleanup."""
         try:
-            self._run_kubectl(
-                ["delete", "namespace", CHS_NAMESPACE, "--ignore-not-found"],
-                timeout=NAMESPACE_DELETE_TIMEOUT_SEC,
+            k8s_client.delete_namespace(
+                name=CHS_NAMESPACE,
+                wait_timeout_seconds=NAMESPACE_DELETE_TIMEOUT_SEC,
             )
         except Exception as e:
             logger.warning(
                 "Failed to delete Kubernetes namespace. This may "
                 "leave orphaned resources. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
             return False
         return True
 
-    def _run_kubectl(
-        self,
-        args: list[str],
-        timeout: int | None = KUBECTL_TIMEOUT_SEC,
-        namespaced: bool = False,
-    ) -> str:
-        """Runs a kubectl command and returns filtered output."""
-
-        cmd = ["kubectl"]
-        if namespaced:
-            cmd.extend(["-n", CHS_NAMESPACE])
-        cmd.extend(args)
-
-        result = subprocess.run(
-            cmd,
-            text=True,
-            capture_output=True,
-            check=True,
-            timeout=timeout,
-        )
-        return result.stdout.strip()
-
     def _delete_job_secrets(self) -> None:
         """Deletes SSH secrets associated with CHS jobs statelessly."""
         try:
-            output = self._run_kubectl(
-                ["get", "secrets", "-o", "jsonpath={.items[*].metadata.name}"],
-                namespaced=True,
-            )
-            secret_names = output.strip().split()
+            secrets = k8s_client.list_secrets(namespace=CHS_NAMESPACE)
+            secret_names = [
+                secret.get("metadata", {}).get("name", "") for secret in secrets
+            ]
             secrets_to_delete = [
                 s
                 for s in secret_names
@@ -362,15 +335,8 @@ class KubernetesScheduler(BaseScheduler):
             ]
 
             if secrets_to_delete:
-                self._run_kubectl(
-                    ["delete", "secrets"]
-                    + secrets_to_delete
-                    + [
-                        "--ignore-not-found",
-                        f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-                    ],
-                    namespaced=True,
-                )
+                for name in secrets_to_delete:
+                    k8s_client.delete_secret(name=name, namespace=CHS_NAMESPACE)
                 logger.debug(
                     "Successfully deleted secrets: %s",
                     ", ".join(secrets_to_delete),
@@ -380,7 +346,7 @@ class KubernetesScheduler(BaseScheduler):
         except Exception as e:
             logger.warning(
                 "Failed to delete Kubernetes secrets. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
 
     def _get_node_objects(self, node_names: list[str]) -> list[dict]:
@@ -414,44 +380,29 @@ class KubernetesScheduler(BaseScheduler):
                     slice_id = "default-slice"
 
                 slices[slice_id].append(node_name)
-        except (ChsSchedulerException, subprocess.SubprocessError) as e:
+        except (ChsSchedulerException, k8s_client.KubeError) as e:
             logger.warning(
-                "Failed to execute 'kubectl' for nodes %s. Error: %s",
+                "Failed to fetch the Kubernetes node objects for nodes %s. "
+                "Error: %s",
                 node_names,
-                format_subprocess_error(e),
+                e,
             )
             slices["failed-nodes"].extend(node_names)
 
         return dict(slices)
 
     def _discover_networks(self) -> tuple[list[str], list[str]]:
-        """Discovers all network names using kubectl and groups them by type.
-
-        # TODO: This is GKE-specific (uses networks.networking.gke.io CRD).
-
-        Returns:
-            A tuple of (l3_networks, device_networks).
-            L3 networks have 'default' first.
-        """
-        args = ["get", "networks.networking.gke.io", "-o", "json"]
+        """Discovers all network names and groups them by type."""
         try:
-            output = self._run_kubectl(args)
-            if not output:
-                return [], []
-            data = json.loads(output)
-            items = data.get("items", [])
-            if not isinstance(items, list):
-                logger.debug(
-                    "Unexpected network discovery output format: "
-                    "'items' is not a list"
-                )
-                return [], []
+            gke_networks = k8s_client.list_custom_objects(
+                group="networking.gke.io", version="v1", plural="networks"
+            )
 
             networks = defaultdict(list)
 
-            for item in items:
-                metadata = item.get("metadata", {})
-                spec = item.get("spec", {})
+            for gke_network in gke_networks:
+                metadata = gke_network.get("metadata", {})
+                spec = gke_network.get("spec", {})
                 name = metadata.get("name")
                 net_type = spec.get("type")
 
@@ -480,13 +431,6 @@ class KubernetesScheduler(BaseScheduler):
             )
             return l3_networks, device_networks
 
-        except json.JSONDecodeError as e:
-            logger.warning(
-                "Failed to parse the network discovery JSON "
-                "output from the cluster. Error: %s",
-                e,
-            )
-            return [], []
         except Exception as e:
             logger.warning(
                 "Encountered an unexpected error during Kubernetes "
@@ -497,26 +441,16 @@ class KubernetesScheduler(BaseScheduler):
 
     def _is_node_busy(self, node_name: str) -> bool:
         """Helper method to determine if a specific node is busy."""
-        args = [
-            "get",
-            "pods",
-            "-A",
-            "--field-selector",
-            f"spec.nodeName={node_name},status.phase!=Succeeded,status.phase!=Failed",
-            "-o",
-            "custom-columns=NODE:.spec.nodeName,PHASE:.status.phase,"
-            "CREQ:.spec.containers[*].resources.requests,CLIM:.spec.containers[*].resources.limits,"
-            "IREQ:.spec.initContainers[*].resources.requests,ILIM:.spec.initContainers[*].resources.limits",
-        ]
+        field_selector = (
+            f"spec.nodeName={node_name},"
+            "status.phase!=Succeeded,status.phase!=Failed"
+        )
 
         for attempt in range(_BUSY_NODES_MAX_RETRIES):
             try:
-                pod_output = self._run_kubectl(args)
+                pods = k8s_client.list_pods(field_selector=field_selector)
                 break
-            except (
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-            ) as e:
+            except k8s_client.KubeError as e:
                 if attempt == _BUSY_NODES_MAX_RETRIES - 1:
                     raise ChsSchedulerException(
                         "Failed to communicate with API server for "
@@ -528,13 +462,21 @@ class KubernetesScheduler(BaseScheduler):
                 backoff = (2**attempt) + random.uniform(0, 1)
                 time.sleep(backoff)
 
-        for pod_output_row in pod_output.splitlines()[1:]:
-            pod_columns = pod_output_row.split()
-            if not pod_columns or len(pod_columns) < 2:
-                continue
-            resources_str = " ".join(pod_columns[2:]).lower()
-            if "gpu" in resources_str or "tpu" in resources_str:
-                return True
+        for pod in pods:
+            spec = pod.get("spec") or {}
+            for container in (spec.get("containers") or []) + (
+                spec.get("initContainers") or []
+            ):
+                container_resources = container.get("resources") or {}
+                for section in ("requests", "limits"):
+                    for resource, quantity in (
+                        container_resources.get(section) or {}
+                    ).items():
+                        resource_lower = resource.lower()
+                        if (
+                            "gpu" in resource_lower or "tpu" in resource_lower
+                        ) and quantity not in (0, "0", None, ""):
+                            return True
         return False
 
     def _get_busy_nodes(self, target_nodes: list[str]) -> set[str]:
@@ -585,75 +527,56 @@ class KubernetesScheduler(BaseScheduler):
         return busy_nodes
 
     def _fetch_raw_node_resources(self) -> list[dict]:
-        """Fetches raw node resource dictionaries from kubectl."""
+        """Fetches raw node resource dictionaries from the Kubernetes API."""
         if self._resolved_node_resources is not None:
             return self._resolved_node_resources
 
-        try:
-            args = ["get", "nodes"]
-            if self.nodepools_arg:
-                pools = [
-                    p.strip()
-                    for p in self.nodepools_arg.split(",")
-                    if p.strip()
-                ]
-                if pools:
-                    pools_str = ",".join(pools)
-                    args.extend(
-                        [
-                            "-l",
-                            f"cloud.google.com/gke-nodepool in ({pools_str})",
-                        ]
-                    )
-            else:
-                args.extend(["-l", "cloud.google.com/gke-nodepool!=system"])
-            args.extend(["-o", "json"])
+        label_selector = None
+        if self.nodepools_arg:
+            pools = [
+                p.strip() for p in self.nodepools_arg.split(",") if p.strip()
+            ]
+            if pools:
+                pools_str = ",".join(pools)
+                label_selector = (
+                    f"cloud.google.com/gke-nodepool in ({pools_str})"
+                )
+        else:
+            label_selector = "cloud.google.com/gke-nodepool!=system"
 
-            kubectl_nodes_output = self._run_kubectl(args)
-        except (subprocess.SubprocessError, FileNotFoundError) as e:
+        try:
+            node_resources = k8s_client.list_nodes(
+                label_selector=label_selector
+            )
+        except k8s_client.KubeError as e:
             raise ChsSchedulerException(
                 f"Failed to get nodes to determine availability: {e}"
             ) from e
 
-        try:
-            nodes_manifest = json.loads(kubectl_nodes_output)
-            if not isinstance(nodes_manifest, dict):
-                node_resources: list[Any] = []
-            elif nodes_manifest.get("kind") == "List":
-                node_resources = nodes_manifest.get("items") or []
-            else:
-                node_resources = [nodes_manifest]
+        resolved_resources = [
+            node for node in node_resources if isinstance(node, dict)
+        ]
 
-            resolved_resources = [
-                n for n in node_resources if isinstance(n, dict)
-            ]
+        if self.nodepools_arg:
+            requested_pools = {
+                p.strip() for p in self.nodepools_arg.split(",") if p.strip()
+            }
+            found_pools = set()
+            for node in resolved_resources:
+                labels = (node.get("metadata") or {}).get("labels") or {}
+                pool = labels.get("cloud.google.com/gke-nodepool")
+                if pool:
+                    found_pools.add(pool)
+            missing_pools = requested_pools - found_pools
+            if missing_pools:
+                missing_str = ", ".join(sorted(missing_pools))
+                raise ChsValidationError(
+                    "No nodes were found for the following requested "
+                    f"nodepool(s): {missing_str}"
+                )
 
-            if self.nodepools_arg:
-                requested_pools = {
-                    p.strip()
-                    for p in self.nodepools_arg.split(",")
-                    if p.strip()
-                }
-                found_pools = set()
-                for n in resolved_resources:
-                    labels = (n.get("metadata") or {}).get("labels") or {}
-                    pool = labels.get("cloud.google.com/gke-nodepool")
-                    if pool:
-                        found_pools.add(pool)
-                missing_pools = requested_pools - found_pools
-                if missing_pools:
-                    missing_str = ", ".join(sorted(missing_pools))
-                    raise ChsValidationError(
-                        "No nodes were found for the following requested "
-                        f"nodepool(s): {missing_str}"
-                    )
-
-            self._resolved_node_resources = resolved_resources
-            return self._resolved_node_resources
-        except json.JSONDecodeError as e:
-            raise ChsSchedulerException(
-                f"Failed to parse node JSON during availability check: {e}"
-            ) from e
+        self._resolved_node_resources = resolved_resources
+        return self._resolved_node_resources
 
     def _classify_unhealthy_nodes(
         self,
@@ -832,10 +755,7 @@ class KubernetesScheduler(BaseScheduler):
         return self._tpu_slice_data
 
     def resolve_raw_nodes(self) -> list[str]:
-        """Resolves targeted nodes based on CLI arguments.
-
-        Does not drop busy nodes.
-        """
+        """Resolves targeted nodes without dropping busy nodes."""
         if self._resolved_raw_nodes is not None:
             return self._resolved_raw_nodes
 
@@ -845,32 +765,35 @@ class KubernetesScheduler(BaseScheduler):
                 n.strip() for n in self.nodes_arg.split(",") if n.strip()
             ]
             try:
-                self._run_kubectl(["get", "node"] + raw_nodes)
-            except subprocess.SubprocessError as e:
-                err_msg = format_subprocess_error(e)
+                cluster_nodes = {
+                    node.get("metadata", {}).get("name")
+                    for node in k8s_client.list_nodes()
+                }
+            except k8s_client.KubeError as e:
                 raise ChsSchedulerException(
-                    f"One or more targeted nodes not found in the cluster. "
-                    f"Please verify the nodes exist.\nDetails: {err_msg}"
+                    f"Failed to verify the targeted nodes: {e}"
                 ) from e
+            missing = [node for node in raw_nodes if node not in cluster_nodes]
+            if missing:
+                raise ChsSchedulerException(
+                    "One or more targeted nodes not found in the cluster. "
+                    f"Please verify the nodes exist: {', '.join(missing)}"
+                )
         else:
             try:
                 node_resources = self._fetch_raw_node_resources()
                 raw_nodes = [
-                    res.get("metadata", {}).get("name")
-                    for res in node_resources
-                    if (res.get("metadata") or {}).get("name")
+                    node.get("metadata", {}).get("name")
+                    for node in node_resources
+                    if node.get("metadata", {}).get("name")
                 ]
                 logger.debug("Resolved raw nodes: %s", raw_nodes)
-            except (
-                subprocess.SubprocessError,
-                FileNotFoundError,
-                ChsSchedulerException,
-            ) as e:
+            except (k8s_client.KubeError, ChsSchedulerException) as e:
                 logger.warning(
                     "Failed to discover cluster nodes via the "
-                    "Kubernetes API. Ensure "
-                    "'kubectl' is configured correctly. Error: %s",
-                    format_subprocess_error(e),
+                    "Kubernetes API. Ensure your kubeconfig (or in-cluster "
+                    "configuration) is set up correctly. Error: %s",
+                    e,
                 )
 
         self._resolved_raw_nodes = raw_nodes
@@ -899,7 +822,6 @@ class KubernetesScheduler(BaseScheduler):
             if pool:
                 requested_tpu_slices[pool].add(node)
             elif node in topology.all_tpu_nodes:
-                # TPU node and exists without its nodepool/slice mapping
                 logger.warning(
                     "Excluded TPU node '%s' from testing because "
                     "its parent slice is unhealthy.",
@@ -958,13 +880,7 @@ class KubernetesScheduler(BaseScheduler):
         return self._resolved_nodes
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
-        """Discovers network topology using kubectl to get node labels.
-
-        # TODO: This uses GCE topology labels (gce-topology-block).
-
-        Returns a dictionary mapping block names to dicts of subblocks to lists
-        of nodes.
-        """
+        """Discovers network topology from the labels of the node objects."""
         nodes = self.get_nodes_under_test()
         if not nodes:
             return {}
@@ -988,18 +904,16 @@ class KubernetesScheduler(BaseScheduler):
                 if name:
                     topology[block][subblock].append(name)
 
-            # Convert defaultdict to regular dict
             return {b: dict(s) for b, s in topology.items()}
 
         except (
             ChsSchedulerException,
-            subprocess.SubprocessError,
-            FileNotFoundError,
+            k8s_client.KubeError,
         ) as e:
             logger.warning(
                 "Failed to retrieve node topology information from "
                 "the Kubernetes cluster. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
             return {}
 
@@ -1089,31 +1003,21 @@ class KubernetesScheduler(BaseScheduler):
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     def has_no_failed_jobs(self) -> bool:
-        """Checks if there are any failed CHS jobs.
-
-        Returns:
-            True if all are healthy (active/completed).
-        """
+        """Checks if there are any failed CHS jobs."""
         all_healthy = False
         try:
-            args = ["get", "jobset", "-o", "json", "--ignore-not-found"]
-            output = self._run_kubectl(args, namespaced=True)
-
-            # If stdout is empty, no jobs were found (all completed and deleted)
-            if not output:
-                raise NoActiveJobsException("No jobs found on the cluster.")
-
-            data = json.loads(output)
-
-            # If a single item is returned, it's not wrapped in a List
-            items = (
-                data.get("items", [data])
-                if data.get("kind") == "List"
-                else [data]
+            jobsets = k8s_client.list_custom_objects(
+                group=_JOBSET_GROUP,
+                version=_JOBSET_VERSION,
+                plural="jobsets",
+                namespace=CHS_NAMESPACE,
             )
 
-            for job_data in items:
-                conditions = job_data.get("status", {}).get("conditions", [])
+            if not jobsets:
+                raise NoActiveJobsException("No jobs found on the cluster.")
+
+            for jobset in jobsets:
+                conditions = jobset.get("status", {}).get("conditions", [])
                 failed = False
                 for cond in conditions:
                     if (
@@ -1126,22 +1030,22 @@ class KubernetesScheduler(BaseScheduler):
                     logger.warning(
                         "The diagnostic JobSet '%s' has entered a failed "
                         "state. Initiating resource cleanup.",
-                        job_data.get("metadata", {}).get("name", "Unknown"),
+                        jobset.get("metadata", {}).get("name", "Unknown"),
                     )
                     return False
                 else:
                     all_healthy = True
                     logger.debug(
                         "JobSet %s is healthy.",
-                        job_data.get("metadata", {}).get("name", "Unknown"),
+                        jobset.get("metadata", {}).get("name", "Unknown"),
                     )
 
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        except k8s_client.KubeError as e:
             raise ChsSchedulerException(
                 "Failed to query the status of diagnostic JobSets via the "
-                f"Kubernetes API: {format_subprocess_error(e)}"
+                f"Kubernetes API: {e}"
             ) from e
-        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+        except (AttributeError, TypeError) as e:
             logger.warning(
                 "Failed to parse the status payload returned by "
                 "the JobSet controller. Error: %s",
@@ -1155,23 +1059,16 @@ class KubernetesScheduler(BaseScheduler):
     ) -> None:
         """Batch checks jobs for deadline exceeded and updates statuses."""
         try:
+            failed_set = set(failed_jobset_ids)
             label_selector = (
                 "jobset.sigs.k8s.io/jobset-name in "
                 f"({','.join(failed_jobset_ids)})"
+                if len(failed_jobset_ids) <= 50
+                else None
             )
-            args = [
-                "get",
-                "jobs",
-                "-l",
-                label_selector,
-                "-o",
-                "json",
-            ]
-            jobs_output = self._run_kubectl(args, namespaced=True)
-            if not jobs_output:
-                return
-
-            jobs_data = json.loads(jobs_output).get("items", [])
+            jobs_data = k8s_client.list_jobs(
+                namespace=CHS_NAMESPACE, label_selector=label_selector
+            )
             deadlined_jobsets = set()
 
             for job in jobs_data:
@@ -1180,7 +1077,11 @@ class KubernetesScheduler(BaseScheduler):
                     .get("labels", {})
                     .get("jobset.sigs.k8s.io/jobset-name")
                 )
-                if not jobset_name or jobset_name in deadlined_jobsets:
+                if (
+                    not jobset_name
+                    or jobset_name not in failed_set
+                    or jobset_name in deadlined_jobsets
+                ):
                     continue
 
                 for condition in job.get("status", {}).get("conditions", []):
@@ -1193,8 +1094,7 @@ class KubernetesScheduler(BaseScheduler):
                         statuses[jobset_name] = JobStatus.TIMEOUT.value
                         break
         except (
-            subprocess.SubprocessError,
-            json.JSONDecodeError,
+            k8s_client.KubeError,
             AttributeError,
             TypeError,
         ) as e:
@@ -1222,31 +1122,25 @@ class KubernetesScheduler(BaseScheduler):
         return "PENDING" if is_pending else "RUNNING"
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
-        """Gets the status of the given jobs using kubectl."""
+        """Gets the status of the given jobs from the Kubernetes API."""
         if not job_ids:
             return {}
 
         statuses = {j: JobStatus.UNKNOWN.value for j in job_ids}
 
         try:
-            args = (
-                ["get", "jobset"]
-                + (job_ids if len(job_ids) == 1 else [])
-                + ["-o", "json", "--ignore-not-found"]
-            )
-            output = self._run_kubectl(args, namespaced=True)
-            if not output:
-                return statuses
-            data = json.loads(output)
-            items = (
-                data.get("items", []) if data.get("kind") == "List" else [data]
+            jobsets = k8s_client.list_custom_objects(
+                group=_JOBSET_GROUP,
+                version=_JOBSET_VERSION,
+                plural="jobsets",
+                namespace=CHS_NAMESPACE,
             )
 
             failed_jobset_ids = []
-            for item in items:
-                job_id = item.get("metadata", {}).get("name")
+            for jobset in jobsets:
+                job_id = jobset.get("metadata", {}).get("name")
                 if job_id in statuses:
-                    raw_status = self._evaluate_jobset_status(item)
+                    raw_status = self._evaluate_jobset_status(jobset)
                     if raw_status == "Failed":
                         failed_jobset_ids.append(job_id)
                     statuses[job_id] = JobStatus.from_string(raw_status)
@@ -1254,8 +1148,7 @@ class KubernetesScheduler(BaseScheduler):
             if failed_jobset_ids:
                 self._check_and_update_deadlines(failed_jobset_ids, statuses)
         except (
-            subprocess.SubprocessError,
-            json.JSONDecodeError,
+            k8s_client.KubeError,
             AttributeError,
             TypeError,
         ) as e:
@@ -1272,50 +1165,28 @@ class KubernetesScheduler(BaseScheduler):
         """Checks if the job is a TPU benchmark based on naming convention."""
         return "tpu-" in job_id
 
-    def _get_pod_names(
-        self, job_id: str, head_pod_only: bool = False
-    ) -> list[str]:
-        """Queries Kubernetes for pod names."""
+    def _get_pods(self, job_id: str, head_pod_only: bool = False) -> list[dict]:
+        """Queries Kubernetes for the pods of a JobSet."""
         if head_pod_only:
-            args = [
-                "get",
-                "pods",
-                "-l",
-                f"jobset.sigs.k8s.io/jobset-name={job_id},batch.kubernetes.io/job-completion-index=0",
-                "-o",
-                "jsonpath={.items[0].metadata.name}",
-            ]
+            label_selector = (
+                f"jobset.sigs.k8s.io/jobset-name={job_id},"
+                "batch.kubernetes.io/job-completion-index=0"
+            )
         else:
-            args = [
-                "get",
-                "pods",
-                "-l",
-                f"jobset.sigs.k8s.io/jobset-name={job_id}",
-                "-o",
-                "jsonpath={.items[*].metadata.name}",
-            ]
+            label_selector = f"jobset.sigs.k8s.io/jobset-name={job_id}"
         try:
-            output = self._run_kubectl(args, namespaced=True)
-            return [p for p in output.split() if p]
-        except subprocess.SubprocessError as e:
+            pods = k8s_client.list_pods(
+                namespace=CHS_NAMESPACE, label_selector=label_selector
+            )
+        except k8s_client.KubeError as e:
             logger.debug("Failed to query pods for JobSet %s: %s", job_id, e)
             return []
+        return pods[:1] if head_pod_only else pods
 
-    def _fetch_pod_log(self, pod_name: str, output_path: str) -> None:
-        kubectl_cmd = [
-            "kubectl",
-            "logs",
-            pod_name,
-            "-n",
-            CHS_NAMESPACE,
-        ]
+    def _fetch_pod_log(self, pod: dict, output_path: str) -> None:
+        """Streams the log of one pod into output_path."""
         with open(output_path, "wb") as output_file:
-            subprocess.run(
-                kubectl_cmd,
-                stdout=output_file,
-                check=True,
-                timeout=KUBECTL_TIMEOUT_SEC,
-            )
+            k8s_client.stream_pod_log(pod=pod, out=output_file)
 
     def fetch_job_log(self, job_id: str, log_path: str) -> None:
         """Fetches the log for a completed Kubernetes job."""
@@ -1323,21 +1194,23 @@ class KubernetesScheduler(BaseScheduler):
         temp_paths: list[str] = []
         try:
             is_tpu = self._is_tpu_job(job_id)
-            pod_names = self._get_pod_names(job_id, head_pod_only=not is_tpu)
-            if not pod_names:
+            pods = self._get_pods(job_id, head_pod_only=not is_tpu)
+            if not pods:
                 logger.debug(
                     "No pods found to fetch logs for JobSet %s.", job_id
                 )
                 return
             logger.debug(
-                "Fetching logs from %d pods: %s", len(pod_names), pod_names
+                "Fetching logs from %d pods: %s",
+                len(pods),
+                [pod["metadata"]["name"] for pod in pods],
             )
-            if len(pod_names) == 1:
-                self._fetch_pod_log(pod_names[0], log_path)
+            if len(pods) == 1:
+                self._fetch_pod_log(pods[0], log_path)
                 logger.debug("Logs saved to %s", log_path)
                 return
             log_dir = os.path.dirname(os.path.abspath(log_path))
-            for _ in pod_names:
+            for _ in pods:
                 fd, temp_path = tempfile.mkstemp(
                     prefix=_LOG_TEMP_PREFIX, dir=log_dir
                 )
@@ -1345,8 +1218,8 @@ class KubernetesScheduler(BaseScheduler):
                 os.close(fd)
             executor = _get_log_fetch_executor()
             futures = [
-                executor.submit(self._fetch_pod_log, pod_name, temp_path)
-                for pod_name, temp_path in zip(pod_names, temp_paths)
+                executor.submit(self._fetch_pod_log, pod, temp_path)
+                for pod, temp_path in zip(pods, temp_paths)
             ]
             try:
                 wait(futures)
@@ -1362,21 +1235,9 @@ class KubernetesScheduler(BaseScheduler):
             logger.debug("Logs saved to %s", log_path)
             for future in futures:
                 future.result()
-        except subprocess.CalledProcessError as e:
-            if e.returncode < 0 or e.returncode == 130:
-                logger.debug(
-                    "Log fetching interrupted by user for JobSet %s.", job_id
-                )
-            else:
-                logger.error(
-                    "Failed to retrieve execution logs for JobSet '%s'. "
-                    "Result parsing may be incomplete. Error: %s",
-                    job_id,
-                    format_subprocess_error(e),
-                )
-        except subprocess.TimeoutExpired as e:
+        except k8s_client.KubeError as e:
             logger.error(
-                "Timed out retrieving execution logs for JobSet '%s'. "
+                "Failed to retrieve execution logs for JobSet '%s'. "
                 "Result parsing may be incomplete. Error: %s",
                 job_id,
                 e,
@@ -1417,33 +1278,28 @@ class KubernetesScheduler(BaseScheduler):
     def _cleanup_dynamic_slices(self) -> None:
         """Deletes dynamic TPU slices created by CHS."""
         try:
-            crd_check = self._run_kubectl(
-                [
-                    "get",
-                    "crd",
-                    "slices.accelerator.gke.io",
-                    "--ignore-not-found",
-                ]
+            slices = k8s_client.list_custom_objects(
+                group=_SLICE_GROUP,
+                version=_SLICE_VERSION,
+                plural="slices",
+                label_selector="created-by=chs",
             )
-            if not crd_check.strip():
-                return
-
-            self._run_kubectl(
-                [
-                    "delete",
-                    "slices.accelerator.gke.io",
-                    "-A",
-                    "-l",
-                    "created-by=chs",
-                    "--ignore-not-found",
+            k8s_client.delete_custom_objects(
+                group=_SLICE_GROUP,
+                version=_SLICE_VERSION,
+                plural="slices",
+                object_names=[
+                    tpu_slice["metadata"]["name"] for tpu_slice in slices
                 ],
-                timeout=300,
+                wait_timeout_seconds=300,
             )
-        except Exception as e:
+        except k8s_client.KubeError as e:
+            if e.status == 404:
+                return
             logger.warning(
                 "Failed to delete dynamic TPU slices after execution. "
                 "Manual cleanup may be required. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
 
     def _wait_for_slices_active(
@@ -1461,29 +1317,19 @@ class KubernetesScheduler(BaseScheduler):
 
         while time.time() - start_time < timeout_sec:
             try:
-                output = self._run_kubectl(
-                    [
-                        "get",
-                        "slice",
-                        "-l",
-                        "created-by=chs",
-                        "-o",
-                        "json",
-                        "--ignore-not-found",
-                    ]
+                slices = k8s_client.list_custom_objects(
+                    group=_SLICE_GROUP,
+                    version=_SLICE_VERSION,
+                    plural="slices",
+                    label_selector="created-by=chs",
                 )
-                if not output:
-                    time.sleep(10)
-                    continue
-                slices_json = json.loads(output)
-                items = slices_json.get("items", [])
-                if not items:
+                if not slices:
                     time.sleep(10)
                     continue
 
-                for slice_item in items:
+                for tpu_slice in slices:
                     nodepool = (
-                        slice_item.get("metadata", {})
+                        tpu_slice.get("metadata", {})
                         .get("labels", {})
                         .get("chs-nodepool")
                     )
@@ -1491,8 +1337,8 @@ class KubernetesScheduler(BaseScheduler):
                         continue
 
                     conditions = (
-                        slice_item.get("status", {}).get("conditions", [])
-                        if slice_item.get("status")
+                        tpu_slice.get("status", {}).get("conditions", [])
+                        if tpu_slice.get("status")
                         else []
                     )
                     ready_cond = next(
@@ -1507,12 +1353,8 @@ class KubernetesScheduler(BaseScheduler):
                 if len(slice_terminal_statuses) >= len(expected_nodepools):
                     break
 
-            except (
-                subprocess.SubprocessError,
-                json.JSONDecodeError,
-            ) as e:
+            except k8s_client.KubeError as e:
                 logger.debug("Failed to check status for dynamic slices: %s", e)
-                pass
             time.sleep(10)
 
         success_nodepools = [
@@ -1526,23 +1368,18 @@ class KubernetesScheduler(BaseScheduler):
         return success_nodepools, failed_nodepools
 
     def _get_already_fulfilled_partitions(self) -> set[str]:
-        """Returns partition IDs of all currently existing slices to prevent
-        conflicts.
-        """
+        """Returns partition IDs of all existing slices."""
         fulfilled = set()
         try:
-            output = self._run_kubectl(
-                ["get", "slice", "-A", "-o", "json", "--ignore-not-found"]
+            slices = k8s_client.list_custom_objects(
+                group=_SLICE_GROUP, version=_SLICE_VERSION, plural="slices"
             )
-            if output:
-                slices = json.loads(output).get("items", [])
-                for s in slices:
-                    if s.get("metadata", {}).get("deletionTimestamp"):
-                        continue
-                    partition_ids = s.get("spec", {}).get("partitionIds", [])
-                    for pid in partition_ids:
-                        fulfilled.add(pid)
-        except subprocess.SubprocessError as e:
+            for tpu_slice in slices:
+                if tpu_slice.get("metadata", {}).get("deletionTimestamp"):
+                    continue
+                for pid in tpu_slice.get("spec", {}).get("partitionIds", []):
+                    fulfilled.add(pid)
+        except k8s_client.KubeError as e:
             logger.debug("Could not retrieve existing slices: %s", e)
         return fulfilled
 
@@ -1609,8 +1446,12 @@ class KubernetesScheduler(BaseScheduler):
                 f.write(all_slices_yaml)
 
             try:
-                self._run_kubectl(["apply", "-f", slice_yaml_path])
-            except subprocess.SubprocessError as e:
+                for slice_manifest in yaml.safe_load_all(all_slices_yaml):
+                    if slice_manifest:
+                        k8s_client.apply_custom_object(
+                            plural="slices", body=slice_manifest
+                        )
+            except k8s_client.KubeError as e:
                 raise ChsSchedulerException(
                     f"Failed to apply dynamic slice configuration: {e}"
                 ) from e
@@ -1674,9 +1515,7 @@ class KubernetesScheduler(BaseScheduler):
             kueue_mgr.apply_configs(self.workspace_config_dir)
 
     def cleanup_scheduler_resources(self) -> None:
-        """Cleans up scheduler-specific resources like Kueue
-        configurations statelessly."""
-
+        """Cleans up scheduler-specific resources statelessly."""
         self._cleanup_dynamic_slices()
 
         kueue_mgr = KueueManager(self)
@@ -1693,32 +1532,26 @@ class KubernetesScheduler(BaseScheduler):
             self._delete_job_secrets()
 
     def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given JobSets using kubectl delete."""
+        """Cancels the given JobSets by deleting them via the Kubernetes API."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
             return
 
         try:
-            args = (
-                ["delete", "jobset"]
-                + job_ids
-                + [
-                    "--ignore-not-found",
-                    f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-                ]
+            k8s_client.delete_custom_objects(
+                group=_JOBSET_GROUP,
+                version=_JOBSET_VERSION,
+                plural="jobsets",
+                object_names=job_ids,
+                namespace=CHS_NAMESPACE,
+                wait_timeout_seconds=DELETE_WAIT_TIMEOUT_SEC,
             )
-            self._run_kubectl(args, namespaced=True)
             logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
-        except FileNotFoundError:
-            logger.warning(
-                "The 'kubectl' command-line tool was not found in your "
-                "PATH. Cannot natively cancel active jobs."
-            )
-        except subprocess.SubprocessError as e:
+        except k8s_client.KubeError as e:
             logger.error(
                 "Encountered an error while attempting to "
                 "delete active JobSets. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
 
         self._delete_job_secrets()
@@ -1726,55 +1559,50 @@ class KubernetesScheduler(BaseScheduler):
     def get_active_job_names(self) -> list[str]:
         """Returns a list of active job names (JobSets) on the cluster."""
         try:
-            output = self._run_kubectl(
-                ["get", "jobset", "-o", "name"], namespaced=True
+            jobsets = k8s_client.list_custom_objects(
+                group=_JOBSET_GROUP,
+                version=_JOBSET_VERSION,
+                plural="jobsets",
+                namespace=CHS_NAMESPACE,
             )
-            if not output:
-                return []
-
-            job_names = []
-            for line in output.splitlines():
-                if line:
-                    job_names.append(line.split("/")[-1])
-            return job_names
-        except FileNotFoundError:
-            logger.warning(
-                "The 'kubectl' command-line tool was not found in your "
-                "PATH. Cannot fetch the status of active jobs."
-            )
-            return []
-        except subprocess.TimeoutExpired as e:
-            raise ChsSchedulerException(
-                "Timed out listing active JobSets; cannot verify that no "
-                f"other CHS run is in progress: {e}"
-            ) from e
-        except subprocess.CalledProcessError as e:
+            job_names = [
+                jobset.get("metadata", {}).get("name") for jobset in jobsets
+            ]
+            return [name for name in job_names if name]
+        except k8s_client.KubeError as e:
+            if e.status is None:
+                raise ChsSchedulerException(
+                    "Failed to list active JobSets; cannot verify that no "
+                    f"other CHS run is in progress: {e}"
+                ) from e
             logger.warning(
                 "Failed to retrieve the list of active JobSets "
                 "from the cluster. Error: %s",
-                format_subprocess_error(e),
+                e,
             )
             return []
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all JobSets matching the specified prefix natively."""
         logger.debug("Attempting native cancel for prefix: %s", prefix)
-        # Match the sanitized prefix as a substring in the JobSet name.
         sanitized_match = prefix.replace("_", "-").replace(".", "-").lower()
 
         try:
-            # List all JobSets
-            output = self._run_kubectl(
-                ["get", "jobset", "-o", "name"], namespaced=True
+            jobsets = k8s_client.list_custom_objects(
+                group=_JOBSET_GROUP,
+                version=_JOBSET_VERSION,
+                plural="jobsets",
+                namespace=CHS_NAMESPACE,
             )
-            if not output:
+            if not jobsets:
                 return
 
-            job_ids = []
-            for line in output.splitlines():
-                if sanitized_match in line:
-                    job_name = line.split("/")[-1]
-                    job_ids.append(job_name)
+            job_names = [
+                jobset.get("metadata", {}).get("name") for jobset in jobsets
+            ]
+            job_ids = [
+                name for name in job_names if name and sanitized_match in name
+            ]
 
             if job_ids:
                 logger.debug(
@@ -1785,11 +1613,6 @@ class KubernetesScheduler(BaseScheduler):
                 self.cancel_jobs(job_ids)
             else:
                 logger.debug("No matching JobSets found for %s.", prefix)
-        except FileNotFoundError:
-            logger.warning(
-                "The 'kubectl' command-line tool was not found in your PATH. "
-                "Cannot perform a native job cancellation."
-            )
         except Exception as e:
             logger.warning(
                 "Failed to execute native job cancellation "

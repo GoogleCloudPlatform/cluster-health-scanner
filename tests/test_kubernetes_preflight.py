@@ -14,12 +14,70 @@
 
 """Unit tests for KubernetesPreflightChecker."""
 
-import json
-import subprocess
 import unittest
 from unittest import mock
 from chs.exceptions import ChsPreflightException
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
+from chs.utils.k8s_client import KubeError
+from tests.k8s_fakes import Call, install_fake_client, patch_k8s_client
+
+_JOBSET_CRD = "jobsets.jobset.sigs.k8s.io"
+_KUEUE_CRD = "kueues.kueue.sigs.k8s.io"
+_CRD_QUERY = Call("list_crds", {})
+
+
+def _label_query(app):
+    """Returns the recorded cluster-wide label query for a controller."""
+    return Call(
+        "list_deployments", {"label_selector": f"app.kubernetes.io/name={app}"}
+    )
+
+
+def _fallback_query(app):
+    """Returns the recorded by-name query for a controller."""
+    return Call(
+        "get_deployment",
+        {
+            "name": f"{app}-controller-manager",
+            "namespace": f"{app}-system",
+        },
+    )
+
+
+def _forbidden(what):
+    """Returns the error of a request the RBAC rules deny."""
+    return KubeError(
+        f"Error from server (Forbidden): {what} is forbidden",
+        status=403,
+    )
+
+
+def _deployment(
+    app, image_tag="v0.7.2", *, available=True, labeled=True, containers=None
+):
+    """Returns the controller Deployment of `app` in `<app>-system`."""
+    metadata = {
+        "name": f"{app}-controller-manager",
+        "namespace": f"{app}-system",
+    }
+    if labeled:
+        metadata["labels"] = {"app.kubernetes.io/name": app}
+    if containers is None:
+        containers = [{"image": f"registry.k8s.io/{app}/{app}:{image_tag}"}]
+    return {
+        "kind": "Deployment",
+        "metadata": metadata,
+        "spec": {"template": {"spec": {"containers": containers}}},
+        "status": {
+            "availableReplicas": 1 if available else 0,
+            "conditions": [
+                {
+                    "type": "Available",
+                    "status": "True" if available else "False",
+                }
+            ],
+        },
+    }
 
 
 class TestKubernetesPreflightChecker(unittest.TestCase):
@@ -27,388 +85,228 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.kube = install_fake_client(self)
         self.mock_scheduler = mock.Mock()
         self.mock_app_data = mock.Mock()
         self.mock_scheduler._app_data = self.mock_app_data
         self.checker = KubernetesPreflightChecker(self.mock_scheduler)
 
-    def _healthy_jobset_deployment_json(self):
-        return json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {
-                            "name": "jobset-controller-manager",
-                            "namespace": "jobset-system",
-                            "labels": {
-                                "app.kubernetes.io/name": "jobset",
-                                "app.kubernetes.io/version": "v0.7.2",
-                            },
-                        },
-                        "spec": {
-                            "template": {
-                                "spec": {
-                                    "containers": [
-                                        {
-                                            "image": (
-                                                "registry.k8s.io/jobset/jobset:"
-                                                "v0.7.2"
-                                            )
-                                        }
-                                    ]
-                                }
-                            }
-                        },
-                        "status": {
-                            "availableReplicas": 1,
-                            "conditions": [
-                                {"type": "Available", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
+    def _add_crds(self, *crd_names):
+        for crd_name in crd_names:
+            self.kube.add_crd(crd_name)
 
-    def _healthy_kueue_deployment_json(self):
-        return json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {
-                            "name": "kueue-controller-manager",
-                            "namespace": "kueue-system",
-                            "labels": {"app.kubernetes.io/name": "kueue"},
-                        },
-                        "spec": {
-                            "template": {
-                                "spec": {
-                                    "containers": [
-                                        {
-                                            "image": (
-                                                "registry.k8s.io/kueue/kueue:"
-                                                "v0.14.5"
-                                            )
-                                        }
-                                    ]
-                                }
-                            }
-                        },
-                        "status": {
-                            "availableReplicas": 1,
-                            "conditions": [
-                                {"type": "Available", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
+    def _add_deployment(self, deployment):
+        self.kube.add_object("apps", "deployments", deployment)
 
-    def _unhealthy_jobset_deployment_json(self):
-        return json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {
-                            "name": "jobset-controller-manager",
-                            "namespace": "jobset-system",
-                            "labels": {
-                                "app.kubernetes.io/name": "jobset",
-                                "app.kubernetes.io/version": "v0.7.2",
-                            },
-                        },
-                        "spec": {
-                            "template": {
-                                "spec": {
-                                    "containers": [
-                                        {
-                                            "image": (
-                                                "registry.k8s.io/jobset/jobset:"
-                                                "v0.7.2"
-                                            )
-                                        }
-                                    ]
-                                }
-                            }
-                        },
-                        "status": {
-                            "availableReplicas": 0,
-                            "conditions": [
-                                {"type": "Available", "status": "False"}
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
-
-    def _kueue_deployment_json(self, image_tag="v0.14.5", available=True):
-        return json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {
-                            "name": "kueue-controller-manager",
-                            "namespace": "kueue-system",
-                            "labels": {"app.kubernetes.io/name": "kueue"},
-                        },
-                        "spec": {
-                            "template": {
-                                "spec": {
-                                    "containers": [
-                                        {
-                                            "image": (
-                                                "registry.k8s.io/kueue/kueue:"
-                                                f"{image_tag}"
-                                            )
-                                        }
-                                    ]
-                                }
-                            }
-                        },
-                        "status": {
-                            "availableReplicas": 1 if available else 0,
-                            "conditions": [
-                                {
-                                    "type": "Available",
-                                    "status": "True" if available else "False",
-                                }
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
+    def _add_healthy_jobset(self):
+        self._add_deployment(_deployment("jobset", "v0.7.2"))
 
     def test_check_crds_installed_version_valid(self):
         """Test that preflight check passes if JobSet/Kueue are valid."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_healthy_jobset()
+        self._add_deployment(_deployment("kueue", "v0.14.5"))
+        original_tests = [{"name": "test1"}, {"name": "nccl-cluster"}]
+        filtered_tests, kueue_supported = self.checker.check(original_tests)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
         )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        kueue_dep = self._kueue_deployment_json("v0.14.5")
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep, kueue_dep]
-            original_tests = [{"name": "test1"}, {"name": "nccl-cluster"}]
-            filtered_tests, kueue_supported = self.checker.check(original_tests)
-            self.assertEqual(mock_run.call_count, 3)
-            self.assertEqual(filtered_tests, original_tests)
-            self.assertTrue(kueue_supported)
+        self.assertEqual(filtered_tests, original_tests)
+        self.assertTrue(kueue_supported)
 
     def test_check_crds_installed_version_invalid(self):
         """Test that invalid Kueue version raises exception."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_healthy_jobset()
+        self._add_deployment(_deployment("kueue", "v0.13.0"))
+        tests = [
+            {"name": "nccl-cluster"},
+            {"name": "tpu-info"},
+            {"name": "nvidia-smi"},
+        ]
+        with self.assertRaisesRegex(
+            ChsPreflightException, "Kueue is missing or incompatible"
+        ):
+            self.checker.check(tests)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
         )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        kueue_dep = self._kueue_deployment_json("v0.13.0")
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep, kueue_dep]
-            tests = [
-                {"name": "nccl-cluster"},
-                {"name": "tpu-info"},
-                {"name": "nvidia-smi"},
-            ]
-            with self.assertRaisesRegex(
-                ChsPreflightException, "Kueue is missing or incompatible"
-            ):
-                self.checker.check(tests)
 
     def test_check_kueue_deployment_unhealthy_raises_exception(self):
         """Test that unhealthy Kueue deployment raises exception."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_healthy_jobset()
+        self._add_deployment(_deployment("kueue", "v0.14.5", available=False))
+        tests = [
+            {"name": "nccl-cluster"},
+            {"name": "tpu-info"},
+            {"name": "nvidia-smi"},
+        ]
+        with self.assertRaisesRegex(
+            ChsPreflightException, "Kueue is missing or incompatible"
+        ):
+            self.checker.check(tests)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
         )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        kueue_dep = self._kueue_deployment_json("v0.14.5", available=False)
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep, kueue_dep]
-            tests = [
-                {"name": "nccl-cluster"},
-                {"name": "tpu-info"},
-                {"name": "nvidia-smi"},
-            ]
-            with self.assertRaisesRegex(
-                ChsPreflightException, "Kueue is missing or incompatible"
-            ):
-                self.checker.check(tests)
 
     def test_check_crds_missing_raises_exception(self):
         """Test that missing JobSet causes it to fail fast."""
-        with mock.patch.object(self.checker, "_run_kubectl", return_value=""):
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "JobSet is missing or incompatible",
-            ):
-                self.checker.check()
+        with self.assertRaisesRegex(
+            ChsPreflightException,
+            "JobSet is missing or incompatible",
+        ):
+            self.checker.check()
+        self.assertEqual(self.kube.calls, [_CRD_QUERY])
 
     def test_check_jobset_deployment_unhealthy_raises_exception(self):
         """Test that unhealthy deployment (0 replicas) raises exception."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
-        )
-        dep_output = self._unhealthy_jobset_deployment_json()
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, dep_output]
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "JobSet CRD is installed, but the JobSet controller "
-                "deployment is NOT in an Available state",
-            ):
-                self.checker.check()
+        self._add_crds(_JOBSET_CRD)
+        self._add_deployment(_deployment("jobset", "v0.7.2", available=False))
+        with self.assertRaisesRegex(
+            ChsPreflightException,
+            "JobSet CRD is installed, but the JobSet controller "
+            "deployment is NOT in an Available state",
+        ):
+            self.checker.check()
+        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
     def test_check_jobset_deployment_rbac_restricted_raises_exception(self):
         """Test that RBAC query raises exception when deployment unverified."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD)
+        self._add_healthy_jobset()
+        self.kube.fail_next("list_deployments", _forbidden("deployments.apps"))
+        self.kube.fail_next(
+            "get_deployment",
+            _forbidden('deployments.apps "jobset-controller-manager"'),
         )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [
-                crd_output,
-                subprocess.CalledProcessError(1, "kubectl get deployment -A"),
-                subprocess.CalledProcessError(
-                    1, "kubectl get deployment -n jobset-system"
-                ),
-            ]
-            tests = [{"name": "nvidia-smi"}]
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "no JobSet controller deployment could be found",
-            ):
-                self.checker.check(tests)
+        tests = [{"name": "nvidia-smi"}]
+        with self.assertRaisesRegex(
+            ChsPreflightException,
+            "no JobSet controller deployment could be found",
+        ):
+            self.checker.check(tests)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _fallback_query("jobset")],
+        )
 
     def test_check_jobset_deployment_null_available_replicas(self):
         """Test handling when status.availableReplicas is null in JSON."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
-        )
-        null_replicas_dep = json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "status": {
-                            "availableReplicas": None,
-                            "conditions": [
-                                {"type": "Available", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, null_replicas_dep]
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "JobSet CRD is installed, but the JobSet controller "
-                "deployment is NOT in an Available state",
-            ):
-                self.checker.check()
+        self._add_crds(_JOBSET_CRD)
+        null_replicas_dep = _deployment("jobset", "v0.7.2")
+        null_replicas_dep["status"]["availableReplicas"] = None
+        self._add_deployment(null_replicas_dep)
+        with self.assertRaisesRegex(
+            ChsPreflightException,
+            "JobSet CRD is installed, but the JobSet controller "
+            "deployment is NOT in an Available state",
+        ):
+            self.checker.check()
+        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
     def test_check_with_none_tests_and_unsupported_kueue_raises_exception(self):
         """Test checking None tests with unsupported Kueue raises exception."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
-        )
-        dep_output = self._healthy_jobset_deployment_json()
-        with mock.patch.object(
-            self.checker, "_run_kubectl", side_effect=[crd_output, dep_output]
+        self._add_crds(_JOBSET_CRD)
+        self._add_healthy_jobset()
+        with self.assertRaisesRegex(
+            ChsPreflightException, "Kueue is missing or incompatible"
         ):
-            with self.assertRaisesRegex(
-                ChsPreflightException, "Kueue is missing or incompatible"
-            ):
-                self.checker.check(None)
+            self.checker.check(None)
+        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
     def test_check_kueue_missing_raises_exception(self):
         """Test that missing Kueue raises exception."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
-        )
-        dep_output = self._healthy_jobset_deployment_json()
-        with mock.patch.object(
-            self.checker, "_run_kubectl", side_effect=[crd_output, dep_output]
+        self._add_crds(_JOBSET_CRD)
+        self._add_healthy_jobset()
+        tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
+        with self.assertRaisesRegex(
+            ChsPreflightException, "Kueue is missing or incompatible"
         ):
-            tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            with self.assertRaisesRegex(
-                ChsPreflightException, "Kueue is missing or incompatible"
-            ):
-                self.checker.check(tests)
+            self.checker.check(tests)
+        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
     def test_check_crds_query_failure_raises_exception(self):
         """Test that Error when getting CRDs raises ChsPreflightException."""
-        with mock.patch.object(
-            self.checker,
-            "_run_kubectl",
-            side_effect=subprocess.CalledProcessError(1, "kubectl get crd"),
-        ):
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "Failed to query cluster CRDs via kubectl:",
-            ):
+        err = _forbidden("customresourcedefinitions.apiextensions.k8s.io")
+        self.kube.fail_next("list_crds", err)
+        with self.assertRaises(ChsPreflightException) as ctx:
+            self.checker.check()
+        self.assertEqual(
+            str(ctx.exception),
+            f"Failed to query cluster CRDs from the Kubernetes API: {err}",
+        )
+        self.assertIs(ctx.exception.__cause__, err)
+        self.assertEqual(self.kube.calls, [_CRD_QUERY])
+
+    def test_check_kube_config_error_raises_exception(self):
+        """Test that unusable Kubernetes configuration is reported as such."""
+        err = KubeError(
+            "Kubernetes configuration could not be loaded: No configuration"
+        )
+        with patch_k8s_client(error=err):
+            with self.assertRaises(ChsPreflightException) as ctx:
                 self.checker.check()
+        self.assertEqual(
+            str(ctx.exception),
+            f"Failed to query cluster CRDs from the Kubernetes API: {err}",
+        )
+        self.assertIs(ctx.exception.__cause__, err)
+
+    def test_get_installed_crds_returns_lowercase_kubectl_names(self):
+        """Test CRD names are returned in lowercase."""
+        self._add_crds(
+            "jobsets.jobset.x-k8s.io", "ClusterQueues.Kueue.X-K8s.io"
+        )
+        self.assertEqual(
+            self.checker._get_installed_crds(),
+            [
+                "jobsets.jobset.x-k8s.io",
+                "clusterqueues.kueue.x-k8s.io",
+            ],
+        )
+        self.assertEqual(self.kube.calls, [_CRD_QUERY])
 
     def test_check_version_unparsed_tag_passes(self):
         """Test unparsed tag (:latest) passes."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_healthy_jobset()
+        self._add_deployment(_deployment("kueue", "latest"))
+        tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
+        result_tests, supported = self.checker.check(tests)
+        self.assertEqual(result_tests, tests)
+        self.assertTrue(supported)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
         )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        kueue_dep = self._kueue_deployment_json("latest")
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [
-                crd_output,
-                jobset_dep,
-                kueue_dep,
-            ]
-            tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            result_tests, supported = self.checker.check(tests)
-            self.assertEqual(result_tests, tests)
-            self.assertTrue(supported)
 
     def test_check_without_kueue_raises_exception(self):
         """Test that missing Kueue raises exception even for non-Kueue tests."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
-        )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        with mock.patch.object(
-            self.checker, "_run_kubectl", side_effect=[crd_output, jobset_dep]
+        self._add_crds(_JOBSET_CRD)
+        self._add_healthy_jobset()
+        tests = [{"name": "nvidia-smi"}, {"name": "dcgm"}]
+        with self.assertRaisesRegex(
+            ChsPreflightException, "Kueue is missing or incompatible"
         ):
-            tests = [{"name": "nvidia-smi"}, {"name": "dcgm"}]
-            with self.assertRaisesRegex(
-                ChsPreflightException, "Kueue is missing or incompatible"
-            ):
-                self.checker.check(tests)
+            self.checker.check(tests)
+        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
     def test_check_with_none_tests_returns_none(self):
         """Test that checking without tests returns None."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_healthy_jobset()
+        self._add_deployment(_deployment("kueue", "v0.14.5"))
+        filtered, kueue_supported = self.checker.check(None)
+        self.assertIsNone(filtered)
+        self.assertTrue(kueue_supported)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
         )
-        jobset_dep = self._healthy_jobset_deployment_json()
-        kueue_dep = self._kueue_deployment_json("v0.14.5")
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep, kueue_dep]
-            filtered, kueue_supported = self.checker.check(None)
-            self.assertIsNone(filtered)
-            self.assertTrue(kueue_supported)
 
     def test_parse_version_string_ip_registry(self):
         """Test parsing Kueue version from registry URL with IP and port."""
@@ -482,11 +380,8 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
 
     def test_check_version_with_multicontainer_sidecar(self):
         """Test container selection skips kube-rbac-proxy at container 0."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/kueues.kueue.sigs.k8s.io"
-        )
-        jobset_dep = self._healthy_jobset_deployment_json()
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_healthy_jobset()
         containers = [
             {
                 "name": "kube-rbac-proxy",
@@ -497,167 +392,61 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                 "image": "registry.k8s.io/kueue/kueue:v0.14.5",
             },
         ]
-        kueue_dep_sidecar = json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {
-                            "name": "kueue-controller-manager",
-                            "namespace": "kueue-system",
-                            "labels": {"app.kubernetes.io/name": "kueue"},
-                        },
-                        "spec": {
-                            "template": {"spec": {"containers": containers}}
-                        },
-                        "status": {
-                            "availableReplicas": 1,
-                            "conditions": [
-                                {"type": "Available", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            }
+        self._add_deployment(_deployment("kueue", containers=containers))
+        tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
+        filtered, kueue_supported = self.checker.check(tests)
+        self.assertEqual(filtered, tests)
+        self.assertTrue(kueue_supported)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
         )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep, kueue_dep_sidecar]
-            tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, tests)
-            self.assertTrue(kueue_supported)
 
     def test_discover_deployments_fallback_success(self):
         """Test that missing label triggers fallback to namespace query."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io\n"
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "kueues.kueue.sigs.k8s.io"
-        )
-        empty_label_query = json.dumps({"items": []})
-        single_jobset_dep = json.dumps(
-            {
-                "kind": "Deployment",
-                "metadata": {
-                    "name": "jobset-controller-manager",
-                    "namespace": "jobset-system",
-                },
-                "spec": {
-                    "template": {
-                        "spec": {
-                            "containers": [
-                                {
-                                    "image": "registry.k8s.io/jobset/jobset:v0.7.2"  # noqa: E501
-                                }
-                            ]
-                        }
-                    }
-                },
-                "status": {
-                    "availableReplicas": 1,
-                    "conditions": [{"type": "Available", "status": "True"}],
-                },
-            }
-        )
-        single_kueue_dep = json.dumps(
-            {
-                "kind": "Deployment",
-                "metadata": {
-                    "name": "kueue-controller-manager",
-                    "namespace": "kueue-system",
-                },
-                "spec": {
-                    "template": {
-                        "spec": {
-                            "containers": [
-                                {"image": "registry.k8s.io/kueue/kueue:v0.14.5"}
-                            ]
-                        }
-                    }
-                },
-                "status": {
-                    "availableReplicas": 1,
-                    "conditions": [{"type": "Available", "status": "True"}],
-                },
-            }
-        )
+        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_deployment(_deployment("jobset", "v0.7.2", labeled=False))
+        self._add_deployment(_deployment("kueue", "v0.14.5", labeled=False))
 
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [
-                crd_output,
-                empty_label_query,
-                single_jobset_dep,
-                empty_label_query,
-                single_kueue_dep,
-            ]
-            tests = [{"name": "nccl-cluster"}]
-            filtered, kueue_supported = self.checker.check(tests)
-            self.assertEqual(filtered, tests)
-            self.assertTrue(kueue_supported)
-            self.assertEqual(mock_run.call_count, 5)
+        tests = [{"name": "nccl-cluster"}]
+        filtered, kueue_supported = self.checker.check(tests)
+        self.assertEqual(filtered, tests)
+        self.assertTrue(kueue_supported)
+        self.assertEqual(
+            self.kube.calls,
+            [
+                _CRD_QUERY,
+                _label_query("jobset"),
+                _fallback_query("jobset"),
+                _label_query("kueue"),
+                _fallback_query("kueue"),
+            ],
+        )
 
     def test_discover_deployments_fallback_fails(self):
         """Test that if both label and fallback name are different, it fails."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
+        self._add_crds(_JOBSET_CRD)
+        tests = [{"name": "nccl-cluster"}]
+        with self.assertRaisesRegex(
+            ChsPreflightException,
+            "no JobSet controller deployment could be found",
+        ):
+            self.checker.check(tests)
+        self.assertEqual(
+            self.kube.calls,
+            [_CRD_QUERY, _label_query("jobset"), _fallback_query("jobset")],
         )
-        empty_label_query = json.dumps({"items": []})
-
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [
-                crd_output,
-                empty_label_query,
-                subprocess.CalledProcessError(1, "kubectl"),
-            ]
-            tests = [{"name": "nccl-cluster"}]
-            with self.assertRaisesRegex(
-                ChsPreflightException,
-                "no JobSet controller deployment could be found",
-            ):
-                self.checker.check(tests)
 
     def test_jobset_version_incompatible_raises_exception(self):
         """Test that incompatible JobSet version raises exception."""
-        crd_output = (
-            "customresourcedefinition.apiextensions.k8s.io/"
-            "jobsets.jobset.sigs.k8s.io"
-        )
-        jobset_dep = json.dumps(
-            {
-                "items": [
-                    {
-                        "kind": "Deployment",
-                        "metadata": {"name": "jobset-controller-manager"},
-                        "spec": {
-                            "template": {
-                                "spec": {
-                                    "containers": [
-                                        {
-                                            "image": "registry.k8s.io/jobset/jobset:v0.1.0"  # noqa: E501
-                                        }
-                                    ]
-                                }
-                            }
-                        },
-                        "status": {
-                            "availableReplicas": 1,
-                            "conditions": [
-                                {"type": "Available", "status": "True"}
-                            ],
-                        },
-                    }
-                ]
-            }
-        )
-        with mock.patch.object(self.checker, "_run_kubectl") as mock_run:
-            mock_run.side_effect = [crd_output, jobset_dep]
-            tests = [{"name": "nccl-cluster"}]
-            with self.assertRaisesRegex(
-                ChsPreflightException, "JobSet is missing or incompatible"
-            ):
-                self.checker.check(tests)
+        self._add_crds(_JOBSET_CRD)
+        self._add_deployment(_deployment("jobset", "v0.1.0"))
+        tests = [{"name": "nccl-cluster"}]
+        with self.assertRaisesRegex(
+            ChsPreflightException, "JobSet is missing or incompatible"
+        ):
+            self.checker.check(tests)
+        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
 
 if __name__ == "__main__":

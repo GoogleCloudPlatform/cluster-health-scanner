@@ -15,23 +15,71 @@
 """Unit tests for CHS Schedulers."""
 
 import contextlib
+import json
 import os
-import subprocess
 import tempfile
 import unittest
-import json
 import yaml
 from unittest import mock
+from chs.constants import (
+    CHS_NAMESPACE,
+    DELETE_WAIT_TIMEOUT_SEC,
+    NAMESPACE_DELETE_TIMEOUT_SEC,
+    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+)
 from chs.schedulers.kubernetes import (
     KubernetesScheduler,
     TpuSliceData,
-    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
 from chs.schedulers.slurm import SlurmScheduler
-from chs.schedulers import detect_scheduler
+from chs.schedulers import _get_kubectl_context, detect_scheduler
 from chs.exceptions import ChsSchedulerException
+from chs.utils import k8s_client
 import click
 from chs import exceptions as ex
+from tests.k8s_fakes import (
+    Call,
+    install_fake_client,
+)
+
+_LIST_CHS_SLICES = Call(
+    "list_custom_objects",
+    {
+        "group": "accelerator.gke.io",
+        "version": "v1beta1",
+        "plural": "slices",
+        "label_selector": "created-by=chs",
+    },
+)
+
+_DELETE_CHS_NAMESPACE = Call(
+    "delete_namespace",
+    {
+        "name": CHS_NAMESPACE,
+        "wait_timeout_seconds": NAMESPACE_DELETE_TIMEOUT_SEC,
+    },
+)
+
+
+def _chs_slice(pool_name: str, reason: str) -> dict:
+    """Returns a GKE Slice object created by CHS with the given Ready reason."""
+    return {
+        "metadata": {
+            "name": f"chs-slice-{pool_name}",
+            "labels": {"created-by": "chs", "chs-nodepool": pool_name},
+        },
+        "status": {
+            "conditions": [{"type": "Ready", "reason": reason}],
+        },
+    }
+
+
+def _provider_node(name: str, provider_id: str) -> dict:
+    """Returns a Node object with the given spec.providerID."""
+    return {
+        "metadata": {"name": name},
+        "spec": {"providerID": provider_id},
+    }
 
 
 @mock.patch("chs.schedulers.slurm.logger")
@@ -229,6 +277,7 @@ class TestKubernetesScheduler(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.kube = install_fake_client(self)
         self.tmp_dir_obj = tempfile.TemporaryDirectory()
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
@@ -269,16 +318,16 @@ class TestKubernetesScheduler(unittest.TestCase):
         return_value=set(),
     )
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_get_nodes_under_test(
         self,
-        mock_run_kubectl,
         mock_tpu_slices,
         mock_busy,
         mock_not_ready,
         mock_logger,
     ):
         """Test get_nodes_under_test returns parsed nodes."""
+        for name in ("node1", "node2"):
+            self.kube.add_object("", "nodes", {"metadata": {"name": name}})
         mock_tpu_slices.return_value = TpuSliceData(
             pools={}, node_to_pool={}, pool_to_topology={}
         )
@@ -289,41 +338,155 @@ class TestKubernetesScheduler(unittest.TestCase):
             scheduler.get_nodes_under_test(), ["node1", "node2"]
         )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_is_node_busy_true(self, mock_run_kubectl, mock_logger):
+    def test_is_node_busy_true(self, mock_logger):
         """Test _is_node_busy returns True for nodes with TPU/GPU requests."""
         scheduler = KubernetesScheduler()
-        # Header + 1 row with TPU request
-        mock_run_kubectl.return_value = (
-            "NODE PHASE CREQ CLIM IREQ ILIM\n"
-            "node1 Running map[google.com/tpu:4] <none> <none> <none>\n"
+        self.kube.add_object(
+            "",
+            "pods",
+            {
+                "metadata": {"name": "tpu-pod"},
+                "spec": {
+                    "nodeName": "node1",
+                    "containers": [
+                        {
+                            "name": "worker",
+                            "resources": {"requests": {"google.com/tpu": "4"}},
+                        }
+                    ],
+                },
+                "status": {"phase": "Running"},
+            },
         )
         self.assertTrue(scheduler._is_node_busy("node1"))
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_pods",
+                    {
+                        "field_selector": (
+                            "spec.nodeName=node1,"
+                            "status.phase!=Succeeded,status.phase!=Failed"
+                        ),
+                    },
+                )
+            ],
+        )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_is_node_busy_false(self, mock_run_kubectl, mock_logger):
+    def test_is_node_busy_false(self, mock_logger):
         """Test _is_node_busy returns False if no accelerator pods exist."""
         scheduler = KubernetesScheduler()
-        # Header + 1 row with CPU request
-        mock_run_kubectl.return_value = (
-            "NODE PHASE CREQ CLIM IREQ ILIM\n"
-            "node1 Running map[cpu:4] <none> <none> <none>\n"
+        self.kube.add_object(
+            "",
+            "pods",
+            {
+                "metadata": {"name": "cpu-pod"},
+                "spec": {
+                    "nodeName": "node1",
+                    "containers": [
+                        {
+                            "name": "worker",
+                            "resources": {"requests": {"cpu": "4"}},
+                        }
+                    ],
+                },
+                "status": {"phase": "Running"},
+            },
         )
         self.assertFalse(scheduler._is_node_busy("node1"))
 
-    @mock.patch("time.sleep", return_value=None)
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_is_node_busy_error_retries(
-        self, mock_run_kubectl, mock_sleep, mock_logger
-    ):
-        """Test _is_node_busy raises exception after kubectl fails."""
+    def test_is_node_busy_zero_and_limits(self, mock_logger):
+        """Test _is_node_busy ignores 0/"0" accelerator counts and checks
+        both requests and limits."""
         scheduler = KubernetesScheduler()
-        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
-            1, "kubectl"
+        self.kube.add_object(
+            "",
+            "pods",
+            {
+                "metadata": {"name": "zero-accel-pod"},
+                "spec": {
+                    "nodeName": "node1",
+                    "containers": [
+                        {
+                            "name": "worker",
+                            "resources": {
+                                "requests": {
+                                    "nvidia.com/gpu": "0",
+                                    "google.com/tpu": 0,
+                                    "cpu": "4",
+                                },
+                                "limits": {
+                                    "nvidia.com/gpu": "0",
+                                    "google.com/tpu": 0,
+                                    "memory": "16Gi",
+                                },
+                            },
+                        }
+                    ],
+                },
+                "status": {"phase": "Running"},
+            },
+        )
+        self.assertFalse(scheduler._is_node_busy("node1"))
+
+        cases = [
+            (
+                "gpu in requests",
+                "containers",
+                {"requests": {"nvidia.com/gpu": "1"}},
+            ),
+            (
+                "gpu in limits",
+                "containers",
+                {"limits": {"nvidia.com/gpu": "1"}},
+            ),
+            (
+                "tpu in requests",
+                "containers",
+                {"requests": {"google.com/tpu": "1"}},
+            ),
+            (
+                "tpu in limits",
+                "containers",
+                {"limits": {"google.com/tpu": "1"}},
+            ),
+            (
+                "tpu in initContainers",
+                "initContainers",
+                {"requests": {"google.com/tpu": "1"}},
+            ),
+        ]
+        for label, field_name, resources in cases:
+            with self.subTest(label):
+                self.kube.objects.clear()
+                self.kube.add_object(
+                    "",
+                    "pods",
+                    {
+                        "metadata": {"name": "accel-pod"},
+                        "spec": {
+                            "nodeName": "node1",
+                            field_name: [
+                                {"name": "worker", "resources": resources}
+                            ],
+                        },
+                        "status": {"phase": "Running"},
+                    },
+                )
+                self.assertTrue(scheduler._is_node_busy("node1"))
+
+    @mock.patch("time.sleep", return_value=None)
+    def test_is_node_busy_error_retries(self, mock_sleep, mock_logger):
+        """Test _is_node_busy raises exception after API retries fail."""
+        scheduler = KubernetesScheduler()
+        self.kube.fail_always(
+            "list_pods", k8s_client.KubeError("boom", status=500)
         )
         with self.assertRaises(ChsSchedulerException):
             scheduler._is_node_busy("node1")
-        self.assertEqual(mock_run_kubectl.call_count, 3)
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 3)
+        self.assertEqual(mock_sleep.call_count, 2)
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._is_node_busy")
     def test_get_busy_nodes(self, mock_is_node_busy, mock_logger):
@@ -336,51 +499,43 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(busy_nodes, {"node2"})
         self.assertEqual(mock_is_node_busy.call_count, 3)
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_not_ready_nodes(self, mock_run_kubectl, mock_logger):
+    def test_get_not_ready_nodes(self, mock_logger):
         """Test _get_not_ready_nodes identifies NotReady and Cordoned nodes."""
         scheduler = KubernetesScheduler()
 
-        mock_nodes_json = {
-            "kind": "List",
-            "items": [
-                {
-                    "metadata": {"name": "ready-node"},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
+        for node in [
+            {
+                "metadata": {"name": "ready-node"},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {"name": "not-ready-node"},
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "False"}]
                 },
-                {
-                    "metadata": {"name": "not-ready-node"},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "False"}]
-                    },
+            },
+            {
+                "metadata": {"name": "unknown-node"},
+                "status": {
+                    "conditions": [{"type": "Ready", "status": "Unknown"}]
                 },
-                {
-                    "metadata": {"name": "unknown-node"},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "Unknown"}]
-                    },
-                },
-                {
-                    "metadata": {"name": "cordoned-node"},
-                    "spec": {"unschedulable": True},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
-                },
-                {
-                    "metadata": {"name": "empty-conditions-node"},
-                    "status": {"conditions": []},
-                },
-                {
-                    "metadata": {"name": "null-status-node"},
-                    "status": None,
-                    "spec": None,
-                },
-            ],
-        }
-        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+            },
+            {
+                "metadata": {"name": "cordoned-node"},
+                "spec": {"unschedulable": True},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {"name": "empty-conditions-node"},
+                "status": {"conditions": []},
+            },
+            {
+                "metadata": {"name": "null-status-node"},
+                "status": None,
+                "spec": None,
+            },
+        ]:
+            self.kube.add_object("", "nodes", node)
 
         not_ready = scheduler._get_not_ready_nodes()
 
@@ -395,90 +550,78 @@ class TestKubernetesScheduler(unittest.TestCase):
             },
         )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_not_ready_nodes_with_nodepools(
-        self, mock_run_kubectl, mock_logger
-    ):
-        """Test _get_not_ready_nodes sends nodepools filter to kubectl."""
+    def test_get_not_ready_nodes_with_nodepools(self, mock_logger):
+        """Test _get_not_ready_nodes sends nodepools filter to API."""
         scheduler = KubernetesScheduler(nodepools="pool1,pool2")
-        mock_nodes_json = {
-            "kind": "List",
-            "items": [
+        for name, pool in (("node1", "pool1"), ("node2", "pool2")):
+            self.kube.add_object(
+                "",
+                "nodes",
                 {
                     "metadata": {
-                        "name": "node1",
-                        "labels": {"cloud.google.com/gke-nodepool": "pool1"},
+                        "name": name,
+                        "labels": {"cloud.google.com/gke-nodepool": pool},
                     }
                 },
-                {
-                    "metadata": {
-                        "name": "node2",
-                        "labels": {"cloud.google.com/gke-nodepool": "pool2"},
-                    }
-                },
-            ],
-        }
-        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+            )
 
         scheduler._get_not_ready_nodes()
 
-        mock_run_kubectl.assert_called_once_with(
+        self.assertEqual(
+            self.kube.calls,
             [
-                "get",
-                "nodes",
-                "-l",
-                "cloud.google.com/gke-nodepool in (pool1,pool2)",
-                "-o",
-                "json",
-            ]
+                Call(
+                    "list_nodes",
+                    {
+                        "label_selector": (
+                            "cloud.google.com/gke-nodepool in (pool1,pool2)"
+                        )
+                    },
+                )
+            ],
         )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_not_ready_nodes_list_kind_null_items(
-        self, mock_run_kubectl, mock_logger
-    ):
-        """Test List kind with null items in _get_not_ready_nodes."""
+    def test_get_not_ready_nodes_list_kind_null_items(self, mock_logger):
+        """Test empty node list in _get_not_ready_nodes."""
         scheduler = KubernetesScheduler()
-        mock_run_kubectl.return_value = json.dumps(
-            {"kind": "List", "items": None}
-        )
 
         not_ready = scheduler._get_not_ready_nodes()
 
         self.assertEqual(not_ready, set())
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_fetch_raw_node_resources(self, mock_run_kubectl, mock_logger):
-        """Test _fetch_raw_node_resources parses kubectl json."""
+    def test_fetch_raw_node_resources(self, mock_logger):
+        """Test _fetch_raw_node_resources lists non-system nodes."""
         scheduler = KubernetesScheduler()
-        mock_nodes_json = {
-            "kind": "List",
-            "items": [{"metadata": {"name": "node1"}}],
-        }
-        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+        stored = self.kube.add_object(
+            "", "nodes", {"metadata": {"name": "node1"}}
+        )
 
         resources = scheduler._fetch_raw_node_resources()
 
-        self.assertEqual(resources, [{"metadata": {"name": "node1"}}])
+        self.assertEqual(resources, [stored])
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_nodes",
+                    {"label_selector": "cloud.google.com/gke-nodepool!=system"},
+                )
+            ],
+        )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_fetch_raw_node_resources_missing_nodepool(
-        self, mock_run_kubectl, mock_logger
-    ):
+    def test_fetch_raw_node_resources_missing_nodepool(self, mock_logger):
         """Test _fetch_raw_node_resources raises error for missing nodepool."""
         scheduler = KubernetesScheduler(nodepools="pool-a,pool-b")
-        mock_nodes_json = {
-            "kind": "List",
-            "items": [
-                {
-                    "metadata": {
-                        "name": "node1",
-                        "labels": {"cloud.google.com/gke-nodepool": "pool-a"},
-                    }
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "node1",
+                    "labels": {"cloud.google.com/gke-nodepool": "pool-a"},
                 }
-            ],
-        }
-        mock_run_kubectl.return_value = json.dumps(mock_nodes_json)
+            },
+        )
 
         with self.assertRaisesRegex(ex.ChsValidationError, "pool-b"):
             scheduler._fetch_raw_node_resources()
@@ -507,13 +650,10 @@ class TestKubernetesScheduler(unittest.TestCase):
 
         self.assertEqual(unhealthy, {"not-ready-node", "cordoned-node"})
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_not_ready_nodes_invalid_json(
-        self, mock_run_kubectl, mock_logger
-    ):
-        """Test _get_not_ready_nodes raises exception on invalid JSON."""
+    def test_get_not_ready_nodes_invalid_json(self, mock_logger):
+        """Test _get_not_ready_nodes raises exception on API failure."""
         scheduler = KubernetesScheduler()
-        mock_run_kubectl.return_value = "invalid-json"
+        self.kube.fail_next("list_nodes", k8s_client.KubeError("API failure"))
 
         with self.assertRaises(ChsSchedulerException):
             scheduler._get_not_ready_nodes()
@@ -527,16 +667,15 @@ class TestKubernetesScheduler(unittest.TestCase):
         return_value=set(),
     )
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_get_nodes_under_test_tpu_slice_not_ready(
         self,
-        mock_run_kubectl,
         mock_tpu_slices,
         mock_busy,
         mock_not_ready,
         mock_logger,
     ):
         """Test TPU slice is dropped if any node in slice is NotReady."""
+        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
         mock_tpu_slices.return_value = TpuSliceData(
             pools={"pool1": ["node1", "node2"]},
             node_to_pool={"node1": "pool1", "node2": "pool1"},
@@ -549,80 +688,65 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(valid_nodes, [])
         mock_logger.warning.assert_called_once()
 
-    @mock.patch("subprocess.run")
-    def test_resolve_raw_nodes_empty(self, mock_run, mock_logger):
-        """Test resolve_raw_nodes returns empty list if no nodes."""
+    def test_resolve_raw_nodes_empty(self, mock_logger):
+        """Test resolve_raw_nodes returns empty list if node discovery fails."""
         scheduler = KubernetesScheduler()
-        mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
+        self.kube.fail_next("list_nodes", k8s_client.KubeError("boom"))
 
         self.assertEqual(scheduler.resolve_raw_nodes(), [])
 
-    @mock.patch("subprocess.run")
-    def test_resolve_raw_nodes_nodepool(self, mock_run, mock_logger):
+    def test_resolve_raw_nodes_nodepool(self, mock_logger):
         """Test resolve_raw_nodes uses nodepools to fetch nodes."""
         scheduler = KubernetesScheduler(
             nodepools="pool-1",
         )
-        mock_run.return_value.stdout = json.dumps(
-            {
-                "kind": "List",
-                "items": [
-                    {
-                        "metadata": {
-                            "name": "node-1",
-                            "labels": {
-                                "cloud.google.com/gke-nodepool": "pool-1"
-                            },
-                        }
-                    },
-                    {
-                        "metadata": {
-                            "name": "node-2",
-                            "labels": {
-                                "cloud.google.com/gke-nodepool": "pool-1"
-                            },
-                        }
-                    },
-                ],
-            }
-        )
+        for name in ("node-1", "node-2"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                {
+                    "metadata": {
+                        "name": name,
+                        "labels": {"cloud.google.com/gke-nodepool": "pool-1"},
+                    }
+                },
+            )
 
         nodes = scheduler.resolve_raw_nodes()
 
         self.assertEqual(nodes, ["node-1", "node-2"])
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        self.assertIn("kubectl", cmd)
-        self.assertIn("-l", cmd)
-        self.assertIn("cloud.google.com/gke-nodepool in (pool-1)", cmd)
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_nodes",
+                    {
+                        "label_selector": (
+                            "cloud.google.com/gke-nodepool in (pool-1)"
+                        )
+                    },
+                )
+            ],
+        )
 
-    @mock.patch("subprocess.run")
-    def test_resolve_raw_nodes_precedence(self, mock_run, mock_logger):
+    def test_resolve_raw_nodes_precedence(self, mock_logger):
         """Test nodes arg overrides nodepools, and executes validation."""
         scheduler = KubernetesScheduler(
             nodes="node-1",
             nodepools="pool-1",
         )
-        mock_run.return_value.returncode = 0
+        self.kube.add_object("", "nodes", {"metadata": {"name": "node-1"}})
         nodes = scheduler.resolve_raw_nodes()
         self.assertEqual(nodes, ["node-1"])
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        self.assertIn("kubectl", cmd)
-        self.assertIn("get", cmd)
-        self.assertIn("node", cmd)
-        self.assertIn("node-1", cmd)
+        self.assertEqual(
+            self.kube.calls,
+            [Call("list_nodes", {})],
+        )
 
-    @mock.patch("subprocess.run")
-    def test_resolve_raw_nodes_invalid(self, mock_run, mock_logger):
+    def test_resolve_raw_nodes_invalid(self, mock_logger):
         """Test resolve_raw_nodes errors if provided nodes don't exist."""
         scheduler = KubernetesScheduler(
             nodes="invalid-node",
-        )
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1,
-            "kubectl get node invalid-node",
-            stderr=b'Error (NotFound): nodes "invalid-node" not found',
         )
 
         with self.assertRaises(ex.ChsSchedulerException) as cm:
@@ -632,19 +756,13 @@ class TestKubernetesScheduler(unittest.TestCase):
             "One or more targeted nodes not found in the cluster.",
             str(cm.exception),
         )
+        self.assertIn("invalid-node", str(cm.exception))
 
-    # Keeps get_topology() away from the cluster of the current context.
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
-        side_effect=subprocess.CalledProcessError(1, "kubectl"),
-    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1"],
     )
-    def test_write_ramble_config(
-        self, mock_filter, mock_run_kubectl, mock_logger
-    ):
+    def test_write_ramble_config(self, mock_filter, mock_logger):
         """Test write_ramble_config generates correct YAML."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -677,18 +795,11 @@ ramble:
                         workspace_config_dir, ["test1"], "a3-megagpu-8g"
                     )
 
-    # Keeps get_topology() away from the cluster of the current context.
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
-        side_effect=subprocess.CalledProcessError(1, "kubectl"),
-    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1"],
     )
-    def test_write_ramble_config_integration(
-        self, mock_filter, mock_run_kubectl, mock_logger
-    ):
+    def test_write_ramble_config_integration(self, mock_filter, mock_logger):
         """Integration-like test for write_ramble_config using real template."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -726,7 +837,6 @@ ramble:
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
-        import yaml
 
         with open(output_path, "r") as f:
             data = yaml.safe_load(f)
@@ -737,25 +847,16 @@ ramble:
         self.assertEqual(variables["tests"], ["test1"])
         self.assertEqual(variables["default_interface_name"], "eth0")
 
-        import json
-
         all_interfaces = json.loads(variables["all_interfaces_json"].strip())
         self.assertEqual(len(all_interfaces), 2)
         self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
         self.assertEqual(all_interfaces[0]["network"], "default")
 
-    # Keeps get_topology() away from the cluster of the current context.
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
-        side_effect=subprocess.CalledProcessError(1, "kubectl"),
-    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
     )
-    def test_write_ramble_config_with_deadline(
-        self, mock_filter, mock_run_kubectl, mock_logger
-    ):
+    def test_write_ramble_config_with_deadline(self, mock_filter, mock_logger):
         """Test write_ramble_config injects timeout and deadline."""
         scheduler = KubernetesScheduler(
             nodes="node1",
@@ -798,7 +899,6 @@ ramble:
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
-        import yaml
 
         with open(output_path, "r") as f:
             data = yaml.safe_load(f)
@@ -806,14 +906,13 @@ ramble:
         variables = data["ramble"]["variables"]
         self.assertEqual(variables["deadline"], 1800)
 
-    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1"],
     )
     def test_setup_scheduler_resources_kueue_success(
-        self, mock_validate, mock_kueue_mgr_class, mock_run, mock_logger
+        self, mock_validate, mock_kueue_mgr_class, mock_logger
     ):
         """Test setup_scheduler_resources caches labels on success."""
         scheduler = KubernetesScheduler(
@@ -843,17 +942,12 @@ ramble:
         )
         self.assertEqual(scheduler._suspend_jobset, "true")
 
-    # Keeps get_topology() away from the cluster of the current context.
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl",
-        side_effect=subprocess.CalledProcessError(1, "kubectl"),
-    )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
     )
     def test_write_ramble_config_uses_cached_labels(
-        self, mock_filter, mock_run_kubectl, mock_logger
+        self, mock_filter, mock_logger
     ):
         """Test write_ramble_config writes cached properties."""
         scheduler = KubernetesScheduler(
@@ -898,7 +992,6 @@ ramble:
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
-        import yaml
 
         with open(output_path, "r") as f:
             data = yaml.safe_load(f)
@@ -909,57 +1002,51 @@ ramble:
         )
         self.assertEqual(variables["suspend_jobset"], "true")
 
-    @mock.patch("subprocess.run")
-    def test_discover_networks_success(self, mock_run, mock_logger):
+    def test_discover_networks_success(self, mock_logger):
         """Test _discover_networks with success and grouping."""
         scheduler = KubernetesScheduler()
-        mock_run.return_value.stdout = json.dumps(
-            {
-                "items": [
-                    {
-                        "metadata": {"name": "rdma-1"},
-                        "spec": {"type": "Device"},
-                    },
-                    {
-                        "metadata": {"name": "rdma-0"},
-                        "spec": {"type": "Device"},
-                    },
-                    {"metadata": {"name": "gvnic-1"}, "spec": {"type": "L3"}},
-                    {"metadata": {"name": "default"}, "spec": {"type": "L3"}},
-                ]
-            }
-        )
+        for network in [
+            {"metadata": {"name": "rdma-1"}, "spec": {"type": "Device"}},
+            {"metadata": {"name": "rdma-0"}, "spec": {"type": "Device"}},
+            {"metadata": {"name": "gvnic-1"}, "spec": {"type": "L3"}},
+            {"metadata": {"name": "default"}, "spec": {"type": "L3"}},
+        ]:
+            self.kube.add_object("networking.gke.io", "networks", network)
 
         networks_l3, networks_device = scheduler._discover_networks()
 
         self.assertEqual(networks_l3, ["default", "gvnic-1"])
         self.assertEqual(networks_device, ["rdma-0", "rdma-1"])
-        mock_run.assert_called_once()
-        self.assertIn("kubectl", mock_run.call_args[0][0])
-        self.assertIn("networks.networking.gke.io", mock_run.call_args[0][0])
-        self.assertIn("-o", mock_run.call_args[0][0])
-        self.assertIn("json", mock_run.call_args[0][0])
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_custom_objects",
+                    {
+                        "group": "networking.gke.io",
+                        "version": "v1",
+                        "plural": "networks",
+                    },
+                )
+            ],
+        )
 
-    @mock.patch("subprocess.run")
-    def test_discover_networks_failure(self, mock_run, mock_logger):
+    def test_discover_networks_failure(self, mock_logger):
         """Test _discover_networks with failure."""
         scheduler = KubernetesScheduler()
-        mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
+        self.kube.fail_next("list_custom_objects", k8s_client.KubeError("boom"))
 
         networks = scheduler._discover_networks()
 
         self.assertEqual(networks, ([], []))
 
-    @mock.patch("subprocess.run")
-    def test_discover_networks_no_default(self, mock_run, mock_logger):
+    def test_discover_networks_no_default(self, mock_logger):
         """Test _discover_networks fails if default L3 network is missing."""
         scheduler = KubernetesScheduler()
-        mock_run.return_value.stdout = json.dumps(
-            {
-                "items": [
-                    {"metadata": {"name": "gvnic-1"}, "spec": {"type": "L3"}},
-                ]
-            }
+        self.kube.add_object(
+            "networking.gke.io",
+            "networks",
+            {"metadata": {"name": "gvnic-1"}, "spec": {"type": "L3"}},
         )
         networks_l3, networks_device = scheduler._discover_networks()
         self.assertEqual(networks_l3, [])
@@ -972,24 +1059,38 @@ ramble:
             "gvnic-1",
         )
 
-    @mock.patch("subprocess.run")
-    def test_discover_networks_malformed_items(self, mock_run, mock_logger):
-        """Test _discover_networks handles non-list items field."""
+    def test_discover_networks_malformed_items(self, mock_logger):
+        """Test _discover_networks handles malformed network items."""
         scheduler = KubernetesScheduler()
-        mock_run.return_value.stdout = json.dumps({"items": "not-a-list"})
-        networks_l3, networks_device = scheduler._discover_networks()
-        self.assertEqual(networks_l3, [])
-        self.assertEqual(networks_device, [])
-        mock_logger.debug.assert_called_with(
-            "Unexpected network discovery output format: 'items' is not a list"
-        )
+        with self.subTest("item missing spec.type is ignored"):
+            self.kube.add_object(
+                "networking.gke.io",
+                "networks",
+                {"metadata": {"name": "broken"}},
+            )
+            self.kube.add_object(
+                "networking.gke.io",
+                "networks",
+                {"metadata": {"name": "default"}, "spec": {"type": "L3"}},
+            )
+            self.assertEqual(scheduler._discover_networks(), (["default"], []))
+        with self.subTest("non-dict item returns empty lists"):
+            with mock.patch.object(
+                k8s_client, "list_custom_objects", return_value=["not-a-dict"]
+            ):
+                self.assertEqual(scheduler._discover_networks(), ([], []))
+                mock_logger.warning.assert_called()
 
-    @mock.patch("subprocess.run")
-    def test_write_ramble_config_discovery_fallback(
-        self, mock_run, mock_logger
-    ):
+    def test_write_ramble_config_discovery_fallback(self, mock_logger):
         """Test write_ramble_config network discovery fallback."""
-        mock_run.return_value.stdout = "{}"
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1"},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        )
         scheduler = KubernetesScheduler(
             nodes="node1",
         )
@@ -1024,7 +1125,6 @@ ramble:
                 )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
-        import yaml
 
         with open(output_path, "r") as f:
             data = yaml.safe_load(f)
@@ -1032,48 +1132,32 @@ ramble:
         variables = data["ramble"]["variables"]
         self.assertEqual(variables["default_interface_name"], "eth0")
 
-        import json
-
         all_interfaces = json.loads(variables["all_interfaces_json"].strip())
         self.assertEqual(len(all_interfaces), 1)
         self.assertEqual(all_interfaces[0]["interfaceName"], "eth0")
         self.assertEqual(all_interfaces[0]["network"], "default")
 
-    @mock.patch("subprocess.run")
-    def test_get_topology(self, mock_run, mock_logger):
+    def test_get_topology(self, mock_logger):
         """Test get_topology returns mapped nodes."""
         scheduler = KubernetesScheduler(
             nodes="node1,node2",
         )
-
-        mock_nodes_json = {
-            "kind": "List",
-            "items": [
+        for name, block in (("node1", "block1"), ("node2", "block2")):
+            self.kube.add_object(
+                "",
+                "nodes",
                 {
                     "metadata": {
-                        "name": "node1",
+                        "name": name,
                         "labels": {
-                            "cloud.google.com/gce-topology-block": "block1"
+                            "cloud.google.com/gce-topology-block": block
                         },
                     },
                     "status": {
                         "conditions": [{"type": "Ready", "status": "True"}]
                     },
                 },
-                {
-                    "metadata": {
-                        "name": "node2",
-                        "labels": {
-                            "cloud.google.com/gce-topology-block": "block2"
-                        },
-                    },
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
-                },
-            ],
-        }
-        mock_run.return_value.stdout = json.dumps(mock_nodes_json)
+            )
 
         topology = scheduler.get_topology()
 
@@ -1081,36 +1165,30 @@ ramble:
         self.assertEqual(topology["block1"]["default-subblock"], ["node1"])
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
-    @mock.patch("subprocess.run")
-    def test_get_topology_missing_label(self, mock_run, mock_logger):
+    def test_get_topology_missing_label(self, mock_logger):
         """Test get_topology falls back to default-block."""
         scheduler = KubernetesScheduler(
             nodes="node1,node2",
         )
-
-        mock_nodes_json = {
-            "kind": "List",
-            "items": [
-                {
-                    "metadata": {"name": "node1", "labels": {}},
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1", "labels": {}},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "node2",
+                    "labels": {"cloud.google.com/gce-topology-block": "block2"},
                 },
-                {
-                    "metadata": {
-                        "name": "node2",
-                        "labels": {
-                            "cloud.google.com/gce-topology-block": "block2"
-                        },
-                    },
-                    "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
-                    },
-                },
-            ],
-        }
-        mock_run.return_value.stdout = json.dumps(mock_nodes_json)
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        )
 
         topology = scheduler.get_topology()
 
@@ -1120,10 +1198,9 @@ ramble:
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
-    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_cleanup_scheduler_resources(
-        self, mock_kueue_mgr_class, mock_run, mock_logger
+        self, mock_kueue_mgr_class, mock_logger
     ):
         """Test cleanup_scheduler_resources invokes KueueManager."""
         scheduler = KubernetesScheduler()
@@ -1141,11 +1218,29 @@ ramble:
 
             mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
             mock_kueue_mgr_instance.cleanup.assert_called_once_with()
+            # No slices exist, so delete_custom_objects receives []; the
+            # namespace delete takes the secrets with it.
+            self.assertEqual(
+                self.kube.calls,
+                [
+                    _LIST_CHS_SLICES,
+                    Call(
+                        "delete_custom_objects",
+                        {
+                            "group": "accelerator.gke.io",
+                            "version": "v1beta1",
+                            "plural": "slices",
+                            "object_names": [],
+                            "wait_timeout_seconds": 300,
+                        },
+                    ),
+                    _DELETE_CHS_NAMESPACE,
+                ],
+            )
 
-    @mock.patch("subprocess.run")
     @mock.patch("chs.schedulers.kubernetes.KueueManager")
     def test_cleanup_scheduler_resources_file_backstop(
-        self, mock_kueue_mgr_class, mock_run, mock_logger
+        self, mock_kueue_mgr_class, mock_logger
     ):
         """Test cleanup_scheduler_resources cleans up statelessly."""
         scheduler = KubernetesScheduler()
@@ -1163,77 +1258,136 @@ ramble:
 
             mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
             mock_kueue_mgr_instance.cleanup.assert_called_once_with()
+            self.assertIn(
+                _DELETE_CHS_NAMESPACE,
+                self.kube.calls,
+            )
 
-    @mock.patch("subprocess.run")
-    def test_cancel_jobs_deletes_secrets(self, mock_run, mock_logger):
+    def test_cancel_jobs_deletes_secrets(self, mock_logger):
         """Test that _cancel_jobs deletes associated secrets."""
+        for name in ("job1", "job2"):
+            self.kube.add_object(
+                "jobset.x-k8s.io",
+                "jobsets",
+                {"metadata": {"name": name}},
+                namespace=CHS_NAMESPACE,
+            )
+        for name in ("chs-job1-ssh", "chs-job2-ssh", "other-secret"):
+            self.kube.add_object(
+                "",
+                "secrets",
+                {"metadata": {"name": name}},
+                namespace=CHS_NAMESPACE,
+            )
         scheduler = KubernetesScheduler()
-        mock_run.return_value.stdout = "chs-job1-ssh chs-job2-ssh other-secret"
 
         scheduler.cancel_jobs(["job1", "job2"])
 
-        args = mock_run.call_args_list[0][0][0]
-        self.assertIn("delete", args)
-        self.assertIn("jobset", args)
-        self.assertIn("--timeout=60s", args)
-
-        args_secrets = mock_run.call_args_list[2][0][0]
-        self.assertIn("delete", args_secrets)
-        self.assertIn("secrets", args_secrets)
-        self.assertIn("chs-job1-ssh", args_secrets)
-        self.assertNotIn("other-secret", args_secrets)
-
-    @mock.patch("subprocess.run")
-    def test_cleanup_scheduler_resources_deletes_secrets(
-        self, mock_run, mock_logger
-    ):
-        """Test that cleanup_scheduler_resources deletes secrets when the
-        namespace, which would delete them too, cannot be deleted."""
-        scheduler = KubernetesScheduler()
-
-        def fake_run(cmd, **kwargs):
-            if cmd[1:3] == ["delete", "namespace"]:
-                raise subprocess.CalledProcessError(1, cmd, stderr="forbidden")
-            return mock.Mock(stdout="chs-job1-ssh")
-
-        mock_run.side_effect = fake_run
-        scheduler.cleanup_scheduler_resources()
-
-        # Located by content rather than call index so that adding unrelated
-        # cleanup steps does not break this assertion.
-        secret_deletes = [
-            call[0][0]
-            for call in mock_run.call_args_list
-            if "delete" in call[0][0] and "secrets" in call[0][0]
-        ]
-        self.assertEqual(len(secret_deletes), 1)
-        self.assertIn("chs-job1-ssh", secret_deletes[0])
-
-    @mock.patch("subprocess.run")
-    def test_resolve_project_id_kubernetes_success(self, mock_run, mock_logger):
-        scheduler = KubernetesScheduler()
-        mock_run.return_value.stdout = "gce://my-project-id/us-central1-a/node1"
-        project_id = scheduler._resolve_project_id("node1")
-        self.assertEqual(project_id, "my-project-id")
-        mock_run.assert_called_once_with(
+        self.assertEqual(
+            self.kube.calls,
             [
-                "kubectl",
-                "get",
-                "node",
-                "node1",
-                "-o",
-                "jsonpath={.spec.providerID}",
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": "jobset.x-k8s.io",
+                        "version": "v1alpha2",
+                        "plural": "jobsets",
+                        "object_names": ["job1", "job2"],
+                        "namespace": CHS_NAMESPACE,
+                        "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
+                    },
+                ),
+                Call("list_secrets", {"namespace": CHS_NAMESPACE}),
+                Call(
+                    "delete_secret",
+                    {"name": "chs-job1-ssh", "namespace": CHS_NAMESPACE},
+                ),
+                Call(
+                    "delete_secret",
+                    {"name": "chs-job2-ssh", "namespace": CHS_NAMESPACE},
+                ),
             ],
-            text=True,
-            capture_output=True,
-            check=True,
-            timeout=120,
+        )
+        self.assertEqual(
+            self.kube.stored_names("jobset.x-k8s.io", "jobsets"), []
+        )
+        self.assertEqual(
+            self.kube.stored_names("", "secrets"), ["other-secret"]
         )
 
-    @mock.patch("subprocess.run")
-    def test_resolve_project_id_kubernetes_invalid_format(
-        self, mock_run, mock_logger
-    ):
+    def test_cancel_jobs_without_kubeconfig_is_logged(self, mock_logger):
+        error = k8s_client.KubeError("no kubeconfig")
+        install_fake_client(self, error=error)
+        scheduler = KubernetesScheduler()
+        # Cancellation is best effort: the error is logged, not raised.
+        scheduler.cancel_jobs(["job1"])
+        mock_logger.error.assert_any_call(
+            "Encountered an error while attempting to "
+            "delete active JobSets. Error: %s",
+            error,
+        )
+
+    def test_cleanup_scheduler_resources_deletes_secrets(self, mock_logger):
+        """Test that cleanup_scheduler_resources deletes secrets when the
+        namespace, which would delete them too, cannot be deleted."""
+        forbidden = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_namespace", forbidden)
+        self.kube.add_object(
+            "", "namespaces", {"metadata": {"name": CHS_NAMESPACE}}
+        )
+        self.kube.add_object(
+            "",
+            "secrets",
+            {"metadata": {"name": "chs-job1-ssh"}},
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.cleanup_scheduler_resources()
+
+        self.assertIn(
+            _DELETE_CHS_NAMESPACE,
+            self.kube.calls,
+        )
+        mock_logger.warning.assert_any_call(
+            "Failed to delete Kubernetes namespace. This may "
+            "leave orphaned resources. Error: %s",
+            forbidden,
+        )
+        self.assertEqual(
+            self.kube.calls_to("delete_secret"),
+            [
+                Call(
+                    "delete_secret",
+                    {"name": "chs-job1-ssh", "namespace": CHS_NAMESPACE},
+                )
+            ],
+        )
+        self.assertEqual(self.kube.stored_names("", "secrets"), [])
+
+    def test_resolve_project_id_kubernetes_success(self, mock_logger):
+        self.kube.add_object(
+            "",
+            "nodes",
+            _provider_node("node1", "gce://my-project-id/us-central1-a/node1"),
+        )
+        scheduler = KubernetesScheduler()
+        project_id = scheduler._resolve_project_id("node1")
+        self.assertEqual(project_id, "my-project-id")
+        self.assertEqual(self.kube.calls, [Call("get_node", {"name": "node1"})])
+
+    def test_resolve_project_id_kubernetes_uses_cached_node(self, mock_logger):
+        # A node object cached by node discovery already has the providerID.
+        scheduler = KubernetesScheduler()
+        scheduler._resolved_node_resources = [
+            _provider_node("node1", "gce://cached-project/us-central1-a/node1")
+        ]
+        self.assertEqual(
+            scheduler._resolve_project_id("node1"), "cached-project"
+        )
+        self.assertEqual(self.kube.calls, [])
+
+    def test_resolve_project_id_kubernetes_invalid_format(self, mock_logger):
         scheduler = KubernetesScheduler()
         invalid_formats = [
             "invalid-format",
@@ -1244,20 +1398,46 @@ ramble:
             "gke://my-project-id/us-central1-a/node1",
         ]
         for fmt in invalid_formats:
-            mock_run.return_value.stdout = fmt
+            with self.subTest(provider_id=fmt):
+                self.kube.add_object("", "nodes", _provider_node("node1", fmt))
+                with self.assertRaisesRegex(
+                    ex.ChsSchedulerException, "Unexpected providerID format"
+                ):
+                    scheduler._resolve_project_id("node1")
+        with self.subTest(provider_id=None):
+            self.kube.add_object("", "nodes", {"metadata": {"name": "node2"}})
             with self.assertRaisesRegex(
                 ex.ChsSchedulerException, "Unexpected providerID format"
             ):
-                scheduler._resolve_project_id("node1")
+                scheduler._resolve_project_id("node2")
 
-    @mock.patch("subprocess.run")
-    def test_resolve_project_id_kubernetes_error(self, mock_run, mock_logger):
-        scheduler = KubernetesScheduler()
-        mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
-        with self.assertRaisesRegex(
-            ex.ChsSchedulerException, "Failed to resolve project ID"
-        ):
-            scheduler._resolve_project_id("node1")
+    def test_resolve_project_id_kubernetes_error(self, mock_logger):
+        with self.subTest("node not found"):
+            scheduler = KubernetesScheduler()
+            with self.assertRaisesRegex(
+                ex.ChsSchedulerException,
+                "Failed to resolve project ID from node 'node1': .*"
+                'nodes "node1" not found',
+            ) as cm:
+                scheduler._resolve_project_id("node1")
+            self.assertIsInstance(cm.exception.__cause__, k8s_client.KubeError)
+            self.assertEqual(cm.exception.__cause__.status, 404)
+        with self.subTest("API error"):
+            error = k8s_client.KubeError("internal error", status=500)
+            self.kube.fail_next("get_node", error)
+            with self.assertRaisesRegex(
+                ex.ChsSchedulerException, "Failed to resolve project ID"
+            ) as cm:
+                scheduler._resolve_project_id("node1")
+            self.assertIs(cm.exception.__cause__, error)
+        with self.subTest("no kubeconfig"):
+            error = k8s_client.KubeError("no kubeconfig")
+            self.kube.fail_next("get_node", error)
+            with self.assertRaisesRegex(
+                ex.ChsSchedulerException, "Failed to resolve project ID"
+            ) as cm:
+                scheduler._resolve_project_id("node1")
+            self.assertIs(cm.exception.__cause__, error)
 
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
     def test_detect_nodes_hardware_success(self, mock_query_info, mock_logger):
@@ -1342,8 +1522,10 @@ ramble:
         self, mock_query_info, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        scheduler._resolved_node_resources = [
-            {"metadata": {"name": "node1"}},
+        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        self.kube.add_object(
+            "",
+            "nodes",
             {
                 "metadata": {
                     "name": "node2",
@@ -1354,7 +1536,7 @@ ramble:
                     },
                 }
             },
-        ]
+        )
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
         ):
@@ -1372,6 +1554,15 @@ ramble:
                 scheduler.node_to_instance_id,
                 {"node1": "12345", "node2": "node2"},
             )
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_nodes",
+                    {"label_selector": "cloud.google.com/gke-nodepool!=system"},
+                )
+            ],
+        )
 
     @mock.patch(
         "builtins.open",
@@ -1434,51 +1625,61 @@ ramble:
         nodes = scheduler.get_nodes_under_test()
         self.assertEqual(nodes, ["node1", "node2"])
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_cleanup_dynamic_slices(self, mock_kubectl, mock_logger):
-        mock_kubectl.return_value = "slices.accelerator.gke.io"
-        scheduler = KubernetesScheduler()
-        scheduler._cleanup_dynamic_slices()
-        mock_kubectl.assert_has_calls(
-            [
-                mock.call(
-                    [
-                        "get",
-                        "crd",
-                        "slices.accelerator.gke.io",
-                        "--ignore-not-found",
-                    ]
-                ),
-                mock.call(
-                    [
-                        "delete",
-                        "slices.accelerator.gke.io",
-                        "-A",
-                        "-l",
-                        "created-by=chs",
-                        "--ignore-not-found",
-                    ],
-                    timeout=300,
-                ),
-            ]
+    def test_cleanup_dynamic_slices(self, mock_logger):
+        self.kube.add_crd("slices.accelerator.gke.io", versions=("v1beta1",))
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("pool1", "Ready")
         )
-
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_cleanup_dynamic_slices_crd_not_found(
-        self,
-        mock_kubectl,
-        mock_logger,
-    ):
-        mock_kubectl.return_value = ""
+        self.kube.add_object(
+            "accelerator.gke.io",
+            "slices",
+            {"metadata": {"name": "user-slice"}},
+        )
         scheduler = KubernetesScheduler()
         scheduler._cleanup_dynamic_slices()
-        mock_kubectl.assert_called_once_with(
+        self.assertEqual(
+            self.kube.calls,
             [
-                "get",
-                "crd",
-                "slices.accelerator.gke.io",
-                "--ignore-not-found",
-            ]
+                _LIST_CHS_SLICES,
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": "accelerator.gke.io",
+                        "version": "v1beta1",
+                        "plural": "slices",
+                        "object_names": ["chs-slice-pool1"],
+                        "wait_timeout_seconds": 300,
+                    },
+                ),
+            ],
+        )
+        # Only the slices CHS created are deleted.
+        self.assertEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            ["user-slice"],
+        )
+        mock_logger.warning.assert_not_called()
+
+    def test_cleanup_dynamic_slices_crd_not_found(self, mock_logger):
+        # Without the Slice CRD there is nothing to delete, and a list
+        # failing with 404 is silently ignored.
+        self.kube.unregister_type("accelerator.gke.io", "slices")
+        scheduler = KubernetesScheduler()
+        scheduler._cleanup_dynamic_slices()
+        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
+        mock_logger.warning.assert_not_called()
+
+    def test_cleanup_dynamic_slices_failure_is_logged(self, mock_logger):
+        self.kube.add_crd("slices.accelerator.gke.io", versions=("v1beta1",))
+        error = k8s_client.KubeError("timed out deleting slices")
+        self.kube.fail_next("delete_custom_objects", error)
+        scheduler = KubernetesScheduler()
+        # Cleanup is best effort: the error is logged, not raised.
+        scheduler._cleanup_dynamic_slices()
+        mock_logger.warning.assert_called_once_with(
+            "Failed to delete dynamic TPU slices after execution. "
+            "Manual cleanup may be required. Error: %s",
+            error,
         )
 
     @mock.patch(
@@ -1488,17 +1689,19 @@ ramble:
         "chs.schedulers.kubernetes.KubernetesScheduler."
         "_cleanup_dynamic_slices"
     )
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_cancel_jobs_by_prefix_does_not_delete_namespace(
         self,
-        mock_run_kubectl,
         mock_cleanup_slices,
         mock_delete_ns,
         mock_logger,
     ):
-        mock_run_kubectl.return_value = (
-            "jobset/chs-test-job1\njobset/chs-test-job2"
-        )
+        for name in ("chs-test-job1", "chs-test-job2", "other-job"):
+            self.kube.add_object(
+                "jobset.x-k8s.io",
+                "jobsets",
+                {"metadata": {"name": name}},
+                namespace=CHS_NAMESPACE,
+            )
         scheduler = KubernetesScheduler()
         with mock.patch.object(scheduler, "cancel_jobs") as mock_cancel_jobs:
             scheduler.cancel_jobs_by_prefix("chs-test")
@@ -1506,114 +1709,106 @@ ramble:
                 ["chs-test-job1", "chs-test-job2"]
             )
             mock_delete_ns.assert_not_called()
-
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_delete_namespace_includes_timeout(
-        self, mock_run_kubectl, mock_logger
-    ):
-        scheduler = KubernetesScheduler()
-        scheduler._delete_namespace()
-        mock_run_kubectl.assert_called_once_with(
-            ["delete", "namespace", "chs", "--ignore-not-found"],
-            timeout=300,
+            mock_cleanup_slices.assert_not_called()
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_custom_objects",
+                    {
+                        "group": "jobset.x-k8s.io",
+                        "version": "v1alpha2",
+                        "plural": "jobsets",
+                        "namespace": CHS_NAMESPACE,
+                    },
+                )
+            ],
         )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_has_no_failed_jobs_timeout_raises(
-        self, mock_run_kubectl, mock_logger
-    ):
+    def test_has_no_failed_jobs_timeout_raises(self, mock_logger):
         """A timeout is unknown state and must not be treated as failed."""
-        mock_run_kubectl.side_effect = subprocess.TimeoutExpired(
-            "kubectl get jobset", 120
+        self.kube.fail_next(
+            "list_custom_objects", k8s_client.KubeError("read timed out")
         )
         with self.assertRaisesRegex(
             ex.ChsSchedulerException, "Failed to query the status"
         ):
             KubernetesScheduler().has_no_failed_jobs()
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_has_no_failed_jobs_kubectl_error_raises(
-        self, mock_run_kubectl, mock_logger
-    ):
-        """A kubectl error is also unknown state, not a failed run."""
-        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
-            1, "kubectl get jobset", stderr="forbidden"
+    def test_has_no_failed_jobs_api_error_raises(self, mock_logger):
+        """An API error is also unknown state, not a failed run."""
+        self.kube.fail_next(
+            "list_custom_objects",
+            k8s_client.KubeError("forbidden", status=403),
         )
         with self.assertRaisesRegex(
             ex.ChsSchedulerException, "Failed to query the status.*forbidden"
         ):
             KubernetesScheduler().has_no_failed_jobs()
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_active_job_names_timeout_raises(
-        self, mock_run_kubectl, mock_logger
-    ):
+    def test_get_active_job_names_timeout_raises(self, mock_logger):
         """A timeout must not look like "no jobs" to the foreign-run check."""
-        mock_run_kubectl.side_effect = subprocess.TimeoutExpired(
-            "kubectl get jobset", 120
+        self.kube.fail_next(
+            "list_custom_objects", k8s_client.KubeError("read timed out")
         )
         with self.assertRaisesRegex(
-            ex.ChsSchedulerException, "Timed out listing active JobSets"
+            ex.ChsSchedulerException, "Failed to list active JobSets"
         ):
             KubernetesScheduler().get_active_job_names()
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_active_job_names_kubectl_error_returns_empty(
-        self, mock_run_kubectl, mock_logger
-    ):
-        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
-            1, "kubectl get jobset", stderr="forbidden"
+    def test_get_active_job_names_api_error_returns_empty(self, mock_logger):
+        self.kube.fail_next(
+            "list_custom_objects",
+            k8s_client.KubeError("forbidden", status=403),
         )
         self.assertEqual(KubernetesScheduler().get_active_job_names(), [])
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("time.sleep")
     @mock.patch("time.time", side_effect=[0, 1])
     def test_wait_for_slices_active_success(
-        self, mock_time, mock_kubectl, mock_logger
+        self, mock_time, mock_sleep, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        mock_kubectl.return_value = (
-            '{"items": [{"metadata": {"labels": {"chs-nodepool": "mypool"}}, '
-            '"status": {"conditions": '
-            '[{"type": "Ready", "reason": "ACTIVE"}]}}]}'
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("mypool", "ACTIVE")
         )
         success, failed = scheduler._wait_for_slices_active(["mypool"])
-        mock_kubectl.assert_called_once()
+        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
         self.assertEqual(success, ["mypool"])
         self.assertEqual(failed, [])
+        mock_sleep.assert_not_called()
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("time.sleep")
     @mock.patch("time.time", side_effect=[0, 1])
     def test_wait_for_slices_active_failed(
-        self, mock_time, mock_kubectl, mock_logger
+        self, mock_time, mock_sleep, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        mock_kubectl.return_value = (
-            '{"items": [{"metadata": {"labels": {"chs-nodepool": "mypool"}}, '
-            '"status": {"conditions": '
-            '[{"type": "Ready", "reason": "FAILED"}]}}]}'
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("mypool", "FAILED")
         )
         success, failed = scheduler._wait_for_slices_active(["mypool"])
-        mock_kubectl.assert_called_once()
+        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
         self.assertEqual(success, [])
         self.assertEqual(failed, ["mypool"])
+        mock_sleep.assert_not_called()
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("time.sleep")
     @mock.patch("time.time", side_effect=[0, 10, 310])
     def test_wait_for_slices_active_timeout(
-        self, mock_time, mock_kubectl, mock_logger
+        self, mock_time, mock_sleep, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        mock_kubectl.return_value = (
-            '{"items": [{"metadata": {"labels": {"chs-nodepool": "mypool"}}, '
-            '"status": {"conditions": '
-            '[{"type": "Ready", "reason": "CREATING"}]}}]}'
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("mypool", "CREATING")
         )
         success, failed = scheduler._wait_for_slices_active(
             ["mypool"], timeout_sec=300
         )
         self.assertEqual(success, [])
         self.assertEqual(failed, ["mypool"])
+        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
+        mock_sleep.assert_called_once_with(10)
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._ensure_namespace_exists"
@@ -1644,7 +1839,6 @@ ramble:
         scheduler = KubernetesScheduler()
         scheduler.kueue_supported = False
         scheduler._resolved_nodes = ["node1"]
-        from chs.schedulers.kubernetes import TpuSliceData
 
         scheduler._tpu_slice_data = TpuSliceData(
             pools={"mypool": ["node1"]},
@@ -1662,46 +1856,62 @@ ramble:
         self.assertNotIn("mypool", scheduler._tpu_slice_data.pool_to_topology)
         self.assertNotIn("node1", scheduler._tpu_slice_data.node_to_pool)
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_already_fulfilled_partitions_success(
-        self, mock_kubectl, mock_logger
-    ):
+    def test_get_already_fulfilled_partitions_success(self, mock_logger):
         scheduler = KubernetesScheduler()
-        mock_kubectl.return_value = json.dumps(
+        for slice_obj in [
             {
-                "items": [
-                    {
-                        "metadata": {"name": "slice1"},
-                        "spec": {"partitionIds": ["part-1"]},
-                    },
-                    {
-                        "metadata": {
-                            "name": "slice2",
-                            "deletionTimestamp": "2023-10-01T00:00:00Z",
-                        },
-                        "spec": {"partitionIds": ["part-2"]},
-                    },
-                    {
-                        "metadata": {"name": "slice3"},
-                        "spec": {"partitionIds": ["part-3", "part-4"]},
-                    },
-                ]
-            }
-        )
+                "metadata": {"name": "slice1"},
+                "spec": {"partitionIds": ["part-1"]},
+            },
+            {
+                "metadata": {
+                    "name": "slice2",
+                    "deletionTimestamp": "2023-10-01T00:00:00Z",
+                },
+                "spec": {"partitionIds": ["part-2"]},
+            },
+            {
+                "metadata": {"name": "slice3"},
+                "spec": {"partitionIds": ["part-3", "part-4"]},
+            },
+        ]:
+            self.kube.add_object("accelerator.gke.io", "slices", slice_obj)
         fulfilled = scheduler._get_already_fulfilled_partitions()
         self.assertCountEqual(fulfilled, ["part-1", "part-3", "part-4"])
-        mock_kubectl.assert_called_once_with(
-            ["get", "slice", "-A", "-o", "json", "--ignore-not-found"]
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_custom_objects",
+                    {
+                        "group": "accelerator.gke.io",
+                        "version": "v1beta1",
+                        "plural": "slices",
+                    },
+                )
+            ],
         )
 
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
-    def test_get_already_fulfilled_partitions_error(
-        self, mock_kubectl, mock_logger
-    ):
+    def test_get_already_fulfilled_partitions_error(self, mock_logger):
         scheduler = KubernetesScheduler()
-        mock_kubectl.side_effect = subprocess.SubprocessError("error")
-        fulfilled = scheduler._get_already_fulfilled_partitions()
-        self.assertEqual(fulfilled, set())
+        self.kube.add_object(
+            "accelerator.gke.io",
+            "slices",
+            {
+                "metadata": {"name": "slice1"},
+                "spec": {"partitionIds": ["part-1"]},
+            },
+        )
+        with self.subTest("request fails"):
+            self.kube.fail_next(
+                "list_custom_objects", k8s_client.KubeError("error")
+            )
+            fulfilled = scheduler._get_already_fulfilled_partitions()
+            self.assertEqual(fulfilled, set())
+        with self.subTest("Slice CRD not installed"):
+            self.kube.unregister_type("accelerator.gke.io", "slices")
+            fulfilled = scheduler._get_already_fulfilled_partitions()
+            self.assertEqual(fulfilled, set())
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions"
@@ -1709,13 +1919,11 @@ ramble:
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
     )
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_provision_dynamic_slices_all_fulfilled(
-        self, mock_kubectl, mock_wait, mock_get_fulfilled, mock_logger
+        self, mock_wait, mock_get_fulfilled, mock_logger
     ):
         scheduler = KubernetesScheduler()
         target_pools = {"pool1": ["node1"]}
-        from chs.schedulers.kubernetes import TpuSliceData
 
         scheduler.workspace_config_dir = "/tmp"
         scheduler._tpu_slice_data = TpuSliceData(
@@ -1729,7 +1937,8 @@ ramble:
         success, failed = scheduler._provision_dynamic_slices(target_pools)
         self.assertEqual(success, ["pool1"])
         self.assertEqual(failed, [])
-        mock_kubectl.assert_not_called()
+        # Nothing is applied.
+        self.assertEqual(self.kube.calls, [])
         mock_wait.assert_not_called()
 
     @mock.patch(
@@ -1738,13 +1947,11 @@ ramble:
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
     )
-    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     def test_provision_dynamic_slices_none_fulfilled(
-        self, mock_kubectl, mock_wait, mock_get_fulfilled, mock_logger
+        self, mock_wait, mock_get_fulfilled, mock_logger
     ):
         scheduler = KubernetesScheduler()
         target_pools = {"pool1": ["node1"]}
-        from chs.schedulers.kubernetes import TpuSliceData
 
         scheduler.workspace_config_dir = self.tmp_dir
         scheduler._tpu_slice_data = TpuSliceData(
@@ -1759,7 +1966,17 @@ ramble:
         success, failed = scheduler._provision_dynamic_slices(target_pools)
         self.assertEqual(success, ["pool1"])
         self.assertEqual(failed, [])
-        mock_kubectl.assert_called_once()
+        applied = self.kube.objects[
+            ("accelerator.gke.io", "slices", None, "chs-slice-pool1")
+        ]
+        self.assertEqual(len(self.kube.calls), 1)
+        self.assertEqual(self.kube.calls[0].method, "apply_custom_object")
+        self.assertEqual(self.kube.calls[0].kwargs["plural"], "slices")
+        self.assertEqual(
+            applied["metadata"]["labels"],
+            {"created-by": "chs", "chs-nodepool": "pool1"},
+        )
+        self.assertEqual(applied["spec"]["partitionIds"], ["part1"])
         mock_wait.assert_called_once_with(["pool1"], 300)
 
     @mock.patch(
@@ -1908,16 +2125,18 @@ class TestSchedulerDetection(unittest.TestCase):
         scheduler = detect_scheduler()
         self.assertEqual(scheduler, "kubernetes")
 
-    @mock.patch("subprocess.run")
+    @mock.patch.object(
+        k8s_client, "current_context", return_value="test-context"
+    )
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {}, clear=True)
     def test_detect_kubernetes_out_of_cluster(
-        self, mock_exists, mock_which, mock_run
+        self, mock_exists, mock_which, mock_current_context
     ):
         """Test K8s detected out-of-cluster if kubeconfig exists."""
-        # Mock subprocess.run to return a context
-        mock_run.return_value.stdout = "test-context"
+        # k8s_client.current_context() (formerly `kubectl config
+        # current-context`) is mocked to return a context.
         # Slurm not found, kubectl found
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
 
@@ -1928,11 +2147,15 @@ class TestSchedulerDetection(unittest.TestCase):
 
         scheduler = detect_scheduler()
         self.assertEqual(scheduler, "kubernetes")
+        mock_current_context.assert_called_once_with()
 
+    @mock.patch.object(k8s_client, "current_context")
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {}, clear=True)
-    def test_detect_kubernetes_missing_kubectl(self, mock_exists, mock_which):
+    def test_detect_kubernetes_missing_kubectl(
+        self, mock_exists, mock_which, mock_current_context
+    ):
         """Test K8s detection fails fast if kubectl is missing."""
         mock_exists.side_effect = lambda p: p == os.path.expanduser(
             "~/.kube/config"
@@ -1943,55 +2166,58 @@ class TestSchedulerDetection(unittest.TestCase):
             ChsSchedulerException, "Missing required executable: kubectl"
         ):
             detect_scheduler()
+        # kubectl is checked before the kubeconfig is read.
+        mock_current_context.assert_not_called()
 
-    @mock.patch("subprocess.run")
+    @mock.patch.object(k8s_client, "current_context", return_value=None)
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {}, clear=True)
     def test_detect_kubernetes_missing_context(
-        self, mock_exists, mock_which, mock_run
+        self, mock_exists, mock_which, mock_current_context
     ):
         """Test K8s detection fails if no active context is set."""
         mock_exists.side_effect = lambda p: p == os.path.expanduser(
             "~/.kube/config"
         )
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
-        mock_run.return_value.stdout = ""
 
         with self.assertRaisesRegex(
             ChsSchedulerException, "no active kubectl context is set"
         ):
             detect_scheduler()
+        mock_current_context.assert_called_once_with()
 
-    @mock.patch("subprocess.run")
+    @mock.patch.object(
+        k8s_client, "current_context", return_value="test-context"
+    )
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {"KUBECONFIG": "/some/path"})
     def test_detect_kubernetes_out_of_cluster_env(
-        self, mock_exists, mock_which, mock_run
+        self, mock_exists, mock_which, mock_current_context
     ):
         """Test K8s detected out-of-cluster if KUBECONFIG env is set and
         file exists.
         """
-        # Mock subprocess.run to return a context
-        mock_run.return_value.stdout = "test-context"
         # Slurm not found, kubectl found
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
         mock_exists.side_effect = lambda p: p == "/some/path"
 
         scheduler = detect_scheduler()
         self.assertEqual(scheduler, "kubernetes")
+        mock_current_context.assert_called_once_with()
 
-    @mock.patch("subprocess.run")
+    @mock.patch.object(
+        k8s_client, "current_context", return_value="test-context"
+    )
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
     @mock.patch.dict("os.environ", {"KUBECONFIG": "/path1:/path2"})
     def test_detect_kubernetes_out_of_cluster_env_multi(
-        self, mock_exists, mock_which, mock_run
+        self, mock_exists, mock_which, mock_current_context
     ):
         """Test K8s detected if KUBECONFIG has multiple paths and one exists."""
-        # Mock subprocess.run to return a context
-        mock_run.return_value.stdout = "test-context"
         # Slurm not found, kubectl found
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
         # /path2 exists, /path1 does not
@@ -1999,6 +2225,59 @@ class TestSchedulerDetection(unittest.TestCase):
 
         scheduler = detect_scheduler()
         self.assertEqual(scheduler, "kubernetes")
+        mock_current_context.assert_called_once_with()
+
+    @mock.patch.object(
+        k8s_client, "current_context", return_value="test-context"
+    )
+    @mock.patch("shutil.which", return_value=None)
+    def test_get_kubectl_context_requires_kubectl(
+        self, mock_which, mock_current_context
+    ):
+        """Test no context is reported if kubectl, which Ramble runs, is
+        missing."""
+        self.assertIsNone(_get_kubectl_context())
+        mock_which.assert_called_once_with("kubectl")
+        mock_current_context.assert_not_called()
+
+    @mock.patch("subprocess.run")
+    @mock.patch("shutil.which", return_value="/usr/bin/kubectl")
+    def test_get_kubectl_context_reads_kubeconfig(self, mock_which, mock_run):
+        """Test the context is read via k8s_client without kubectl."""
+        kube = install_fake_client(self)
+        kube.context = "gke_proj_zone_cluster"
+        self.assertEqual(_get_kubectl_context(), "gke_proj_zone_cluster")
+
+        kube.context = None
+        self.assertIsNone(_get_kubectl_context())
+        mock_run.assert_not_called()
+
+    @mock.patch("shutil.which")
+    @mock.patch("os.path.exists")
+    @mock.patch.dict("os.environ", {}, clear=True)
+    def test_detect_kubernetes_current_context_kube_error(
+        self, mock_exists, mock_which
+    ):
+        """Test KubeError from current_context returns None and raises
+        no-active-context ChsSchedulerException."""
+        mock_exists.side_effect = lambda p: p == os.path.expanduser(
+            "~/.kube/config"
+        )
+        mock_which.side_effect = lambda cmd: cmd == "kubectl"
+        kube = install_fake_client(self)
+        kube.fail_always(
+            "current_context",
+            k8s_client.KubeError(
+                "Kubernetes configuration could not be loaded: "
+                "Expected key current-context in kube-config"
+            ),
+        )
+
+        self.assertIsNone(_get_kubectl_context())
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "no active kubectl context is set"
+        ):
+            detect_scheduler()
 
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
@@ -2023,57 +2302,6 @@ class TestSchedulerDetection(unittest.TestCase):
 
         with self.assertRaises(ChsSchedulerException):
             detect_scheduler()
-
-
-class TestKubernetesFetchJobLog(unittest.TestCase):
-    """Tests for KubernetesScheduler.fetch_job_log."""
-
-    def setUp(self):
-        super().setUp()
-        self.tmp_dir_obj = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp_dir_obj.cleanup)
-        self.log_path = os.path.join(self.tmp_dir_obj.name, "job.log")
-        self.scheduler = KubernetesScheduler()
-        patcher = mock.patch.object(
-            self.scheduler, "_is_tpu_job", return_value=False
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    @mock.patch("chs.schedulers.kubernetes.subprocess.run")
-    @mock.patch.object(
-        KubernetesScheduler, "_get_pod_names", return_value=["pod-a", "pod-b"]
-    )
-    def test_streams_logs_to_file_with_timeout(self, _, mock_run):
-        def _write_log(cmd, stdout, **kwargs):
-            stdout.write(f"log {cmd[2]}\n".encode())
-
-        mock_run.side_effect = _write_log
-        self.scheduler.fetch_job_log("job-1", self.log_path)
-
-        for pod in ("pod-a", "pod-b"):
-            mock_run.assert_any_call(
-                ["kubectl", "logs", pod, "-n", "chs"],
-                stdout=mock.ANY,
-                check=True,
-                timeout=120,
-            )
-        with open(self.log_path) as f:
-            self.assertEqual(f.read(), "log pod-a\nlog pod-b\n")
-
-    @mock.patch("chs.schedulers.kubernetes.logger")
-    @mock.patch("chs.schedulers.kubernetes.subprocess.run")
-    @mock.patch.object(
-        KubernetesScheduler, "_get_pod_names", return_value=["pod-a"]
-    )
-    def test_timeout_is_logged_not_raised(self, _, mock_run, mock_logger):
-        mock_run.side_effect = subprocess.TimeoutExpired("kubectl logs", 120)
-        self.scheduler.fetch_job_log("job-1", self.log_path)
-        mock_logger.error.assert_called_once()
-        self.assertIn(
-            "Timed out retrieving execution logs",
-            mock_logger.error.call_args[0][0],
-        )
 
 
 if __name__ == "__main__":

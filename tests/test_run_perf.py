@@ -14,9 +14,10 @@
 
 """Tests for the latency optimizations of `chs run`.
 
-Covers the deferred import of the GCE client library, the Bill of Health
-upload that overlaps the workspace archive, the job status poll interval and
-the resource cleanup that runs in the background after the analysis.
+Covers the deferred import of the GCE and Kubernetes client libraries, the
+Bill of Health upload that overlaps the workspace archive, the job status
+poll interval and the resource cleanup that runs in the background after the
+analysis.
 """
 
 import contextlib
@@ -35,7 +36,11 @@ from chs import cli
 from chs import exceptions as ex
 from chs.cli.background_cleanup import BackgroundCleanup
 from chs.ramble_manager import RambleManager
+from chs.utils import k8s_client
 from chs.utils.app_data import ChsAppData
+
+# Imported for its guard: no test here may create a real Kubernetes client.
+from tests import k8s_fakes  # noqa: F401
 
 # Upper bound for waiting on an event that the code under test should set.
 # It is only reached when the behavior under test is broken.
@@ -60,11 +65,11 @@ def _join_cleanup_threads() -> None:
         thread.join(timeout=_EVENT_TIMEOUT_S)
 
 
-class LazyGceClientImportTest(unittest.TestCase):
-    """Tests that importing CHS does not load the GCE client library."""
+class LazyClientLibraryImportTest(unittest.TestCase):
+    """Tests that importing CHS does not load slow client libraries."""
 
-    def test_import_does_not_load_compute_v1(self):
-        """Test the ~2.9 s google.cloud.compute_v1 import is deferred.
+    def _loaded_by_import(self, package):
+        """Returns whether importing CHS loads `package` or a submodule.
 
         Every Ramble subprocess imports chs.utils.topology and the CLI imports
         chs.cli. This runs in a fresh interpreter, since the test process may
@@ -81,7 +86,9 @@ class LazyGceClientImportTest(unittest.TestCase):
             "import sys\n"
             "import chs.utils.topology\n"
             "import chs.cli\n"
-            "print('google.cloud.compute_v1' in sys.modules)\n"
+            f"package = {package!r}\n"
+            "print(any(name == package or name.startswith(package + '.')\n"
+            "          for name in sys.modules))\n"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],
@@ -92,7 +99,16 @@ class LazyGceClientImportTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.split()[-1], "False")
+        self.assertIn(result.stdout.split()[-1], ("True", "False"))
+        return result.stdout.split()[-1] == "True"
+
+    def test_import_does_not_load_compute_v1(self):
+        """Test the ~2.9 s google.cloud.compute_v1 import is deferred."""
+        self.assertFalse(self._loaded_by_import("google.cloud.compute_v1"))
+
+    def test_import_does_not_load_the_kubernetes_sdk(self):
+        """Test the ~1.3 s kubernetes import waits for the first API call."""
+        self.assertFalse(self._loaded_by_import("kubernetes"))
 
 
 class _RambleManagerTestCase(unittest.TestCase):
@@ -627,11 +643,14 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         )
 
     def test_expected_cleanup_errors_log_warning(self):
-        """ChsException, SubprocessError, and OSError log a warning."""
+        """Expected cleanup errors log a warning."""
         errors = [
             ex.ChsSchedulerException("scheduler down"),
-            subprocess.CalledProcessError(1, ["kubectl", "delete"]),
-            FileNotFoundError(2, "No such file or directory", "kubectl"),
+            k8s_client.KubeError(
+                "Error from server (Forbidden): forbidden", status=403
+            ),
+            subprocess.CalledProcessError(1, ["scancel", "--name=chs-run1"]),
+            FileNotFoundError(2, "No such file or directory", "scancel"),
         ]
         for error in errors:
             with self.subTest(error=type(error).__name__):

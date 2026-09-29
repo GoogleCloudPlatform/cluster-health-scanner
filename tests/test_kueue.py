@@ -15,7 +15,6 @@
 """Unit tests for KueueManager."""
 
 import os
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -23,12 +22,51 @@ from unittest import mock
 import yaml
 
 from chs.constants import (
+    CHS_NAMESPACE,
     DELETE_WAIT_TIMEOUT_SEC,
-    KUBECTL_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
 from chs.exceptions import KueueException
-from chs.utils.kueue import KueueManager
+from chs.utils.k8s_client import KubeError
+from chs.utils.kueue import (
+    FLAVOR_NAMES,
+    KUEUE_API_GROUP,
+    TOPOLOGY_NAMES,
+    KueueManager,
+)
+from tests.k8s_fakes import Call, install_fake_client, patch_k8s_client
+
+_CLUSTER_QUEUE_CRD = "clusterqueues.kueue.x-k8s.io"
+_DELETIONS = (
+    ("localqueues", ["chs-local-queue"], CHS_NAMESPACE),
+    ("clusterqueues", ["chs-cluster-queue"], None),
+    ("resourceflavors", FLAVOR_NAMES, None),
+    ("topologies", TOPOLOGY_NAMES, None),
+)
+_SERVER_ERROR = KubeError(
+    "Error from server (InternalError): etcdserver: request timed out",
+    status=500,
+)
+
+
+def _cleanup_calls(version: str = "v1beta1") -> list[Call]:
+    return [
+        Call("get_crd", {"name": _CLUSTER_QUEUE_CRD}),
+        *[
+            Call(
+                "delete_custom_objects",
+                {
+                    "group": KUEUE_API_GROUP,
+                    "version": version,
+                    "plural": plural,
+                    "object_names": object_names,
+                    "namespace": namespace,
+                    "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
+                },
+            )
+            for plural, object_names, namespace in _DELETIONS
+        ],
+    ]
 
 
 class TestKueueManager(unittest.TestCase):
@@ -36,6 +74,7 @@ class TestKueueManager(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        self.kube = install_fake_client(self)
         self.mock_scheduler = mock.Mock()
         self.mock_scheduler.kueue_supported = False
         self.mock_scheduler.workspace_config_dir = None
@@ -43,6 +82,26 @@ class TestKueueManager(unittest.TestCase):
         self.tmp_dir_obj = tempfile.TemporaryDirectory()
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
+        self.config_path = os.path.join(self.tmp_dir, "kueue-configs.yaml")
+
+    def _add_kueue_objects(self):
+        for plural, object_names, namespace in _DELETIONS:
+            for name in object_names:
+                self.kube.add_object(
+                    KUEUE_API_GROUP,
+                    plural,
+                    {"metadata": {"name": name}},
+                    namespace=namespace,
+                )
+
+    def _stored_kueue_names(self) -> list[str]:
+        remaining = []
+        for plural, object_names, namespace in _DELETIONS:
+            stored = set(
+                self.kube.stored_names(KUEUE_API_GROUP, plural, namespace)
+            )
+            remaining.extend(name for name in object_names if name in stored)
+        return remaining
 
     def test_generate_configs_unsupported_machine_type_raises(self):
         """Test generate_configs with unsupported machine type raises
@@ -53,10 +112,11 @@ class TestKueueManager(unittest.TestCase):
             self.kueue_mgr.generate_configs(
                 self.tmp_dir, "unsupported-mt", ["node1"]
             )
+        self.assertEqual(self.kube.calls, [])
 
     def test_generate_configs_success_renders(self):
         """Test generate_configs renders template and returns correct label."""
-        self.mock_scheduler._run_kubectl.return_value = "v1beta2"
+        self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta2",))
         label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
@@ -82,7 +142,7 @@ class TestKueueManager(unittest.TestCase):
     def test_generate_configs_tpu_success_renders(self):
         """Test generate_configs for TPU renders correct flavor and
         resource name."""
-        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
+        self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta1",))
         label = self.kueue_mgr.generate_configs(
             self.tmp_dir, "tpu7x-standard-4t", ["node1", "node2"]
         )
@@ -111,7 +171,7 @@ class TestKueueManager(unittest.TestCase):
         dynamic_slicing: bool = False,
     ) -> list[dict]:
         """Renders configs and returns all parsed YAML documents."""
-        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
+        self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta1",))
         self.kueue_mgr.generate_configs(
             self.tmp_dir,
             machine_type,
@@ -123,12 +183,7 @@ class TestKueueManager(unittest.TestCase):
             return [d for d in yaml.safe_load_all(f) if d]
 
     def test_generate_configs_flat_topology_omits_slice_levels(self):
-        """Non-dynamic clusters get a hostname-only topology.
-
-        TAS requires every node in the flavor to carry a label for every
-        level, so GPU and statically sliced TPU nodes must not be given the
-        slice controller's block or sub-block levels.
-        """
+        """Non-dynamic clusters get a hostname-only topology."""
         docs = self._render_all("a3-megagpu-8g", dynamic_slicing=False)
         topologies = [d for d in docs if d["kind"] == "Topology"]
         flavors = [d for d in docs if d["kind"] == "ResourceFlavor"]
@@ -222,202 +277,327 @@ class TestKueueManager(unittest.TestCase):
                 self.assertNotIn("admissionChecks", cq["spec"])
 
     def test_apply_configs_success(self):
-        """Test apply_configs cleans up and applies configurations."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            "",  # cleanup (one batched delete)
-            "",  # apply
-            "",  # wait
-        ]
-        self.kueue_mgr.apply_configs(self.tmp_dir)
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 3)
+        """Test apply_configs cleans up and applies configs."""
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
+        )
+        self.kube.add_object(
+            KUEUE_API_GROUP,
+            "clusterqueues",
+            {
+                "metadata": {"name": "chs-cluster-queue"},
+                "status": {
+                    "conditions": [{"type": "Active", "status": "True"}]
+                },
+            },
+        )
+        with (
+            mock.patch.object(self.kueue_mgr, "cleanup") as mock_cleanup,
+            mock.patch.object(
+                self.kueue_mgr, "apply_and_verify"
+            ) as mock_apply_and_verify,
+        ):
+            self.kueue_mgr.apply_configs(self.tmp_dir)
+        mock_cleanup.assert_called_once_with()
+        mock_apply_and_verify.assert_called_once_with(self.config_path)
 
     def test_apply_and_verify_permission_error_raises(self):
-        """Test applying config with kubectl error raises KueueException."""
-        self.mock_scheduler._run_kubectl.side_effect = (
-            subprocess.CalledProcessError(
-                1, "kubectl apply", stderr="permission denied"
-            )
+        """Test a Kubernetes API error on apply raises KueueException."""
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
-        with self.assertRaisesRegex(
-            KueueException, "Failed to create ResourceFlavors"
-        ):
-            self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
+        err = KubeError(
+            "Error from server (Forbidden): clusterqueues.kueue.x-k8s.io is "
+            'forbidden: User "chs" cannot create resource "clusterqueues"',
+            status=403,
+        )
+        self.kube.fail_next("apply_custom_object", err)
+        with self.assertRaises(KueueException) as ctx:
+            self.kueue_mgr.apply_and_verify(self.config_path)
+        self.assertEqual(
+            str(ctx.exception),
+            "Failed to create ResourceFlavors, ClusterQueues, and/or "
+            f"LocalQueues. Details: {err}",
+        )
+        self.assertIs(ctx.exception.__cause__, err)
+        self.assertEqual(self.kube.calls_to("get_custom_object"), [])
 
     def test_apply_and_verify_success(self):
-        """Test apply_and_verify successfully runs apply and wait commands."""
-        self.mock_scheduler._run_kubectl.return_value = ""
-        self.kueue_mgr.apply_and_verify("/tmp/kueue-configs.yaml")
-
-        self.mock_scheduler._run_kubectl.assert_any_call(
-            ["apply", "-f", "/tmp/kueue-configs.yaml"],
-            timeout=KUBECTL_TIMEOUT_SEC,
+        """Test apply_and_verify applies all docs and waits for Active."""
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
+        self.kube.add_object(
+            KUEUE_API_GROUP,
+            "clusterqueues",
+            {
+                "metadata": {"name": "chs-cluster-queue"},
+                "status": {
+                    "conditions": [{"type": "Active", "status": "True"}]
+                },
+            },
+        )
+        self.kube.calls.clear()
 
-        self.mock_scheduler._run_kubectl.assert_any_call(
+        self.kueue_mgr.apply_and_verify(self.config_path)
+
+        self.assertEqual(len(self.kube.calls_to("apply_custom_object")), 4)
+        self.assertEqual(
+            self.kube.calls_to("get_custom_object"),
             [
-                "wait",
-                "--for=condition=Active",
-                "clusterqueue/chs-cluster-queue",
-                "--timeout=300s",
+                Call(
+                    "get_custom_object",
+                    {
+                        "group": KUEUE_API_GROUP,
+                        "version": "v1beta1",
+                        "plural": "clusterqueues",
+                        "name": "chs-cluster-queue",
+                    },
+                )
             ],
-            timeout=350,
+        )
+        self.assertEqual(
+            self.kube.stored_names(KUEUE_API_GROUP, "localqueues", "chs"),
+            ["chs-local-queue"],
+        )
+        self.assertEqual(
+            self.kube.stored_names(KUEUE_API_GROUP, "resourceflavors"),
+            ["chs-flavor-static"],
+        )
+        self.assertEqual(
+            self.kube.stored_names(KUEUE_API_GROUP, "topologies"),
+            ["chs-node-topology-static"],
         )
 
-    def test_apply_and_verify_timeout_raises(self):
-        """Test timeout during verification wait loop raises KueueException."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            "",
-            subprocess.CalledProcessError(
-                1, "kubectl wait", stderr="timed out"
-            ),
+    def test_apply_and_verify_uses_cluster_queue_version_and_requires_it(self):
+        """ClusterQueue API version comes from the ClusterQueue doc itself."""
+        docs = [
+            {
+                "apiVersion": f"{KUEUE_API_GROUP}/v1beta1",
+                "kind": "ResourceFlavor",
+                "metadata": {"name": "chs-flavor-static"},
+            },
+            {
+                "apiVersion": f"{KUEUE_API_GROUP}/v1beta2",
+                "kind": "ClusterQueue",
+                "metadata": {"name": "chs-cluster-queue"},
+            },
         ]
+        with open(self.config_path, "w") as f:
+            yaml.safe_dump_all(docs, f)
+        self.kube.add_object(
+            KUEUE_API_GROUP,
+            "clusterqueues",
+            {
+                "metadata": {"name": "chs-cluster-queue"},
+                "status": {
+                    "conditions": [{"type": "Active", "status": "True"}]
+                },
+            },
+        )
 
-        with self.assertRaisesRegex(
-            KueueException, "Timeout or error waiting for Kueue ClusterQueue"
-        ):
-            self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
+        self.kueue_mgr.apply_and_verify(self.config_path)
 
-        self.mock_scheduler._run_kubectl.assert_any_call(
+        self.assertEqual(
+            self.kube.calls_to("get_custom_object"),
             [
-                "wait",
-                "--for=condition=Active",
-                "clusterqueue/chs-cluster-queue",
-                "--timeout=300s",
+                Call(
+                    "get_custom_object",
+                    {
+                        "group": KUEUE_API_GROUP,
+                        "version": "v1beta2",
+                        "plural": "clusterqueues",
+                        "name": "chs-cluster-queue",
+                    },
+                )
             ],
-            timeout=350,
+        )
+
+        with open(self.config_path, "w") as f:
+            yaml.safe_dump_all([docs[0]], f)
+        with self.assertRaisesRegex(
+            KueueException, "No ClusterQueue document found"
+        ):
+            self.kueue_mgr.apply_and_verify(self.config_path)
+
+    def test_apply_and_verify_polls_then_times_out(self):
+        """Test verification wait loop polls and raises on timeout."""
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
+        )
+        self.kube.add_object(
+            KUEUE_API_GROUP,
+            "clusterqueues",
+            {"metadata": {"name": "chs-cluster-queue"}, "status": None},
+        )
+        self.kube.calls.clear()
+
+        with (
+            mock.patch(
+                "chs.utils.kueue.time.monotonic", side_effect=[0, 10, 301]
+            ),
+            mock.patch("chs.utils.kueue.time.sleep") as mock_sleep,
+        ):
+            with self.assertRaises(KueueException) as ctx:
+                self.kueue_mgr.apply_and_verify(self.config_path)
+
+        mock_sleep.assert_called_once_with(0.5)
+        cause = ctx.exception.__cause__
+        self.assertIsInstance(cause, KubeError)
+        self.assertEqual(
+            str(ctx.exception),
+            "Timeout or error waiting for Kueue ClusterQueue "
+            f"'chs-cluster-queue' to become active. Details: {cause}",
         )
 
     def test_cleanup_success(self):
-        """Test cleanup deletes all resources with one kubectl call."""
-        self.mock_scheduler._run_kubectl.return_value = ""
+        """Test cleanup deletes all resources in dependency order."""
+        self._add_kueue_objects()
         self.kueue_mgr.cleanup()
-        self.mock_scheduler._run_kubectl.assert_called_once_with(
-            [
-                "delete",
-                "localqueue/chs-local-queue",
-                "clusterqueue/chs-cluster-queue",
-                "resourceflavor/chs-flavor-dynamic",
-                "resourceflavor/chs-flavor-static",
-                "topology/chs-node-topology-dynamic",
-                "topology/chs-node-topology-static",
-                "-n",
-                "chs",
-                "--ignore-not-found",
-                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
-            ],
-            timeout=KUBECTL_TIMEOUT_SEC,
-        )
+        self.assertEqual(self.kube.calls, _cleanup_calls("v1beta1"))
+        self.assertEqual(self._stored_kueue_names(), [])
+
+    def test_cleanup_ignores_missing_objects(self):
+        """Test cleanup succeeds when nothing is left."""
+        self.kueue_mgr.cleanup()
+        self.assertEqual(self.kube.calls, _cleanup_calls("v1beta1"))
 
     def test_cleanup_deletes_topology_after_resource_flavor(self):
         """Topologies must outlive the ResourceFlavor that references them."""
-        with self.subTest("batched"):
-            self.mock_scheduler._run_kubectl.return_value = ""
-            self.kueue_mgr.cleanup()
-
-            # kubectl deletes the resources in argument order.
-            args = self.mock_scheduler._run_kubectl.call_args.args[0]
-            flavors = [
-                i for i, a in enumerate(args) if a.startswith("resourceflavor/")
-            ]
-            topologies = [
-                i for i, a in enumerate(args) if a.startswith("topology/")
-            ]
-            self.assertTrue(flavors)
-            self.assertTrue(topologies)
-            self.assertLess(max(flavors), min(topologies))
-
-        with self.subTest("sequential fallback"):
-            self.mock_scheduler._run_kubectl.reset_mock()
-            self.mock_scheduler._run_kubectl.side_effect = [
-                subprocess.CalledProcessError(1, "kubectl delete"),
-                "",
-                "",
-                "",
-                "",
-            ]
-            self.kueue_mgr.cleanup()
-
-            resources = [
-                call.args[0][1]
-                for call in self.mock_scheduler._run_kubectl.call_args_list[1:]
-            ]
-            self.assertLess(
-                resources.index("resourceflavor"), resources.index("topology")
-            )
+        self.kueue_mgr.cleanup()
+        delete_calls = self.kube.calls_to("delete_custom_objects")
+        plurals = [call.kwargs["plural"] for call in delete_calls]
+        self.assertEqual(
+            plurals,
+            ["localqueues", "clusterqueues", "resourceflavors", "topologies"],
+        )
 
     def test_cleanup_failure_raises(self):
         """Test cleanup error raises KueueException."""
-        self.mock_scheduler._run_kubectl.side_effect = (
-            subprocess.CalledProcessError(
-                1, "kubectl delete", stderr="conflict"
-            )
+        err = KubeError(
+            "Error from server (Conflict): Operation cannot be fulfilled",
+            status=409,
+        )
+        self.kube.fail_always("delete_custom_objects", err)
+        with self.assertRaises(KueueException) as ctx:
+            self.kueue_mgr.cleanup()
+        self.assertEqual(
+            str(ctx.exception),
+            f"Failed to delete Kueue resources. Details: {err}",
+        )
+        self.assertIs(ctx.exception.__cause__, err)
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call("get_crd", {"name": _CLUSTER_QUEUE_CRD}),
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": KUEUE_API_GROUP,
+                        "version": "v1beta1",
+                        "plural": "localqueues",
+                        "object_names": ["chs-local-queue"],
+                        "namespace": CHS_NAMESPACE,
+                        "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
+                    },
+                ),
+            ],
+        )
+
+    def test_cleanup_without_kubeconfig_raises(self):
+        """Test a client that cannot be created raises KueueException."""
+        err = KubeError("Invalid kube-config file. No configuration.")
+        with patch_k8s_client(error=err):
+            with self.assertRaises(KueueException) as ctx:
+                self.kueue_mgr.cleanup()
+        self.assertEqual(
+            str(ctx.exception),
+            f"Failed to delete Kueue resources. Details: {err}",
+        )
+        self.assertIs(ctx.exception.__cause__, err)
+
+    def test_cleanup_timeout_raises(self):
+        """A stuck finalizer must surface as KueueException, not hang."""
+        self.kube.fail_next(
+            "delete_custom_objects",
+            None,
+            KubeError("Timed out waiting for deletion of chs-cluster-queue"),
         )
         with self.assertRaisesRegex(
             KueueException, "Failed to delete Kueue resources"
         ):
             self.kueue_mgr.cleanup()
-
-    def test_cleanup_timeout_raises(self):
-        """A stuck finalizer must surface as KueueException, not hang."""
-        self.mock_scheduler._run_kubectl.side_effect = [
-            subprocess.TimeoutExpired("kubectl delete", KUBECTL_TIMEOUT_SEC),
-            "",
-            subprocess.TimeoutExpired(
-                "kubectl delete clusterqueue", KUBECTL_TIMEOUT_SEC
-            ),
-        ]
-        with self.assertRaisesRegex(
-            KueueException, "Failed to delete Kueue resources"
-        ):
-            self.kueue_mgr.cleanup()
+        self.assertEqual(self.kube.calls, _cleanup_calls()[:3])
 
     def test_apply_configs_cleanup_failure_propagates(self):
         """apply_configs fails fast if pre-apply cleanup times out or fails."""
-        self.mock_scheduler._run_kubectl.side_effect = (
-            subprocess.TimeoutExpired(
-                "kubectl delete localqueue", KUBECTL_TIMEOUT_SEC
-            )
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
+        )
+        self.kube.fail_next(
+            "delete_custom_objects",
+            KubeError("Timed out waiting for deletion of chs-local-queue"),
         )
         with self.assertRaisesRegex(
             KueueException, "Failed to delete Kueue resources"
         ):
             self.kueue_mgr.apply_configs(self.tmp_dir)
-        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 2)
+        self.assertEqual(self.kube.calls_to("apply_custom_object"), [])
 
     def test_apply_and_verify_apply_timeout_raises(self):
-        """A kubectl apply timeout is reported as KueueException."""
-        self.mock_scheduler._run_kubectl.side_effect = (
-            subprocess.TimeoutExpired("kubectl apply", KUBECTL_TIMEOUT_SEC)
+        """An apply timeout is reported as KueueException."""
+        self.kueue_mgr.generate_configs(
+            self.tmp_dir, "a3-megagpu-8g", ["node1", "node2"]
         )
+        self.kube.fail_next("apply_custom_object", KubeError("read timed out"))
         with self.assertRaisesRegex(
             KueueException, "Failed to create ResourceFlavors"
         ):
-            self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
+            self.kueue_mgr.apply_and_verify(self.config_path)
 
     def test_get_kueue_api_version_v1beta2_preferred(self):
         """Test _get_kueue_api_version returns v1beta2 when both
         are supported."""
-        self.mock_scheduler._run_kubectl.return_value = "v1beta1 v1beta2"
+        self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta1", "v1beta2"))
         self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta2")
+        self.assertEqual(
+            self.kube.calls,
+            [Call("get_crd", {"name": _CLUSTER_QUEUE_CRD})],
+        )
 
     def test_get_kueue_api_version_v1beta2(self):
         """Test _get_kueue_api_version returns v1beta2 when only
         v1beta2 is supported."""
-        self.mock_scheduler._run_kubectl.return_value = "v1beta2"
+        self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta2",))
         self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta2")
 
     def test_get_kueue_api_version_v1beta1_only(self):
         """Test _get_kueue_api_version returns v1beta1 when only
         v1beta1 is supported."""
-        self.mock_scheduler._run_kubectl.return_value = "v1beta1"
-        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+        with self.subTest("v1beta1 served"):
+            self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta1",))
+            self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+        with self.subTest("no versions listed"):
+            self.kube.add_object(
+                "apiextensions.k8s.io",
+                "customresourcedefinitions",
+                {"metadata": {"name": _CLUSTER_QUEUE_CRD}},
+            )
+            self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
 
     def test_get_kueue_api_version_fallback(self):
         """Test _get_kueue_api_version falls back to v1beta1 on error."""
-        self.mock_scheduler._run_kubectl.side_effect = (
-            subprocess.CalledProcessError(1, "cmd")
-        )
-        self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+        with self.subTest("CRD not installed"):
+            self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+        with self.subTest("API error"):
+            self.kube.add_crd(_CLUSTER_QUEUE_CRD, versions=("v1beta2",))
+            self.kube.fail_next("get_crd", _SERVER_ERROR)
+            self.assertEqual(self.kueue_mgr._get_kueue_api_version(), "v1beta1")
+        with self.subTest("no kubeconfig"):
+            with patch_k8s_client(error=KubeError("no configuration")):
+                self.assertEqual(
+                    self.kueue_mgr._get_kueue_api_version(), "v1beta1"
+                )
 
 
 if __name__ == "__main__":
