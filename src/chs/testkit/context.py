@@ -50,23 +50,17 @@ def nodes_str(scheduler: str, nodes: list[str] | None) -> str:
 def apply_kubernetes_affinity(
     variables: dict,
     nodes_block: str | None,
-    nodes_list: list[str] | None = None,
 ) -> None:
     affinity_yaml = ""
-    node_affinity_only_yaml = ""
     if nodes_block:
-        node_affinity_only_yaml = f"""nodeAffinity:
+        affinity_yaml = f'''nodeAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
     nodeSelectorTerms:
     - matchExpressions:
       - key: kubernetes.io/hostname
         operator: In
         values:
-{nodes_block}"""
-
-        affinity_yaml = (
-            node_affinity_only_yaml
-            + '''
+{nodes_block}
 podAntiAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
   - labelSelector:
@@ -74,20 +68,8 @@ podAntiAffinity:
       - key: jobset.sigs.k8s.io/jobset-name
         operator: Exists
     topologyKey: "kubernetes.io/hostname"'''
-        )
 
     variables["affinity_yaml"] = affinity_yaml
-    variables["node_affinity_only_yaml"] = node_affinity_only_yaml
-    lines = node_affinity_only_yaml.split("\n")
-    variables["cd_affinity_yaml"] = (
-        lines[0] + "\n" + textwrap.indent("\n".join(lines[1:]), "        ")
-    )
-
-    if nodes_list:
-        expr = " || ".join(f"device.pool == '{name}'" for name in nodes_list)
-        variables["cel_filter_expression"] = expr if expr else "true"
-    else:
-        variables["cel_filter_expression"] = "device.pool == '{node}'"
 
 
 def sbatch_headers(headers: dict) -> str:
@@ -149,10 +131,7 @@ def merge_machine_config(
 
     app_config = machine_config[config_key]
     _merge_section(app_config, "env_vars", context_dict, "env_vars")
-    # Not renamed to "success" as the engine does: Ramble's
-    # create_context_from_dict reads success_criteria and nothing else, so the
-    # renamed key would be dropped in silence. No config sets one today, which
-    # is why the engine has got away with it.
+    # Ramble's create_context_from_dict expects the key "success_criteria".
     _merge_section(
         app_config, "success_criteria", context_dict, "success_criteria"
     )
@@ -209,8 +188,6 @@ def _merge_section(
     target_value = dst[dst_key]
     if isinstance(source_value, dict) and isinstance(target_value, dict):
         for key, value in source_value.items():
-            # An unset or empty value is filled in from the configuration, but
-            # a caller that asked for False or 0 meant it.
             if override or _is_empty(target_value.get(key, _UNSET)):
                 target_value[key] = value
     elif isinstance(source_value, list) and isinstance(target_value, list):
@@ -244,18 +221,13 @@ def build_base_context(
     if extra_context:
         if "variables" in extra_context:
             raise ValueError(
-                "extra_context must not contain 'variables'; it would replace "
-                "the merged variables wholesale. Set the values through the "
-                "machine configuration or prepare_variables instead."
+                "Cannot set 'variables' in extra_context; configure variables "
+                "via the machine configuration or prepare_variables()."
             )
         context_dict.update(copy.deepcopy(extra_context))
 
     if not configs:
-        raise ValueError(
-            "build_base_context needs the machine configuration. Nothing "
-            "reads a test's configuration file yet, so there is nowhere "
-            "else for the settings to come from."
-        )
+        raise ValueError("Machine configuration is required.")
     merge_machine_config(
         context_dict,
         configs,
@@ -270,9 +242,7 @@ def build_base_context(
             headers.update(extra_sbatch_headers)
         variables["extra_sbatch_headers"] = sbatch_headers(headers)
     elif scheduler == "kubernetes":
-        nodes_list = variables.get("nodes")
-        nodes_list = nodes_list if isinstance(nodes_list, list) else None
-        apply_kubernetes_affinity(variables, nodes_block, nodes_list=nodes_list)
+        apply_kubernetes_affinity(variables, nodes_block)
 
     return context_dict
 
@@ -289,6 +259,7 @@ def build_node_context(
     scheduler = ctx_vars.get("scheduler", "kubernetes")
 
     ctx_vars["node"] = ctx_vars.get("nodes")
+    ctx_vars["n_nodes"] = 1
 
     nodes_block = (
         "{node}"
@@ -368,14 +339,6 @@ def build_slice_contexts(
             benchmark_config=benchmark_config,
         )
         return [(f"{experiment_name}-{{node}}", context_dict)]
-
-    if scheduler != "kubernetes":
-        logger.warning(
-            "Unsupported scheduler '%s' for test '%s'. Skipping this test.",
-            scheduler,
-            config_key,
-        )
-        return []
 
     tpu_slices = variables.get("tpu_slices", {})
     if not tpu_slices:

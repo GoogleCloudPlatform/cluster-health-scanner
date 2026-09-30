@@ -12,19 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Toolkit for defining CHS tests.
-
-A test is a directory under ``chs/repos/tests`` holding a ``plugin.py`` that
-subclasses one of the plugin shapes exported here. Everything a test needs to
-say about itself is said in that one file, and the runner discovers it without
-being told the test exists.
-"""
-
 from chs.testkit.base import (
     BaseTestPlugin,
-    ClusterTestPlugin,
-    NodeTestPlugin,
-    SliceTestPlugin,
+    MultiNodePlugin,
+    SingleNodePlugin,
+    SlicePlugin,
 )
 from chs.testkit.loader import available_tests, clear_cache, load_plugin
 from chs.testkit.spec import (
@@ -37,9 +29,9 @@ from chs.testkit.spec import (
 
 __all__ = [
     "BaseTestPlugin",
-    "ClusterTestPlugin",
-    "NodeTestPlugin",
-    "SliceTestPlugin",
+    "MultiNodePlugin",
+    "SingleNodePlugin",
+    "SlicePlugin",
     "ExperimentSpec",
     "NodeGrouping",
     "STRIPPED_WORKSPACE_KEYS",

@@ -325,7 +325,7 @@ class PairwiseGroupingTest(unittest.TestCase):
         return self.root
 
     def test_one_node_is_too_few_to_measure_a_pair(self):
-        self.assertEqual(2, self.plugin.minimum_nodes)
+        self.assertEqual(2, self.plugin.min_nodes_to_run)
         self.assertEqual([], self.plugin.build(request(nodes=["node-1"])))
 
     def test_two_nodes_are_enough_for_one_pair(self):
@@ -449,15 +449,32 @@ class SingleNodeNcclTest(unittest.TestCase):
     def setUp(self):
         self.plugin = plugin("nccl-single-node")
 
-    def test_every_node_is_measured_on_its_own(self):
-        grouping = self.plugin.grouping(
-            request(nodes=["node-1", "node-2", "node-3"])
+    def test_each_workload_expands_per_node_with_one_node_count(self):
+        req = request(
+            nodes=["node-1", "node-2"],
+            configs={
+                "machine-x": {
+                    self.plugin.config_name: {
+                        "variables": {"timeout": 600, "deadline": 600}
+                    }
+                }
+            },
         )
 
-        self.assertEqual([["node-1"], ["node-2"], ["node-3"]], grouping.groups)
+        specs = self.plugin.build(req)
 
-    def test_an_experiment_is_named_after_the_node_it_measures(self):
-        self.assertEqual("-node-1", self.plugin.group_suffix(["node-1"]))
+        self.assertEqual(
+            [
+                "chs-run-nccl-single-node-all-gather-{node}",
+                "chs-run-nccl-single-node-all-reduce-{node}",
+            ],
+            [s.name for s in specs],
+        )
+        for spec in specs:
+            self.assertEqual(1, spec.context["variables"]["n_nodes"])
+            self.assertEqual(
+                ["node-1", "node-2"], spec.context["variables"]["node"]
+            )
 
     def test_the_collective_is_kept_off_the_cluster_fabric(self):
         """Otherwise the intra-node measurement would include the fabric."""
@@ -510,12 +527,85 @@ class TpuCollectivesTest(unittest.TestCase):
             context["variables"]["benchmarks_yaml_escaped"],
         )
 
+    def test_an_unlisted_topology_uses_default_transfer_bounds(self):
+        context = {
+            "variables": {
+                "execution_topology": "3x3x3",
+                "cores_per_chip": 1,
+                "benchmarks_yaml_escaped": (
+                    "__MESH__ __START__ __END__ __MULTIPLIER__"
+                ),
+            }
+        }
+
+        self.plugin.finalize_context(context, "all_reduce", request())
+
+        self.assertEqual(
+            "3x3x3 27 16384 2",
+            context["variables"]["benchmarks_yaml_escaped"],
+        )
+
     def test_a_slice_of_unknown_shape_is_refused(self):
         """A guessed mesh would report bandwidth that means nothing."""
-        context = {"variables": {"cores_per_chip": 1}}
+        for bad_vars in (
+            {"cores_per_chip": 1},
+            {"execution_topology": "2x2x1"},
+            {"execution_topology": "two-by-two", "cores_per_chip": 1},
+        ):
+            with self.subTest(variables=bad_vars):
+                with self.assertRaises(ValueError):
+                    self.plugin.finalize_context(
+                        {"variables": dict(bad_vars)}, "all_reduce", request()
+                    )
 
+    def finalize(self, **values):
+        context = {"variables": values}
+        self.plugin.finalize_context(context, "all_reduce", request())
+        return context["variables"]["benchmarks_yaml_escaped"]
+
+    def test_the_execution_topology_wins_over_the_assigned_one(self):
+        escaped = self.finalize(
+            execution_topology="2x2x1",
+            tpu_topology="4x4x4",
+            cores_per_chip=2,
+            benchmarks_yaml_escaped="__MESH__",
+        )
+
+        self.assertEqual("2x2x2", escaped)
+
+    def test_the_assigned_topology_is_used_when_no_execution_topology(self):
+        escaped = self.finalize(
+            tpu_topology="4x4x4",
+            cores_per_chip=2,
+            benchmarks_yaml_escaped="__START__ __END__ __MULTIPLIER__",
+        )
+
+        self.assertEqual("128 16384 2", escaped)
+
+    def test_message_size_start_never_drops_below_eight_elements(self):
+        escaped = self.finalize(
+            execution_topology="2x2x1",
+            cores_per_chip=1,
+            benchmarks_yaml_escaped="__ICI__ __START__",
+        )
+
+        self.assertEqual("4 8", escaped)
+
+    def test_message_sizes_can_be_overridden(self):
+        escaped = self.finalize(
+            execution_topology="2x2x1",
+            cores_per_chip=2,
+            message_size_start=64,
+            message_size_end=128,
+            message_size_multiplier=4,
+            benchmarks_yaml_escaped="__START__ __END__ __MULTIPLIER__",
+        )
+
+        self.assertEqual("64 128 4", escaped)
+
+    def test_a_non_integer_core_count_is_refused(self):
         with self.assertRaises(ValueError):
-            self.plugin.finalize_context(context, "all_reduce", request())
+            self.finalize(execution_topology="2x2x1", cores_per_chip="bad")
 
     def test_every_default_workload_builds_with_no_placeholders_left(self):
         req = request(
@@ -583,6 +673,30 @@ class TpuCollectivesSingleNodeTest(unittest.TestCase):
         self.assertEqual(
             "mesh: 2x2x2", context["variables"]["benchmarks_yaml_escaped"]
         )
+
+    def test_an_unlisted_topology_and_invalid_topologies_are_handled(self):
+        context = {
+            "variables": {
+                "execution_topology": "3x3x3",
+                "cores_per_chip": 1,
+                "benchmarks_yaml_escaped": "__MESH__ __START__",
+            }
+        }
+        self.plugin.finalize_context(context, "all_gather", request())
+        self.assertEqual(
+            "3x3x3 27", context["variables"]["benchmarks_yaml_escaped"]
+        )
+
+        for bad_vars in (
+            {"cores_per_chip": 1},
+            {"execution_topology": "2x2x1"},
+            {"execution_topology": "two-by-two", "cores_per_chip": 1},
+        ):
+            with self.subTest(variables=bad_vars):
+                with self.assertRaises(ValueError):
+                    self.plugin.finalize_context(
+                        {"variables": dict(bad_vars)}, "all_gather", request()
+                    )
 
 
 class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):

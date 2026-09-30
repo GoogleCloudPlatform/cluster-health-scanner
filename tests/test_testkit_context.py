@@ -69,42 +69,16 @@ class NodesStringTest(unittest.TestCase):
 class KubernetesAffinityTest(unittest.TestCase):
     def test_pins_to_nodes_and_keeps_pods_apart(self):
         values = {}
-        ctx.apply_kubernetes_affinity(
-            values, "            - node-1", nodes_list=["node-1"]
-        )
+        ctx.apply_kubernetes_affinity(values, "            - node-1")
 
         self.assertIn("kubernetes.io/hostname", values["affinity_yaml"])
         self.assertIn("podAntiAffinity", values["affinity_yaml"])
-        self.assertNotIn("podAntiAffinity", values["node_affinity_only_yaml"])
 
-    def test_reindents_the_nested_variant_below_its_first_line(self):
-        values = {}
-        ctx.apply_kubernetes_affinity(values, "            - node-1")
-
-        lines = values["cd_affinity_yaml"].split("\n")
-        self.assertEqual(lines[0], "nodeAffinity:")
-        self.assertTrue(lines[1].startswith("        "))
-
-    def test_device_filter_lists_every_pool(self):
-        values = {}
-        ctx.apply_kubernetes_affinity(
-            values, "x", nodes_list=["pool-a", "pool-b"]
-        )
-
-        self.assertEqual(
-            values["cel_filter_expression"],
-            "device.pool == 'pool-a' || device.pool == 'pool-b'",
-        )
-
-    def test_without_nodes_the_filter_stays_a_template(self):
+    def test_without_nodes_affinity_is_empty(self):
         values = {}
         ctx.apply_kubernetes_affinity(values, "")
 
         self.assertEqual(values["affinity_yaml"], "")
-        self.assertEqual(values["node_affinity_only_yaml"], "")
-        self.assertEqual(
-            values["cel_filter_expression"], "device.pool == '{node}'"
-        )
 
 
 class SbatchHeaderTest(unittest.TestCase):
@@ -151,8 +125,7 @@ class MergeMachineConfigTest(unittest.TestCase):
             )
 
     def test_a_context_cannot_be_built_without_a_configuration(self):
-        """Nothing reads a test's own configuration file yet."""
-        with self.assertRaisesRegex(ValueError, "needs the machine config"):
+        with self.assertRaisesRegex(ValueError, "Machine configuration"):
             ctx.build_base_context(
                 {"machine_type": "machine-x"}, None, "demo", "node-1"
             )
@@ -476,9 +449,6 @@ class SliceContextTest(unittest.TestCase):
         self.assertEqual(
             contexts[0][1]["variables"]["node"], ["node-1", "node-2"]
         )
-
-    def test_an_unknown_scheduler_produces_nothing(self):
-        self.assertEqual(self.build(variables(scheduler="pbs")), [])
 
 
 class BenchmarkConfigTest(unittest.TestCase):

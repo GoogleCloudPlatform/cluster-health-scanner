@@ -26,8 +26,7 @@ class TestRequest:
     workloads: tuple[str, ...] = ()
     workspace_root: str | None = None
 
-    # The name starts with "Test", which test runners take as an invitation to
-    # collect it. It is a value type, not a test case.
+    # Prevent pytest from collecting this dataclass as a test case.
     __test__ = False
 
     @property

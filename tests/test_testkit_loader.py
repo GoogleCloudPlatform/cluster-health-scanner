@@ -21,7 +21,6 @@ cover the happy path, and the rejection paths are driven by modules built in
 memory.
 """
 
-import os
 import sys
 import types
 import unittest
@@ -29,10 +28,10 @@ from unittest import mock
 
 from chs.testkit import available_tests, clear_cache, load_plugin
 from chs.testkit import loader
-from chs.testkit import NodeTestPlugin
+from chs.testkit import SingleNodePlugin
 
 
-class DemoPlugin(NodeTestPlugin):
+class DemoPlugin(SingleNodePlugin):
     """A valid plugin that does not match any shipped test directory."""
 
     name = "demo"
@@ -73,21 +72,16 @@ class LoaderTest(unittest.TestCase):
         logger.warning.assert_called_once()
 
     def test_a_missing_directory_lists_nothing(self):
-        absent = os.path.join(loader.TESTS_ROOT, "absent")
-
-        with mock.patch.object(loader, "logger") as logger:
-            self.assertEqual(available_tests(absent), [])
+        with (
+            mock.patch.object(loader, "TESTS_ROOT", "/nonexistent/tests"),
+            mock.patch.object(loader, "logger") as logger,
+        ):
+            self.assertEqual(available_tests(), [])
 
         logger.warning.assert_called_once()
 
     def test_a_plugin_is_loaded_once_and_reused(self):
         self.assertIs(load_plugin("dcgm"), load_plugin("dcgm"))
-
-    def test_two_spellings_of_one_directory_load_the_same_plugin(self):
-        first = load_plugin("dcgm")
-        second = load_plugin("dcgm", os.path.join(loader.TESTS_ROOT, "."))
-
-        self.assertIs(first, second)
 
     def test_a_file_without_a_plugin_class_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "does not define a class"):
@@ -98,7 +92,7 @@ class LoaderTest(unittest.TestCase):
             self.load_with(plugin_module(Plugin=type("Plugin", (), {})))
 
     def test_a_plugin_in_the_wrong_directory_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "must match"):
+        with self.assertRaisesRegex(ValueError, "does not match"):
             self.load_with(plugin_module(Plugin=DemoPlugin))
 
     def test_a_plugin_python_cannot_load_is_reported(self):
@@ -127,9 +121,7 @@ class LoaderTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 load_plugin("dcgm")
 
-        self.assertNotIn(
-            loader._module_name("dcgm", loader.TESTS_ROOT), sys.modules
-        )
+        self.assertNotIn(loader._module_name("dcgm"), sys.modules)
 
 
 if __name__ == "__main__":

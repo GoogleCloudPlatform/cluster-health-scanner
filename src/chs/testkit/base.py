@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The contract every CHS test implements"""
+"""Base plugin classes for CHS diagnostic tests."""
 
 import abc
 import copy
@@ -40,7 +40,7 @@ class BaseTestPlugin(abc.ABC):
     extra_context: ClassVar[dict[str, Any] | None] = None
     extra_sbatch_headers: ClassVar[dict[str, Any] | None] = None
     benchmark_config: ClassVar[str | None] = None
-    minimum_nodes: ClassVar[int] = 0
+    min_nodes_to_run: ClassVar[int] = 0
     category: ClassVar[str] = ""
     description: ClassVar[str] = ""
     long_description: ClassVar[str] = ""
@@ -69,13 +69,9 @@ class BaseTestPlugin(abc.ABC):
     def label(self) -> str:
         return self.experiment_label or self.name
 
-    @property
-    def accepts_workload_override(self) -> bool:
-        return self.workload_in_experiment_name
-
     def resolve_workloads(self, request: TestRequest) -> tuple[str, ...]:
         workloads = request.workloads
-        if not workloads or not self.accepts_workload_override:
+        if not workloads or not self.workload_in_experiment_name:
             return tuple(self.default_workloads)
         if isinstance(workloads, str):
             return (workloads,)
@@ -91,30 +87,22 @@ class BaseTestPlugin(abc.ABC):
     def machine_configs(self, request: TestRequest) -> dict[str, Any] | None:
         return copy.deepcopy(request.configs)
 
-    def prepare_run(self, request: TestRequest) -> Any:
-        del request
-        return None
-
     def build(self, request: TestRequest) -> list[ExperimentSpec]:
         if not self._has_enough_nodes(request):
             return []
 
-        prepared = self.prepare_run(request)
         specs: list[ExperimentSpec] = []
         for workload in self.resolve_workloads(request):
             experiment_name = self.experiment_name(
                 request.base_prefix, workload
             )
             variables = copy.deepcopy(request.variables)
-            # The job name identifies the submitted job and stays common to all
-            # experiments of this workload, even where the experiment names
-            # below are further qualified by node, pair or slice.
             variables["job_name"] = experiment_name
             variables["chs_test_name"] = self.name
             self.prepare_variables(variables, workload, request)
 
             for name, context in self.build_contexts(
-                variables, experiment_name, workload, request, prepared
+                variables, experiment_name, request
             ):
                 self.finalize_context(context, workload, request)
                 specs.append(
@@ -128,15 +116,15 @@ class BaseTestPlugin(abc.ABC):
         return specs
 
     def _has_enough_nodes(self, request: TestRequest) -> bool:
-        if not self.minimum_nodes:
+        if not self.min_nodes_to_run:
             return True
         available = len(request.nodes)
-        if available < self.minimum_nodes:
+        if available < self.min_nodes_to_run:
             logger.warning(
                 "The '%s' diagnostic requires a minimum of %d nodes, but only "
                 "%d are available. Skipping this test.",
                 self.name,
-                self.minimum_nodes,
+                self.min_nodes_to_run,
                 available,
             )
             return False
@@ -145,52 +133,31 @@ class BaseTestPlugin(abc.ABC):
     def prepare_variables(
         self, variables: dict, workload: str, request: TestRequest
     ) -> None:
-        """Adjusts the variables before any context is built.
-
-        Override to derive values that depend on the workload. Called once per
-        workload, on a copy that no other workload shares.
-        """
+        """Adjusts the variables before any context is built."""
 
     def finalize_context(
         self, context: dict, workload: str, request: TestRequest
     ) -> None:
-        """Adjusts a context after it has been built.
-
-        Override for changes that need the merged configuration in place, such
-        as substituting values into content the machine configuration supplied.
-        Called once per produced context.
-        """
+        """Adjusts a context after it has been built."""
 
     @abc.abstractmethod
     def build_contexts(
         self,
         variables: dict,
         experiment_name: str,
-        workload: str,
         request: TestRequest,
-        prepared: Any = None,
     ) -> Iterable[tuple[str, dict]]:
-        """Builds the contexts for one workload.
-
-        Returns pairs of experiment name and context dictionary. The number of
-        pairs is the test's own decision: one per node group, one per slice, or
-        a single context that a matrix expands later. ``prepared`` is whatever
-        :meth:`prepare_run` returned for this run.
-        """
+        """Builds the (experiment_name, context_dict) pairs for one workload."""
 
 
-class NodeTestPlugin(BaseTestPlugin):
+class SingleNodePlugin(BaseTestPlugin):
     """A test that runs on each node independently.
 
-    One context is produced whose experiment name ends in ``{node}``. Ramble
-    matrixes it over the node list, so the number of runs follows the size of
-    the cluster without the plugin counting anything.
+    Produces a single context templated with ``{node}`` that Ramble expands
+    across all nodes in the allocation.
     """
 
-    def build_contexts(
-        self, variables, experiment_name, workload, request, prepared=None
-    ):
-        del workload, prepared
+    def build_contexts(self, variables, experiment_name, request):
         context = build_node_context(
             variables,
             self.machine_configs(request),
@@ -202,7 +169,7 @@ class NodeTestPlugin(BaseTestPlugin):
         return [(f"{experiment_name}-{{node}}", context)]
 
 
-class ClusterTestPlugin(BaseTestPlugin):
+class MultiNodePlugin(BaseTestPlugin):
     """A test that runs across a group of nodes at once.
 
     By default the group is the whole allocation. Tests that measure several
@@ -213,24 +180,16 @@ class ClusterTestPlugin(BaseTestPlugin):
     def grouping(self, request: TestRequest) -> NodeGrouping:
         return NodeGrouping(groups=[request.nodes])
 
-    def prepare_run(self, request: TestRequest) -> NodeGrouping:
-        return self.grouping(request)
-
     def group_suffix(self, nodes: list[str]) -> str:
-        del nodes
         return ""
 
     def group_domain_type(
         self, nodes: list[str], grouping: NodeGrouping
     ) -> str | None:
-        del nodes, grouping
         return None
 
-    def build_contexts(
-        self, variables, experiment_name, workload, request, prepared=None
-    ):
-        del workload
-        grouping = prepared if prepared is not None else self.grouping(request)
+    def build_contexts(self, variables, experiment_name, request):
+        grouping = self.grouping(request)
         contexts = []
         for nodes in grouping.groups:
             context = build_cluster_context(
@@ -249,18 +208,14 @@ class ClusterTestPlugin(BaseTestPlugin):
         return contexts
 
 
-class SliceTestPlugin(BaseTestPlugin):
-    """A test that runs across a whole TPU slice at once.
+class SlicePlugin(BaseTestPlugin):
+    """A test that runs across a TPU slice.
 
-    On Kubernetes this is one experiment per slice, because a slice is the unit
-    the inter-chip interconnect is wired across. On Slurm it collapses to a
-    single node-matrix experiment.
+    On Kubernetes this creates one experiment per slice; on Slurm it creates a
+    single node-templated experiment.
     """
 
-    def build_contexts(
-        self, variables, experiment_name, workload, request, prepared=None
-    ):
-        del workload, prepared
+    def build_contexts(self, variables, experiment_name, request):
         return build_slice_contexts(
             variables,
             experiment_name,

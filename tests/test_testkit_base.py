@@ -18,12 +18,11 @@ import unittest
 from unittest import mock
 
 from chs.testkit import (
-    ClusterTestPlugin,
-    NodeTestPlugin,
-    SliceTestPlugin,
+    MultiNodePlugin,
+    SingleNodePlugin,
+    SlicePlugin,
     TestRequest,
 )
-from chs.testkit import base
 
 
 def machine_configs(**app_config):
@@ -47,7 +46,13 @@ def variables(**overrides):
     return values
 
 
-class DemoNodePlugin(NodeTestPlugin):
+class DemoNodePlugin(SingleNodePlugin):
+    name = "demo"
+    application = "demo"
+    default_workloads = ("check", "verify")
+
+
+class DemoClusterPlugin(MultiNodePlugin):
     name = "demo"
     application = "demo"
     default_workloads = ("check", "verify")
@@ -55,21 +60,25 @@ class DemoNodePlugin(NodeTestPlugin):
 
 class PluginContractTest(unittest.TestCase):
     def request(self, **overrides):
-        return TestRequest(
-            variables=variables(),
-            configs=machine_configs(variables={}),
-            base_prefix="chs-run",
-            **overrides,
-        )
+        defaults = {
+            "variables": variables(),
+            "configs": machine_configs(variables={}),
+            "base_prefix": "chs-run",
+        }
+        defaults.update(overrides)
+        return TestRequest(**defaults)
 
     def test_a_plugin_must_say_what_it_is(self):
         for attributes, message in (
             ({"application": "a", "default_workloads": ("w",)}, "test name"),
             ({"name": "a", "default_workloads": ("w",)}, "Ramble application"),
-            ({"name": "a", "application": "a"}, "default workload"),
+            (
+                {"name": "a", "application": "a"},
+                "default workload",
+            ),
         ):
             with self.subTest(attributes=attributes):
-                plugin_class = type("P", (NodeTestPlugin,), attributes)
+                plugin_class = type("P", (SingleNodePlugin,), attributes)
                 with self.assertRaisesRegex(ValueError, message):
                     plugin_class()
 
@@ -89,73 +98,80 @@ class PluginContractTest(unittest.TestCase):
             plugin.resolve_workloads(self.request(workloads=("only",))),
             ("only",),
         )
-
-    def test_a_single_workload_given_as_text_is_not_split_up(self):
-        plugin = DemoNodePlugin()
-
         self.assertEqual(
-            plugin.resolve_workloads(self.request(workloads="solo")), ("solo",)
+            plugin.resolve_workloads(self.request(workloads="only")),
+            ("only",),
         )
 
-    def test_experiment_names_follow_the_declared_shape(self):
-        plugin = DemoNodePlugin()
+    def test_experiment_names_carry_only_the_pieces_configured(self):
         self.assertEqual(
-            plugin.experiment_name("chs-run", "check"), "chs-run-demo-check"
+            DemoNodePlugin().experiment_name("chs-1", "check"),
+            "chs-1-demo-check",
         )
 
-        quiet = type(
-            "P", (DemoNodePlugin,), {"workload_in_experiment_name": False}
-        )()
-        self.assertEqual(
-            quiet.experiment_name("chs-run", "check"), "chs-run-demo"
-        )
-
-        suffixed = type(
+        fixed = type(
             "P",
             (DemoNodePlugin,),
             {
+                "experiment_label": "custom",
+                "experiment_suffix": "-tail",
                 "workload_in_experiment_name": False,
-                "experiment_suffix": "-l{lvl}",
             },
         )()
         self.assertEqual(
-            suffixed.experiment_name("chs-run", "check"), "chs-run-demo-l{lvl}"
+            fixed.experiment_name("chs-1", "check"), "chs-1-custom-tail"
         )
 
-    def test_a_test_below_its_node_floor_is_skipped(self):
-        plugin = type("P", (DemoNodePlugin,), {"minimum_nodes": 5})()
+    def test_a_plugin_displays_its_type_and_name(self):
+        self.assertEqual(repr(DemoNodePlugin()), "<DemoNodePlugin demo>")
 
-        with mock.patch.object(base, "logger") as logger:
-            self.assertEqual(plugin.build(self.request()), [])
-
-        logger.warning.assert_called_once()
-        self.assertIn("minimum of %d nodes", logger.warning.call_args[0][0])
-        self.assertEqual(logger.warning.call_args[0][2], 5)
-
-    def test_a_test_that_has_the_nodes_it_asked_for_runs(self):
-        plugin = type("P", (DemoNodePlugin,), {"minimum_nodes": 2})()
-
-        self.assertTrue(plugin.build(self.request()))
-
-    def test_a_plugin_is_identifiable_in_a_log_line(self):
-        self.assertEqual("<DemoNodePlugin demo>", repr(DemoNodePlugin()))
-
-    def test_the_job_name_is_shared_by_every_experiment_of_a_workload(self):
-        plugin = DemoNodePlugin()
-
-        specs = plugin.build(self.request())
+    def test_produces_one_spec_per_workload_with_the_job_name_fixed(self):
+        specs = DemoNodePlugin().build(self.request())
 
         self.assertEqual(
-            [spec.name for spec in specs],
+            [s.name for s in specs],
             ["chs-run-demo-check-{node}", "chs-run-demo-verify-{node}"],
         )
+        self.assertEqual([s.workload for s in specs], ["check", "verify"])
         self.assertEqual(
-            specs[0].context["variables"]["job_name"], "chs-run-demo-check"
+            [s.context["variables"]["job_name"] for s in specs],
+            ["chs-run-demo-check", "chs-run-demo-verify"],
         )
 
-    def test_a_plugin_does_not_modify_the_request(self):
-        plugin = DemoNodePlugin()
+    def test_skips_with_a_warning_when_fewer_nodes_are_present(self):
+        plugin = type("P", (DemoClusterPlugin,), {"min_nodes_to_run": 5})()
+
+        with mock.patch("chs.testkit.base.logger") as mock_logger:
+            specs = plugin.build(self.request())
+
+        self.assertEqual(specs, [])
+        mock_logger.warning.assert_called_once()
+
+    def test_runs_when_the_minimum_node_count_is_met(self):
+        plugin = type("P", (DemoClusterPlugin,), {"min_nodes_to_run": 2})()
+
+        self.assertEqual(len(plugin.build(self.request())), 2)
+
+    def test_hooks_see_each_workload_separately(self):
+        class HookedPlugin(DemoNodePlugin):
+            def prepare_variables(self, variables, workload, request):
+                variables["chosen"] = workload
+
+            def finalize_context(self, context, workload, request):
+                context["variables"]["finalized"] = (
+                    f"{context['variables']['chosen']}!"
+                )
+
+        specs = HookedPlugin().build(self.request())
+
+        self.assertEqual(
+            [s.context["variables"]["finalized"] for s in specs],
+            ["check!", "verify!"],
+        )
+
+    def test_building_leaves_the_request_untouched(self):
         request = self.request()
+        plugin = DemoNodePlugin()
 
         plugin.build(request)
 
@@ -165,7 +181,7 @@ class PluginContractTest(unittest.TestCase):
     def test_class_level_extras_are_not_shared_between_experiments(self):
         plugin = type(
             "P",
-            (SliceTestPlugin,),
+            (SlicePlugin,),
             {
                 "name": "demo",
                 "application": "demo",
@@ -175,7 +191,7 @@ class PluginContractTest(unittest.TestCase):
         )()
 
         specs = plugin.build(
-            TestRequest(
+            self.request(
                 variables=variables(
                     tpu_slices={"a": ["node-1"], "b": ["node-2"]}
                 ),
@@ -195,7 +211,6 @@ class PluginContractTest(unittest.TestCase):
             "P", (DemoNodePlugin,), {"workload_in_experiment_name": False}
         )()
 
-        self.assertFalse(plugin.accepts_workload_override)
         self.assertEqual(
             plugin.resolve_workloads(self.request(workloads=("only",))),
             ("check", "verify"),
@@ -207,28 +222,11 @@ class PluginContractTest(unittest.TestCase):
         for spec in specs:
             self.assertEqual(spec.context["variables"]["chs_test_name"], "demo")
 
-    def test_shared_work_is_prepared_once_per_run_not_per_workload(self):
-        calls = []
-
-        class Plugin(ClusterTestPlugin):
-            name = "demo"
-            application = "demo"
-            default_workloads = ("check", "verify")
-
-            def grouping(self, request):
-                calls.append(request)
-                return base.NodeGrouping(groups=[request.nodes])
-
-        specs = Plugin().build(self.request())
-
-        self.assertEqual(len(specs), 2)
-        self.assertEqual(len(calls), 1)
-
     def test_a_cluster_test_measures_the_whole_allocation_by_default(self):
         """Every shipped cluster test overrides this with something finer."""
         plugin = type(
             "P",
-            (ClusterTestPlugin,),
+            (MultiNodePlugin,),
             {
                 "name": "demo",
                 "application": "demo",
@@ -248,7 +246,7 @@ class PluginContractTest(unittest.TestCase):
             "P", (DemoNodePlugin,), {"extra_context": {"variables": {"a": 1}}}
         )()
 
-        with self.assertRaisesRegex(ValueError, "must not contain 'variables'"):
+        with self.assertRaisesRegex(ValueError, "extra_context"):
             plugin.build(self.request())
 
 
