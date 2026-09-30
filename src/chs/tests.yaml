@@ -149,6 +149,10 @@ tests:
     description: Per-NVLink-domain ring bandwidth
     long_description: Runs NCCL benchmarks separately within each NVLink domain (IMEX/NVLD racks) to measure intra-domain MNNVL bandwidth (GB/s), isolating a degraded domain without invalidating the rest of the cluster.
     platforms:
+      - scheduler: slurm
+        machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
