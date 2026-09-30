@@ -1270,8 +1270,14 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "a3-ultragpu-8g"])
 
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     @mock.patch("chs.schedulers.base.query_gce_instances_info")
-    def test_detect_nodes_hardware_unknown(self, mock_query_info, mock_logger):
+    def test_detect_nodes_hardware_unknown(
+        self, mock_query_info, mock_run_kubectl, mock_logger
+    ):
+        mock_run_kubectl.return_value = json.dumps(
+            {"kind": "List", "items": []}
+        )
         scheduler = KubernetesScheduler()
         with mock.patch.object(
             scheduler, "_resolve_project_id", return_value="my-project"
@@ -1285,6 +1291,47 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
             self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    def test_detect_nodes_hardware_fallback_to_labels(
+        self, mock_query_info, mock_run_kubectl, mock_logger
+    ):
+        mock_run_kubectl.return_value = json.dumps(
+            {
+                "kind": "List",
+                "items": [
+                    {
+                        "metadata": {
+                            "name": "node2",
+                            "labels": {
+                                "node.kubernetes.io/instance-type": (
+                                    "a5x-highgpu-4g-metal"
+                                ),
+                            },
+                        }
+                    }
+                ],
+            }
+        )
+        scheduler = KubernetesScheduler()
+        with mock.patch.object(
+            scheduler, "_resolve_project_id", return_value="my-project"
+        ):
+            mock_query_info.return_value = {
+                "node1": {
+                    "machine_type": "a3-megagpu-8g",
+                    "instance_id": "12345",
+                },
+            }
+            machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+            self.assertEqual(
+                machine_types, ["a3-megagpu-8g", "a5x-highgpu-4g-metal"]
+            )
+            self.assertEqual(
+                scheduler.node_to_instance_id,
+                {"node1": "12345", "node2": "node2"},
+            )
 
     @mock.patch(
         "builtins.open",

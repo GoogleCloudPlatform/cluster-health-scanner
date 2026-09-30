@@ -48,7 +48,11 @@ class BaseScheduler(abc.ABC):
             return []
 
         project = self._resolve_project_id(nodes[0])
-        instances_info = query_gce_instances_info(project, nodes)
+        try:
+            instances_info = query_gce_instances_info(project, nodes)
+        except Exception as e:
+            logger.warning("Could not retrieve GCE metadata for nodes: %s", e)
+            instances_info = {}
 
         unique_types = set()
         for node in nodes:

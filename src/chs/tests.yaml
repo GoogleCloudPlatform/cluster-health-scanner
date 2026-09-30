@@ -38,6 +38,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: dcgm
     category: GPU Diagnostics
     description: Deep hardware diagnostics
@@ -63,6 +65,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: gemm
     category: Compute
     description: General Matrix Multiply benchmark
@@ -113,6 +117,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: nccl-cluster
     category: Network & Collectives
     description: Full cluster ring bandwidth
@@ -136,6 +142,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: nccl-domain
     category: Network & Collectives
     description: Per-NVLink-domain ring bandwidth
@@ -145,6 +153,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: nccl-pairwise
     category: Network & Collectives
     description: Node-to-node latency check
@@ -170,6 +180,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: stream
     category: Memory
     description: Memory bandwidth benchmark
@@ -195,6 +207,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: tpu-info
     category: Host
     description: Basic TPU health and information

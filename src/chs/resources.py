@@ -35,6 +35,10 @@ MACHINE_TYPE_RESOURCE_MAP = {
         "accelerators": 4,
         "resource_name": "nvidia.com/gpu",
     },
+    "a5x-highgpu-4g-metal": {
+        "accelerators": 4,
+        "resource_name": "nvidia.com/gpu",
+    },
     "tpu7x-standard-4t": {
         "accelerators": 4,
         "resource_name": "google.com/tpu",

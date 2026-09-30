@@ -1604,7 +1604,11 @@ class TestBOHGenerator(unittest.TestCase):
             "a3-megagpu-8g",
             "a4-highgpu-8g",
         ]
-        four_gpu_machines = ["a4x-highgpu-4g", "a4x-maxgpu-4g-metal"]
+        four_gpu_machines = [
+            "a4x-highgpu-4g",
+            "a4x-maxgpu-4g-metal",
+            "a5x-highgpu-4g-metal",
+        ]
 
         for mtype in eight_gpu_machines:
             self.assertIn(mtype, thresholds)
