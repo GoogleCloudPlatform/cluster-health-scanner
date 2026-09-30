@@ -61,6 +61,25 @@ python3 setup.py build_py
 ```
 This will regenerate files in `src/chs/protos/`.
 
+### Container Image Dependencies
+
+The Docker image installs third-party Python packages only from hash-pinned lockfiles. Every `pip install` in the `Dockerfile` must either use `--require-hashes` or install a local source tree with `--no-deps --no-index`.
+
+| Lockfile | Generated from | Installed into |
+| --- | --- | --- |
+| `requirements.txt` | `pyproject.toml` + `requirements-build.in` | The CHS virtualenv (`/opt/venv`) |
+| `requirements-system.txt` | `requirements-system.in` | The base image's system Python |
+
+Ramble is the exception: pip cannot hash-check git dependencies, so the image builds Ramble from a checkout of the commit pinned in `pyproject.toml`. Always pin it to a full commit SHA.
+
+The `pip-compile` pre-commit hooks keep the lockfiles in sync with their inputs. After changing dependencies, regenerate the lockfiles and commit them:
+
+```bash
+pre-commit run pip-compile --all-files
+```
+
+Existing pins are kept until you explicitly upgrade them. To pick up a newer release (for example, a security fix), rerun the `uv pip compile` command from the lockfile's header with `--upgrade-package <name>` (or `--upgrade` for everything).
+
 ## 2. Pre-commit Hooks
 
 We use `pre-commit` to catch low-hanging fruit (trailing whitespace, file endings) and enforce code style (black, ruff).
@@ -96,6 +115,7 @@ pre-commit run --all-files
 *   **YAML:** Syntax and formatting (`check-yaml`).
 *   **Python:** Formatting (`black`) and linting (`ruff`).
 *   **Whitespace:** Trailing whitespace and end-of-file validation.
+*   **Lockfiles:** `requirements.txt` and `requirements-system.txt` match their inputs (`pip-compile`, see [Container Image Dependencies](#container-image-dependencies)).
 
 ## 3. Running Tests
 

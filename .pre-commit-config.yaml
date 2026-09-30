@@ -27,6 +27,19 @@ repos:
       - id: ruff
         args: [ --fix ]
       - id: ruff-format
+-   repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.19
+    hooks:
+    -   id: pip-compile
+        name: pip-compile requirements.txt
+        args: [pyproject.toml, requirements-build.in, --universal, --python-version=3.10, --generate-hashes, --no-emit-package=ramble, --quiet, --output-file=requirements.txt]
+        files: ^(pyproject\.toml|requirements-build\.in|requirements\.txt)$
+        pass_filenames: false
+    -   id: pip-compile
+        name: pip-compile requirements-system.txt
+        args: [requirements-system.in, --universal, --python-version=3.10, --generate-hashes, --quiet, --output-file=requirements-system.txt]
+        files: ^requirements-system\.(in|txt)$
+        pass_filenames: false
 -   repo: local
     hooks:
     -   id: addlicense
