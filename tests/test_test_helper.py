@@ -624,6 +624,74 @@ class TestTestHelper(unittest.TestCase):
         )
         self.assertNotIn("claims:", res_empty["container_resources_section"])
 
+    def test_nccl_test_minimum_nodes(self):
+        configs = {
+            "a3-ultragpu-8g": {
+                "nccl-tests": {
+                    "variables": {},
+                    "env_vars": {},
+                    "success_criteria": [],
+                    "modifiers": [],
+                }
+            }
+        }
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict"
+        ) as mock_create:
+            mock_create.side_effect = lambda name, ctx: mock.Mock(
+                context_name=name
+            )
+
+            # 2 nodes should succeed for nccl-pairwise
+            vars_2_nodes = {
+                "scheduler": "kubernetes",
+                "machine_type": "a3-ultragpu-8g",
+                "nodes": ["node1", "node2"],
+            }
+            res_pairwise_2 = _TestHelper.nccl_test(
+                vars_2_nodes, "exp", configs, "nccl-pairwise"
+            )
+            self.assertEqual(len(res_pairwise_2), 1)
+
+            # 1 node should be skipped for nccl-pairwise
+            vars_1_node = {
+                "scheduler": "kubernetes",
+                "machine_type": "a3-ultragpu-8g",
+                "nodes": ["node1"],
+            }
+            res_pairwise_1 = _TestHelper.nccl_test(
+                vars_1_node, "exp", configs, "nccl-pairwise"
+            )
+            self.assertEqual(res_pairwise_1, [])
+
+            # 0 nodes should be skipped for nccl-pairwise
+            vars_0_nodes = {
+                "scheduler": "kubernetes",
+                "machine_type": "a3-ultragpu-8g",
+                "nodes": [],
+            }
+            res_pairwise_0 = _TestHelper.nccl_test(
+                vars_0_nodes, "exp", configs, "nccl-pairwise"
+            )
+            self.assertEqual(res_pairwise_0, [])
+
+            # 3 nodes should succeed for nccl-cluster
+            vars_3_nodes = {
+                "scheduler": "kubernetes",
+                "machine_type": "a3-ultragpu-8g",
+                "nodes": ["node1", "node2", "node3"],
+            }
+            res_cluster_3 = _TestHelper.nccl_test(
+                vars_3_nodes, "exp", configs, "nccl-cluster"
+            )
+            self.assertEqual(len(res_cluster_3), 1)
+
+            # 2 nodes should be skipped for nccl-cluster
+            res_cluster_2 = _TestHelper.nccl_test(
+                vars_2_nodes, "exp", configs, "nccl-cluster"
+            )
+            self.assertEqual(res_cluster_2, [])
+
 
 if __name__ == "__main__":
     unittest.main()
