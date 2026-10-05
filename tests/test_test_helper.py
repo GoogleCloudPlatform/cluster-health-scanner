@@ -15,9 +15,12 @@
 """Unit tests for TestHelper."""
 
 import copy
+import pathlib
 import sys
 import unittest
 from unittest import mock
+
+import yaml
 
 # Mock ramble module dependencies
 ramble_mock = mock.Mock()
@@ -173,6 +176,117 @@ class TestTestHelper(unittest.TestCase):
         }
         pairs = _TestHelper.generate_topological_pairs(topology)
         self.assertEqual(pairs, [])
+
+    def test_a4x_nccl_cluster_gets_compute_domain(self):
+        """nccl-cluster on A4X needs a ComputeDomain for IMEX.
+
+        Without it, cross-node MNNVL/NVLS setup fails with CUDA error 801.
+        """
+        config_path = (
+            pathlib.Path(__file__).parents[1]
+            / "src/chs/repos/applications/chs/configs/kubernetes.yaml"
+        )
+        with open(config_path) as f:
+            configs = yaml.safe_load(f)
+
+        variables = {
+            "machine_type": "a4x-highgpu-4g",
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(variables, "exp", configs, "nccl-cluster")
+
+        self.assertEqual(len(contexts_created), 1)
+        ctx_vars = contexts_created[0][1]["variables"]
+        self.assertIn("kind: ComputeDomain", ctx_vars["custom_resources_yaml"])
+        self.assertIn(
+            "compute-domain-channel", ctx_vars["pod_resource_claims_yaml"]
+        )
+        self.assertIn(
+            "compute-domain-channel", ctx_vars["extra_container_resources_yaml"]
+        )
+
+    def _cluster_domain_type(self, nodes, topology, configs=None, **extra):
+        variables = {
+            "machine_type": "a4x-maxgpu-4g-metal",
+            "nodes": nodes,
+            "timeout": 600,
+            "deadline": 2400,
+            **extra,
+        }
+        configs = configs or {
+            "a4x-maxgpu-4g-metal": {"nccl-tests": {"variables": {}}}
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-cluster", topology=topology
+            )
+        self.assertEqual(len(contexts_created), 1)
+        return contexts_created[0][1]
+
+    def test_nccl_cluster_domain_type(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2", "node3"],
+                "subblock2": ["node4"],
+            }
+        }
+        ctx = self._cluster_domain_type(["node1", "node2", "node3"], topology)
+        self.assertEqual(ctx["variables"]["domain_type"], "intradomain")
+        ctx = self._cluster_domain_type(
+            ["node1", "node2", "node3", "node4"], topology
+        )
+        self.assertEqual(ctx["variables"]["domain_type"], "interdomain")
+        ctx = self._cluster_domain_type(["node1", "node2", "node3"], None)
+        self.assertEqual(ctx["variables"]["domain_type"], "unknown")
+        ctx = self._cluster_domain_type(["node1", "node2", "ghost"], topology)
+        self.assertEqual(ctx["variables"]["domain_type"], "unknown")
+
+    def test_nccl_cluster_does_not_merge_domain_config(self):
+        """The domain_type label must not pull in per-domain config blocks."""
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        configs = {
+            "a4x-maxgpu-4g-metal": {
+                "nccl-tests": {
+                    "variables": {"mnnvl_enable": 2},
+                    "intradomain": {"variables": {"mnnvl_enable": 1}},
+                    "interdomain": {"variables": {"mnnvl_enable": 0}},
+                }
+            }
+        }
+        ctx = self._cluster_domain_type(
+            ["node1", "node2", "node3", "node4"],
+            topology,
+            configs=configs,
+            scheduler="slurm",
+        )
+        self.assertEqual(ctx["variables"]["domain_type"], "interdomain")
+        self.assertEqual(ctx["variables"]["mnnvl_enable"], 2)
 
     def test_nccl_test_domain_type_variable(self):
         topology = {

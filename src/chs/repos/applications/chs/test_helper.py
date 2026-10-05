@@ -469,8 +469,33 @@ podAntiAffinity:
             experiment_name = (
                 f"{experiment_name}-{sanitize_dns_1123(str(group_label))}"
             )
+        elif test_type == "nccl-cluster":
+            # Label only, for threshold conditions. Passing it as domain_type
+            # to _prepare_cluster_context would also merge the per-domain
+            # config blocks, which nccl-cluster must not pick up.
+            context_dict["variables"]["domain_type"] = (
+                TestHelper._cluster_domain_type(nodes_list, node_to_loc)
+            )
 
         return create_context_from_dict(experiment_name, context_dict)
+
+    @staticmethod
+    def _cluster_domain_type(nodes, node_to_loc):
+        """Returns whether all nodes share one NVLink domain (subblock).
+
+        Returns 'intradomain' if every node is in the same block/subblock,
+        'interdomain' if they span more than one, and 'unknown' if any node
+        has no topology information.
+        """
+        if not node_to_loc:
+            return "unknown"
+        domains = set()
+        for node in nodes:
+            loc = node_to_loc.get(node) or {}
+            if not loc.get("block") or not loc.get("subblock"):
+                return "unknown"
+            domains.add((loc["block"], loc["subblock"]))
+        return "intradomain" if len(domains) == 1 else "interdomain"
 
     @staticmethod
     def _pair_adjacent(nodes: list[str]) -> list[list[str]]:
@@ -599,6 +624,8 @@ podAntiAffinity:
                 return []
         else:
             labeled_groups = [(None, all_nodes)]
+            if test_type == "nccl-cluster" and topology:
+                node_to_loc = build_node_to_location(topology)
 
         return [
             TestHelper._nccl_context(
