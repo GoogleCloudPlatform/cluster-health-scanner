@@ -346,6 +346,71 @@ class ArchiveOverlapTest(_RambleManagerTestCase):
         self.assertFalse(latest_symlink.is_symlink())
         self.assertTrue(older.exists())
 
+    def _stage_ramble_archive(
+        self, archive_dir, name="ws1-archive-2026", suffix=".tar.gz"
+    ):
+        """Lays out what `ramble workspace archive -t` leaves behind."""
+        archive_dir.mkdir(exist_ok=True)
+        staged_dir = archive_dir / name
+        (staged_dir / "experiments").mkdir(parents=True)
+        (staged_dir / "experiments" / "out.log").write_text("log")
+        tarball = archive_dir / f"{name}{suffix}"
+        tarball.write_bytes(b"tar")
+        (archive_dir / "archive.latest").symlink_to(staged_dir.name)
+        (archive_dir / f"archive.latest{suffix}").symlink_to(tarball.name)
+        return staged_dir, tarball
+
+    def test_upload_removes_staged_directory_and_symlinks(self):
+        """Test the copied workspace directory goes with its tarball."""
+        archive_dir = pathlib.Path(self.manager.path, "archive")
+        _, tarball = self._stage_ramble_archive(archive_dir)
+        other_dir = archive_dir / "ws1-archive-2025"
+        other_dir.mkdir()
+
+        dest = self.manager._upload_workspace_archive(self.provider, tarball)
+
+        self.assertEqual(dest, "workspaces/ws1.tar.gz")
+        self.assertEqual(sorted(os.listdir(archive_dir)), [other_dir.name])
+
+    def test_upload_removes_staged_directory_of_tgz_archive(self):
+        """Test a .tgz tarball's staged directory is removed too."""
+        archive_dir = pathlib.Path(self.manager.path, "archive")
+        _, tarball = self._stage_ramble_archive(archive_dir, suffix=".tgz")
+
+        self.manager._upload_workspace_archive(self.provider, tarball)
+
+        self.assertEqual(os.listdir(archive_dir), [])
+
+    def test_upload_keeps_directories_outside_the_archive_dir(self):
+        """Test a symlinked staged directory and its target are kept."""
+        archive_dir = pathlib.Path(self.manager.path, "archive")
+        archive_dir.mkdir()
+        outside_dir = pathlib.Path(self.manager.path, "outside")
+        outside_dir.mkdir()
+        (outside_dir / "keep.txt").write_text("keep")
+        (archive_dir / "ws1-archive-2026").symlink_to(outside_dir)
+        tarball = archive_dir / "ws1-archive-2026.tar.gz"
+        tarball.write_bytes(b"tar")
+
+        self.manager._upload_workspace_archive(self.provider, tarball)
+
+        self.assertFalse(tarball.exists())
+        self.assertTrue((outside_dir / "keep.txt").exists())
+        self.assertTrue((archive_dir / "ws1-archive-2026").is_symlink())
+
+    def test_failed_upload_keeps_local_archive(self):
+        """Test nothing is removed if the upload fails."""
+        archive_dir = pathlib.Path(self.manager.path, "archive")
+        staged_dir, tarball = self._stage_ramble_archive(archive_dir)
+        self.provider.upload_file.side_effect = OSError("denied")
+
+        self.assertIsNone(
+            self.manager._upload_workspace_archive(self.provider, tarball)
+        )
+
+        self.assertTrue(tarball.exists())
+        self.assertTrue((staged_dir / "experiments" / "out.log").exists())
+
 
 class JobPollIntervalTest(_RambleManagerTestCase):
     """Tests the default interval between job status polls."""

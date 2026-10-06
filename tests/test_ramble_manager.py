@@ -555,7 +555,11 @@ mycriteria:
         mock_archive_file.is_symlink.return_value = False
         mock_archive_file.is_file.return_value = True
         mock_archive_file.stat.return_value.st_mtime = 1.0
+        mock_archive_file.parent = mock.MagicMock()
         mock_archive_file.parent.iterdir.return_value = []
+        mock_rmtree = self.enterContext(
+            mock.patch("chs.ramble_manager.shutil.rmtree")
+        )
         mock_glob.side_effect = (
             lambda pat: [mock_archive_file] if "tar.gz" in pat else []
         )
@@ -587,6 +591,9 @@ mycriteria:
                 str(mock_archive_file), "workspaces/ws1.tar.gz"
             )
             mock_archive_file.unlink.assert_called_once()
+            mock_rmtree.assert_called_once_with(
+                mock_archive_file.parent / "ws1", ignore_errors=True
+            )
 
     def test_upload_workspace_no_archive_found(self):
         """Test _create_workspace_archive logs failure if no archive found."""

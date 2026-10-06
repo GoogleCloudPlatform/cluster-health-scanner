@@ -15,7 +15,9 @@
 """Unit tests for TestHelper."""
 
 import copy
+import os
 import pathlib
+import re
 import sys
 import unittest
 from unittest import mock
@@ -1295,7 +1297,7 @@ class TestTestHelper(unittest.TestCase):
         # When extra fields are empty
         var_map["extra_pod_annotations_yaml"] = ""
         var_map["extra_container_resources_yaml"] = ""
-        res_empty = wm._jobset_vars()
+        res_empty = wm._compute_jobset_vars()
         self.assertIn(
             "networking.gke.io/default-interface: eth0",
             res_empty["pod_annotations_section"],
@@ -1372,6 +1374,137 @@ class TestTestHelper(unittest.TestCase):
                 vars_2_nodes, "exp", configs, "nccl-cluster"
             )
             self.assertEqual(res_cluster_2, [])
+
+
+_JOBSET_VARS_INPUTS = {
+    "job_name": "chs-run1-nccl-tests-all-gather",
+    "command": "mpirun -n 16 all_gather_perf",
+    "experiment_run_dir": "/workspace/experiments/nccl/all-gather/exp1",
+    "container_image": "image:latest",
+    "pod_annotations_yaml": "networking.gke.io/default-interface: eth0",
+    "node_selector_yaml": "cloud.google.com/gke-nodepool: pool-1",
+    "tolerations_yaml": (
+        "- key: nvidia.com/gpu\n  operator: Exists\n  effect: NoSchedule"
+    ),
+    "init_containers_yaml": (
+        "- name: tcpxo-daemon\n  image: daemon:latest\n"
+        "  restartPolicy: Always"
+    ),
+    "container_resources_yaml": "limits:\n  nvidia.com/gpu: 8",
+    "suspend_jobset": "true",
+}
+
+_TEMPLATE_PLACEHOLDER = re.compile(r"(?<![$\w])\{(\w+)\}")
+
+
+def _workflow_manager(var_map: dict[str, str]) -> KubernetesJobset:
+    wm = KubernetesJobset(mock.Mock())
+    wm.app_inst = mock.Mock()
+    wm.app_inst.expander.expand_var_name.side_effect = lambda name: (
+        var_map.get(name, "")
+    )
+    return wm
+
+
+class KubernetesJobsetTest(unittest.TestCase):
+    """Tests for the kubernetes-jobset workflow manager."""
+
+    def setUp(self):
+        super().setUp()
+        self.generate_ssh_keys = self.enterContext(
+            mock.patch.object(
+                KubernetesJobset,
+                "_generate_ssh_keys",
+                autospec=True,
+                return_value=("private-key", "public-key"),
+            )
+        )
+
+    def test_jobset_vars_are_computed_once_per_experiment(self):
+        """All templates of one experiment share one JobSet name and key."""
+        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+
+        rendered_vars = [wm._jobset_vars() for _ in range(5)]
+
+        self.generate_ssh_keys.assert_called_once()
+        self.assertEqual(
+            {v["sanitized_job_name"] for v in rendered_vars},
+            {rendered_vars[0]["sanitized_job_name"]},
+        )
+        self.assertTrue(all(v == rendered_vars[0] for v in rendered_vars))
+
+    def test_jobset_vars_differ_between_experiments(self):
+        """Different experiments never share a JobSet name or key pair."""
+        var_map = dict(_JOBSET_VARS_INPUTS)
+        wm = _workflow_manager(var_map)
+        self.generate_ssh_keys.side_effect = [
+            ("private-key-1", "public-key-1"),
+            ("private-key-2", "public-key-2"),
+        ]
+
+        first = wm._jobset_vars()
+        var_map["experiment_run_dir"] = (
+            "/workspace/experiments/nccl/all-gather/exp2"
+        )
+        second = wm._jobset_vars()
+
+        self.assertEqual(self.generate_ssh_keys.call_count, 2)
+        self.assertNotEqual(
+            first["sanitized_job_name"], second["sanitized_job_name"]
+        )
+        self.assertNotEqual(
+            first["ssh_private_key_indented"],
+            second["ssh_private_key_indented"],
+        )
+
+    def test_returned_jobset_vars_do_not_alias_the_cache(self):
+        """Mutating returned variables does not leak into later templates."""
+        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+        job_name = wm._jobset_vars()["sanitized_job_name"]
+
+        wm._jobset_vars()["sanitized_job_name"] = "mutated"
+
+        self.assertEqual(wm._jobset_vars()["sanitized_job_name"], job_name)
+
+    def test_mpi_pods_have_short_termination_grace_period(self):
+        """Every pod spec of the MPI JobSet uses a 5s grace period."""
+        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+        template_vars = {
+            "kubernetes_namespace": "chs",
+            "n_nodes": "2",
+            "timeout": "3600",
+            "ssh_port": "222",
+            "processes_per_node": "8",
+            **wm._jobset_vars(),
+        }
+        template_path = os.path.join(
+            os.path.dirname(sys.modules[KubernetesJobset.__module__].__file__),
+            "jobset_mpi.yaml.tpl",
+        )
+        with open(template_path) as template_file:
+            template = template_file.read()
+
+        rendered = _TEMPLATE_PLACEHOLDER.sub(
+            lambda match: template_vars[match.group(1)], template
+        )
+        jobsets = [
+            doc
+            for doc in yaml.safe_load_all(rendered)
+            if doc and doc.get("kind") == "JobSet"
+        ]
+
+        self.assertEqual(len(jobsets), 1)
+        pod_specs = [
+            replicated_job["template"]["spec"]["template"]["spec"]
+            for replicated_job in jobsets[0]["spec"]["replicatedJobs"]
+        ]
+        self.assertTrue(pod_specs)
+        for pod_spec in pod_specs:
+            self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 5)
+            self.assertEqual(
+                [c["name"] for c in pod_spec["initContainers"]],
+                ["tcpxo-daemon"],
+            )
 
 
 if __name__ == "__main__":

@@ -1251,10 +1251,7 @@ class RambleManager:
             provider.upload_file(str(archive_file), dest)
             logger.debug("Workspace archive uploaded successfully.")
             try:
-                archive_file.unlink()
-                for entry in archive_file.parent.iterdir():
-                    if entry.is_symlink() and not entry.exists():
-                        entry.unlink(missing_ok=True)
+                self._remove_local_archive(archive_file)
             except OSError as e:
                 logger.debug(
                     "Failed to remove local workspace archive %s: %s",
@@ -1265,6 +1262,23 @@ class RambleManager:
         except Exception as e:
             self._log_workspace_archive_failure(e)
             return None
+
+    @staticmethod
+    def _remove_local_archive(archive_file: pathlib.Path) -> None:
+        """Deletes an uploaded tarball and the directory Ramble staged it from.
+
+        Dangling `archive.latest*` symlinks left behind are removed too.
+        """
+        archive_dir = archive_file.parent
+        archive_file.unlink()
+        shutil.rmtree(
+            archive_dir
+            / archive_file.name.removesuffix(".tar.gz").removesuffix(".tgz"),
+            ignore_errors=True,
+        )
+        for entry in archive_dir.iterdir():
+            if entry.is_symlink() and not entry.exists():
+                entry.unlink(missing_ok=True)
 
     def _log_workspace_archive_failure(self, error: Exception) -> None:
         """Logs a failure to archive or upload the workspace."""

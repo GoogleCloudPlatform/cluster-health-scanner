@@ -190,6 +190,10 @@ class KubernetesJobset(WorkflowManagerBase):
         description="Raw YAML for Pod spec.template.spec.resourceClaims",
     )
 
+    def __init__(self, file_path):
+        super().__init__(file_path)
+        self._jobset_vars_by_experiment_run_dir = {}
+
     def _yaml_block(self, var_name, key_name, indent_spaces):
         """Constructs a full YAML key-value block with proper indentation."""
         val = self.app_inst.expander.expand_var_name(var_name)
@@ -237,6 +241,17 @@ class KubernetesJobset(WorkflowManagerBase):
         return priv_key, pub_key
 
     def _jobset_vars(self):
+        """Returns the experiment's template variables, computed once."""
+        experiment_run_dir = self.app_inst.expander.expand_var_name(
+            "experiment_run_dir"
+        )
+        if experiment_run_dir not in self._jobset_vars_by_experiment_run_dir:
+            self._jobset_vars_by_experiment_run_dir[experiment_run_dir] = (
+                self._compute_jobset_vars()
+            )
+        return dict(self._jobset_vars_by_experiment_run_dir[experiment_run_dir])
+
+    def _compute_jobset_vars(self):
         expander = self.app_inst.expander
         raw_job_name = expander.expand_var_name("job_name")
         # K8S resource names can be max 63 chars and no `_` is supported

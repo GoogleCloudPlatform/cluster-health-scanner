@@ -16,11 +16,17 @@ import unittest
 from unittest import mock
 from chs.preflights.gcp_preflight import verify_gcp_credentials
 from chs.exceptions import ChsPreflightException
+from chs.utils import gcp
 from google.auth.exceptions import DefaultCredentialsError
 
 
 class TestGcpPreflight(unittest.TestCase):
-    @mock.patch("chs.preflights.gcp_preflight.google.auth.default")
+    def setUp(self):
+        super().setUp()
+        gcp.get_default_credentials.cache_clear()
+        self.addCleanup(gcp.get_default_credentials.cache_clear)
+
+    @mock.patch("google.auth.default")
     def test_verify_gcp_credentials_success(self, mock_auth_default):
         mock_auth_default.return_value = (mock.MagicMock(), "my-project")
 
@@ -28,7 +34,7 @@ class TestGcpPreflight(unittest.TestCase):
         verify_gcp_credentials()
         mock_auth_default.assert_called_once()
 
-    @mock.patch("chs.preflights.gcp_preflight.google.auth.default")
+    @mock.patch("google.auth.default")
     def test_verify_gcp_credentials_failure(self, mock_auth_default):
         mock_auth_default.side_effect = DefaultCredentialsError(
             "Missing credentials"
@@ -39,6 +45,41 @@ class TestGcpPreflight(unittest.TestCase):
             r"GCP Application Default Credentials \(ADC\) not found",
         ):
             verify_gcp_credentials()
+
+
+class TestGetDefaultCredentials(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        gcp.get_default_credentials.cache_clear()
+        self.addCleanup(gcp.get_default_credentials.cache_clear)
+
+    @mock.patch("google.auth.default")
+    def test_credentials_are_resolved_once(self, mock_auth_default):
+        credentials = mock.MagicMock()
+        mock_auth_default.return_value = (credentials, "my-project")
+
+        verify_gcp_credentials()
+
+        self.assertEqual(
+            gcp.get_default_credentials(), (credentials, "my-project")
+        )
+        mock_auth_default.assert_called_once_with()
+
+    @mock.patch("google.auth.default")
+    def test_failure_is_not_cached(self, mock_auth_default):
+        credentials = mock.MagicMock()
+        mock_auth_default.side_effect = [
+            DefaultCredentialsError("Missing credentials"),
+            (credentials, "my-project"),
+        ]
+
+        with self.assertRaises(DefaultCredentialsError):
+            gcp.get_default_credentials()
+
+        self.assertEqual(
+            gcp.get_default_credentials(), (credentials, "my-project")
+        )
+        self.assertEqual(mock_auth_default.call_count, 2)
 
 
 if __name__ == "__main__":

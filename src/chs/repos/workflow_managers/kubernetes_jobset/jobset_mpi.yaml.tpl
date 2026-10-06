@@ -40,6 +40,7 @@ spec:
 {pod_annotations_section}
             spec:
               restartPolicy: Never
+              terminationGracePeriodSeconds: 5
 {node_selector_section}
 {affinity_section}
 {tolerations_section}
@@ -134,4 +135,3 @@ spec:
                   mountPath: "/secrets/ssh"
                   readOnly: true
 {mpi_volume_mounts_append}
-              restartPolicy: Never

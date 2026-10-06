@@ -12,12 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import logging
 from typing import Any
 from chs.resources import normalize_machine_type
 from chs.exceptions import ChsSchedulerException
 
 logger = logging.getLogger(__name__)
+
+
+@functools.cache
+def get_default_credentials() -> tuple[Any, str | None]:
+    """Returns the process-wide Application Default Credentials and project.
+
+    Raises:
+        google.auth.exceptions.DefaultCredentialsError: If no credentials are
+            configured.
+    """
+    import google.auth
+
+    return google.auth.default()
 
 
 def query_gce_instances_info(

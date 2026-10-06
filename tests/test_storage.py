@@ -25,8 +25,10 @@ from chs.exceptions import (
     ChsValidationError,
 )
 from chs.storage import StorageProviderFactory
+from chs.storage import gcs
 from chs.storage.gcs import GcsStorageProvider
 from chs.storage.path import PathStorageProvider
+from chs.utils import gcp
 from google.api_core import exceptions as gcp_ex
 
 
@@ -176,6 +178,18 @@ class TestPathStorageProvider(unittest.TestCase):
 class TestGcsStorageProvider(unittest.TestCase):
     """Tests for GcsStorageProvider."""
 
+    def setUp(self):
+        super().setUp()
+        gcs._storage_client.cache_clear()
+        self.addCleanup(gcs._storage_client.cache_clear)
+        patcher = mock.patch.object(
+            gcp,
+            "get_default_credentials",
+            return_value=(mock.sentinel.credentials, "my-project"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @mock.patch("chs.storage.gcs.storage.Client")
     def test_validate_success(self, mock_storage_client):
         """Test validate succeeds if write and delete succeed."""
@@ -257,10 +271,20 @@ class TestGcsStorageProvider(unittest.TestCase):
 
 
 class TestGcsStorageProviderClientReuse(unittest.TestCase):
-    """Tests that a GcsStorageProvider creates one GCS client and reuses it."""
+    """Tests that GCS providers share one process-wide GCS client."""
 
     def setUp(self):
         super().setUp()
+        gcs._storage_client.cache_clear()
+        self.addCleanup(gcs._storage_client.cache_clear)
+        self.credentials = mock.sentinel.credentials
+        patcher = mock.patch.object(
+            gcp,
+            "get_default_credentials",
+            return_value=(self.credentials, "my-project"),
+        )
+        self.mock_get_credentials = patcher.start()
+        self.addCleanup(patcher.stop)
         patcher = mock.patch("chs.storage.gcs.storage.Client")
         self.mock_client_cls = patcher.start()
         self.addCleanup(patcher.stop)
@@ -282,8 +306,24 @@ class TestGcsStorageProviderClientReuse(unittest.TestCase):
         self.provider.download_file("bills_of_health/r.json", "/tmp/r.json")
         self.assertTrue(self.provider.exists("bills_of_health/r.json"))
 
-        self.mock_client_cls.assert_called_once_with()
+        self.mock_client_cls.assert_called_once_with(
+            credentials=self.credentials, project="my-project"
+        )
         self.assertEqual(self.mock_client_cls.return_value.bucket.call_count, 4)
+
+    def test_client_is_shared_across_providers(self):
+        """Test a second provider reuses the first provider's client."""
+        other = GcsStorageProvider({"bucket_name": "other-bucket"})
+
+        self.provider.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+        other.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+
+        self.mock_client_cls.assert_called_once()
+        self.mock_get_credentials.assert_called_once_with()
+        self.assertEqual(
+            self.mock_client_cls.return_value.bucket.call_args_list,
+            [mock.call("my-bucket"), mock.call("other-bucket")],
+        )
 
     def test_failed_client_creation_is_retried(self):
         """Test a failed client creation is not cached."""
