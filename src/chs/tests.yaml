@@ -26,6 +26,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -36,6 +38,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: dcgm
     category: GPU Diagnostics
     description: Deep hardware diagnostics
@@ -49,6 +53,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -59,6 +65,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: gemm
     category: Compute
     description: General Matrix Multiply benchmark
@@ -72,6 +80,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -95,6 +105,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -105,6 +117,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: nccl-cluster
     category: Network & Collectives
     description: Full cluster ring bandwidth
@@ -128,6 +142,23 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
+  - name: nccl-domain
+    category: Network & Collectives
+    description: Per-NVLink-domain ring bandwidth
+    long_description: Runs NCCL benchmarks separately within each NVLink domain (IMEX/NVLD racks) to measure intra-domain MNNVL bandwidth (GB/s), isolating a degraded domain without invalidating the rest of the cluster.
+    platforms:
+      - scheduler: slurm
+        machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a4x-highgpu-4g
+      - scheduler: kubernetes
+        machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: nccl-pairwise
     category: Network & Collectives
     description: Node-to-node latency check
@@ -141,6 +172,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -151,6 +184,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: stream
     category: Memory
     description: Memory bandwidth benchmark
@@ -164,6 +199,8 @@ tests:
         machine_type: a3-megagpu-8g
       - scheduler: slurm
         machine_type: a4x-highgpu-4g
+      - scheduler: slurm
+        machine_type: a4x-maxgpu-4g-metal
       - scheduler: kubernetes
         machine_type: a3-ultragpu-8g
       - scheduler: kubernetes
@@ -174,6 +211,8 @@ tests:
         machine_type: a4x-highgpu-4g
       - scheduler: kubernetes
         machine_type: a4x-maxgpu-4g-metal
+      - scheduler: kubernetes
+        machine_type: a5x-highgpu-4g-metal
   - name: tpu-info
     category: Host
     description: Basic TPU health and information

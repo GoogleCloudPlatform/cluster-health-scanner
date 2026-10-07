@@ -37,6 +37,11 @@ a4x-maxgpu-4g-metal:
     gpus_per_node: 4
     processes_per_node: "{gpus_per_node}"
     n_ranks: "{processes_per_node}*{n_nodes}"
+a5x-highgpu-4g-metal:
+  variables:
+    gpus_per_node: 4
+    processes_per_node: "{gpus_per_node}"
+    n_ranks: "{processes_per_node}*{n_nodes}"
 tpu7x-standard-4t:
   variables:
     tpu_chips_per_node: 4

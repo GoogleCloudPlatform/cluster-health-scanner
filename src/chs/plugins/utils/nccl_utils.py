@@ -40,7 +40,7 @@ def get_peak_metrics(metrics: list[pb.Metric]) -> PeakMetrics:
     max_bw = 0.0
     max_size = "Unknown"
     for m in metrics:
-        if m.value.HasField("number_value") and "Bandwidth" in m.key:
+        if m.value.HasField("number_value") and "Bus Bandwidth" in m.key:
             if m.value.number_value > max_bw:
                 max_bw = m.value.number_value
                 if "context" in m.metadata.fields:
@@ -131,16 +131,16 @@ def extract_nccl_detail_data(
 
         resource_id = get_resource_id_func(res)
 
+        target_nodes = extract_node_names(res.target_resources)
         topo_context = "Unknown"
         if (
             node_to_location
             and res.target_resources
             and len(res.target_resources) >= 2
         ):
-            names = extract_node_names(res.target_resources)
             topo_context = get_topological_context(
-                names[0],
-                names[1],
+                target_nodes[0],
+                target_nodes[1],
                 node_to_location,
             )
 
@@ -148,6 +148,7 @@ def extract_nccl_detail_data(
 
         row_dict = {
             "node": resource_id,
+            "target_nodes": target_nodes,
             "workload": test_level,
             "resource": resource_id,
             "peak_bw": format_val(max_bw),

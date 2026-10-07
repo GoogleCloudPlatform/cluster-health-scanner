@@ -27,6 +27,7 @@ from chs.utils.tests import (
     get_tests_map,
     TestsMap as _TestsMap,
     get_tests_by_machine_type,
+    get_tests_by_machine_type_and_scheduler,
 )
 
 
@@ -229,6 +230,18 @@ class TestTests(unittest.TestCase):
         self.assertEqual(tests_m2, ["t1", "t2"])
         self.assertEqual(tests_m3, ["t2"])
         self.assertEqual(tests_m4, [])
+
+    def test_a4x_max_slurm_supported_tests(self):
+        """Test that a4x-maxgpu-4g-metal supports expected tests on slurm
+        in default config.
+        """
+        tests = get_tests_by_machine_type_and_scheduler(
+            "a4x-maxgpu-4g-metal", "slurm"
+        )
+        self.assertIn("nvidia-smi", tests)
+        self.assertIn("dcgm", tests)
+        self.assertIn("gemm", tests)
+        self.assertIn("stream", tests)
 
 
 if __name__ == "__main__":

@@ -18,8 +18,7 @@ from .renderer import NcclClusterRenderer
 
 
 class NcclClusterPlugin(NcclClusterRenderer, NcclClusterExtractor, TestPlugin):
-    def get_fom_aliases(self) -> dict[str, str]:
-        return {"bandwidth": "Peak Detected Bandwidth"}
+    pass
 
 
 __chs_plugin__ = {

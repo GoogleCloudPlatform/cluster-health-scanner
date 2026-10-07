@@ -15,17 +15,33 @@
 from ramble.modkit import *
 
 
-class DcgmFom(BasicModifier):
-    """Modifier to extract GPU-specific Figure of Merits for DCGM."""
+class Dcgm(BasicModifier):
+    """Modifier for DCGM execution and Figure of Merit extraction."""
 
-    name = "dcgm-fom"
+    name = "dcgm"
 
     tags("gpu", "dcgm")
 
     maintainers("simrankaurb")
 
-    mode("standard", description="Standard extraction mode")
+    mode("standard", description="Standard extraction and execution mode")
     default_mode("standard")
+
+    variable(
+        "diag_args",
+        default="",
+        description="Additional arguments for dcgmi diag",
+        expandable=False,
+    )
+
+    executable_modifier("override_dcgm_diag")
+
+    def override_dcgm_diag(self, executable_name, executable, app_inst=None):
+        if executable_name == "diag" and executable.template:
+            diag_args = self.expander.expand_var_name("diag_args")
+            if diag_args:
+                executable.template[0] += f" {diag_args}"
+        return [], []
 
     figure_of_merit_context(
         "test_name",

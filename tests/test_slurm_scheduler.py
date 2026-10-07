@@ -159,6 +159,16 @@ class TestSlurmScheduler(unittest.TestCase):
         self.assertEqual(topology["s0_0"]["s0_0_0"], ["n1", "n2"])
         self.assertEqual(topology["s0_0"]["s0_1"], ["n3", "n4"])
 
+    def test_allow_interdomain_pairs(self):
+        self.assertFalse(
+            self.scheduler.allow_interdomain_pairs("a4x-highgpu-4g")
+        )
+        self.assertFalse(
+            self.scheduler.allow_interdomain_pairs("a4x-maxgpu-4g-metal")
+        )
+        self.assertTrue(self.scheduler.allow_interdomain_pairs("a3-megagpu-8g"))
+        self.assertTrue(self.scheduler.allow_interdomain_pairs())
+
 
 if __name__ == "__main__":
     unittest.main()

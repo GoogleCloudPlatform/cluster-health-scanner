@@ -36,8 +36,11 @@ from chs.utils.theme import (
 )
 from chs.utils.topology import (
     build_node_to_location,
+    build_subblock_to_blocks,
+    get_domain_label,
     get_topological_context,
     get_topology,
+    load_topology,
 )
 
 __all__ = [
@@ -59,6 +62,9 @@ __all__ = [
     "generate_random_suffix",
     "is_in_cluster",
     "build_node_to_location",
+    "build_subblock_to_blocks",
+    "get_domain_label",
     "get_topological_context",
     "get_topology",
+    "load_topology",
 ]

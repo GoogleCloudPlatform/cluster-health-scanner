@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from chs.plugins.nccl_cluster.renderer import NcclClusterRenderer
+from chs.plugins.nccl_domain.renderer import NcclDomainRenderer
 from chs.plugins.nccl_pairwise.renderer import NcclPairwiseRenderer
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import Console
@@ -28,7 +29,7 @@ def test_nccl_cluster_renderer_without_errors():
 
     # Add peak metric
     m1 = res.metrics.add()
-    m1.key = "BusBandwidth"
+    m1.key = "Bus Bandwidth"
     m1.value.number_value = 120.5
     m1.metadata.fields["context"].string_value = str(1024**3)  # 1 GB
 
@@ -58,7 +59,7 @@ def test_nccl_pairwise_renderer():
 
     # Add peak metric
     m1 = res.metrics.add()
-    m1.key = "BusBandwidth"
+    m1.key = "Bus Bandwidth"
     m1.value.number_value = 60.2
     m1.metadata.fields["context"].string_value = str(1024**3)  # 1 GB
 
@@ -130,3 +131,137 @@ def test_build_node_to_location_and_get_topology(caplog):
         get_topological_context("node1", "unknown_node", loc_map) == "Unknown"
     )
     assert get_topology("node1", "unknown_node", loc_map) == "unknown"
+
+
+def _domain_result() -> pb.TestResult:
+    res = pb.TestResult()
+    res.test_name = "nccl-domain"
+    res.test_level = "all-reduce"
+    res.target_resources.add(node_name="node-1")
+    res.target_resources.add(node_name="node-2")
+
+    m1 = res.metrics.add()
+    m1.key = "Bus Bandwidth"
+    m1.value.number_value = 805.4
+    m1.metadata.fields["context"].string_value = str(1024**3)
+    return res
+
+
+def _render(renderer, results) -> str:
+    console = Console(width=200)
+    with console.capture() as capture:
+        console.print(renderer.render_detail(results))
+    return capture.get()
+
+
+def test_nccl_domain_renderer_labels_domain():
+    renderer = NcclDomainRenderer()
+    renderer.set_topology({"block-1": {"subblock-1": ["node-1", "node-2"]}})
+
+    output = _render(renderer, [_domain_result()])
+
+    assert "NCCL Domain Detail" in output
+    assert "NVLink Domain" in output
+    assert "subblock-1 (2 nodes)" in output
+    assert "805.40" in output
+
+
+def test_nccl_domain_renderer_flags_mixed_domains():
+    renderer = NcclDomainRenderer()
+    renderer.set_topology(
+        {
+            "block-1": {
+                "subblock-1": ["node-1"],
+                "subblock-2": ["node-2"],
+            }
+        }
+    )
+
+    output = _render(renderer, [_domain_result()])
+
+    assert "Mixed (subblock-1, subblock-2)" in output
+
+
+def test_nccl_domain_renderer_falls_back_to_nodes():
+    renderer = NcclDomainRenderer()
+
+    output = _render(renderer, [_domain_result()])
+
+    assert "node-1, node-2" in output
+
+
+def test_nccl_domain_renderer_handles_empty_topology():
+    for topology in (None, {}, {"block-1": {}}):
+        renderer = NcclDomainRenderer()
+        renderer.set_topology(topology)
+
+        output = _render(renderer, [_domain_result()])
+
+        assert "node-1, node-2" in output
+
+
+def test_nccl_domain_renderer_handles_partially_known_nodes():
+    renderer = NcclDomainRenderer()
+    renderer.set_topology({"block-1": {"subblock-1": ["node-1"]}})
+
+    output = _render(renderer, [_domain_result()])
+
+    assert "subblock-1 (2 nodes)" not in output
+    assert "Mixed (Unknown, subblock-1)" in output
+
+
+def test_nccl_domain_renderer_disambiguates_repeated_subblocks():
+    renderer = NcclDomainRenderer()
+    renderer.set_topology(
+        {
+            "block-1": {"subblock-1": ["node-1", "node-2"]},
+            "block-2": {"subblock-1": ["node-3", "node-4"]},
+        }
+    )
+
+    output = _render(renderer, [_domain_result()])
+
+    assert "block-1-subblock-1 (2 nodes)" in output
+
+
+def test_nccl_domain_renderer_flags_same_subblock_different_blocks_as_mixed():
+    renderer = NcclDomainRenderer()
+    renderer.set_topology(
+        {
+            "block-1": {"subblock-1": ["node-1"]},
+            "block-2": {"subblock-1": ["node-2"]},
+        }
+    )
+
+    output = _render(renderer, [_domain_result()])
+
+    assert "Mixed (block-1-subblock-1, block-2-subblock-1)" in output
+
+
+def test_build_subblock_to_blocks_and_cached_domain_label():
+    from chs.utils.topology import (
+        build_node_to_location,
+        build_subblock_to_blocks,
+        get_domain_label,
+    )
+
+    topology = {
+        "block-1": {"subblock-A": ["node-1", "node-2"]},
+        "block-2": {"subblock-A": ["node-3"]},
+        "block-3": {"subblock-B": ["node-4"]},
+    }
+    node_to_loc = build_node_to_location(topology)
+    subblock_to_blocks = build_subblock_to_blocks(node_to_loc)
+
+    assert subblock_to_blocks["subblock-A"] == {"block-1", "block-2"}
+    assert subblock_to_blocks["subblock-B"] == {"block-3"}
+
+    # Disambiguated because subblock-A appears in multiple blocks
+    label1 = get_domain_label(
+        ["node-1", "node-2"], node_to_loc, subblock_to_blocks
+    )
+    assert label1 == "block-1-subblock-A"
+
+    # Unique subblock
+    label2 = get_domain_label(["node-4"], node_to_loc, subblock_to_blocks)
+    assert label2 == "subblock-B"

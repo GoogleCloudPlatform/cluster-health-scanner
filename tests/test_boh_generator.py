@@ -126,7 +126,7 @@ class TestBOHGenerator(unittest.TestCase):
         report = generator.generate()
 
         self.assertEqual(report.report_id, "test_hash")
-        self.assertEqual(report.chs_version, "1.0.0")
+        self.assertTrue(report.chs_version)
         self.assertEqual(report.system_info.type, "SLURM_CLUSTER")
         self.assertEqual(len(report.test_results), 0)
 
@@ -1604,7 +1604,11 @@ class TestBOHGenerator(unittest.TestCase):
             "a3-megagpu-8g",
             "a4-highgpu-8g",
         ]
-        four_gpu_machines = ["a4x-highgpu-4g", "a4x-maxgpu-4g-metal"]
+        four_gpu_machines = [
+            "a4x-highgpu-4g",
+            "a4x-maxgpu-4g-metal",
+            "a5x-highgpu-4g-metal",
+        ]
 
         for mtype in eight_gpu_machines:
             self.assertIn(mtype, thresholds)
@@ -1708,7 +1712,10 @@ class TestBOHGenerator(unittest.TestCase):
                         {
                             "name": "1073741824",
                             "foms": [
-                                {"name": "out-of-place Bandwidth", "value": 90}
+                                {
+                                    "name": "Out of Place Bus Bandwidth",
+                                    "value": 90,
+                                }
                             ],
                         }
                     ],
@@ -1724,7 +1731,10 @@ class TestBOHGenerator(unittest.TestCase):
                         {
                             "name": "1073741824",
                             "foms": [
-                                {"name": "out-of-place Bandwidth", "value": 60}
+                                {
+                                    "name": "Out of Place Bus Bandwidth",
+                                    "value": 60,
+                                }
                             ],
                         }
                     ],

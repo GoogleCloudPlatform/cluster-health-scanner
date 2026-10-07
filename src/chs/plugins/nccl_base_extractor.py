@@ -18,6 +18,9 @@ from chs.plugins.utils.nccl_utils import parse_nccl_context_metadata
 
 
 class NcclBaseExtractor(DefaultExtractor):
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {"bandwidth": "Peak Detected Bandwidth"}
+
     def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
         return parse_nccl_context_metadata(ctx_name)
 
@@ -56,7 +59,7 @@ class NcclBaseExtractor(DefaultExtractor):
             for fom in foms:
                 name = fom.get("name", "")
                 val = fom.get("value")
-                if "Bandwidth" in name:
+                if "Bus Bandwidth" in name:
                     try:
                         max_bw = max(max_bw, float(val))
                     except (ValueError, TypeError):

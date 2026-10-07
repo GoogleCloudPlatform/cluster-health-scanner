@@ -26,6 +26,7 @@ from chs.plugins.utils.validation_analyzer import extract_validation_data
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils.config import load_yaml_config
 from chs.utils.tests import get_all_supported_tests_details
+from chs.version import get_version
 
 DEFAULT_TEMPLATE_PATH = os.path.join(
     os.path.dirname(__file__), "templates", "boh_template.html"
@@ -37,8 +38,13 @@ logger = logging.getLogger(__name__)
 class HtmlReportGenerator:
     """Generates standalone, interactive HTML Bill of Health reports."""
 
-    def __init__(self, template_path: str | None = None):
+    def __init__(
+        self,
+        template_path: str | None = None,
+        topology: dict[str, Any] | None = None,
+    ):
         self.template_path = template_path or DEFAULT_TEMPLATE_PATH
+        self.topology = topology or {}
 
     def _extract_tier2_mappings(self) -> dict[str, list[str]]:
         """Extracts tier1-to-tier2 test mappings."""
@@ -130,6 +136,9 @@ class HtmlReportGenerator:
             boh.metadata.fields["skip_validation"].bool_value
             if "skip_validation" in boh.metadata.fields
             else False
+        )
+        chs_version = (
+            boh.chs_version or run_info.get("chs_version") or get_version()
         )
         tier1_to_tier2_tests = self._extract_tier2_mappings()
 
@@ -454,7 +463,7 @@ class HtmlReportGenerator:
         return {
             "metadata": {
                 "report_id": report_id,
-                "chs_version": run_info.get("chs_version", "0.1.0"),
+                "chs_version": chs_version,
                 "created_at": created_at_str,
                 "system_type": system_type,
                 "command_statement": run_info.get("command_statement", ""),
@@ -499,6 +508,8 @@ class HtmlReportGenerator:
 
         for (canonical_name, test_level), results in grouped_results.items():
             plugin = plugin_manager.get_plugin(canonical_name)
+            if hasattr(plugin, "set_topology") and self.topology:
+                plugin.set_topology(self.topology)
             detail_report = plugin.get_detail_data(results)
             if detail_report and detail_report.tables:
                 tables_data = [

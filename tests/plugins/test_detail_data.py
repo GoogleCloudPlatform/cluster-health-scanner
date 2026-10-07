@@ -205,7 +205,7 @@ def test_nccl_renderers_get_detail_data():
 
     res = pb.TestResult(test_name="nccl-cluster", test_level="all-reduce")
     res.target_resources.add(node_name="node-1")
-    m = res.metrics.add(key="Bandwidth")
+    m = res.metrics.add(key="Bus Bandwidth")
     m.value.number_value = 250.0
     m.metadata.fields["context"].string_value = "1073741824"
 
@@ -217,7 +217,7 @@ def test_nccl_renderers_get_detail_data():
     res_pw = pb.TestResult(test_name="nccl-pairwise", test_level="all-reduce")
     res_pw.target_resources.add(node_name="node-1")
     res_pw.target_resources.add(node_name="node-2")
-    m_pw = res_pw.metrics.add(key="Bandwidth")
+    m_pw = res_pw.metrics.add(key="Bus Bandwidth")
     m_pw.value.number_value = 240.0
     m_pw.metadata.fields["context"].string_value = "1073741824"
 
@@ -229,7 +229,7 @@ def test_nccl_renderers_get_detail_data():
         test_name="nccl-single-node", test_level="all-reduce"
     )
     res_sn.target_resources.add(node_name="node-1")
-    m_sn = res_sn.metrics.add(key="Bandwidth")
+    m_sn = res_sn.metrics.add(key="Bus Bandwidth")
     m_sn.value.number_value = 260.0
     m_sn.metadata.fields["context"].string_value = "1073741824"
 

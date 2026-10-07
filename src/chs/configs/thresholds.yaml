@@ -18,6 +18,10 @@ default:
     type: min
     thresholds:
       bandwidth: 50
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth: 50
   nccl-single-node:
     type: min
     thresholds:
@@ -294,7 +298,7 @@ a3-ultragpu-8g:
         - value: 453.0
           conditions:
             workload_name: "all-reduce"
-        - value: 393.0
+        - value: 344.0
           conditions:
             workload_name: "all-gather"
   nccl-pairwise:
@@ -304,7 +308,7 @@ a3-ultragpu-8g:
         - value: 450.0
           conditions:
             workload_name: "all-reduce"
-        - value: 334.0
+        - value: 313.0
           conditions:
             workload_name: "all-gather"
   gemm:
@@ -324,7 +328,7 @@ a3-megagpu-8g:
         - value: 167.0
           conditions:
             workload_name: "all-reduce"
-        - value: 166.0
+        - value: 178.0
           conditions:
             workload_name: "all-gather"
   nccl-single-node:
@@ -334,7 +338,7 @@ a3-megagpu-8g:
         - value: 455.0
           conditions:
             workload_name: "all-reduce"
-        - value: 393.0
+        - value: 344.0
           conditions:
             workload_name: "all-gather"
   nccl-pairwise:
@@ -344,7 +348,7 @@ a3-megagpu-8g:
         - value: 320.0
           conditions:
             workload_name: "all-reduce"
-        - value: 190.0
+        - value: 178.0
           conditions:
             workload_name: "all-gather"
   gemm:
@@ -364,7 +368,7 @@ a4-highgpu-8g:
         - value: 357.0
           conditions:
             workload_name: "all-reduce"
-        - value: 368.0
+        - value: 357.0
           conditions:
             workload_name: "all-gather"
   nccl-single-node:
@@ -374,7 +378,7 @@ a4-highgpu-8g:
         - value: 768.0
           conditions:
             workload_name: "all-reduce"
-        - value: 725.0
+        - value: 624.0
           conditions:
             workload_name: "all-gather"
   nccl-pairwise:
@@ -384,7 +388,7 @@ a4-highgpu-8g:
         - value: 642.0
           conditions:
             workload_name: "all-reduce"
-        - value: 381.0
+        - value: 357.0
           conditions:
             workload_name: "all-gather"
   gemm:
@@ -407,6 +411,16 @@ a4x-highgpu-4g:
         - value: 600.0
           conditions:
             workload_name: "all-gather"
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 780.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 600.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
@@ -414,7 +428,7 @@ a4x-highgpu-4g:
         - value: 600.0
           conditions:
             workload_name: "all-reduce"
-        - value: 800.0
+        - value: 618.0
           conditions:
             workload_name: "all-gather"
   nccl-pairwise:
@@ -425,7 +439,7 @@ a4x-highgpu-4g:
           conditions:
             domain_type: "intradomain"
             workload_name: "all-reduce"
-        - value: 734.0
+        - value: 626.0
           conditions:
             domain_type: "intradomain"
             workload_name: "all-gather"
@@ -433,7 +447,7 @@ a4x-highgpu-4g:
           conditions:
             domain_type: "interdomain"
             workload_name: "all-reduce"
-        - value: 205.0
+        - value: 179.0
           conditions:
             domain_type: "interdomain"
             workload_name: "all-gather"
@@ -457,11 +471,71 @@ a4x-maxgpu-4g-metal:
         - value: 340.0
           conditions:
             workload_name: "all-gather"
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 780.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 600.0
+          conditions:
+            workload_name: "all-gather"
   nccl-single-node:
     type: min
     thresholds:
       bandwidth:
-        - value: 600.0
+        - value: 616.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 607.0
+          conditions:
+            workload_name: "all-gather"
+  nccl-pairwise:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 794.0
+          conditions:
+            domain_type: "intradomain"
+            workload_name: "all-reduce"
+        - value: 616.0
+          conditions:
+            domain_type: "intradomain"
+            workload_name: "all-gather"
+        - value: 360.0
+          conditions:
+            domain_type: "interdomain"
+            workload_name: "all-reduce"
+        - value: 353.0
+          conditions:
+            domain_type: "interdomain"
+            workload_name: "all-gather"
+  gemm:
+    type: min
+    thresholds:
+      performance: 1000
+  nvidia-smi:
+    type: scalar
+    thresholds:
+      gpus: 4
+
+a5x-highgpu-4g-metal:
+  nccl-cluster:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 880.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 800.0
+          conditions:
+            workload_name: "all-gather"
+  nccl-domain:
+    type: min
+    thresholds:
+      bandwidth:
+        - value: 880.0
           conditions:
             workload_name: "all-reduce"
         - value: 800.0
@@ -471,16 +545,24 @@ a4x-maxgpu-4g-metal:
     type: min
     thresholds:
       bandwidth:
-        - value: 240.0
+        - value: 880.0
           conditions:
+            domain_type: "intradomain"
             workload_name: "all-reduce"
-        - value: 380.0
+        - value: 800.0
           conditions:
+            domain_type: "intradomain"
             workload_name: "all-gather"
-  gemm:
+  nccl-single-node:
     type: min
     thresholds:
-      performance: 1000
+      bandwidth:
+        - value: 850.0
+          conditions:
+            workload_name: "all-reduce"
+        - value: 800.0
+          conditions:
+            workload_name: "all-gather"
   nvidia-smi:
     type: scalar
     thresholds:

@@ -29,6 +29,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from google.protobuf import json_format
 from chs.utils.app_data import ChsAppData
 from chs.utils import lifecycle
+from chs.version import get_version
 
 
 logger = logging.getLogger(__name__)
@@ -514,7 +515,7 @@ class BOHGenerator:
             return self.report
 
         self.report.report_id = data.get("workspace_name", str(uuid.uuid4()))
-        self.report.chs_version = "1.0.0"
+        self.report.chs_version = get_version()
         self.report.created_at.CopyFrom(self._get_timestamp())
 
         self.report.system_info.type = f"{self.cluster_type.upper()}_CLUSTER"

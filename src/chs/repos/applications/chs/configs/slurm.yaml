@@ -14,7 +14,7 @@
 
 a3-megagpu-8g:
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -89,7 +89,7 @@ a3-ultragpu-8g:
       begin_message_size: "256M"
       end_message_size: "8G"
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -147,7 +147,7 @@ a4-highgpu-8g:
       begin_message_size: "256M"
       end_message_size: "8G"
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -190,7 +190,7 @@ a4-highgpu-8g:
       n_nodes: 1
 a4x-highgpu-4g:
   nvidia-dcgm:
-    modifiers: [{name: "dcgm-fom"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    modifiers: [{name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
     variables:
       diag_level: [1,2]
       n_ranks: 1
@@ -254,6 +254,88 @@ a4x-highgpu-4g:
       nccl-tests_path: "{nccl_tests_build_dir}/build/"
       begin_message_size: "256M"
       end_message_size: "8G"
+
+a4x-maxgpu-4g-metal:
+  nvidia-dcgm:
+    modifiers: [{name: "dcgm"}, {name: "dcgm-error-detector"}, {name: "generic-error-detector"}]
+    variables:
+      diag_level: [1,2]
+      diag_args: '-p "memory.max_free_memory_mb=220000"'
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nvidia-stream:
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: hpc-benchmarks:26.02
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:26.02"
+      srun_args: "-l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60"
+      n_elements: "2800000000"
+      cpu_affinity: "0-71:0-71:72-143:72-143"
+      mem_affinity: "0:0:1:1"
+  nvidia-gemm:
+    modifiers: [{name: "pyxis-enroot"}, {name: "generic-error-detector"}]
+    variables:
+      n_ranks: "{gpus_per_node}"
+      processes_per_node: "{gpus_per_node}"
+      n_nodes: 1
+      container_name: "hpc-benchmarks:26.02"
+      container_uri: "docker://nvcr.io#nvidia/hpc-benchmarks:26.02"
+      srun_args: "--cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60"
+      gpu_affinity: "0:1:2:3"
+      cpu_affinity: "0-71:0-71:72-143:72-143"
+      mem_affinity: "0:0:1:1"
+      type: "fp64"
+      iter: 32
+      m: 16384
+      n: 16384
+      k: 16384
+  nvidia-smi:
+    modifiers: [{name: "generic-error-detector"}]
+    variables:
+      n_ranks: 1
+      processes_per_node: 1
+      n_nodes: 1
+  nccl-tests:
+    modifiers: [{name: "nccl-gib"}, {name: "nccl-linker"}, {name: "pyxis-enroot"}, {name: "nccl-error-detector"}, {name: "generic-error-detector"}]
+    env_vars:
+      set:
+        OMPI_MCA_btl_tcp_if_include: "{tcp_interfaces}"
+        NCCL_SOCKET_IFNAME: "{tcp_interfaces}"
+        LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
+        NCCL_NET: gIB
+        NCCL_DEBUG: INFO
+        NCCL_TESTS_SPLIT_MASK: "0x0"
+        NCCL_MNNVL_ENABLE: "{mnnvl_enable}"
+        NCCL_NVLS_ENABLE: "{nvls_enable}"
+    variables:
+      mnnvl_enable: 2
+      nvls_enable: 2
+      container_name: nccl-gib-a4x-max-arm64-v1.1.1
+      container_uri: "docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1"
+      srun_args: >-
+        --mpi=pmix
+        --container-workdir /third_party/nccl-tests/build/
+        --container-env {container_env_vars}
+        --container-image {container_path}
+        --container-mounts "/usr/local/gib,/var/tmp"
+        --container-writable
+        --wait=60
+        --kill-on-bad-exit=1
+      nccl-tests_path: "/third_party/nccl-tests/build/"
+      begin_message_size: "256M"
+      end_message_size: "8G"
+    intradomain:
+      variables:
+        mnnvl_enable: 1
+        nvls_enable: 2
+    interdomain:
+      variables:
+        mnnvl_enable: 0
+        nvls_enable: 0
 
 ct6e-standard-4t:
   variables:

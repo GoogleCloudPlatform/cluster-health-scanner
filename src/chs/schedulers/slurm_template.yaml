@@ -28,6 +28,7 @@ ramble:
     scheduler: slurm
     container_dir: ""
     tcp_interfaces: ""
+    allow_interdomain_pairs: true
 
   applications:
     chs:

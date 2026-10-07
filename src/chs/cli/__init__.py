@@ -58,6 +58,7 @@ from chs.cli import list_formatting
 from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
+from chs.version import get_version
 
 warnings.filterwarnings(
     "ignore", category=RuntimeWarning, module="google_crc32c"
@@ -980,6 +981,11 @@ def safe_cancel_action(
     ),
 )
 @help_command_text.style_cli_docstring
+@click.version_option(
+    version=get_version(),
+    prog_name="chs",
+    message="%(prog)s %(version)s",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:

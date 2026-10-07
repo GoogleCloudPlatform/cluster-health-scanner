@@ -14,6 +14,7 @@
 
 import copy
 import logging
+import math
 import os
 import textwrap
 from chs.constants import TOPOLOGY_TO_MESH
@@ -21,6 +22,7 @@ from chs.utils import sanitize_dns_1123
 from ramble.context import Context, create_context_from_dict
 from chs.utils.topology import (
     build_node_to_location,
+    generate_domain_groups,
     get_topology,
 )
 
@@ -113,7 +115,7 @@ podAntiAffinity:
         timeout_seconds = TestHelper._get_int_var(ctx_vars, "timeout")
         deadline_seconds = TestHelper._get_int_var(ctx_vars, "deadline")
 
-        headers_dict["--time"] = str(timeout_seconds // 60)
+        headers_dict["--time"] = str(max(1, math.ceil(timeout_seconds / 60)))
         headers_dict["--deadline"] = (
             f"now+{deadline_seconds + timeout_seconds}seconds"
         )
@@ -429,23 +431,27 @@ podAntiAffinity:
         nodes_list,
         test_type="nccl-cluster",
         node_to_loc=None,
+        group_label=None,
+        allow_interdomain_pairs=True,
     ):
         domain_type = None
         if test_type == "nccl-pairwise":
+            fallback = (
+                "interdomain" if allow_interdomain_pairs else "intradomain"
+            )
+            topo_val = "unknown"
             if node_to_loc and len(nodes_list) == 2:
                 topo_val = get_topology(
                     nodes_list[0], nodes_list[1], node_to_loc
                 )
-                domain_type = (
-                    topo_val if topo_val != "unknown" else "interdomain"
-                )
-            else:
-                domain_type = "interdomain"
+            domain_type = topo_val if topo_val != "unknown" else fallback
             experiment_name = (
                 f"{experiment_name}-{nodes_list[0]}-{nodes_list[1]}"
             )
         elif test_type == "nccl-single-node":
             experiment_name = f"{experiment_name}-{nodes_list[0]}"
+        elif test_type == "nccl-domain":
+            domain_type = "intradomain"
 
         context_dict = TestHelper._prepare_cluster_context(
             variables,
@@ -459,57 +465,74 @@ podAntiAffinity:
             context_dict.setdefault("env_vars", {}).setdefault("set", {})[
                 "NCCL_NET"
             ] = "Socket"
+        elif test_type == "nccl-domain":
+            experiment_name = (
+                f"{experiment_name}-{sanitize_dns_1123(str(group_label))}"
+            )
 
         return create_context_from_dict(experiment_name, context_dict)
 
     @staticmethod
+    def _pair_adjacent(nodes: list[str]) -> list[list[str]]:
+        """Pairs adjacent nodes, pairing any trailing odd node with its predecessor."""
+        pairs = [[nodes[i], nodes[i + 1]] for i in range(0, len(nodes) - 1, 2)]
+        if len(nodes) % 2 != 0 and len(nodes) > 1:
+            pairs.append([nodes[-2], nodes[-1]])
+        return pairs
+
+    @staticmethod
     def generate_topological_pairs(
         topology: dict[str, dict[str, list[str]]],
+        allow_interdomain_pairs: bool = True,
     ) -> list[list[str]]:
-        """Generates pairs ordered by topology hierarchy.
+        """Generates disjoint node pairs ordered by topology hierarchy.
 
-        Note: This method generates disjoint pairs (e.g., [n1, n2], [n3, n4]) rather
-        than a fully connected ring or all-to-all coverage, as we moved away from
-        n-ring pairs.
+        Args:
+            topology: Mapping from block names to dicts of subblocks to node lists.
+            allow_interdomain_pairs: If False, only generates intra-subblock pairs.
 
-        topology: dict mapping block names to dicts of subblocks to lists of nodes.
+        Returns:
+            List of 2-element node pair lists.
         """
-        all_pairs = []
-        inter_block_nodes = []
+        all_pairs: list[list[str]] = []
+        inter_block_nodes: list[str] = []
 
         # 1. Intra-subblock pairs
         for block in sorted(topology.keys()):
             subblocks = topology[block]
-            block_nodes = []
+            block_nodes: list[str] = []
             for subblock in sorted(subblocks.keys()):
                 nodes = sorted(subblocks[subblock])
-                for i in range(0, len(nodes) - 1, 2):
-                    all_pairs.append([nodes[i], nodes[i + 1]])
-
-                if len(nodes) % 2 != 0 and len(nodes) > 1:
-                    all_pairs.append([nodes[-2], nodes[-1]])
-
+                all_pairs.extend(TestHelper._pair_adjacent(nodes))
                 if nodes:
                     block_nodes.append(nodes[0])
 
+            if not allow_interdomain_pairs:
+                continue
+
             # 2. Inter-subblock pairs (within the same block)
-            for i in range(0, len(block_nodes) - 1, 2):
-                all_pairs.append([block_nodes[i], block_nodes[i + 1]])
-
-            if len(block_nodes) % 2 != 0 and len(block_nodes) > 1:
-                all_pairs.append([block_nodes[-2], block_nodes[-1]])
-
+            all_pairs.extend(TestHelper._pair_adjacent(block_nodes))
             if block_nodes:
                 inter_block_nodes.append(block_nodes[0])
 
+        if not allow_interdomain_pairs:
+            return all_pairs
+
         # 3. Inter-block pairs
-        for i in range(0, len(inter_block_nodes) - 1, 2):
-            all_pairs.append([inter_block_nodes[i], inter_block_nodes[i + 1]])
-
-        if len(inter_block_nodes) % 2 != 0 and len(inter_block_nodes) > 1:
-            all_pairs.append([inter_block_nodes[-2], inter_block_nodes[-1]])
-
+        all_pairs.extend(TestHelper._pair_adjacent(inter_block_nodes))
         return all_pairs
+
+    @staticmethod
+    def generate_domain_groups(
+        topology: dict[str, dict[str, list[str]]] | None,
+        target_nodes: list[str] | None = None,
+        min_nodes_per_domain: int = 3,
+    ) -> list[tuple[str, list[str]]]:
+        return generate_domain_groups(
+            topology=topology,
+            target_nodes=target_nodes,
+            min_nodes_per_domain=min_nodes_per_domain,
+        )
 
     @staticmethod
     def nccl_test(
@@ -526,20 +549,56 @@ podAntiAffinity:
             )
             return []
 
+        allow_interdomain_pairs = variables.get("allow_interdomain_pairs", True)
         if test_type == "nccl-pairwise":
+            if not topology and not allow_interdomain_pairs:
+                logger.warning(
+                    "The 'nccl-pairwise' diagnostic requires cluster topology "
+                    "data when allow_interdomain_pairs is False. Skipping this test."
+                )
+                return []
+
             if topology:
-                node_groups = TestHelper.generate_topological_pairs(topology)
+                node_groups = TestHelper.generate_topological_pairs(
+                    topology, allow_interdomain_pairs=allow_interdomain_pairs
+                )
                 node_to_loc = build_node_to_location(topology)
             else:
                 # Fallback: create a dummy topology with all nodes in a single block
                 dummy_topology = {"default": {"default-subblock": all_nodes}}
                 node_groups = TestHelper.generate_topological_pairs(
-                    dummy_topology
+                    dummy_topology,
+                    allow_interdomain_pairs=allow_interdomain_pairs,
                 )
+
+            if not node_groups:
+                logger.warning(
+                    f"No node pairs could be formed from {len(all_nodes)} nodes for '{test_type}'. "
+                    "Skipping this test."
+                )
+                return []
+            labeled_groups = [(None, nodes) for nodes in node_groups]
         elif test_type == "nccl-single-node":
-            node_groups = [[n] for n in all_nodes]
+            labeled_groups = [(None, [node]) for node in all_nodes]
+        elif test_type == "nccl-domain":
+            if not topology:
+                logger.warning(
+                    "The 'nccl-domain' diagnostic requires cluster topology "
+                    "data, but none was found. Skipping this test."
+                )
+                return []
+
+            labeled_groups = TestHelper.generate_domain_groups(
+                topology, all_nodes, min_nodes_per_domain=3
+            )
+            if not labeled_groups:
+                logger.warning(
+                    "The 'nccl-domain' diagnostic requires domains with more "
+                    "than 2 nodes, but none met this criteria. Skipping this test."
+                )
+                return []
         else:
-            node_groups = [all_nodes]
+            labeled_groups = [(None, all_nodes)]
 
         return [
             TestHelper._nccl_context(
@@ -548,9 +607,11 @@ podAntiAffinity:
                 copy.deepcopy(configs),
                 nodes,
                 test_type,
-                node_to_loc,
+                node_to_loc=node_to_loc,
+                group_label=label,
+                allow_interdomain_pairs=allow_interdomain_pairs,
             )
-            for nodes in node_groups
+            for label, nodes in labeled_groups
         ]
 
     @staticmethod

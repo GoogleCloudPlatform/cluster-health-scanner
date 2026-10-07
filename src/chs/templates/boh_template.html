@@ -716,7 +716,9 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
             }
 
             let rowNodes = [];
-            if (rawNodeVal && rawNodeVal !== 'N/A' && rawNodeVal !== 'unknown' && !rawNodeVal.includes('Cluster Bandwidth')) {
+            if (Array.isArray(r.target_nodes) && r.target_nodes.length > 0) {
+              rowNodes = r.target_nodes;
+            } else if (rawNodeVal && rawNodeVal !== 'N/A' && rawNodeVal !== 'unknown' && !rawNodeVal.includes('Cluster Bandwidth')) {
               const cleaned = rawNodeVal.replace(/\([^)]*\)/g, '');
               rowNodes = cleaned.split(/[\s,<>]+/).map(n => n.trim()).filter(n => n && n !== '-');
             } else if (tableNodesFromTitle.length > 0) {

@@ -232,6 +232,41 @@ class KubernetesScheduler(BaseScheduler):
             pass
         return None
 
+    def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
+        """Detects machine types, falling back to labels if GCE lookup fails."""
+        machine_types = super().detect_nodes_hardware(nodes)
+        if "unknown" not in machine_types:
+            return machine_types
+
+        node_labels = {
+            (n.get("metadata") or {}).get("name"): (
+                n.get("metadata") or {}
+            ).get("labels")
+            or {}
+            for n in self._fetch_raw_node_resources()
+        }
+
+        resolved_types = {t for t in machine_types if t != "unknown"}
+        for node in nodes:
+            if node in self.node_to_instance_id:
+                continue
+            mtype = node_labels.get(node, {}).get(
+                "node.kubernetes.io/instance-type"
+            )
+            if mtype:
+                logger.info(
+                    "Resolved machine type '%s' for node '%s' from "
+                    "Kubernetes labels.",
+                    mtype,
+                    node,
+                )
+                self.node_to_instance_id[node] = node
+                resolved_types.add(mtype)
+            else:
+                resolved_types.add("unknown")
+
+        return sorted(list(resolved_types))
+
     def _ensure_namespace_exists(self) -> None:
         """Ensures the chs namespace exists before deploying resources."""
 

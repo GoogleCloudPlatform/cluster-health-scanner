@@ -26,6 +26,7 @@ import google.auth
 from google.api_core.exceptions import GoogleAPICallError
 
 from chs.exceptions import NoActiveJobsException
+from chs.resources import normalize_machine_type
 
 from typing import Any
 
@@ -50,6 +51,13 @@ logger = logging.getLogger(__name__)
 
 class SlurmScheduler(BaseScheduler):
     """Slurm scheduler implementation."""
+
+    _INTERDOMAIN_RESTRICTED_MACHINE_TYPES = frozenset(
+        {
+            "a4x-highgpu-4g",
+            "a4x-maxgpu-4g-metal",
+        }
+    )
 
     @property
     def _enroot_paths(self) -> dict[str, str]:
@@ -425,6 +433,9 @@ class SlurmScheduler(BaseScheduler):
             variables["deadline"] = deadline
 
         variables["chs_run_id"] = run_id
+        variables["allow_interdomain_pairs"] = self.allow_interdomain_pairs(
+            machine_type
+        )
 
         logger.debug("Configuration: %r", config)
 
@@ -432,6 +443,14 @@ class SlurmScheduler(BaseScheduler):
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+    def allow_interdomain_pairs(self, machine_type: str = "") -> bool:
+        """Returns whether the scheduler allows cross-domain node pairs."""
+        # TODO: Revisit after we fix inter partition scheduling.
+        return (
+            normalize_machine_type(machine_type).lower()
+            not in self._INTERDOMAIN_RESTRICTED_MACHINE_TYPES
+        )
 
     # TODO: Test and make slurm workflow consistent with GKE
     def has_no_failed_jobs(self) -> bool:
