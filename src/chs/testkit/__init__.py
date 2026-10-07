@@ -18,6 +18,7 @@ from chs.testkit.base import (
     SingleNodePlugin,
     SlicePlugin,
 )
+from chs.testkit.catalog import build_catalog
 from chs.testkit.loader import available_tests, clear_cache, load_plugin
 from chs.testkit.spec import (
     STRIPPED_WORKSPACE_KEYS,
@@ -26,6 +27,7 @@ from chs.testkit.spec import (
     TestRequest,
     build_test_request,
 )
+from chs.testkit.thresholds import build_thresholds
 
 __all__ = [
     "BaseTestPlugin",
@@ -37,7 +39,9 @@ __all__ = [
     "STRIPPED_WORKSPACE_KEYS",
     "TestRequest",
     "available_tests",
+    "build_catalog",
     "build_test_request",
+    "build_thresholds",
     "clear_cache",
     "load_plugin",
 ]

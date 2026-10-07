@@ -1,0 +1,45 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+platforms:
+- a3-ultragpu-8g
+- a4-highgpu-8g
+- a3-megagpu-8g
+- a4x-highgpu-4g
+- a4x-maxgpu-4g-metal
+- a5x-highgpu-4g-metal
+defaults:
+  modifiers:
+  - name: generic-error-detector
+  kubernetes:
+    modifiers:
+    - name: gpu-persistence-mode
+    variables:
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
+      jobset_template: jobset_standard.yaml.tpl
+      mpi_command: ''
+machines:
+  a4x-highgpu-4g:
+    kubernetes:
+      variables:
+        container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+  a4x-maxgpu-4g-metal:
+    kubernetes:
+      variables:
+        container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+  a5x-highgpu-4g-metal:
+    kubernetes:
+      variables:
+        container_image: nvcr.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04

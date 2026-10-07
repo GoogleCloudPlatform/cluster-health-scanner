@@ -1,0 +1,272 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+platforms:
+- a3-ultragpu-8g
+- a4-highgpu-8g
+- a3-megagpu-8g
+- a4x-highgpu-4g
+- a4x-maxgpu-4g-metal
+- a5x-highgpu-4g-metal
+defaults:
+  env_vars:
+    set:
+      NCCL_DEBUG: INFO
+  modifiers:
+  - name: nccl-error-detector
+  - name: generic-error-detector
+  variables:
+    nccl-tests_path: /third_party/nccl-tests/build
+  kubernetes:
+    env_vars:
+      set:
+        OMPI_ALLOW_RUN_AS_ROOT: 1
+    modifiers:
+    - name: gpu-persistence-mode
+    variables:
+      container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
+      jobset_template: jobset_mpi.yaml.tpl
+      mpi_command: |
+        mpirun -n {n_ranks} -N {processes_per_node} \
+          --hostfile /tmp/hostfile --bind-to none \
+          --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+          --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+          --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+          -x CUDA_VISIBLE_DEVICES \
+          -x PATH="{nccl-tests_path}:$PATH" \
+          -x {mpi_env_vars}
+      mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} LD_LIBRARY_PATH | sed 's/ / -x /g')
+      ssh_port: 2222
+  slurm:
+    modifiers:
+    - name: nccl-linker
+    - name: pyxis-enroot
+    variables:
+      container_name: nccl-plugin-gib-diagnostic:v1.1.0
+      container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
+      srun_args: --mpi=pmix --export=ALL --container-workdir {nccl-tests_path} --container-image {container_path} --container-mounts "/var/tmp" --container-writable --wait=60
+machines:
+  a3-ultragpu-8g:
+    env_vars:
+      set:
+        NCCL_NET: gIB
+    modifiers:
+    - name: nccl-gib
+    kubernetes:
+      env_vars:
+        set:
+          CUDA_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+    slurm:
+      env_vars:
+        set:
+          OMPI_MCA_btl: tcp,self
+          OMPI_MCA_btl_tcp_if_include: '{tcp_interfaces}'
+  a4-highgpu-8g:
+    env_vars:
+      set:
+        NCCL_NET: gIB
+    modifiers:
+    - name: nccl-gib
+    kubernetes:
+      env_vars:
+        set:
+          CUDA_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+    slurm:
+      env_vars:
+        set:
+          OMPI_MCA_btl: tcp,self
+          OMPI_MCA_btl_tcp_if_include: '{tcp_interfaces}'
+  a3-megagpu-8g:
+    env_vars:
+      set:
+        NCCL_FASTRAK_LLCM_DEVICE_DIRECTORY: /dev/aperture_devices
+    kubernetes:
+      env_vars:
+        set:
+          NCCL_LIB_DIR: /usr/local/nvidia/lib64
+      variables:
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.15
+        init_containers_yaml: |
+          - name: tcpxo-daemon
+            image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.21
+            imagePullPolicy: Always
+            restartPolicy: Always
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -ex
+                chmod 755 /fts/entrypoint_rxdm_container.sh
+                /fts/entrypoint_rxdm_container.sh --num_hops=2 --num_nics=8
+            securityContext:
+              privileged: true
+              capabilities:
+                add:
+                  - NET_ADMIN
+                  - NET_BIND_SERVICE
+            volumeMounts:
+              - name: nvidia
+                mountPath: /usr/local/nvidia/lib64
+              - name: sys
+                mountPath: /hostsysfs
+              - name: proc-sys
+                mountPath: /hostprocsysfs
+              - name: aperture-devices
+                mountPath: /dev/aperture_devices
+        mpi_command: |
+          BINARY=$(basename $(dirname $(pwd)) | tr '-' '_')_perf
+          mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 \
+            --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_args "-p {ssh_port}" \
+            -np $(( {n_nodes} * {processes_per_node} )) \
+            --hostfile /tmp/hostfile \
+            -x {mpi_env_vars} \
+            taskset -c 32-63 /scripts/demo_mpi_entry_with_config_profile.sh $BINARY -b 8 -e 8G -f 2 -g 1 -w 5 --iters 20
+        ssh_port: 222
+    slurm:
+      env_vars:
+        set:
+          NCCL_FASTRAK_CTRL_DEV: enp0s12
+          NCCL_FASTRAK_IFNAME: enp6s0,enp7s0,enp13s0,enp14s0,enp134s0,enp135s0,enp141s0,enp142s0
+          NCCL_SOCKET_IFNAME: enp0s12
+      modifiers:
+      - name: nccl-tcpxo
+      - name: nccl-test-compiler
+      variables:
+        container_name: pytorch:24.09-py3
+        container_uri: docker://nvcr.io#nvidia/pytorch:24.09-py3
+        nccl_tests_build_dir: '{workspace_shared}/nccl-tests-{nccl_tests_ref}'
+        nccl-tests_path: '{nccl_tests_build_dir}/build'
+        srun_args: --mpi=pmi2 --export=ALL --container-workdir {nccl-tests_path} --container-image {container_path} --container-mounts "/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/var/lib/tcpxo/lib64/" --container-writable --wait=60
+  a4x-highgpu-4g:
+    env_vars:
+      set:
+        NCCL_NET: gIB
+    modifiers:
+    - name: nccl-gib
+    kubernetes:
+      env_vars:
+        set:
+          LD_LIBRARY_PATH: /usr/local/nvidia/lib64:/usr/local/gib/lib64:/usr/local/gib/lib
+      intradomain:
+        variables:
+          custom_resources_yaml: |
+            apiVersion: resource.nvidia.com/v1beta1
+            kind: ComputeDomain
+            metadata:
+              name: {job_name}-cd
+              namespace: "{kubernetes_namespace}"
+              labels:
+                chs-run: {job_name}
+            spec:
+              numNodes: {n_nodes}
+              channel:
+                resourceClaimTemplate:
+                  name: {job_name}-cdc
+            ---
+          extra_container_resources_yaml: |
+            claims:
+            - name: compute-domain-channel
+          extra_pod_annotations_yaml: |
+            compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+            compute-domain.nvidia.com/domain-name: {job_name}-cd
+          pod_resource_claims_yaml: |
+            - name: compute-domain-channel
+              resourceClaimTemplateName: {job_name}-cdc
+      variables:
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
+        mpi_command: |
+          mpirun -n {n_ranks} -N {processes_per_node} \
+            --hostfile /tmp/hostfile --bind-to none \
+            --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+            --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+            --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            -x PATH="{nccl-tests_path}:$PATH" \
+            -x {mpi_env_vars} bash -c 'if [ -f /usr/local/gib/scripts/set_nccl_env.sh ]; then source /usr/local/gib/scripts/set_nccl_env.sh; fi; "$@"' --
+        ssh_port: 222
+    slurm:
+      env_vars:
+        set:
+          LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
+          NCCL_SOCKET_IFNAME: '{tcp_interfaces}'
+          OMPI_MCA_btl_tcp_if_include: '{tcp_interfaces}'
+      variables:
+        container_name: nccl-plugin-gib-diagnostic-v1.1.0
+        container_uri: docker://us-docker.pkg.dev#kernel-net-team/clouda4-nccl-dev/nccl-plugin-gib-diagnostic-arm64:v1.1.0
+        srun_args: --mpi=pmix --container-workdir {nccl-tests_path} --container-env {container_env_vars} --container-image {container_path} --container-mounts "/usr/local/gib,/var/tmp" --container-writable --wait=60 --kill-on-bad-exit=1
+  a4x-maxgpu-4g-metal:
+    modifiers:
+    - name: nccl-gib
+    kubernetes:
+      env_vars:
+        set:
+          LD_LIBRARY_PATH: /usr/local/nvidia/lib64:/usr/local/gib/lib64
+          NCCL_NET: gIB
+          NCCL_TESTS_SPLIT_MASK: '0x0'
+      variables:
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+        mpi_command: |
+          mpirun -n {n_ranks} -N {processes_per_node} \
+            --hostfile /tmp/hostfile --bind-to none \
+            --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+            --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+            --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            -x PATH="{nccl-tests_path}:$PATH" \
+            -x {mpi_env_vars}
+    slurm:
+      env_vars:
+        set:
+          LD_LIBRARY_PATH: /usr/local/gib/lib64:/usr/local/cuda/lib64
+          NCCL_MNNVL_ENABLE: '{mnnvl_enable}'
+          NCCL_NET: gIB
+          NCCL_NVLS_ENABLE: '{nvls_enable}'
+          NCCL_SOCKET_IFNAME: '{tcp_interfaces}'
+          NCCL_TESTS_SPLIT_MASK: '0x0'
+          OMPI_MCA_btl_tcp_if_include: '{tcp_interfaces}'
+      variables:
+        container_name: nccl-gib-a4x-max-arm64-v1.1.1
+        container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+        mnnvl_enable: 2
+        nvls_enable: 2
+        srun_args: --mpi=pmix --container-workdir {nccl-tests_path} --container-env {container_env_vars} --container-image {container_path} --container-mounts "/usr/local/gib,/var/tmp" --container-writable --wait=60 --kill-on-bad-exit=1
+      intradomain:
+        variables:
+          mnnvl_enable: 1
+          nvls_enable: 2
+      interdomain:
+        variables:
+          mnnvl_enable: 0
+          nvls_enable: 0
+  a5x-highgpu-4g-metal:
+    kubernetes:
+      env_vars:
+        set:
+          HWLOC_COMPONENTS: -pci
+          LD_LIBRARY_PATH: /usr/local/nvidia/lib64
+          NCCL_CUMEM_ENABLE: '1'
+          NCCL_IB_DISABLE: '1'
+          NCCL_NET: Socket
+          NCCL_NVLS_ENABLE: '0'
+          NCCL_SOCKET_IFNAME: eth0
+      variables:
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.3
+        mpi_command: |
+          mpirun -n {n_ranks} -N {processes_per_node} \
+            --hostfile /tmp/hostfile --bind-to none \
+            --mca btl self,tcp --mca btl_tcp_if_include eth0 \
+            --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_no_tree_spawn 1 \
+            --mca plm_rsh_agent "ssh -q -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes" \
+            -x PATH="{nccl-tests_path}:$PATH" \
+            -x {mpi_env_vars}
+        mpi_env_vars: $(echo ${!NCCL*} ${!OMPI*} HWLOC_COMPONENTS LD_LIBRARY_PATH | sed 's/ / -x /g')
+        ssh_port: 222

@@ -1,0 +1,66 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+type: min
+default:
+  bandwidth: 50
+a3-ultragpu-8g:
+  bandwidth:
+    - value: 332.0
+      conditions:
+        workload_name: all-reduce
+    - value: 318.0
+      conditions:
+        workload_name: all-gather
+a3-megagpu-8g:
+  bandwidth:
+    - value: 167.0
+      conditions:
+        workload_name: all-reduce
+    - value: 178.0
+      conditions:
+        workload_name: all-gather
+a4-highgpu-8g:
+  bandwidth:
+    - value: 357.0
+      conditions:
+        workload_name: all-reduce
+    - value: 357.0
+      conditions:
+        workload_name: all-gather
+a4x-highgpu-4g:
+  bandwidth:
+    - value: 800.0
+      conditions:
+        workload_name: all-reduce
+    - value: 600.0
+      conditions:
+        workload_name: all-gather
+a4x-maxgpu-4g-metal:
+  bandwidth:
+    - value: 330.0
+      conditions:
+        workload_name: all-reduce
+    - value: 340.0
+      conditions:
+        workload_name: all-gather
+a5x-highgpu-4g-metal:
+  bandwidth:
+    - value: 880.0
+      conditions:
+        workload_name: all-reduce
+    - value: 800.0
+      conditions:
+        workload_name: all-gather

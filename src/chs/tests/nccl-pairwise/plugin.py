@@ -14,16 +14,16 @@
 
 """Pairwise NCCL bandwidth check between nodes."""
 
-import json
 import logging
-import os
 
 from chs.testkit import MultiNodePlugin, NodeGrouping
-from chs.utils.topology import build_node_to_location, get_topology
+from chs.utils.topology import (
+    build_node_to_location,
+    get_topology,
+    load_topology,
+)
 
 logger = logging.getLogger(__name__)
-
-TOPOLOGY_FILENAME = "topology.json"
 
 
 class Plugin(MultiNodePlugin):
@@ -32,6 +32,9 @@ class Plugin(MultiNodePlugin):
     Pairs are chosen to cover the cluster at each level of its physical
     hierarchy rather than to cover every possible pair, which would grow with
     the square of the cluster size.
+
+    Set ``allow_interdomain_pairs: false`` to measure only pairs inside one
+    NVLink domain. That needs the cluster topology.
     """
 
     name = "nccl-pairwise"
@@ -46,17 +49,43 @@ class Plugin(MultiNodePlugin):
     min_nodes_to_run = 2
 
     def grouping(self, request):
-        topology = load_topology(request.workspace_root)
+        allow_interdomain_pairs = request.variables.get(
+            "allow_interdomain_pairs", True
+        )
+        topology = load_topology(request.workspace_root, warn_on_error=True)
+
+        if not topology and not allow_interdomain_pairs:
+            logger.warning(
+                "The 'nccl-pairwise' diagnostic requires cluster topology "
+                "data when allow_interdomain_pairs is False. "
+                "Skipping this test."
+            )
+            return NodeGrouping(groups=[])
+
         if topology:
-            return NodeGrouping(
-                groups=generate_topological_pairs(topology),
+            grouping = NodeGrouping(
+                groups=generate_topological_pairs(
+                    topology, allow_interdomain_pairs
+                ),
                 node_locations=build_node_to_location(topology),
             )
+        else:
+            flat = {"default": {"default-subblock": request.nodes}}
+            grouping = NodeGrouping(
+                groups=generate_topological_pairs(
+                    flat, allow_interdomain_pairs
+                ),
+            )
 
-        flat = {"default": {"default-subblock": request.nodes}}
-        return NodeGrouping(groups=generate_topological_pairs(flat))
+        if not grouping.groups:
+            logger.warning(
+                "No node pairs could be formed from %d nodes for "
+                "'nccl-pairwise'. Skipping this test.",
+                len(request.nodes),
+            )
+        return grouping
 
-    def group_suffix(self, nodes):
+    def group_suffix(self, nodes, grouping):
         return f"-{nodes[0]}-{nodes[1]}"
 
     def group_domain_type(self, nodes, grouping):
@@ -66,41 +95,12 @@ class Plugin(MultiNodePlugin):
         return "interdomain"
 
 
-def load_topology(workspace_root: str | None) -> dict | None:
-    if not workspace_root:
-        return None
-
-    path = os.path.join(workspace_root, TOPOLOGY_FILENAME)
-    if not os.path.exists(path):
-        logger.debug("No cluster topology file at '%s'.", path)
-    else:
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            logger.debug(
-                "Failed to parse the cluster topology JSON file at '%s'. "
-                "Ensure the file is correctly formatted. Error: %s",
-                path,
-                e,
-            )
-        except IOError as e:
-            logger.debug(
-                "Failed to read the cluster topology file at '%s'. Network "
-                "discovery may be incomplete. Error: %s",
-                path,
-                e,
-            )
-    logger.warning(
-        "Could not load cluster topology data. Pairing nodes arbitrarily, "
-        "and judging every pair against the interdomain thresholds."
-    )
-    return None
-
-
 def generate_topological_pairs(
     topology: dict[str, dict[str, list[str]]],
+    allow_interdomain_pairs: bool = True,
 ) -> list[list[str]]:
+    """Pairs within each subblock, then (if allowed) across subblocks and
+    blocks."""
     pairs = []
     block_representatives = []
 
@@ -114,11 +114,14 @@ def generate_topological_pairs(
             if nodes:
                 subblock_representatives.append(nodes[0])
 
+        if not allow_interdomain_pairs:
+            continue
         pairs.extend(_adjacent_pairs(subblock_representatives))
         if subblock_representatives:
             block_representatives.append(subblock_representatives[0])
 
-    pairs.extend(_adjacent_pairs(block_representatives))
+    if allow_interdomain_pairs:
+        pairs.extend(_adjacent_pairs(block_representatives))
     return pairs
 
 

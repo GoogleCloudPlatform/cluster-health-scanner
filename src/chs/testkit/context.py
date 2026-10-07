@@ -14,6 +14,7 @@
 
 import copy
 import logging
+import math
 import os
 import textwrap
 
@@ -99,7 +100,8 @@ def common_sbatch_headers(variables: dict, nodes_block: str) -> dict:
     deadline_seconds = _int_var(variables, "deadline")
     return {
         "-w": nodes_block,
-        "--time": str(timeout_seconds // 60),
+        # Slurm takes whole minutes; round up so short timeouts are not 0.
+        "--time": str(max(1, math.ceil(timeout_seconds / 60))),
         "--deadline": f"now+{deadline_seconds + timeout_seconds}seconds",
     }
 

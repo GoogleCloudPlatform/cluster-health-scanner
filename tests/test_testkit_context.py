@@ -99,6 +99,14 @@ class SbatchHeaderTest(unittest.TestCase):
         self.assertEqual(headers["--time"], "20")
         self.assertEqual(headers["--deadline"], "now+4800seconds")
 
+    def test_time_rounds_up_to_the_next_minute(self):
+        for timeout, minutes in ((150, "3"), (30, "1"), (0, "1")):
+            with self.subTest(timeout=timeout):
+                headers = ctx.common_sbatch_headers(
+                    {"timeout": timeout, "deadline": 3600}, "node-1"
+                )
+                self.assertEqual(headers["--time"], minutes)
+
     def test_an_unbounded_job_is_refused(self):
         for values in (
             {"deadline": 3600},

@@ -180,7 +180,7 @@ class MultiNodePlugin(BaseTestPlugin):
     def grouping(self, request: TestRequest) -> NodeGrouping:
         return NodeGrouping(groups=[request.nodes])
 
-    def group_suffix(self, nodes: list[str]) -> str:
+    def group_suffix(self, nodes: list[str], grouping: NodeGrouping) -> str:
         return ""
 
     def group_domain_type(
@@ -203,7 +203,10 @@ class MultiNodePlugin(BaseTestPlugin):
                 domain_type=self.group_domain_type(nodes, grouping),
             )
             contexts.append(
-                (f"{experiment_name}{self.group_suffix(nodes)}", context)
+                (
+                    f"{experiment_name}{self.group_suffix(nodes, grouping)}",
+                    context,
+                )
             )
         return contexts
 
