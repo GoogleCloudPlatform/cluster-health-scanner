@@ -17,6 +17,8 @@ import unittest
 from unittest.mock import patch
 import os
 import subprocess
+from chs import exceptions as ex
+from chs.constants import SLURM_CMD_TIMEOUT_SEC
 from chs.schedulers.slurm import SlurmScheduler
 
 
@@ -168,6 +170,57 @@ class TestSlurmScheduler(unittest.TestCase):
         )
         self.assertTrue(self.scheduler.allow_interdomain_pairs("a3-megagpu-8g"))
         self.assertTrue(self.scheduler.allow_interdomain_pairs())
+
+    @patch("subprocess.run")
+    def test_run_slurm_cmd_passes_timeout(self, mock_run):
+        self.scheduler._run_slurm_cmd(["squeue"], check=True)
+        mock_run.assert_called_once_with(
+            ["squeue"],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=SLURM_CMD_TIMEOUT_SEC,
+        )
+
+    @patch("subprocess.run")
+    def test_run_slurm_cmd_timeout_override(self, mock_run):
+        self.scheduler._run_slurm_cmd(["sacct"], timeout=5)
+        self.assertEqual(mock_run.call_args.kwargs["timeout"], 5)
+
+    @patch("subprocess.run")
+    def test_resolve_raw_nodes_sinfo_timeout_raises(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired("sinfo", 60)
+        with self.assertRaises(ex.ChsSchedulerException):
+            self.scheduler.resolve_raw_nodes()
+
+    @patch("subprocess.run")
+    def test_has_no_failed_jobs_timeout_raises(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired("sacct", 60)
+        with self.assertRaises(ex.ChsSchedulerException):
+            self.scheduler.has_no_failed_jobs()
+
+    @patch("subprocess.run")
+    def test_has_no_failed_jobs_sacct_error_raises(self, mock_run):
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, "sacct", stderr="slurmdbd unavailable"
+        )
+        with self.assertRaises(ex.ChsSchedulerException):
+            self.scheduler.has_no_failed_jobs()
+
+    @patch("subprocess.run")
+    def test_get_job_statuses_timeout_returns_unknown(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired("sacct", 60)
+        statuses = self.scheduler.get_job_statuses(["123", "124"])
+        self.assertEqual(statuses, {"123": "UNKNOWN", "124": "UNKNOWN"})
+
+    @patch("subprocess.run")
+    def test_get_active_job_names_timeout_raises(self, mock_run):
+        """A timeout must not look like "no jobs" to the foreign-run check."""
+        mock_run.side_effect = subprocess.TimeoutExpired("squeue", 60)
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Timed out listing active jobs"
+        ):
+            self.scheduler.get_active_job_names()
 
 
 if __name__ == "__main__":

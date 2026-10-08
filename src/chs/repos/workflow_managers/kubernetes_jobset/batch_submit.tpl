@@ -6,6 +6,6 @@ if [ "{application_name}" = "chs" ]; then
     exit 0
 fi
 
-kubectl delete -f "{experiment_run_dir}/jobset.yaml" --ignore-not-found || true
-kubectl apply -f "{experiment_run_dir}/jobset.yaml"
+kubectl delete -f "{experiment_run_dir}/jobset.yaml" --ignore-not-found --timeout=60s || true
+kubectl apply -f "{experiment_run_dir}/jobset.yaml" --request-timeout=60s
 echo "Submitted {experiment_name} at $(date)" > {log_file}

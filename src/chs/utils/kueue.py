@@ -22,9 +22,11 @@ from typing import Any
 
 from chs.constants import (
     CHS_NAMESPACE,
+    DELETE_WAIT_TIMEOUT_SEC,
+    KUBECTL_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
-from chs.exceptions import KueueException
+from chs.exceptions import KueueException, format_subprocess_error
 from chs.resources import MACHINE_TYPE_RESOURCE_MAP
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,9 @@ class KueueManager:
         """
         self.scheduler = scheduler
 
-    def _run_kubectl(self, args: list[str], timeout: int | None = None) -> str:
+    def _run_kubectl(
+        self, args: list[str], timeout: int | None = KUBECTL_TIMEOUT_SEC
+    ) -> str:
         """Runs kubectl command via the scheduler instance."""
         if hasattr(self.scheduler, "_run_kubectl"):
             return self.scheduler._run_kubectl(args, timeout=timeout)
@@ -81,11 +85,11 @@ class KueueManager:
         logger.debug("Applying Kueue configuration: %s", kueue_config_path)
         try:
             self._run_kubectl(["apply", "-f", kueue_config_path])
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             raise KueueException(
                 "Failed to create ResourceFlavors, ClusterQueues, and/or "
                 "LocalQueues. Details: "
-                f"{e.stderr}"
+                f"{format_subprocess_error(e)}"
             ) from e
 
         logger.debug(
@@ -105,10 +109,11 @@ class KueueManager:
             )
             logger.debug("Kueue ClusterQueue is active.")
 
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             raise KueueException(
                 "Timeout or error waiting for Kueue ClusterQueue "
-                f"'chs-cluster-queue' to become active. Details: {e}"
+                "'chs-cluster-queue' to become active. Details: "
+                f"{format_subprocess_error(e)}"
             ) from e
 
     def generate_configs(
@@ -177,11 +182,7 @@ class KueueManager:
 
     def apply_configs(self, workspace_config_dir: str) -> None:
         """Applies rendered Kueue configurations to the cluster."""
-        try:
-            self.cleanup()
-        except KueueException:
-            pass
-
+        self.cleanup()
         kueue_config_path = os.path.join(
             workspace_config_dir, "kueue-configs.yaml"
         )
@@ -191,49 +192,34 @@ class KueueManager:
         """Deletes Kueue resources by name.
 
         Raises:
-            KueueException: If deletion fails.
+            KueueException: If deletion fails or times out.
         """
         logger.debug("Cleaning up Kueue resources...")
-        try:
-            self._run_kubectl(
-                [
-                    "delete",
-                    "localqueue",
-                    "chs-local-queue",
-                    "-n",
-                    CHS_NAMESPACE,
-                    "--ignore-not-found",
-                ]
-            )
-            self._run_kubectl(
-                [
-                    "delete",
-                    "clusterqueue",
-                    "chs-cluster-queue",
-                    "--ignore-not-found",
-                ]
-            )
-            self._run_kubectl(
-                [
-                    "delete",
-                    "resourceflavor",
-                    *FLAVOR_NAMES,
-                    "--ignore-not-found",
-                ]
-            )
-            self._run_kubectl(
-                [
-                    "delete",
-                    "topology",
-                    *TOPOLOGY_NAMES,
-                    "--ignore-not-found",
-                ]
-            )
-            logger.debug("Successfully deleted Kueue resources.")
-        except subprocess.CalledProcessError as e:
-            raise KueueException(
-                f"Failed to delete Kueue resources. Details: {e.stderr}"
-            ) from e
+        delete_targets = [
+            ["localqueue", "chs-local-queue", "-n", CHS_NAMESPACE],
+            ["clusterqueue", "chs-cluster-queue"],
+            ["resourceflavor", *FLAVOR_NAMES],
+            ["topology", *TOPOLOGY_NAMES],
+        ]
+        for target in delete_targets:
+            try:
+                self._run_kubectl(
+                    [
+                        "delete",
+                        *target,
+                        "--ignore-not-found",
+                        f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
+                    ]
+                )
+            except subprocess.SubprocessError as e:
+                raise KueueException(
+                    f"Failed to delete Kueue resources ({target[0]}). If the "
+                    "object is stuck in deletion, check that "
+                    "kueue-controller-manager is healthy and can reconcile (a "
+                    "blocked 'kueue.x-k8s.io/resource-in-use' finalizer is "
+                    f"the usual cause). Details: {format_subprocess_error(e)}"
+                ) from e
+        logger.debug("Successfully deleted Kueue resources.")
 
     def _get_kueue_api_version(self) -> str:
         """Determines whether to use v1beta2 or v1beta1 based on
@@ -251,6 +237,6 @@ class KueueManager:
             if "v1beta2" in output.split():
                 return "v1beta2"
             return "v1beta1"
-        except subprocess.CalledProcessError:
+        except subprocess.SubprocessError:
             # Default to v1beta1 if check fails
             return "v1beta1"

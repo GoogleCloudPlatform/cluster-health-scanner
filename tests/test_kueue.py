@@ -22,7 +22,11 @@ from unittest import mock
 
 import yaml
 
-from chs.constants import SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
+from chs.constants import (
+    DELETE_WAIT_TIMEOUT_SEC,
+    KUBECTL_TIMEOUT_SEC,
+    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+)
 from chs.exceptions import KueueException
 from chs.utils.kueue import KueueManager
 
@@ -249,7 +253,7 @@ class TestKueueManager(unittest.TestCase):
 
         self.mock_scheduler._run_kubectl.assert_any_call(
             ["apply", "-f", "/tmp/kueue-configs.yaml"],
-            timeout=None,
+            timeout=KUBECTL_TIMEOUT_SEC,
         )
 
         self.mock_scheduler._run_kubectl.assert_any_call(
@@ -299,8 +303,9 @@ class TestKueueManager(unittest.TestCase):
                 "-n",
                 "chs",
                 "--ignore-not-found",
+                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
             ],
-            timeout=None,
+            timeout=KUBECTL_TIMEOUT_SEC,
         )
         self.mock_scheduler._run_kubectl.assert_any_call(
             [
@@ -308,8 +313,9 @@ class TestKueueManager(unittest.TestCase):
                 "clusterqueue",
                 "chs-cluster-queue",
                 "--ignore-not-found",
+                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
             ],
-            timeout=None,
+            timeout=KUBECTL_TIMEOUT_SEC,
         )
         self.mock_scheduler._run_kubectl.assert_any_call(
             [
@@ -318,8 +324,9 @@ class TestKueueManager(unittest.TestCase):
                 "chs-flavor-dynamic",
                 "chs-flavor-static",
                 "--ignore-not-found",
+                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
             ],
-            timeout=None,
+            timeout=KUBECTL_TIMEOUT_SEC,
         )
         self.mock_scheduler._run_kubectl.assert_any_call(
             [
@@ -328,8 +335,9 @@ class TestKueueManager(unittest.TestCase):
                 "chs-node-topology-dynamic",
                 "chs-node-topology-static",
                 "--ignore-not-found",
+                f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
             ],
-            timeout=None,
+            timeout=KUBECTL_TIMEOUT_SEC,
         )
 
     def test_cleanup_deletes_topology_after_resource_flavor(self):
@@ -356,6 +364,42 @@ class TestKueueManager(unittest.TestCase):
             KueueException, "Failed to delete Kueue resources"
         ):
             self.kueue_mgr.cleanup()
+
+    def test_cleanup_timeout_raises(self):
+        """A stuck finalizer must surface as KueueException, not hang."""
+        self.mock_scheduler._run_kubectl.side_effect = [
+            "",
+            subprocess.TimeoutExpired(
+                "kubectl delete clusterqueue", KUBECTL_TIMEOUT_SEC
+            ),
+        ]
+        with self.assertRaisesRegex(
+            KueueException, r"Failed to delete Kueue resources \(clusterqueue\)"
+        ):
+            self.kueue_mgr.cleanup()
+
+    def test_apply_configs_cleanup_failure_propagates(self):
+        """apply_configs fails fast if pre-apply cleanup times out or fails."""
+        self.mock_scheduler._run_kubectl.side_effect = (
+            subprocess.TimeoutExpired(
+                "kubectl delete localqueue", KUBECTL_TIMEOUT_SEC
+            )
+        )
+        with self.assertRaisesRegex(
+            KueueException, r"Failed to delete Kueue resources \(localqueue\)"
+        ):
+            self.kueue_mgr.apply_configs(self.tmp_dir)
+        self.assertEqual(self.mock_scheduler._run_kubectl.call_count, 1)
+
+    def test_apply_and_verify_apply_timeout_raises(self):
+        """A kubectl apply timeout is reported as KueueException."""
+        self.mock_scheduler._run_kubectl.side_effect = (
+            subprocess.TimeoutExpired("kubectl apply", KUBECTL_TIMEOUT_SEC)
+        )
+        with self.assertRaisesRegex(
+            KueueException, "Failed to create ResourceFlavors"
+        ):
+            self.kueue_mgr.apply_and_verify("/tmp/nonexistent.yaml")
 
     def test_get_kueue_api_version_v1beta2_preferred(self):
         """Test _get_kueue_api_version returns v1beta2 when both

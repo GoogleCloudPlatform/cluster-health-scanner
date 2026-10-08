@@ -22,6 +22,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
+from chs.constants import KUBECTL_TIMEOUT_SEC
 from chs.exceptions import ChsPreflightException, format_subprocess_error
 
 logger = logging.getLogger(__name__)
@@ -350,6 +351,6 @@ class KubernetesPreflightChecker:
             text=True,
             capture_output=True,
             check=True,
-            timeout=120,
+            timeout=KUBECTL_TIMEOUT_SEC,
         )
         return result.stdout.strip()

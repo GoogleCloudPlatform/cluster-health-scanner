@@ -24,7 +24,7 @@ echo "Extracting logs..."
 # The primary pod for both standard and MPI templates is ALWAYS rank 0 in the "w" replicatedJob
 # We suppress stderr and use || true so that if the pod is missing, kubectl's non-zero
 # exit code does not trip the 'set -e' immediate exit, allowing the -z error handling block below to run.
-HEAD_POD=$(kubectl get pods -l jobset.sigs.k8s.io/jobset-name=$JOBSET_NAME,batch.kubernetes.io/job-completion-index=0 -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
+HEAD_POD=$(kubectl get pods --request-timeout=60s -l jobset.sigs.k8s.io/jobset-name=$JOBSET_NAME,batch.kubernetes.io/job-completion-index=0 -o jsonpath="{.items[0].metadata.name}" 2>/dev/null || true)
 
 if [ -z "$HEAD_POD" ]; then
     echo "Error: Head pod not found." > "$LOG_FILE"
@@ -32,7 +32,7 @@ if [ -z "$HEAD_POD" ]; then
 fi
 
 echo "Saving logs to $LOG_FILE"
-kubectl logs "$HEAD_POD" > "$LOG_FILE"
+kubectl logs --request-timeout=60s "$HEAD_POD" > "$LOG_FILE"
 
 if [ "$TIMEOUT_OCCURRED" -eq 1 ]; then
     echo "Error: JobSet $JOBSET_NAME failed to complete within 5 minutes." >> "$LOG_FILE"

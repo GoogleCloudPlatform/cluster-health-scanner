@@ -43,7 +43,13 @@ from chs.exceptions import (
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
-from chs.constants import CHS_NAMESPACE, SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
+from chs.constants import (
+    CHS_NAMESPACE,
+    DELETE_WAIT_TIMEOUT_SEC,
+    KUBECTL_TIMEOUT_SEC,
+    NAMESPACE_DELETE_TIMEOUT_SEC,
+    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+)
 
 _BUSY_NODES_BATCH_SIZE = 32
 _BUSY_NODES_MAX_RETRIES = 3
@@ -279,7 +285,8 @@ class KubernetesScheduler(BaseScheduler):
         """Deletes the chs namespace during cleanup."""
         try:
             self._run_kubectl(
-                ["delete", "namespace", CHS_NAMESPACE, "--ignore-not-found"]
+                ["delete", "namespace", CHS_NAMESPACE, "--ignore-not-found"],
+                timeout=NAMESPACE_DELETE_TIMEOUT_SEC,
             )
         except Exception as e:
             logger.warning(
@@ -291,7 +298,7 @@ class KubernetesScheduler(BaseScheduler):
     def _run_kubectl(
         self,
         args: list[str],
-        timeout: int | None = 120,
+        timeout: int | None = KUBECTL_TIMEOUT_SEC,
         namespaced: bool = False,
     ) -> str:
         """Runs a kubectl command and returns filtered output."""
@@ -328,7 +335,10 @@ class KubernetesScheduler(BaseScheduler):
                 self._run_kubectl(
                     ["delete", "secrets"]
                     + secrets_to_delete
-                    + ["--ignore-not-found"],
+                    + [
+                        "--ignore-not-found",
+                        f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
+                    ],
                     namespaced=True,
                 )
                 logger.debug(
@@ -373,7 +383,7 @@ class KubernetesScheduler(BaseScheduler):
                         slice_id = "default-slice"
 
                     slices[slice_id].append(node_name)
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             logger.warning(
                 "Failed to execute 'kubectl' for nodes %s. Error: %s",
                 node_names,
@@ -574,7 +584,7 @@ class KubernetesScheduler(BaseScheduler):
             args.extend(["-o", "json"])
 
             kubectl_nodes_output = self._run_kubectl(args)
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
             raise ChsSchedulerException(
                 f"Failed to get nodes to determine availability: {e}"
             ) from e
@@ -811,7 +821,7 @@ class KubernetesScheduler(BaseScheduler):
             ]
             try:
                 self._run_kubectl(["get", "node"] + raw_nodes)
-            except subprocess.CalledProcessError as e:
+            except subprocess.SubprocessError as e:
                 err_msg = format_subprocess_error(e)
                 raise ChsSchedulerException(
                     f"One or more targeted nodes not found in the cluster. "
@@ -827,7 +837,7 @@ class KubernetesScheduler(BaseScheduler):
                 ]
                 logger.debug("Resolved raw nodes: %s", raw_nodes)
             except (
-                subprocess.CalledProcessError,
+                subprocess.SubprocessError,
                 FileNotFoundError,
                 ChsSchedulerException,
             ) as e:
@@ -966,7 +976,7 @@ class KubernetesScheduler(BaseScheduler):
             # Convert defaultdict to regular dict
             return {b: dict(s) for b, s in topology.items()}
 
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
             logger.warning(
                 "Failed to retrieve node topology information from "
                 "the Kubernetes cluster. Error: %s",
@@ -1114,12 +1124,11 @@ class KubernetesScheduler(BaseScheduler):
                         job_data.get("metadata", {}).get("name", "Unknown"),
                     )
 
-        except subprocess.CalledProcessError as e:
-            logger.warning(
-                "Failed to query the status of diagnostic JobSets "
-                "via Kubernetes API. Error: %s",
-                e.stderr,
-            )
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            raise ChsSchedulerException(
+                "Failed to query the status of diagnostic JobSets via the "
+                f"Kubernetes API: {format_subprocess_error(e)}"
+            ) from e
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
             logger.warning(
                 "Failed to parse the status payload returned by "
@@ -1172,7 +1181,7 @@ class KubernetesScheduler(BaseScheduler):
                         statuses[jobset_name] = JobStatus.TIMEOUT.value
                         break
         except (
-            subprocess.CalledProcessError,
+            subprocess.SubprocessError,
             json.JSONDecodeError,
             AttributeError,
             TypeError,
@@ -1233,7 +1242,7 @@ class KubernetesScheduler(BaseScheduler):
             if failed_jobset_ids:
                 self._check_and_update_deadlines(failed_jobset_ids, statuses)
         except (
-            subprocess.CalledProcessError,
+            subprocess.SubprocessError,
             json.JSONDecodeError,
             AttributeError,
             TypeError,
@@ -1276,7 +1285,7 @@ class KubernetesScheduler(BaseScheduler):
         try:
             output = self._run_kubectl(args, namespaced=True)
             return [p for p in output.split() if p]
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             logger.debug("Failed to query pods for JobSet %s: %s", job_id, e)
             return []
 
@@ -1304,6 +1313,7 @@ class KubernetesScheduler(BaseScheduler):
                         stdout=f,
                         check=True,
                         text=True,
+                        timeout=KUBECTL_TIMEOUT_SEC,
                     )
             logger.debug("Logs saved to %s", log_path)
 
@@ -1317,8 +1327,15 @@ class KubernetesScheduler(BaseScheduler):
                     "Failed to retrieve execution logs for JobSet '%s'. "
                     "Result parsing may be incomplete. Error: %s",
                     job_id,
-                    e,
+                    format_subprocess_error(e),
                 )
+        except subprocess.TimeoutExpired as e:
+            logger.error(
+                "Timed out retrieving execution logs for JobSet '%s'. "
+                "Result parsing may be incomplete. Error: %s",
+                job_id,
+                e,
+            )
         except OSError as e:
             logger.error(
                 "Failed to write execution logs to the "
@@ -1628,7 +1645,14 @@ class KubernetesScheduler(BaseScheduler):
             return
 
         try:
-            args = ["delete", "jobset"] + job_ids + ["--ignore-not-found"]
+            args = (
+                ["delete", "jobset"]
+                + job_ids
+                + [
+                    "--ignore-not-found",
+                    f"--timeout={DELETE_WAIT_TIMEOUT_SEC}s",
+                ]
+            )
             self._run_kubectl(args, namespaced=True)
             logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
         except FileNotFoundError:
@@ -1636,11 +1660,11 @@ class KubernetesScheduler(BaseScheduler):
                 "The 'kubectl' command-line tool was not found in your "
                 "PATH. Cannot natively cancel active jobs."
             )
-        except subprocess.CalledProcessError as e:
+        except subprocess.SubprocessError as e:
             logger.error(
                 "Encountered an error while attempting to "
                 "delete active JobSets. Error: %s",
-                e.stderr,
+                format_subprocess_error(e),
             )
 
         self._delete_job_secrets()
@@ -1665,11 +1689,16 @@ class KubernetesScheduler(BaseScheduler):
                 "PATH. Cannot fetch the status of active jobs."
             )
             return []
+        except subprocess.TimeoutExpired as e:
+            raise ChsSchedulerException(
+                "Timed out listing active JobSets; cannot verify that no "
+                f"other CHS run is in progress: {e}"
+            ) from e
         except subprocess.CalledProcessError as e:
             logger.warning(
                 "Failed to retrieve the list of active JobSets "
                 "from the cluster. Error: %s",
-                e,
+                format_subprocess_error(e),
             )
             return []
 

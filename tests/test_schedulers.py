@@ -1149,6 +1149,7 @@ ramble:
         args = mock_run.call_args_list[0][0][0]
         self.assertIn("delete", args)
         self.assertIn("jobset", args)
+        self.assertIn("--timeout=60s", args)
 
         args_secrets = mock_run.call_args_list[2][0][0]
         self.assertIn("delete", args_secrets)
@@ -1466,6 +1467,65 @@ ramble:
                 ["chs-test-job1", "chs-test-job2"]
             )
             mock_delete_ns.assert_not_called()
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_delete_namespace_includes_timeout(
+        self, mock_run_kubectl, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        scheduler._delete_namespace()
+        mock_run_kubectl.assert_called_once_with(
+            ["delete", "namespace", "chs", "--ignore-not-found"],
+            timeout=300,
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_has_no_failed_jobs_timeout_raises(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """A timeout is unknown state and must not be treated as failed."""
+        mock_run_kubectl.side_effect = subprocess.TimeoutExpired(
+            "kubectl get jobset", 120
+        )
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Failed to query the status"
+        ):
+            KubernetesScheduler().has_no_failed_jobs()
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_has_no_failed_jobs_kubectl_error_raises(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """A kubectl error is also unknown state, not a failed run."""
+        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
+            1, "kubectl get jobset", stderr="forbidden"
+        )
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Failed to query the status.*forbidden"
+        ):
+            KubernetesScheduler().has_no_failed_jobs()
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_active_job_names_timeout_raises(
+        self, mock_run_kubectl, mock_logger
+    ):
+        """A timeout must not look like "no jobs" to the foreign-run check."""
+        mock_run_kubectl.side_effect = subprocess.TimeoutExpired(
+            "kubectl get jobset", 120
+        )
+        with self.assertRaisesRegex(
+            ex.ChsSchedulerException, "Timed out listing active JobSets"
+        ):
+            KubernetesScheduler().get_active_job_names()
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
+    def test_get_active_job_names_kubectl_error_returns_empty(
+        self, mock_run_kubectl, mock_logger
+    ):
+        mock_run_kubectl.side_effect = subprocess.CalledProcessError(
+            1, "kubectl get jobset", stderr="forbidden"
+        )
+        self.assertEqual(KubernetesScheduler().get_active_job_names(), [])
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._run_kubectl")
     @mock.patch("time.time", side_effect=[0, 1])
@@ -1924,6 +1984,58 @@ class TestSchedulerDetection(unittest.TestCase):
 
         with self.assertRaises(ChsSchedulerException):
             detect_scheduler()
+
+
+class TestKubernetesFetchJobLog(unittest.TestCase):
+    """Tests for KubernetesScheduler.fetch_job_log."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_dir_obj = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp_dir_obj.cleanup)
+        self.log_path = os.path.join(self.tmp_dir_obj.name, "job.log")
+        self.scheduler = KubernetesScheduler()
+        patcher = mock.patch.object(
+            self.scheduler, "_is_tpu_job", return_value=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @mock.patch("chs.schedulers.kubernetes.subprocess.run")
+    @mock.patch.object(
+        KubernetesScheduler, "_get_pod_names", return_value=["pod-a", "pod-b"]
+    )
+    def test_streams_logs_to_file_with_timeout(self, _, mock_run):
+        def _write_log(cmd, stdout, **kwargs):
+            stdout.write(f"log {cmd[2]}\n")
+
+        mock_run.side_effect = _write_log
+        self.scheduler.fetch_job_log("job-1", self.log_path)
+
+        for pod in ("pod-a", "pod-b"):
+            mock_run.assert_any_call(
+                ["kubectl", "logs", pod, "-n", "chs"],
+                stdout=mock.ANY,
+                check=True,
+                text=True,
+                timeout=120,
+            )
+        with open(self.log_path) as f:
+            self.assertEqual(f.read(), "log pod-a\nlog pod-b\n")
+
+    @mock.patch("chs.schedulers.kubernetes.logger")
+    @mock.patch("chs.schedulers.kubernetes.subprocess.run")
+    @mock.patch.object(
+        KubernetesScheduler, "_get_pod_names", return_value=["pod-a"]
+    )
+    def test_timeout_is_logged_not_raised(self, _, mock_run, mock_logger):
+        mock_run.side_effect = subprocess.TimeoutExpired("kubectl logs", 120)
+        self.scheduler.fetch_job_log("job-1", self.log_path)
+        mock_logger.error.assert_called_once()
+        self.assertIn(
+            "Timed out retrieving execution logs",
+            mock_logger.error.call_args[0][0],
+        )
 
 
 if __name__ == "__main__":

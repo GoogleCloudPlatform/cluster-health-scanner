@@ -36,6 +36,7 @@ from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
+from chs.constants import SLURM_CMD_TIMEOUT_SEC
 
 _MAX_CONCURRENT_API_REQUESTS = 10
 
@@ -161,6 +162,21 @@ class SlurmScheduler(BaseScheduler):
         )
         return result.stdout.strip()
 
+    def _run_slurm_cmd(
+        self,
+        cmd: list[str],
+        check: bool = False,
+        timeout: int = SLURM_CMD_TIMEOUT_SEC,
+    ) -> subprocess.CompletedProcess:
+        """Runs a Slurm client command with a timeout."""
+        return subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=check,
+            timeout=timeout,
+        )
+
     def _discover_network_interfaces(self) -> list[str]:
         """
         Discovers physical network interfaces from the routing table.
@@ -227,7 +243,7 @@ class SlurmScheduler(BaseScheduler):
                     timeout=5,
                 ).stdout.strip()
                 raw_nodes = [n for n in output.split("\n") if n]
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            except (subprocess.SubprocessError, FileNotFoundError) as e:
                 raise ex.ChsSchedulerException(
                     f"Failed to expand nodelists: {e}"
                 ) from e
@@ -237,13 +253,13 @@ class SlurmScheduler(BaseScheduler):
             if self.partitions_arg:
                 sinfo_cmd.extend(["-p", self.partitions_arg])
             try:
-                output = subprocess.run(
-                    sinfo_cmd, text=True, check=True, capture_output=True
+                output = self._run_slurm_cmd(
+                    sinfo_cmd, check=True
                 ).stdout.strip()
                 raw_nodes = [
                     line.strip() for line in output.split("\n") if line.strip()
                 ]
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            except (subprocess.SubprocessError, FileNotFoundError) as e:
                 raise ex.ChsSchedulerException(
                     f"Failed to get raw nodes: {e}"
                 ) from e
@@ -261,16 +277,14 @@ class SlurmScheduler(BaseScheduler):
             return []
 
         try:
-            output = subprocess.run(
+            output = self._run_slurm_cmd(
                 ["sinfo", "-e", "-t", "idle", "-N", "-h", "-o", "%N"],
-                text=True,
                 check=True,
-                capture_output=True,
             ).stdout.strip()
             idle_nodes = set(
                 line.strip() for line in output.split("\n") if line.strip()
             )
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
             raise ex.ChsSchedulerException(
                 f"Failed to get free nodes: {e}"
             ) from e
@@ -467,9 +481,7 @@ class SlurmScheduler(BaseScheduler):
             "--format=JobName,State",
         ]
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
+            result = self._run_slurm_cmd(cmd, check=True)
             if not result.stdout.strip():
                 raise NoActiveJobsException("No jobs found on the cluster.")
 
@@ -506,6 +518,11 @@ class SlurmScheduler(BaseScheduler):
                 " Slurm client utilities (sacct/scancel) are installed and"
                 " available in your PATH."
             )
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            raise ex.ChsSchedulerException(
+                "Failed to query Slurm job state with sacct: "
+                f"{ex.format_subprocess_error(e)}"
+            ) from e
         return False
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
@@ -513,7 +530,7 @@ class SlurmScheduler(BaseScheduler):
         if not job_ids:
             return {}
 
-        statuses = {}
+        statuses = {jid: JobStatus.UNKNOWN.value for jid in job_ids}
         cmd = [
             "sacct",
             "-j",
@@ -523,9 +540,7 @@ class SlurmScheduler(BaseScheduler):
             "-P",
         ]
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
+            result = self._run_slurm_cmd(cmd)
             logger.debug(" sacct output: %r", result.stdout)
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
@@ -537,11 +552,6 @@ class SlurmScheduler(BaseScheduler):
                                 state.strip().split()[0]
                             )
 
-            # Fallback for any jobs not found in sacct output
-            for jid in job_ids:
-                if jid not in statuses:
-                    statuses[jid] = JobStatus.UNKNOWN.value
-
         except FileNotFoundError:
             logger.debug(
                 "The 'sacct' command was not found. Job states cannot be "
@@ -551,8 +561,11 @@ class SlurmScheduler(BaseScheduler):
                 "The 'sacct' command was not found. Unable to "
                 "track job completion statuses."
             )
-            for jid in job_ids:
-                statuses[jid] = JobStatus.UNKNOWN.value
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Timed out querying job states with sacct. Job states will "
+                "default to UNKNOWN."
+            )
 
         return statuses
 
@@ -596,9 +609,7 @@ class SlurmScheduler(BaseScheduler):
 
         cmd = ["scancel", ",".join(job_ids)]
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
+            result = self._run_slurm_cmd(cmd)
             if result.returncode == 0:
                 logger.debug("Successfully canceled jobs: %s", job_ids)
             else:
@@ -626,9 +637,7 @@ class SlurmScheduler(BaseScheduler):
         """Returns a list of active job names on the cluster."""
         try:
             cmd = ["squeue", "-h", "-o", "%.200j"]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
+            result = self._run_slurm_cmd(cmd)
             if result.returncode != 0:
                 return []
 
@@ -644,6 +653,11 @@ class SlurmScheduler(BaseScheduler):
                 "Cannot retrieve the list of active jobs."
             )
             return []
+        except subprocess.TimeoutExpired as e:
+            raise ex.ChsSchedulerException(
+                "Timed out listing active jobs with 'squeue'; cannot verify "
+                f"that no other CHS run is in progress: {e}"
+            ) from e
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
         """Cancels all jobs matching the specified prefix natively."""
@@ -658,9 +672,7 @@ class SlurmScheduler(BaseScheduler):
                 "-u",
                 os.environ.get("USER", ""),
             ]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, check=False
-            )
+            result = self._run_slurm_cmd(cmd)
             if result.returncode != 0:
                 logger.warning(
                     "Failed to retrieve the list of active jobs using "
