@@ -1340,7 +1340,7 @@ class TestCli(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmpdir,
         ):
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
-            os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
+            os.makedirs(os.path.join(tmpdir, "latest_run", "test_results"))
             result = self.runner.invoke(cli.cli, ["results"])
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("failed to resolve storage provider", result.output)
@@ -1359,7 +1359,7 @@ class TestCli(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
-            os.makedirs(os.path.join(tmpdir, "latest_run", "chs-results"))
+            os.makedirs(os.path.join(tmpdir, "latest_run", "test_results"))
 
             result = self.runner.invoke(cli.cli, ["results"])
             self.assertEqual(result.exit_code, 0)
