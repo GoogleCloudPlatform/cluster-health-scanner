@@ -696,176 +696,164 @@ class RambleManager:
             )
             return (
                 f"{jobs} | {time_str}\n \n"
-                f"[dim]You can safely detach from this run using Ctrl+C.[/dim]"
+                f"[dim]Press Ctrl+C to cancel this run.[/dim]"
             )
 
+        executor = ThreadPoolExecutor(max_workers=max_workers)
         try:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = []
+            futures = []
 
-                with theme.get_progress_spinner(
-                    "Waiting for test execution to complete...", show_time=False
-                ) as (
-                    live_context,
-                    task_id,
-                ):
-                    while active_jobs:
-                        if live_context and task_id is not None:
-                            live_context.update(
-                                task_id, description=get_jobs_desc()
-                            )
-                        statuses = scheduler.get_job_statuses(list(active_jobs))
+            with theme.get_progress_spinner(
+                "Waiting for test execution to complete...", show_time=False
+            ) as (
+                live_context,
+                task_id,
+            ):
+                while active_jobs:
+                    if live_context and task_id is not None:
+                        live_context.update(
+                            task_id, description=get_jobs_desc()
+                        )
+                    statuses = scheduler.get_job_statuses(list(active_jobs))
 
-                        jobs_to_cancel = []
-                        still_running = False
-                        for job_id, status in statuses.items():
-                            if JobStatus.is_terminal(status):
-                                # Job finished
-                                pending_start_times.pop(job_id, None)
-                                if job_id in pending_log_fetches:
-                                    log_path = job_log_map.get(job_id)
-                                    if log_path:
-                                        logger.debug(
-                                            "Fetching log for "
-                                            "completed job: %s",
-                                            job_id,
-                                        )
-                                        future = executor.submit(
-                                            self._safe_fetch_log,
-                                            scheduler,
-                                            job_id,
-                                            log_path,
-                                        )
-                                        futures.append(future)
-                                    pending_log_fetches.remove(job_id)
-
-                                active_jobs.remove(job_id)
-                            elif status in (
-                                JobStatus.PENDING,
-                                JobStatus.UNKNOWN,
-                            ):
-                                if job_id not in pending_start_times:
-                                    pending_start_times[job_id] = time.time()
-
-                                if (
-                                    time.time() - pending_start_times[job_id]
-                                    > QUEUE_TIMEOUT_SECONDS
-                                ):
-                                    logger.error(
-                                        "Job '%s' has exceeded the maximum "
-                                        "queue wait time of %d "
-                                        "seconds. It will be cancelled to "
-                                        "free up resources.",
+                    jobs_to_cancel = []
+                    still_running = False
+                    for job_id, status in statuses.items():
+                        if JobStatus.is_terminal(status):
+                            # Job finished
+                            pending_start_times.pop(job_id, None)
+                            if job_id in pending_log_fetches:
+                                log_path = job_log_map.get(job_id)
+                                if log_path:
+                                    logger.debug(
+                                        "Fetching log for " "completed job: %s",
                                         job_id,
-                                        QUEUE_TIMEOUT_SECONDS,
                                     )
-                                    jobs_to_cancel.append(job_id)
-                                else:
-                                    still_running = True
+                                    future = executor.submit(
+                                        self._safe_fetch_log,
+                                        scheduler,
+                                        job_id,
+                                        log_path,
+                                    )
+                                    futures.append(future)
+                                pending_log_fetches.remove(job_id)
+
+                            active_jobs.remove(job_id)
+                        elif status in (
+                            JobStatus.PENDING,
+                            JobStatus.UNKNOWN,
+                        ):
+                            if job_id not in pending_start_times:
+                                pending_start_times[job_id] = time.time()
+
+                            if (
+                                time.time() - pending_start_times[job_id]
+                                > QUEUE_TIMEOUT_SECONDS
+                            ):
+                                logger.error(
+                                    "Job '%s' has exceeded the maximum "
+                                    "queue wait time of %d "
+                                    "seconds. It will be cancelled to "
+                                    "free up resources.",
+                                    job_id,
+                                    QUEUE_TIMEOUT_SECONDS,
+                                )
+                                jobs_to_cancel.append(job_id)
                             else:
-                                pending_start_times.pop(job_id, None)
                                 still_running = True
+                        else:
+                            pending_start_times.pop(job_id, None)
+                            still_running = True
 
-                        if jobs_to_cancel:
-                            scheduler.cancel_jobs(jobs_to_cancel)
-                            for canceled_job in jobs_to_cancel:
-                                statuses[canceled_job] = (
-                                    JobStatus.DEADLINE.value
-                                )
-                                if canceled_job in active_jobs:
-                                    active_jobs.remove(canceled_job)
-                                pending_start_times.pop(canceled_job, None)
+                    if jobs_to_cancel:
+                        scheduler.cancel_jobs(jobs_to_cancel)
+                        for canceled_job in jobs_to_cancel:
+                            statuses[canceled_job] = JobStatus.DEADLINE.value
+                            if canceled_job in active_jobs:
+                                active_jobs.remove(canceled_job)
+                            pending_start_times.pop(canceled_job, None)
 
-                        try:
-                            app_data.update_run_status(
-                                self._workspace_name, statuses
+                    try:
+                        app_data.update_run_status(
+                            self._workspace_name, statuses
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to update the CHS run status in the "
+                            "internal registry. Error: %s",
+                            e,
+                        )
+
+                    if still_running:
+                        if not live_context:
+                            elapsed = int(time.time() - start_time)
+                            elapsed_td = datetime.timedelta(seconds=elapsed)
+                            logger.debug(
+                                "Jobs remaining: %d | Elapsed time: %s. "
+                                "Waiting %s seconds...",
+                                len(active_jobs),
+                                elapsed_td,
+                                poll_interval,
                             )
-                        except Exception as e:
-                            logger.warning(
-                                "Failed to update the CHS run status in the "
-                                "internal registry. Error: %s",
-                                e,
-                            )
+                            time.sleep(poll_interval)
+                        else:
+                            for _ in range(poll_interval):
+                                if task_id is not None:
+                                    live_context.update(
+                                        task_id, description=get_jobs_desc()
+                                    )
+                                time.sleep(1)
 
-                        if still_running:
-                            if not live_context:
-                                elapsed = int(time.time() - start_time)
-                                elapsed_td = datetime.timedelta(seconds=elapsed)
-                                logger.debug(
-                                    "Jobs remaining: %d | Elapsed time: %s. "
-                                    "Waiting %s seconds...",
-                                    len(active_jobs),
-                                    elapsed_td,
-                                    poll_interval,
-                                )
-                                time.sleep(poll_interval)
-                            else:
-                                for _ in range(poll_interval):
-                                    if task_id is not None:
-                                        live_context.update(
-                                            task_id, description=get_jobs_desc()
-                                        )
-                                    time.sleep(1)
+                if live_context and task_id is not None:
+                    live_context.update(
+                        task_id,
+                        description=get_jobs_desc(),
+                        force_print=True,
+                    )
 
+                if futures:
                     if live_context and task_id is not None:
                         live_context.update(
                             task_id,
-                            description=get_jobs_desc(),
+                            description=(
+                                f"[{theme.CHS_HEADER_STYLE}]Fetching test "
+                                "logs..."
+                                f"[/{theme.CHS_HEADER_STYLE}]"
+                            ),
                             force_print=True,
                         )
 
-                    if futures:
-                        if live_context and task_id is not None:
-                            live_context.update(
-                                task_id,
-                                description=(
-                                    f"[{theme.CHS_HEADER_STYLE}]Fetching test "
-                                    "logs..."
-                                    f"[/{theme.CHS_HEADER_STYLE}]"
-                                ),
-                                force_print=True,
-                            )
-
-                        while True:
-                            pending_count = sum(
-                                1 for f in futures if not f.done()
-                            )
-                            if pending_count == 0:
-                                if live_context and task_id is not None:
-                                    live_context.update(
-                                        task_id,
-                                        description=(
-                                            f"[{theme.CHS_HEADER_STYLE}]"
-                                            "All test logs fetched "
-                                            "successfully."
-                                            f"[/{theme.CHS_HEADER_STYLE}]"
-                                        ),
-                                    )
-                                break
+                    while True:
+                        pending_count = sum(1 for f in futures if not f.done())
+                        if pending_count == 0:
                             if live_context and task_id is not None:
                                 live_context.update(
                                     task_id,
                                     description=(
                                         f"[{theme.CHS_HEADER_STYLE}]"
-                                        "Fetching test logs..."
+                                        "All test logs fetched "
+                                        "successfully."
                                         f"[/{theme.CHS_HEADER_STYLE}]"
                                     ),
                                 )
-                            wait(futures, timeout=1)
-                        for f in futures:
-                            try:
-                                f.result()
-                            except Exception as e:
-                                logger.debug("Log fetch task failed: %s", e)
-        except KeyboardInterrupt:
-            console = Console()
-            console.print(
-                "\n[yellow]Detached from active run. "
-                "Tests will continue executing on the cluster.[/yellow]\n"
-                "To attach to the ongoing run, run: [cyan]chs run[/cyan]\n"
-                "To cancel execution and cleanup run: [cyan]chs cancel[/cyan]"
-            )
-            raise ex.ChsDetachedException()
+                            break
+                        if live_context and task_id is not None:
+                            live_context.update(
+                                task_id,
+                                description=(
+                                    f"[{theme.CHS_HEADER_STYLE}]"
+                                    "Fetching test logs..."
+                                    f"[/{theme.CHS_HEADER_STYLE}]"
+                                ),
+                            )
+                        wait(futures, timeout=1)
+                    for f in futures:
+                        try:
+                            f.result()
+                        except Exception as e:
+                            logger.debug("Log fetch task failed: %s", e)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         logger.debug(
             "All jobs completed and logs fetched for run %s.",
@@ -1078,7 +1066,7 @@ class RambleManager:
         if not os.path.exists(results_json_path):
             raise ex.ChsException(
                 "Failed to generate results. Ensure jobs are complete and try "
-                "running 'chs run' again to auto-attach and resume."
+                "running 'chs run' again."
             )
         self._cleanup_inputs_dir()
         return results_json_path

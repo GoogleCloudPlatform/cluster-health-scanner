@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -171,6 +172,65 @@ class TestJobMonitoring(unittest.TestCase):
             self.assertEqual(mock_scheduler.get_job_statuses.call_count, 2)
             # Should NOT have called fetch_job_log (no map)
             mock_scheduler.fetch_job_log.assert_not_called()
+
+    @patch("time.sleep", side_effect=KeyboardInterrupt)
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_propagates_keyboard_interrupt(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.get_job_statuses.return_value = {"job-1": "RUNNING"}
+
+        with (
+            patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.manager._monitor_jobs(
+                    MagicMock(), poll_interval=1, tier=None
+                )
+
+    @patch("time.sleep", side_effect=KeyboardInterrupt)
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_interrupt_does_not_wait_for_log_fetches(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        release_fetch = threading.Event()
+        fetch_finished = threading.Event()
+
+        def slow_fetch(job_id, log_path):
+            release_fetch.wait(timeout=10)
+            fetch_finished.set()
+
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.get_job_statuses.return_value = {
+            "job-1": "COMPLETED",
+            "job-2": "RUNNING",
+        }
+        mock_scheduler.fetch_job_log.side_effect = slow_fetch
+
+        with (
+            patch.object(
+                self.manager, "get_job_ids", return_value=["job-1", "job-2"]
+            ),
+            patch.object(
+                self.manager,
+                "_map_jobs_to_log_paths",
+                return_value={"job-1": "/path/to/job-1.log"},
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.manager._monitor_jobs(
+                    MagicMock(), poll_interval=1, tier=None
+                )
+            interrupted_before_fetch_finished = not fetch_finished.is_set()
+            release_fetch.set()
+
+        self.assertTrue(interrupted_before_fetch_finished)
 
 
 if __name__ == "__main__":

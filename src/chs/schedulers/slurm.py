@@ -23,7 +23,6 @@ import subprocess
 import yaml
 import google.auth
 
-from chs.exceptions import NoActiveJobsException
 from chs.resources import normalize_machine_type
 
 from typing import Any
@@ -467,65 +466,6 @@ class SlurmScheduler(BaseScheduler):
             normalize_machine_type(machine_type).lower()
             not in self._INTERDOMAIN_RESTRICTED_MACHINE_TYPES
         )
-
-    # TODO: Test and make slurm workflow consistent with GKE
-    def has_no_failed_jobs(self) -> bool:
-        """Checks if there are any failed CHS jobs.
-
-        Returns:
-            True if all are healthy (active/completed).
-        """
-        cmd = [
-            "sacct",
-            "-P",
-            "-X",
-            "-n",
-            "--format=JobName,State",
-        ]
-        try:
-            result = self._run_slurm_cmd(cmd, check=True)
-            if not result.stdout.strip():
-                raise NoActiveJobsException("No jobs found on the cluster.")
-
-            has_chs_jobs = False
-            for line in result.stdout.splitlines():
-                parts = line.strip().split("|")
-                if len(parts) >= 2:
-                    job_name = parts[0]
-                    state = parts[1].upper()
-                    if job_name.startswith("chs-"):
-                        has_chs_jobs = True
-                        if state in (
-                            "FAILED",
-                            "NODE_FAIL",
-                            "OUT_OF_MEMORY",
-                            "BOOT_FAIL",
-                        ):
-                            logger.warning(
-                                "Diagnostic job '%s' has failed "
-                                "with state '%s'. "
-                                "Initiating resource cleanup.",
-                                job_name,
-                                state,
-                            )
-                            return False
-
-            if not has_chs_jobs:
-                raise NoActiveJobsException("No CHS jobs found on the cluster.")
-
-            return True
-        except FileNotFoundError:
-            logger.warning(
-                "Slurm CLI tool 'sacct' was not found in PATH. Please ensure"
-                " Slurm client utilities (sacct/scancel) are installed and"
-                " available in your PATH."
-            )
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
-            raise ex.ChsSchedulerException(
-                "Failed to query Slurm job state with sacct: "
-                f"{ex.format_subprocess_error(e)}"
-            ) from e
-        return False
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs using sacct."""

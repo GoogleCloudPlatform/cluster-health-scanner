@@ -576,6 +576,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         # A non-tiered run whose jobs have not been analyzed yet.
         self.run_entry = {"is_tiered": False, "scheduler": "kubernetes"}
         self.app_data.get_run.return_value = self.run_entry
+        self.scheduler = mock.Mock()
 
         ramble_manager_cls = _start_patch(
             self, mock.patch("chs.cli.RambleManager", autospec=True)
@@ -646,7 +647,9 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         self.show_results.side_effect = show_results
         self.archive_and_log.side_effect = archive_and_log
 
-        self.assertEqual(cli._analyze_action(self.app_data, "run1"), "run1")
+        self.assertEqual(
+            cli._analyze_action(self.app_data, "run1", self.scheduler), "run1"
+        )
 
         self.assertEqual(
             observed,
@@ -679,7 +682,9 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         # The cleanup can only finish once its spinner is shown.
         self.on_cleanup_spinner = release_cleanup.set
 
-        self.assertEqual(cli._analyze_action(self.app_data, "run1"), "run1")
+        self.assertEqual(
+            cli._analyze_action(self.app_data, "run1", self.scheduler), "run1"
+        )
 
         self.assertEqual(
             self.steps,
@@ -701,7 +706,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
         self.archive_and_log.side_effect = archive_and_log
 
-        cli._analyze_action(self.app_data, "run1")
+        cli._analyze_action(self.app_data, "run1", self.scheduler)
 
         self.assertEqual(
             self.steps, ["spinner: Analyzing logs...", "results", "archive"]
@@ -725,7 +730,10 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
                 with self.assertLogs("chs.cli", level="WARNING") as logs:
                     self.assertEqual(
-                        cli._analyze_action(self.app_data, "run1"), "run1"
+                        cli._analyze_action(
+                            self.app_data, "run1", self.scheduler
+                        ),
+                        "run1",
                     )
 
                 self.assertIn(
@@ -739,7 +747,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         self.rm.cancel_experiments.side_effect = RuntimeError("kaboom")
 
         with self.assertRaisesRegex(RuntimeError, "kaboom"):
-            cli._analyze_action(self.app_data, "run1")
+            cli._analyze_action(self.app_data, "run1", self.scheduler)
 
         self.archive_and_log.assert_called_once_with(self.rm)
 
@@ -750,7 +758,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
         with self.assertLogs("chs.cli", level="WARNING") as logs:
             with self.assertRaisesRegex(ValueError, "results broke"):
-                cli._analyze_action(self.app_data, "run1")
+                cli._analyze_action(self.app_data, "run1", self.scheduler)
 
         self.assertIn(
             "Failed to clean CHS resources. Error: cleanup broke",
@@ -769,7 +777,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
         self.rm.get_scheduler_type.side_effect = get_scheduler_type
 
-        cli._analyze_action(self.app_data, "run1")
+        cli._analyze_action(self.app_data, "run1", self.scheduler)
 
         self.assertEqual(resolved_on, [threading.current_thread().name])
         self.rm.cancel_experiments.assert_called_once_with(
@@ -825,9 +833,11 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
                 "chs.cli.parse_tier_results_from_boh",
                 return_value=({}, False),
             ),
-            mock.patch("chs.cli.get_scheduler"),
         ):
-            self.assertEqual(cli._analyze_action(self.app_data, "run1"), "run1")
+            self.assertEqual(
+                cli._analyze_action(self.app_data, "run1", self.scheduler),
+                "run1",
+            )
 
         self.assertEqual(
             events,

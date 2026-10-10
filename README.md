@@ -200,7 +200,6 @@ Executes a test suite on a specified cluster.
 - `--validation`: Path to a user-defined thresholds YAML file (optional).
 - `--skip-validation`: Skip threshold evaluation entirely.
 - `--run-id`: Custom run ID for this execution.
-- `--attach`: Attach to an in-flight run. If the previous run was interrupted mid-submission, it is canceled and restarted.
 
 #### Supported Suites and Tests
 Below are the details of the supported test suites and the tests included in each suite, along with a brief description of each test.
@@ -404,19 +403,6 @@ docker run -it --network host \
 ```
 
 *(Note: If using GCS, the `~/chs-archives:/archive` mount can be omitted).*
-
-### 3. Native GKE Deployment
-CHS can be deployed inside the cluster using the bundled Helm chart. The orchestrator pod prefers CPU nodes and uses a specialized `--attach` mechanism to gracefully recover state if the pod is preempted while jobs are running.
-
-It is highly recommended to use the provided turnkey execution script (which automatically drives Helm and configures security bindings) rather than running Helm manually:
-
-```bash
-# 1. Configure your run preferences in helm/values.yaml
-# 2. Run the deployment script:
-./bin/run_chs_gke.sh
-```
-
-See the `helm/` directory for additional configuration values.
 
 ## Configuration
 

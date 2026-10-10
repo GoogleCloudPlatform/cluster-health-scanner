@@ -160,18 +160,6 @@ class TestSlurmScheduler(unittest.TestCase):
         with self.assertRaises(ChsSchedulerException):
             scheduler.extract_job_id("/tmp/exp")
 
-    @mock.patch("subprocess.run")
-    def test_has_no_failed_jobs_true(self, mock_run, mock_logger):
-        scheduler = SlurmScheduler()
-        mock_run.return_value.stdout = "chs-123|COMPLETED"
-        self.assertTrue(scheduler.has_no_failed_jobs())
-
-    @mock.patch("subprocess.run")
-    def test_has_no_failed_jobs_false(self, mock_run, mock_logger):
-        scheduler = SlurmScheduler()
-        mock_run.return_value.stdout = "chs-123|FAILED"
-        self.assertFalse(scheduler.has_no_failed_jobs())
-
     @mock.patch("os.makedirs")
     @mock.patch("os.path.exists")
     @mock.patch("os.path.expanduser")
@@ -1724,27 +1712,6 @@ ramble:
                 )
             ],
         )
-
-    def test_has_no_failed_jobs_timeout_raises(self, mock_logger):
-        """A timeout is unknown state and must not be treated as failed."""
-        self.kube.fail_next(
-            "list_custom_objects", k8s_client.KubeError("read timed out")
-        )
-        with self.assertRaisesRegex(
-            ex.ChsSchedulerException, "Failed to query the status"
-        ):
-            KubernetesScheduler().has_no_failed_jobs()
-
-    def test_has_no_failed_jobs_api_error_raises(self, mock_logger):
-        """An API error is also unknown state, not a failed run."""
-        self.kube.fail_next(
-            "list_custom_objects",
-            k8s_client.KubeError("forbidden", status=403),
-        )
-        with self.assertRaisesRegex(
-            ex.ChsSchedulerException, "Failed to query the status.*forbidden"
-        ):
-            KubernetesScheduler().has_no_failed_jobs()
 
     def test_get_active_job_names_timeout_raises(self, mock_logger):
         """A timeout must not look like "no jobs" to the foreign-run check."""

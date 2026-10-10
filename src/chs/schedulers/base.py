@@ -190,15 +190,6 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def has_no_failed_jobs(self) -> bool:
-        """Checks if there are any failed CHS jobs.
-
-        Returns:
-            True if all are healthy (active/completed).
-        """
-        pass
-
-    @abc.abstractmethod
     def extract_job_id(self, experiment_dir: str) -> str:
         """Extracts the job ID from the experiment directory.
 

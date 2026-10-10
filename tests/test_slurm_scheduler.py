@@ -64,16 +64,6 @@ class TestSlurmScheduler(unittest.TestCase):
         # Should log warning but not raise
         self.scheduler.fetch_job_log("123", "/path/to/log")
 
-    @patch("subprocess.run")
-    def test_has_no_failed_jobs_true(self, mock_run):
-        mock_run.return_value.stdout = "chs-123|RUNNING"
-        self.assertTrue(self.scheduler.has_no_failed_jobs())
-
-    @patch("subprocess.run")
-    def test_has_no_failed_jobs_false(self, mock_run):
-        mock_run.return_value.stdout = "chs-123|FAILED"
-        self.assertFalse(self.scheduler.has_no_failed_jobs())
-
     def test_get_extra_env(self):
         """Test get_extra_env returns expected Enroot paths."""
         env = self.scheduler.get_extra_env()
@@ -192,20 +182,6 @@ class TestSlurmScheduler(unittest.TestCase):
         mock_run.side_effect = subprocess.TimeoutExpired("sinfo", 60)
         with self.assertRaises(ex.ChsSchedulerException):
             self.scheduler.resolve_raw_nodes()
-
-    @patch("subprocess.run")
-    def test_has_no_failed_jobs_timeout_raises(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired("sacct", 60)
-        with self.assertRaises(ex.ChsSchedulerException):
-            self.scheduler.has_no_failed_jobs()
-
-    @patch("subprocess.run")
-    def test_has_no_failed_jobs_sacct_error_raises(self, mock_run):
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, "sacct", stderr="slurmdbd unavailable"
-        )
-        with self.assertRaises(ex.ChsSchedulerException):
-            self.scheduler.has_no_failed_jobs()
 
     @patch("subprocess.run")
     def test_get_job_statuses_timeout_returns_unknown(self, mock_run):

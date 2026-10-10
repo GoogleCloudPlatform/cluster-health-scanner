@@ -39,7 +39,6 @@ from chs.exceptions import (
     ChsSchedulerException,
     ChsValidationError,
     KueueException,
-    NoActiveJobsException,
 )
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
@@ -1001,58 +1000,6 @@ class KubernetesScheduler(BaseScheduler):
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-
-    def has_no_failed_jobs(self) -> bool:
-        """Checks if there are any failed CHS jobs."""
-        all_healthy = False
-        try:
-            jobsets = k8s_client.list_custom_objects(
-                group=_JOBSET_GROUP,
-                version=_JOBSET_VERSION,
-                plural="jobsets",
-                namespace=CHS_NAMESPACE,
-            )
-
-            if not jobsets:
-                raise NoActiveJobsException("No jobs found on the cluster.")
-
-            for jobset in jobsets:
-                conditions = jobset.get("status", {}).get("conditions", [])
-                failed = False
-                for cond in conditions:
-                    if (
-                        cond.get("type") == "Failed"
-                        and cond.get("status") == "True"
-                    ):
-                        failed = True
-
-                if failed:
-                    logger.warning(
-                        "The diagnostic JobSet '%s' has entered a failed "
-                        "state. Initiating resource cleanup.",
-                        jobset.get("metadata", {}).get("name", "Unknown"),
-                    )
-                    return False
-                else:
-                    all_healthy = True
-                    logger.debug(
-                        "JobSet %s is healthy.",
-                        jobset.get("metadata", {}).get("name", "Unknown"),
-                    )
-
-        except k8s_client.KubeError as e:
-            raise ChsSchedulerException(
-                "Failed to query the status of diagnostic JobSets via the "
-                f"Kubernetes API: {e}"
-            ) from e
-        except (AttributeError, TypeError) as e:
-            logger.warning(
-                "Failed to parse the status payload returned by "
-                "the JobSet controller. Error: %s",
-                e,
-            )
-
-        return all_healthy
 
     def _check_and_update_deadlines(
         self, failed_jobset_ids: list[str], statuses: dict[str, str]
