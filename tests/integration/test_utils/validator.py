@@ -713,7 +713,7 @@ class IntegrationValidator:
             )
             return ValidationReport(passed=passed, results=results)
 
-        # Check for preflight dependency failures (e.g. JobSet or Kueue missing)
+        # Check for preflight dependency failures (e.g. JobSet missing)
         deps = (
             blueprint_config.get("dependencies", {})
             if isinstance(blueprint_config.get("dependencies"), dict)
@@ -743,37 +743,6 @@ class IntegrationValidator:
                     ),
                     expected=(
                         "exit_code != 0 and 'JobSet is missing or incompatible'"
-                    ),
-                    actual=(
-                        f"exit_code={exit_code}, "
-                        f"output={combined_output[-200:]}"
-                    ),
-                )
-            )
-            return ValidationReport(passed=passed, results=results)
-
-        kueue_dep = (
-            deps.get("kueue", {}) if isinstance(deps.get("kueue"), dict) else {}
-        )
-        kueue_disabled = kueue_dep.get("enabled") is False or str(
-            kueue_dep.get("state", "")
-        ).upper() in ("DISABLED", "MISSING", "MISSING_KUEUE")
-        if kueue_disabled:
-            passed = (
-                exit_code != 0
-                and "Kueue is missing or incompatible" in combined_output
-            )
-            results.append(
-                CheckResult(
-                    check_name="kueue_preflight_failure_expected",
-                    passed=passed,
-                    message=(
-                        "Kueue missing preflight error verified in CHS output"
-                        if passed
-                        else "Expected Kueue missing error missing from output"
-                    ),
-                    expected=(
-                        "exit_code != 0 and 'Kueue is missing or incompatible'"
                     ),
                     actual=(
                         f"exit_code={exit_code}, "

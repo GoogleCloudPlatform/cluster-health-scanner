@@ -27,11 +27,9 @@ from chs.constants import (
     NAMESPACE_DELETE_TIMEOUT_SEC,
 )
 from chs.exceptions import (
-    ChsPreflightException,
     ChsSchedulerException,
     ChsValidationError,
 )
-from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs.schedulers import kubernetes
 from chs.schedulers.kubernetes import KubernetesScheduler, TpuSliceData
 from chs.utils import k8s_client
@@ -1108,16 +1106,12 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
         self.mock_delete_secrets = self._patch(
             mock.patch.object(self.scheduler, "_delete_job_secrets")
         )
-        self.mock_kueue = self._patch(
-            mock.patch.object(kubernetes, "KueueManager")
-        )
 
     def test_deleted_namespace_needs_no_secret_cleanup(self):
         """Secrets go with the namespace, so they are not deleted apart."""
         self.scheduler.cleanup_scheduler_resources()
 
         self.mock_cleanup_slices.assert_called_once_with()
-        self.mock_kueue.return_value.cleanup.assert_called_once_with()
         self.mock_delete_secrets.assert_not_called()
         self.assertEqual(
             self.kube.calls,
@@ -1166,61 +1160,7 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
                 )
             ],
         )
-        self.mock_delete_secrets.assert_called_once_with()
-
-
-class TestKueuePreflightEmptyDeployments(unittest.TestCase):
-    """Tests _check_kueue when no Kueue controller deployment is found."""
-
-    def setUp(self):
-        super().setUp()
-        self.kube = install_fake_client(self)
-
-    def test_check_kueue_returns_false_when_no_deployments_found(self):
-        """_check_kueue logs a warning and returns False on empty list."""
-        checker = KubernetesPreflightChecker(mock.Mock())
-        with (
-            mock.patch.object(
-                checker, "_discover_deployments", return_value=[]
-            ),
-            mock.patch(
-                "chs.preflights.kubernetes_preflight.logger"
-            ) as mock_logger,
-        ):
-            result = checker._check_kueue(["kueues.kueue"])
-
-        self.assertFalse(result)
-        mock_logger.warning.assert_called_once()
-        self.assertIn(
-            "Kueue CRD is installed, but no Kueue controller deployment "
-            "could be found.",
-            mock_logger.warning.call_args.args[0],
-        )
-        self.assertEqual(self.kube.calls, [])
-
-    def test_check_raises_when_kueue_crd_has_no_deployment(self):
-        """check() raises ChsPreflightException when Kueue has no deployment."""
-        checker = KubernetesPreflightChecker(mock.Mock())
-        with (
-            mock.patch.object(
-                checker,
-                "_get_installed_crds",
-                return_value=[
-                    "jobsets.jobset.sigs.k8s.io",
-                    "kueues.kueue.sigs.k8s.io",
-                ],
-            ),
-            mock.patch.object(checker, "_check_jobset", return_value=True),
-            mock.patch.object(
-                checker, "_discover_deployments", return_value=[]
-            ),
-            mock.patch("chs.preflights.kubernetes_preflight.logger"),
-            self.assertRaisesRegex(
-                ChsPreflightException, "Kueue is missing or incompatible"
-            ),
-        ):
-            checker.check([{"name": "nccl-cluster"}])
-        self.assertEqual(self.kube.calls, [])
+        self.mock_delete_secrets.assert_called_once_with(["chs-job1"])
 
 
 if __name__ == "__main__":

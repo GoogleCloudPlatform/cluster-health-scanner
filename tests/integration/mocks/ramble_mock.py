@@ -134,19 +134,6 @@ def mock_ramble_workloads(output_generator):
             with open(manifest_path, "w") as f:
                 yaml.dump_all(cleaned_docs, f)
 
-        # Strip the topologyName constraint so mock nodes don't deadlock
-        # Kueue TAS
-        kueue_yaml = os.path.join(self.path, "configs", "kueue-configs.yaml")
-        if os.path.exists(kueue_yaml):
-            with open(kueue_yaml, "r") as f:
-                content = f.read()
-            content = content.replace(
-                "topologyName: chs-node-topology",
-                "# topologyName: chs-node-topology",
-            )
-            with open(kueue_yaml, "w") as f:
-                f.write(content)
-
     with mock.patch(
         "chs.ramble_manager.RambleManager.setup_workspace",
         new=hooked_setup_workspace,

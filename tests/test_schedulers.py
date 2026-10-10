@@ -15,9 +15,11 @@
 """Unit tests for CHS Schedulers."""
 
 import contextlib
+import datetime
 import json
 import os
 import tempfile
+from typing import Any
 import unittest
 import yaml
 from unittest import mock
@@ -79,6 +81,101 @@ def _provider_node(name: str, provider_id: str) -> dict:
     return {
         "metadata": {"name": name},
         "spec": {"providerID": provider_id},
+    }
+
+
+def _jobset_object(
+    name: str,
+    nodes: list[str] | None = None,
+    suspended: bool = True,
+    creation_timestamp: str = "2026-10-07T00:00:00Z",
+) -> dict[str, Any]:
+    """Returns a JobSet object with the given name and optional pinned nodes."""
+    metadata = {
+        "name": name,
+        "creationTimestamp": creation_timestamp,
+        "namespace": CHS_NAMESPACE,
+    }
+    spec: dict[str, Any] = {"suspend": suspended}
+    if nodes is not None:
+        required_terms = [
+            {
+                "matchExpressions": [
+                    {
+                        "key": "kubernetes.io/hostname",
+                        "operator": "In",
+                        "values": nodes,
+                    }
+                ]
+            }
+        ]
+        affinity = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": required_terms
+                }
+            }
+        }
+        spec["replicatedJobs"] = [
+            {
+                "template": {
+                    "spec": {"template": {"spec": {"affinity": affinity}}}
+                }
+            }
+        ]
+    return {
+        "metadata": metadata,
+        "spec": spec,
+    }
+
+
+def _jobset_manifest(name: str, node: str) -> dict[str, Any]:
+    """Returns a rendered jobset.yaml JobSet pinned to one node."""
+    return {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        **_jobset_object(name, [node]),
+    }
+
+
+def _pending_pod(
+    name: str,
+    jobset_name: str | None = None,
+    creation_timestamp: str = "2026-10-07T00:00:00Z",
+    scheduled: bool = False,
+    unschedulable: bool = True,
+) -> dict[str, Any]:
+    """Returns a Pending Pod object with the given scheduling condition."""
+    labels = {}
+    if jobset_name:
+        labels["jobset.sigs.k8s.io/jobset-name"] = jobset_name
+    conditions = []
+    if not scheduled and unschedulable:
+        conditions.append(
+            {
+                "type": "PodScheduled",
+                "status": "False",
+                "reason": "Unschedulable",
+            }
+        )
+    elif scheduled:
+        conditions.append(
+            {
+                "type": "PodScheduled",
+                "status": "True",
+            }
+        )
+    return {
+        "metadata": {
+            "name": name,
+            "namespace": CHS_NAMESPACE,
+            "labels": labels,
+            "creationTimestamp": creation_timestamp,
+        },
+        "status": {
+            "phase": "Pending",
+            "conditions": conditions,
+        },
     }
 
 
@@ -894,26 +991,17 @@ ramble:
         variables = data["ramble"]["variables"]
         self.assertEqual(variables["deadline"], 1800)
 
-    @mock.patch("chs.schedulers.kubernetes.KueueManager")
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1"],
     )
-    def test_setup_scheduler_resources_kueue_success(
-        self, mock_validate, mock_kueue_mgr_class, mock_logger
+    def test_setup_scheduler_resources_success(
+        self, mock_validate, mock_logger
     ):
-        """Test setup_scheduler_resources caches labels on success."""
+        """Test setup_scheduler_resources creates dir and returns tests."""
         scheduler = KubernetesScheduler(
             nodes="node1",
         )
-        scheduler.kueue_supported = True
-        self.mock_app_data.get_run.return_value = {"kueue_supported": True}
-
-        mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
-        mock_kueue_mgr_instance.generate_configs.return_value = (
-            "kueue.x-k8s.io/queue-name: chs-local-queue"
-        )
-
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
 
         tests = scheduler.setup_scheduler_resources(
@@ -924,60 +1012,33 @@ ramble:
         )
 
         self.assertEqual(tests, [{"name": "nccl-cluster"}])
-        self.assertEqual(
-            scheduler._jobset_labels_yaml,
-            "kueue.x-k8s.io/queue-name: chs-local-queue",
-        )
-        self.assertEqual(scheduler._suspend_jobset, "true")
+        self.assertTrue(os.path.isdir(workspace_config_dir))
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
         return_value=["node1", "node2"],
     )
-    def test_write_ramble_config_uses_cached_labels(
+    def test_write_ramble_config_template_defaults(
         self, mock_filter, mock_logger
     ):
-        """Test write_ramble_config writes cached properties."""
+        """Test write_ramble_config writes defaults with suspend_jobset."""
         scheduler = KubernetesScheduler(
             nodes="node1",
         )
-        scheduler._jobset_labels_yaml = "kueue/queue: local-q"
-        scheduler._suspend_jobset = "true"
 
         workspace_config_dir = os.path.join(self.tmp_dir, "configs")
         os.makedirs(workspace_config_dir, exist_ok=True)
-        template_path = os.path.join(self.tmp_dir, "kubernetes_template.yaml")
-        with open(template_path, "w") as f:
-            f.write("""
-ramble:
-  variables:
-    nodes: []
-    machine_type: ""
-    tests: []
-    default_interface_name: ""
-    all_interfaces_json: ""
-    jobset_labels_yaml: ""
-    suspend_jobset: false
-""")
-
-        @contextlib.contextmanager
-        def mock_as_file_func(path):
-            yield template_path
 
         with mock.patch.object(
             KubernetesScheduler,
             "_discover_networks",
             return_value=(["default"], ["rdma-0"]),
         ):
-            with mock.patch(
-                "chs.schedulers.kubernetes.pkg_resources.as_file",
-                side_effect=mock_as_file_func,
-            ):
-                scheduler.write_ramble_config(
-                    workspace_config_dir,
-                    [{"name": "test1"}],
-                    "a3-megagpu-8g",
-                )
+            scheduler.write_ramble_config(
+                workspace_config_dir,
+                [{"name": "test1"}],
+                "a3-megagpu-8g",
+            )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
 
@@ -986,7 +1047,7 @@ ramble:
 
         variables = data["ramble"]["variables"]
         self.assertEqual(
-            variables["jobset_labels_yaml"], "kueue/queue: local-q"
+            variables["jobset_labels_yaml"], "app.kubernetes.io/managed-by: chs"
         )
         self.assertEqual(variables["suspend_jobset"], "true")
 
@@ -1186,26 +1247,16 @@ ramble:
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
-    @mock.patch("chs.schedulers.kubernetes.KueueManager")
-    def test_cleanup_scheduler_resources(
-        self, mock_kueue_mgr_class, mock_logger
-    ):
-        """Test cleanup_scheduler_resources invokes KueueManager."""
+    def test_cleanup_scheduler_resources(self, mock_logger):
+        """Test cleanup_scheduler_resources cleans up slices and namespace."""
         scheduler = KubernetesScheduler()
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = os.path.join(tmpdir, "configs")
             os.makedirs(config_dir, exist_ok=True)
-            config_path = os.path.join(config_dir, "kueue-configs.yaml")
-            with open(config_path, "w") as f:
-                f.write("dummy")
-
             scheduler.workspace_config_dir = config_dir
-            scheduler.kueue_supported = True
 
             scheduler.cleanup_scheduler_resources()
 
-            mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
-            mock_kueue_mgr_instance.cleanup.assert_called_once_with()
             # No slices exist, so delete_custom_objects receives []; the
             # namespace delete takes the secrets with it.
             self.assertEqual(
@@ -1226,41 +1277,30 @@ ramble:
                 ],
             )
 
-    @mock.patch("chs.schedulers.kubernetes.KueueManager")
-    def test_cleanup_scheduler_resources_file_backstop(
-        self, mock_kueue_mgr_class, mock_logger
-    ):
+    def test_cleanup_scheduler_resources_file_backstop(self, mock_logger):
         """Test cleanup_scheduler_resources cleans up statelessly."""
         scheduler = KubernetesScheduler()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_dir = os.path.join(tmpdir, "configs")
-            os.makedirs(config_dir, exist_ok=True)
-            config_path = os.path.join(config_dir, "kueue-configs.yaml")
-            with open(config_path, "w") as f:
-                f.write("dummy")
+        scheduler.workspace_config_dir = None
 
-            scheduler.kueue_supported = False
-            scheduler.workspace_config_dir = None
+        scheduler.cleanup_scheduler_resources()
 
-            scheduler.cleanup_scheduler_resources()
-
-            mock_kueue_mgr_instance = mock_kueue_mgr_class.return_value
-            mock_kueue_mgr_instance.cleanup.assert_called_once_with()
-            self.assertIn(
-                _DELETE_CHS_NAMESPACE,
-                self.kube.calls,
-            )
+        self.assertIn(_DELETE_CHS_NAMESPACE, self.kube.calls)
 
     def test_cancel_jobs_deletes_secrets(self, mock_logger):
-        """Test that _cancel_jobs deletes associated secrets."""
-        for name in ("job1", "job2"):
+        """Test cancel_jobs deletes only cancelled jobs' -ssh secrets."""
+        for name in ("chs-job1", "chs-job2", "chs-job3"):
             self.kube.add_object(
                 "jobset.x-k8s.io",
                 "jobsets",
                 {"metadata": {"name": name}},
                 namespace=CHS_NAMESPACE,
             )
-        for name in ("chs-job1-ssh", "chs-job2-ssh", "other-secret"):
+        for name in (
+            "chs-job1-ssh",
+            "chs-job2-ssh",
+            "chs-job3-ssh",
+            "other-secret",
+        ):
             self.kube.add_object(
                 "",
                 "secrets",
@@ -1269,7 +1309,7 @@ ramble:
             )
         scheduler = KubernetesScheduler()
 
-        scheduler.cancel_jobs(["job1", "job2"])
+        scheduler.cancel_jobs(["chs-job1", "chs-job2"])
 
         self.assertEqual(
             self.kube.calls,
@@ -1280,7 +1320,7 @@ ramble:
                         "group": "jobset.x-k8s.io",
                         "version": "v1alpha2",
                         "plural": "jobsets",
-                        "object_names": ["job1", "job2"],
+                        "object_names": ["chs-job1", "chs-job2"],
                         "namespace": CHS_NAMESPACE,
                         "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
                     },
@@ -1297,11 +1337,13 @@ ramble:
             ],
         )
         self.assertEqual(
-            self.kube.stored_names("jobset.x-k8s.io", "jobsets"), []
+            self.kube.stored_names("jobset.x-k8s.io", "jobsets"), ["chs-job3"]
         )
-        self.assertEqual(
-            self.kube.stored_names("", "secrets"), ["other-secret"]
-        )
+        stored_secrets = self.kube.stored_names("", "secrets")
+        self.assertIn("chs-job3-ssh", stored_secrets)
+        self.assertIn("other-secret", stored_secrets)
+        self.assertNotIn("chs-job1-ssh", stored_secrets)
+        self.assertNotIn("chs-job2-ssh", stored_secrets)
 
     def test_cancel_jobs_without_kubeconfig_is_logged(self, mock_logger):
         error = k8s_client.KubeError("no kubeconfig")
@@ -1804,7 +1846,6 @@ ramble:
         mock_logger,
     ):
         scheduler = KubernetesScheduler()
-        scheduler.kueue_supported = False
         scheduler._resolved_nodes = ["node1"]
 
         scheduler._tpu_slice_data = TpuSliceData(
@@ -2062,6 +2103,368 @@ ramble:
             "pool1",
             SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
         )
+
+    def test_poll_jobs_starts_planned_jobsets_from_one_list(self, mock_logger):
+        """Test poll_jobs starts free JobSets and returns their old status."""
+        for name, node in (("job1", "node1"), ("job2", "node2")):
+            self.kube.add_object(
+                "jobset.x-k8s.io",
+                "jobsets",
+                _jobset_object(name, [node], suspended=True),
+                namespace=CHS_NAMESPACE,
+            )
+        self.kube.add_object(
+            "jobset.x-k8s.io",
+            "jobsets",
+            _jobset_object("job3", ["node1"], suspended=True),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1", "job2", "job3"])
+
+        self.assertEqual(
+            statuses, {"job1": "PENDING", "job2": "PENDING", "job3": "PENDING"}
+        )
+        self.assertEqual(len(self.kube.calls_to("list_custom_objects")), 1)
+        patches = self.kube.calls_to("patch_custom_object")
+        self.assertEqual(
+            sorted(call.kwargs["name"] for call in patches), ["job1", "job2"]
+        )
+        for call in patches:
+            self.assertEqual(call.kwargs["body"], {"spec": {"suspend": False}})
+            self.assertEqual(call.kwargs["namespace"], CHS_NAMESPACE)
+
+    def test_poll_jobs_starts_jobsets_in_queue_order(self, mock_logger):
+        """Test the queue, not creation time, decides who starts first."""
+        self.kube.add_object(
+            "jobset.x-k8s.io",
+            "jobsets",
+            _jobset_object(
+                "job-a", ["node1"], creation_timestamp="2026-10-07T00:00:00Z"
+            ),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "jobset.x-k8s.io",
+            "jobsets",
+            _jobset_object(
+                "job-b", ["node1"], creation_timestamp="2026-10-07T00:00:05Z"
+            ),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.poll_jobs(["job-b", "job-a"])
+
+        patches = self.kube.calls_to("patch_custom_object")
+        self.assertEqual([call.kwargs["name"] for call in patches], ["job-b"])
+
+    def test_poll_jobs_continues_after_failed_start(self, mock_logger):
+        """Test a failed start is logged and the other JobSets still start."""
+        for name, node in (("job1", "node1"), ("job2", "node2")):
+            self.kube.add_object(
+                "jobset.x-k8s.io",
+                "jobsets",
+                _jobset_object(name, [node], suspended=True),
+                namespace=CHS_NAMESPACE,
+            )
+        self.kube.fail_next(
+            "patch_custom_object",
+            k8s_client.KubeError("Conflict", status=409),
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.poll_jobs(["job1", "job2"])
+
+        self.assertEqual(len(self.kube.calls_to("patch_custom_object")), 2)
+        mock_logger.warning.assert_called_once()
+
+    def test_poll_jobs_raises_if_listing_fails(self, mock_logger):
+        """Test poll_jobs raises instead of reporting every job UNKNOWN."""
+        self.kube.fail_next(
+            "list_custom_objects",
+            k8s_client.KubeError("Forbidden", status=403),
+        )
+        scheduler = KubernetesScheduler()
+
+        with self.assertRaisesRegex(ChsSchedulerException, "Forbidden"):
+            scheduler.poll_jobs(["job1"])
+
+        self.assertEqual(self.kube.calls_to("patch_custom_object"), [])
+
+    def test_poll_jobs_empty_job_ids(self, mock_logger):
+        """Test poll_jobs returns immediately when job_ids is empty."""
+        scheduler = KubernetesScheduler()
+        self.assertEqual(scheduler.poll_jobs([]), {})
+        self.assertEqual(self.kube.calls, [])
+
+    def _write_experiment(self, name: str, *objects: dict) -> str:
+        experiment_dir = os.path.join(self.tmp_dir, "experiments", name)
+        os.makedirs(experiment_dir)
+        with open(os.path.join(experiment_dir, "jobset.yaml"), "w") as f:
+            yaml.safe_dump_all(objects, f)
+        return experiment_dir
+
+    def test_submit_experiments_starts_first_wave_unsuspended(
+        self, mock_logger
+    ):
+        """Test free JobSets are created running and first, the rest wait."""
+        secret = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "job1-ssh", "namespace": CHS_NAMESPACE},
+            "stringData": {"ssh-privatekey": "key"},
+        }
+        compute_domain = {
+            "apiVersion": "resource.nvidia.com/v1beta1",
+            "kind": "ComputeDomain",
+            "metadata": {"name": "job4-cd", "namespace": CHS_NAMESPACE},
+            "spec": {"numNodes": 1},
+        }
+        experiment_dirs = [
+            self._write_experiment(
+                "exp1", secret, _jobset_manifest("job1", "node1")
+            ),
+            self._write_experiment("exp2", _jobset_manifest("job2", "node2")),
+            self._write_experiment("exp3", _jobset_manifest("job3", "node1")),
+            self._write_experiment(
+                "exp4", compute_domain, _jobset_manifest("job4", "node3")
+            ),
+        ]
+        scheduler = KubernetesScheduler()
+
+        with mock.patch("chs.schedulers.kubernetes._API_MAX_CONCURRENCY", 1):
+            job_to_dir = scheduler.submit_experiments(experiment_dirs)
+
+        self.assertEqual(
+            list(job_to_dir.items()),
+            list(zip(["job1", "job2", "job3", "job4"], experiment_dirs)),
+        )
+        applied = [
+            call.kwargs["body"]["metadata"]["name"]
+            for call in self.kube.calls
+            if call.method in ("apply_secret", "apply_custom_object")
+        ]
+        self.assertEqual(
+            applied, ["job1-ssh", "job1", "job2", "job4-cd", "job4", "job3"]
+        )
+        suspended = {
+            name: self.kube.objects[
+                ("jobset.x-k8s.io", "jobsets", CHS_NAMESPACE, name)
+            ]["spec"]["suspend"]
+            for name in ("job1", "job2", "job3", "job4")
+        }
+        self.assertEqual(
+            suspended,
+            {"job1": False, "job2": False, "job3": True, "job4": False},
+        )
+        self.assertIn(
+            ("", "secrets", CHS_NAMESPACE, "job1-ssh"), self.kube.objects
+        )
+        self.assertIn(
+            ("resource.nvidia.com", "computedomains", CHS_NAMESPACE, "job4-cd"),
+            self.kube.objects,
+        )
+
+    def test_submit_experiments_waits_for_running_jobsets(self, mock_logger):
+        """Test JobSets already running in the namespace keep their nodes."""
+        self.kube.add_object(
+            "jobset.x-k8s.io",
+            "jobsets",
+            _jobset_object("running", ["node1"], suspended=False),
+            namespace=CHS_NAMESPACE,
+        )
+        experiment_dir = self._write_experiment(
+            "exp1", _jobset_manifest("job1", "node1")
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.submit_experiments([experiment_dir])
+
+        stored = self.kube.objects[
+            ("jobset.x-k8s.io", "jobsets", CHS_NAMESPACE, "job1")
+        ]
+        self.assertTrue(stored["spec"]["suspend"])
+
+    def test_submit_experiments_rejects_unsupported_kind(self, mock_logger):
+        """Test an unknown kind fails before anything is created."""
+        config_map = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "cm", "namespace": CHS_NAMESPACE},
+        }
+        experiment_dirs = [
+            self._write_experiment("exp1", _jobset_manifest("job1", "node1")),
+            self._write_experiment(
+                "exp2", config_map, _jobset_manifest("job2", "node2")
+            ),
+        ]
+        scheduler = KubernetesScheduler()
+
+        with self.assertRaisesRegex(ChsSchedulerException, "ConfigMap"):
+            scheduler.submit_experiments(experiment_dirs)
+
+        self.assertEqual(self.kube.calls, [])
+
+    def test_submit_experiments_names_failed_experiment(self, mock_logger):
+        """Test a failed create raises with the experiment's name."""
+        experiment_dirs = [
+            self._write_experiment("exp1", _jobset_manifest("job1", "node1")),
+            self._write_experiment("exp2", _jobset_manifest("job2", "node2")),
+        ]
+        self.kube.fail_next(
+            "apply_custom_object",
+            k8s_client.KubeError("admission webhook denied", status=400),
+        )
+        scheduler = KubernetesScheduler()
+
+        with (
+            mock.patch("chs.schedulers.kubernetes._API_MAX_CONCURRENCY", 1),
+            self.assertRaisesRegex(
+                ChsSchedulerException, "exp1.*admission webhook denied"
+            ),
+        ):
+            scheduler.submit_experiments(experiment_dirs)
+
+    @mock.patch("time.sleep")
+    def test_submit_experiments_retries_transient_errors(
+        self, mock_sleep, mock_logger
+    ):
+        """Test throttled or dropped creates are retried with backoff."""
+        experiment_dir = self._write_experiment(
+            "exp1", _jobset_manifest("job1", "node1")
+        )
+        self.kube.fail_next(
+            "apply_custom_object",
+            k8s_client.KubeError("Too Many Requests", status=429),
+            k8s_client.KubeError("Kubernetes API request failed: reset"),
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.submit_experiments([experiment_dir])
+
+        self.assertEqual(len(self.kube.calls_to("apply_custom_object")), 3)
+        self.assertEqual(
+            [call.args[0] for call in mock_sleep.call_args_list], [1, 2]
+        )
+        self.assertIn(
+            ("jobset.x-k8s.io", "jobsets", CHS_NAMESPACE, "job1"),
+            self.kube.objects,
+        )
+
+    @mock.patch("time.sleep")
+    def test_submit_experiments_gives_up_after_repeated_errors(
+        self, mock_sleep, mock_logger
+    ):
+        """Test a create that keeps failing raises after five tries."""
+        experiment_dir = self._write_experiment(
+            "exp1", _jobset_manifest("job1", "node1")
+        )
+        self.kube.fail_always(
+            "apply_custom_object",
+            k8s_client.KubeError("Service Unavailable", status=503),
+        )
+        scheduler = KubernetesScheduler()
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "exp1.*Service Unavailable"
+        ):
+            scheduler.submit_experiments([experiment_dir])
+
+        self.assertEqual(len(self.kube.calls_to("apply_custom_object")), 5)
+        self.assertEqual(
+            [call.args[0] for call in mock_sleep.call_args_list], [1, 2, 4, 8]
+        )
+
+    def test_submit_experiments_empty(self, mock_logger):
+        """Test submitting nothing makes no API calls."""
+        scheduler = KubernetesScheduler()
+        self.assertEqual(scheduler.submit_experiments([]), {})
+        self.assertEqual(self.kube.calls, [])
+
+    def test_get_unschedulable_jobs(self, mock_logger):
+        """Test get_unschedulable_jobs returns only matching timed-out jobs."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        old_timestamp = (now - datetime.timedelta(seconds=400)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        young_timestamp = (now - datetime.timedelta(seconds=50)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+        self.kube.add_object(
+            "",
+            "pods",
+            _pending_pod(
+                "job1-pod",
+                jobset_name="job1",
+                creation_timestamp=old_timestamp,
+                scheduled=False,
+                unschedulable=True,
+            ),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _pending_pod(
+                "job2-pod",
+                jobset_name="job2",
+                creation_timestamp=young_timestamp,
+                scheduled=False,
+                unschedulable=True,
+            ),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _pending_pod(
+                "job3-pod",
+                jobset_name="job3",
+                creation_timestamp=old_timestamp,
+                scheduled=True,
+                unschedulable=False,
+            ),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _pending_pod(
+                "job4-pod",
+                jobset_name="job4",
+                creation_timestamp=old_timestamp,
+                scheduled=False,
+                unschedulable=True,
+            ),
+            namespace=CHS_NAMESPACE,
+        )
+
+        scheduler = KubernetesScheduler()
+        unschedulable = scheduler.get_unschedulable_jobs(
+            ["job1", "job2", "job3"]
+        )
+        self.assertEqual(unschedulable, ["job1"])
+
+    def test_get_unschedulable_jobs_returns_empty_on_kube_error(
+        self, mock_logger
+    ):
+        """Test get_unschedulable_jobs returns empty list on KubeError."""
+        self.kube.fail_next(
+            "list_pods",
+            k8s_client.KubeError("Forbidden", status=403),
+        )
+        scheduler = KubernetesScheduler()
+        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        mock_logger.warning.assert_called_once()
+
+    def test_get_unschedulable_jobs_empty_job_ids(self, mock_logger):
+        """Test get_unschedulable_jobs returns empty list for empty job_ids."""
+        scheduler = KubernetesScheduler()
+        self.assertEqual(scheduler.get_unschedulable_jobs([]), [])
+        self.assertEqual(self.kube.calls, [])
 
 
 class TestSchedulerDetection(unittest.TestCase):

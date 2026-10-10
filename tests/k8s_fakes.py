@@ -80,8 +80,6 @@ class FakeResourceType:
         )
 
 
-_KUEUE_VERSIONS = ("v1beta2", "v1beta1")
-
 DEFAULT_TYPES = (
     FakeResourceType("", "nodes", "Node", False),
     FakeResourceType("", "namespaces", "Namespace", False),
@@ -97,26 +95,6 @@ DEFAULT_TYPES = (
         False,
     ),
     FakeResourceType(
-        "kueue.x-k8s.io", "localqueues", "LocalQueue", True, _KUEUE_VERSIONS
-    ),
-    FakeResourceType(
-        "kueue.x-k8s.io",
-        "clusterqueues",
-        "ClusterQueue",
-        False,
-        _KUEUE_VERSIONS,
-    ),
-    FakeResourceType(
-        "kueue.x-k8s.io",
-        "resourceflavors",
-        "ResourceFlavor",
-        False,
-        _KUEUE_VERSIONS,
-    ),
-    FakeResourceType(
-        "kueue.x-k8s.io", "topologies", "Topology", False, _KUEUE_VERSIONS
-    ),
-    FakeResourceType(
         "jobset.x-k8s.io", "jobsets", "JobSet", True, ("v1alpha2",)
     ),
     FakeResourceType(
@@ -129,7 +107,24 @@ DEFAULT_TYPES = (
     FakeResourceType(
         "accelerator.gke.io", "slices", "Slice", False, ("v1beta1",)
     ),
+    FakeResourceType(
+        "resource.nvidia.com",
+        "computedomains",
+        "ComputeDomain",
+        True,
+        ("v1beta1",),
+    ),
 )
+
+
+def _merge_patch(target: dict[str, Any], patch: dict[str, Any]) -> None:
+    for key, val in patch.items():
+        if val is None:
+            target.pop(key, None)
+        elif isinstance(val, dict) and isinstance(target.get(key), dict):
+            _merge_patch(target[key], val)
+        else:
+            target[key] = copy.deepcopy(val)
 
 
 class Call(NamedTuple):
@@ -150,6 +145,7 @@ RECORDED_METHODS = frozenset(
         "delete_namespace",
         "list_secrets",
         "delete_secret",
+        "apply_secret",
         "list_jobs",
         "list_deployments",
         "get_deployment",
@@ -159,6 +155,7 @@ RECORDED_METHODS = frozenset(
         "list_custom_objects",
         "delete_custom_objects",
         "apply_custom_object",
+        "patch_custom_object",
     }
 )
 
@@ -352,6 +349,16 @@ class FakeKubeClient:
             self._remove(key)
 
     @_recorded()
+    def apply_secret(self, *, body: dict[str, Any], **query: Any) -> None:
+        del query
+        rtype = self._served("", "secrets")
+        stored = copy.deepcopy(body)
+        key = self._key(
+            rtype, stored["metadata"]["name"], stored["metadata"]["namespace"]
+        )
+        self._store(key, stored, rtype)
+
+    @_recorded()
     def list_jobs(
         self, *, namespace: str | None = None, **query: Any
     ) -> list[dict[str, Any]]:
@@ -462,6 +469,31 @@ class FakeKubeClient:
             if uid := existing.get("metadata", {}).get("uid"):
                 stored["metadata"]["uid"] = uid
         self._store(key, stored, rtype)
+
+    @_recorded()
+    def patch_custom_object(
+        self,
+        *,
+        group: str,
+        version: str,
+        plural: str,
+        name: str,
+        body: dict[str, Any],
+        namespace: str | None = None,
+        **query: Any,
+    ) -> None:
+        del query
+        rtype = self._served(group, plural)
+        if version not in rtype.versions:
+            raise KubeError(
+                f'no matches for version "{version}" in {group}',
+                status=404,
+            )
+        key = self._key(rtype, name, namespace)
+        existing = self.objects.get(key)
+        if existing is None:
+            raise _not_found(rtype, name)
+        _merge_patch(existing, copy.deepcopy(body))
 
     def _get_one(
         self,

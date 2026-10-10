@@ -67,13 +67,13 @@ class KubernetesJobset(WorkflowManagerBase):
     workflow_manager_variable(
         name="jobset_labels_yaml",
         default="",
-        description="Raw YAML string for JobSet metadata.labels (e.g. kueue queues)",
+        description="Raw YAML string for JobSet metadata.labels",
     )
 
     workflow_manager_variable(
         name="suspend_jobset",
         default="false",
-        description="Whether to suspend the JobSet (used for Kueue)",
+        description="Whether to create the JobSet in a suspended state",
     )
 
     workflow_manager_variable(

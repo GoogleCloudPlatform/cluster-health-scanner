@@ -56,6 +56,7 @@ from chs.utils.topology import load_topology
 logger = logging.getLogger(__name__)
 
 _JOB_POLL_INTERVAL_SECONDS = 5
+_MAX_POLL_OUTAGE_SECONDS = 180
 
 
 class RambleManager:
@@ -393,10 +394,6 @@ class RambleManager:
     ) -> list[str]:
         """Executes experiments in the Ramble workspace.
 
-        This runs the 'all_experiments' script to start the experiments and
-        captures Job IDs by scanning the workspace experiments directory within
-        the current filesystem.
-
         Returns:
           A list of submitted Job IDs.
 
@@ -405,7 +402,32 @@ class RambleManager:
         """
 
         logger.debug("Executing experiments in %s...", self.path)
+        scheduler = get_scheduler(self.get_scheduler_type())
+        experiment_dirs = self._experiment_dirs_in_suite_order(active_tests)
+        if scheduler.submits_directly:
+            job_to_dir = scheduler.submit_experiments(experiment_dirs)
+            for experiment_dir in job_to_dir.values():
+                self._write_submission_log(experiment_dir)
+        else:
+            self._run_experiment_scripts(active_tests)
+            job_to_dir = {
+                scheduler.extract_job_id(d): d for d in experiment_dirs
+            }
 
+        if job_to_dir:
+            self._update_registry(job_to_dir, tier=tier)
+
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        run_entry["submission_complete"] = True
+        self._app_data.update_run(self._workspace_name, run_entry)
+        logger.debug(
+            "All JobSets submitted successfully. "
+            "submission_complete set to True."
+        )
+
+        return list(job_to_dir.keys())
+
+    def _run_experiment_scripts(self, active_tests: list[str] | None) -> None:
         cmd_script = os.path.join(self.path, "all_experiments")
 
         if not active_tests:
@@ -433,42 +455,38 @@ class RambleManager:
                 capture_output=True,
                 error_context="Failed to execute selected experiments",
             )
-        job_to_dir = {}
-        experiments_dir = os.path.join(self.path, "experiments")
-        if os.path.exists(experiments_dir):
-            for root, dirs, files in os.walk(experiments_dir):
-                if "execute_experiment" in files:
-                    exp_name = os.path.basename(root)
-                    app_name = os.path.basename(
-                        os.path.dirname(os.path.dirname(root))
-                    )
-                    if app_name == "chs":
-                        dirs.clear()
-                        continue
 
-                    if active_tests and not any(
-                        t in exp_name for t in active_tests
-                    ):
-                        dirs.clear()
-                        continue
+    def _experiment_dirs_in_suite_order(
+        self, active_tests: list[str] | None
+    ) -> list[str]:
+        experiment_dirs = []
+        with open(os.path.join(self.path, "all_experiments")) as script:
+            for line in script:
+                command = line.strip()
+                if not command.endswith("/batch_submit"):
+                    continue
+                experiment_dir = os.path.dirname(command)
+                app_name = os.path.basename(
+                    os.path.dirname(os.path.dirname(experiment_dir))
+                )
+                experiment_name = os.path.basename(experiment_dir)
+                if app_name == "chs":
+                    continue
+                if active_tests and not any(
+                    t in experiment_name for t in active_tests
+                ):
+                    continue
+                experiment_dirs.append(experiment_dir)
+        return experiment_dirs
 
-                    scheduler = get_scheduler(self.get_scheduler_type())
-                    job_id = scheduler.extract_job_id(root)
-                    job_to_dir[job_id] = root
-                    dirs.clear()
-
-        if job_to_dir:
-            self._update_registry(job_to_dir, tier=tier)
-
-        run_entry = self._app_data.get_run(self._workspace_name) or {}
-        run_entry["submission_complete"] = True
-        self._app_data.update_run(self._workspace_name, run_entry)
-        logger.debug(
-            "All JobSets submitted successfully. "
-            "submission_complete set to True."
-        )
-
-        return list(job_to_dir.keys())
+    @staticmethod
+    def _write_submission_log(experiment_dir: str) -> None:
+        experiment_name = os.path.basename(experiment_dir)
+        log_path = os.path.join(experiment_dir, f"{experiment_name}.out")
+        with open(log_path, "w") as log_file:
+            log_file.write(
+                f"Submitted {experiment_name} at {datetime.datetime.now()}\n"
+            )
 
     def cancel_experiments(self, scheduler_name: str | None = None) -> None:
         """Cancels running experiments in the Ramble workspace.
@@ -498,8 +516,6 @@ class RambleManager:
 
         # Delete jobs statelessly by prefix to guarantee cleanup.
         scheduler.cancel_jobs_by_prefix(prefix)
-        # Clean up associated infrastructure configurations like Kueue
-        # statelessly.
         scheduler.cleanup_scheduler_resources()
 
     def _update_registry(
@@ -640,7 +656,8 @@ class RambleManager:
         pending_log_fetches = set(job_log_map.keys())
         scheduler = get_scheduler(self.get_scheduler_type())
 
-        registry_jobs = set(self.get_job_ids())
+        job_order = self.get_job_ids()
+        registry_jobs = set(job_order)
         if not registry_jobs:
             logger.debug("No jobs found in registry.")
             return
@@ -709,15 +726,66 @@ class RambleManager:
                 live_context,
                 task_id,
             ):
+
+                def wait_for_next_poll() -> None:
+                    if not live_context:
+                        elapsed = int(time.time() - start_time)
+                        elapsed_td = datetime.timedelta(seconds=elapsed)
+                        logger.debug(
+                            "Jobs remaining: %d | Elapsed time: %s. "
+                            "Waiting %s seconds...",
+                            len(active_jobs),
+                            elapsed_td,
+                            poll_interval,
+                        )
+                        time.sleep(poll_interval)
+                    else:
+                        for _ in range(poll_interval):
+                            if task_id is not None:
+                                live_context.update(
+                                    task_id, description=get_jobs_desc()
+                                )
+                            time.sleep(1)
+
+                last_successful_poll = time.time()
                 while active_jobs:
                     if live_context and task_id is not None:
                         live_context.update(
                             task_id, description=get_jobs_desc()
                         )
-                    statuses = scheduler.get_job_statuses(list(active_jobs))
+                    try:
+                        statuses = scheduler.poll_jobs(
+                            [j for j in job_order if j in active_jobs]
+                        )
+                    except ex.ChsSchedulerException as e:
+                        if (
+                            time.time() - last_successful_poll
+                            < _MAX_POLL_OUTAGE_SECONDS
+                        ):
+                            logger.warning(
+                                "Failed to check the status of the tests. "
+                                "Retrying in %d seconds. Error: %s",
+                                poll_interval,
+                                e,
+                            )
+                            wait_for_next_poll()
+                            continue
+                        logger.error(
+                            "Failed to check the status of the tests for %d "
+                            "seconds. Marking the %d unfinished tests as "
+                            "DEADLINE. Error: %s",
+                            _MAX_POLL_OUTAGE_SECONDS,
+                            len(active_jobs),
+                            e,
+                        )
+                        statuses = dict.fromkeys(
+                            active_jobs, JobStatus.DEADLINE.value
+                        )
+                        pending_log_fetches.difference_update(active_jobs)
+                    else:
+                        last_successful_poll = time.time()
 
                     jobs_to_cancel = []
-                    still_running = False
                     for job_id, status in statuses.items():
                         if JobStatus.is_terminal(status):
                             # Job finished
@@ -759,11 +827,24 @@ class RambleManager:
                                     QUEUE_TIMEOUT_SECONDS,
                                 )
                                 jobs_to_cancel.append(job_id)
-                            else:
-                                still_running = True
                         else:
                             pending_start_times.pop(job_id, None)
-                            still_running = True
+
+                    remaining_jobs = [
+                        job_id
+                        for job_id in active_jobs
+                        if job_id not in jobs_to_cancel
+                    ]
+                    for job_id in scheduler.get_unschedulable_jobs(
+                        remaining_jobs
+                    ):
+                        logger.error(
+                            "Job '%s' could not schedule all of its pods in "
+                            "time. It will be cancelled so that no partial "
+                            "set of its pods keeps running.",
+                            job_id,
+                        )
+                        jobs_to_cancel.append(job_id)
 
                     if jobs_to_cancel:
                         scheduler.cancel_jobs(jobs_to_cancel)
@@ -784,25 +865,8 @@ class RambleManager:
                             e,
                         )
 
-                    if still_running:
-                        if not live_context:
-                            elapsed = int(time.time() - start_time)
-                            elapsed_td = datetime.timedelta(seconds=elapsed)
-                            logger.debug(
-                                "Jobs remaining: %d | Elapsed time: %s. "
-                                "Waiting %s seconds...",
-                                len(active_jobs),
-                                elapsed_td,
-                                poll_interval,
-                            )
-                            time.sleep(poll_interval)
-                        else:
-                            for _ in range(poll_interval):
-                                if task_id is not None:
-                                    live_context.update(
-                                        task_id, description=get_jobs_desc()
-                                    )
-                                time.sleep(1)
+                    if active_jobs:
+                        wait_for_next_poll()
 
                 if live_context and task_id is not None:
                     live_context.update(

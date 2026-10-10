@@ -934,7 +934,6 @@ def cancel_action(scheduler_name: str | None = None) -> None:
         subprocess.CalledProcessError,
         KubeError,
         ex.ChsSchedulerException,
-        ex.KueueException,
     ) as e:
         raise ex.ChsCancellationException(
             f"CHS cancellation failed: {e!r}"

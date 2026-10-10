@@ -131,12 +131,6 @@ class MachineTypeDiscoveryException(ChsException):
     """Raised when machine type discovery fails."""
 
 
-class KueueException(ChsException):
-    """Raised for Kueue-related errors."""
-
-    pass
-
-
 class InvalidTestConfigException(ChsException):
     """Raised test config defined in suites.yaml is invalid"""
 

@@ -26,14 +26,13 @@ from chs.utils import k8s_client
 logger = logging.getLogger(__name__)
 
 
-MIN_KUEUE_VERSION = "0.14.5"
 # We require at least JobSet v0.6.0 which introduces
 # `publishNotReadyAddresses` in spec.network.
 MIN_JOBSET_VERSION = "0.6.0"
 
 
 class KubernetesPreflightChecker:
-    """Checks for JobSet and Kueue CRDs on Kubernetes."""
+    """Checks for the JobSet CRD and controller on Kubernetes."""
 
     def __init__(self, scheduler: Any | None = None) -> None:
         self.scheduler = scheduler
@@ -41,22 +40,11 @@ class KubernetesPreflightChecker:
     def check(
         self,
         tests: list[dict[str, Any]] | None = None,
-    ) -> tuple[list[dict[str, Any]] | None, bool]:
+    ) -> list[dict[str, Any]] | None:
         """Runs preflight checks on Kubernetes."""
         installed_crds = self._get_installed_crds()
         self._check_jobset(installed_crds)
-
-        kueue_supported = self._check_kueue(installed_crds)
-
-        if not kueue_supported:
-            raise ChsPreflightException(
-                "Kueue is missing or incompatible "
-                f"(requires v{MIN_KUEUE_VERSION}+). "
-                "Please refer to https://kueue.sigs.k8s.io/docs/installation "
-                "for installation instructions."
-            )
-
-        return tests, kueue_supported
+        return tests
 
     def _get_installed_crds(self) -> list[str]:
         """Fetches installed CRDs from the cluster."""
@@ -168,49 +156,6 @@ class KubernetesPreflightChecker:
 
         return discovered_deployments
 
-    def _check_kueue(self, installed_crds: list[str]) -> bool:
-        """Checks if Kueue CRD is installed and version is compatible."""
-        if not self._check_kueue_crd_exists(installed_crds):
-            return False
-
-        deployments = self._discover_deployments("kueue")
-        if not deployments:
-            logger.warning(
-                "Kueue CRD is installed, but no Kueue controller deployment "
-                "could be found. Please check controller installation with "
-                "'kubectl get deployment -A -l app.kubernetes.io/name=kueue'."
-            )
-            return False
-
-        healthy_dep = self._get_healthy_kueue_deployment(deployments)
-        if not healthy_dep:
-            logger.warning(
-                "Kueue controller deployment is NOT in an Available "
-                "state. Please check controller health with "
-                "'kubectl get deployment -A -l "
-                "app.kubernetes.io/name=kueue'."
-            )
-            return False
-        version = self._extract_version_from_deployment(
-            healthy_dep, app_name="kueue"
-        )
-        if version:
-            return self._is_kueue_version_supported(version)
-        return True
-
-    def _check_kueue_crd_exists(self, installed_crds: list[str]) -> bool:
-        """Checks if Kueue CRD exists in the list of installed CRDs."""
-        return any("kueue" in crd for crd in installed_crds)
-
-    def _get_healthy_kueue_deployment(
-        self, deployments: list[dict[str, Any]]
-    ) -> dict[str, Any] | None:
-        """Finds the first healthy Available deployment."""
-        for dep in deployments:
-            if self._is_deployment_healthy(dep):
-                return dep
-        return None
-
     def _extract_version_from_deployment(
         self, healthy_dep: dict[str, Any], app_name: str
     ) -> str | None:
@@ -263,29 +208,5 @@ class KubernetesPreflightChecker:
                 "the assumption that it is a supported version (>= %s).",
                 version_str,
                 MIN_JOBSET_VERSION,
-            )
-            return True
-
-    def _is_kueue_version_supported(self, version: str) -> bool:
-        """Validates if the installed Kueue version is supported."""
-        try:
-            if Version(version) < Version(MIN_KUEUE_VERSION):
-                logger.warning(
-                    "Kueue version %s not supported. "
-                    "Minimum supported version is v%s. "
-                    "Reference for upgrading: "
-                    "https://kueue.sigs.k8s.io/docs/installation/#upgrading",
-                    version,
-                    MIN_KUEUE_VERSION,
-                )
-                return False
-            return True
-        except InvalidVersion:
-            logger.warning(
-                "Unable to parse the installed Kueue version "
-                "'%s'. Proceeding with the "
-                "assumption that it is a supported version (>= %s).",
-                version,
-                MIN_KUEUE_VERSION,
             )
             return True

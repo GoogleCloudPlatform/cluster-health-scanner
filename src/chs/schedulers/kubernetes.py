@@ -14,6 +14,7 @@
 
 """Kubernetes scheduler implementation for Cluster Health Scanner."""
 
+import datetime
 import importlib.resources as pkg_resources
 import json
 import time
@@ -33,12 +34,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
 from chs.schedulers.base import BaseScheduler
+from chs.schedulers.gang_admission import plan_admissions
 from chs.utils import k8s_client
-from chs.utils.kueue import KueueManager
 from chs.exceptions import (
     ChsSchedulerException,
     ChsValidationError,
-    KueueException,
 )
 from chs.utils.lifecycle import JobStatus
 from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
@@ -54,10 +54,20 @@ _BUSY_NODES_BATCH_SIZE = 32
 _BUSY_NODES_MAX_RETRIES = 3
 _MAX_NODES_UNDER_TEST = 500
 
+GANG_SCHEDULING_TIMEOUT_SECONDS = 300
+
 _JOBSET_GROUP = "jobset.x-k8s.io"
 _JOBSET_VERSION = "v1alpha2"
+_JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
+
+_API_MAX_CONCURRENCY = 32
+_APPLY_ATTEMPTS = 5
+_CUSTOM_RESOURCE_PLURALS = {
+    "JobSet": "jobsets",
+    "ComputeDomain": "computedomains",
+}
 
 _LOG_FETCH_MAX_CONCURRENCY = 32
 _LOG_TEMP_PREFIX = ".chs-log-"
@@ -75,6 +85,66 @@ def _get_log_fetch_executor() -> ThreadPoolExecutor:
                 thread_name_prefix="chs-log-fetch",
             )
         return _LOG_FETCH_EXECUTOR
+
+
+def _read_manifests(experiment_dir: str) -> list[dict]:
+    manifest_path = os.path.join(experiment_dir, "jobset.yaml")
+    try:
+        with open(manifest_path, "r") as f:
+            objects = [obj for obj in yaml.safe_load_all(f) if obj]
+    except (OSError, yaml.YAMLError) as e:
+        raise ChsSchedulerException(
+            f"Failed to read {manifest_path}: {e}"
+        ) from e
+    for obj in objects:
+        kind = obj.get("kind")
+        if kind != "Secret" and kind not in _CUSTOM_RESOURCE_PLURALS:
+            raise ChsSchedulerException(
+                f"Unsupported kind '{kind}' in {manifest_path}"
+            )
+    return objects
+
+
+def _find_jobset(objects: list[dict], experiment_dir: str) -> dict:
+    for obj in objects:
+        if obj["kind"] == "JobSet" and obj.get("metadata", {}).get("name"):
+            return obj
+    raise ChsSchedulerException(
+        f"JobSet kind not found in {experiment_dir}/jobset.yaml"
+    )
+
+
+def _apply_object(obj: dict) -> None:
+    if obj["kind"] == "Secret":
+        k8s_client.apply_secret(body=obj)
+    else:
+        k8s_client.apply_custom_object(
+            plural=_CUSTOM_RESOURCE_PLURALS[obj["kind"]], body=obj
+        )
+
+
+def _is_retryable(error: k8s_client.KubeError) -> bool:
+    return error.status is None or error.status == 429 or error.status >= 500
+
+
+def _apply_objects(objects: list[dict]) -> None:
+    for obj in objects:
+        for attempt in range(1, _APPLY_ATTEMPTS + 1):
+            try:
+                _apply_object(obj)
+                break
+            except k8s_client.KubeError as e:
+                if attempt == _APPLY_ATTEMPTS or not _is_retryable(e):
+                    raise
+                delay = 2 ** (attempt - 1)
+                logger.debug(
+                    "Retrying %s '%s' in %d seconds. Error: %s",
+                    obj["kind"],
+                    obj["metadata"]["name"],
+                    delay,
+                    e,
+                )
+                time.sleep(delay)
 
 
 @dataclass
@@ -101,6 +171,8 @@ logger = logging.getLogger(__name__)
 class KubernetesScheduler(BaseScheduler):
     """Kubernetes scheduler implementation."""
 
+    submits_directly = True
+
     def __init__(
         self,
         nodes: str | None = None,
@@ -125,9 +197,6 @@ class KubernetesScheduler(BaseScheduler):
         self._cluster_name: str | None = None
         self._tpu_slice_data: TpuSliceData | None = None
         self.workspace_config_dir: str | None = None
-        self.kueue_supported: bool = False
-        self._jobset_labels_yaml: str = ""
-        self._suspend_jobset: str = "false"
 
     def _resolve_project_id(self, node: str) -> str:
         """Resolves GCP project ID from Kubernetes node providerID."""
@@ -227,11 +296,9 @@ class KubernetesScheduler(BaseScheduler):
         workspace_name: str | None = None,
         run_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
-        """Checks for JobSet and Kueue dependencies on Kubernetes."""
+        """Checks for JobSet dependencies on Kubernetes."""
         preflight_checker = KubernetesPreflightChecker(self)
-        filtered_tests, kueue_supported = preflight_checker.check(tests)
-        self.kueue_supported = kueue_supported
-        return filtered_tests
+        return preflight_checker.check(tests)
 
     def setup_scheduler_resources(
         self,
@@ -240,29 +307,9 @@ class KubernetesScheduler(BaseScheduler):
         machine_type: str = "",
         workspace_name: str | None = None,
     ) -> list[dict[str, Any]] | None:
-        """Sets up scheduler-specific resources like Kueue configurations."""
+        """Sets up scheduler-specific resources."""
         self.workspace_config_dir = workspace_config_dir
         os.makedirs(workspace_config_dir, exist_ok=True)
-
-        if self.kueue_supported:
-            nodes = self.get_nodes_under_test() or []
-            dynamic_slicing = bool(
-                self._tpu_slice_data
-                and any(
-                    self._tpu_slice_data.node_to_pool.get(n)
-                    in self._tpu_slice_data.dynamic_slice_partitions
-                    for n in nodes
-                )
-            )
-            kueue_mgr = KueueManager(self)
-            self._jobset_labels_yaml = kueue_mgr.generate_configs(
-                workspace_config_dir,
-                machine_type,
-                nodes,
-                dynamic_slicing=dynamic_slicing,
-            )
-            self._suspend_jobset = "true"
-
         return tests
 
     @property
@@ -320,18 +367,24 @@ class KubernetesScheduler(BaseScheduler):
             return False
         return True
 
-    def _delete_job_secrets(self) -> None:
-        """Deletes SSH secrets associated with CHS jobs statelessly."""
+    def _delete_job_secrets(self, job_ids: list[str] | None = None) -> None:
+        """Deletes the SSH secrets of the given jobs, or of all CHS jobs."""
         try:
             secrets = k8s_client.list_secrets(namespace=CHS_NAMESPACE)
             secret_names = [
                 secret.get("metadata", {}).get("name", "") for secret in secrets
             ]
-            secrets_to_delete = [
-                s
-                for s in secret_names
-                if s.startswith("chs-") and s.endswith("-ssh")
-            ]
+            if job_ids is None:
+                secrets_to_delete = [
+                    s
+                    for s in secret_names
+                    if s.startswith("chs-") and s.endswith("-ssh")
+                ]
+            else:
+                job_secrets = {f"{job_id}-ssh" for job_id in job_ids}
+                secrets_to_delete = [
+                    s for s in secret_names if s in job_secrets
+                ]
 
             if secrets_to_delete:
                 for name in secrets_to_delete:
@@ -962,7 +1015,6 @@ class KubernetesScheduler(BaseScheduler):
         variables["tests"] = tests or []
         variables["default_interface_name"] = default_interface_name
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
-        variables["suspend_jobset"] = self.kueue_supported
         variables["chs_run_id"] = run_id
         if deadline is not None:
             variables["deadline"] = deadline
@@ -988,11 +1040,6 @@ class KubernetesScheduler(BaseScheduler):
                 if pool in slice_data.dynamic_slice_partitions
             ]
             variables["tpu_dynamic_pools"] = dynamic_pools
-
-        if self._jobset_labels_yaml:
-            variables["jobset_labels_yaml"] = self._jobset_labels_yaml
-        if self._suspend_jobset == "true":
-            variables["suspend_jobset"] = "true"
 
         logger.debug("Configuration: %r", config)
 
@@ -1072,17 +1119,45 @@ class KubernetesScheduler(BaseScheduler):
         """Gets the status of the given jobs from the Kubernetes API."""
         if not job_ids:
             return {}
-
-        statuses = {j: JobStatus.UNKNOWN.value for j in job_ids}
-
         try:
-            jobsets = k8s_client.list_custom_objects(
-                group=_JOBSET_GROUP,
-                version=_JOBSET_VERSION,
-                plural="jobsets",
-                namespace=CHS_NAMESPACE,
+            jobsets = self._list_jobsets()
+        except k8s_client.KubeError as e:
+            logger.warning(
+                "Failed to retrieve the current execution statuses "
+                "for the scheduled JobSets. Error: %s",
+                e,
             )
+            return {j: JobStatus.UNKNOWN.value for j in job_ids}
+        return self._statuses_from_jobsets(jobsets, job_ids)
 
+    def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
+        """Starts waiting JobSets with free nodes and returns job statuses."""
+        if not job_ids:
+            return {}
+        try:
+            jobsets = self._list_jobsets()
+        except k8s_client.KubeError as e:
+            raise ChsSchedulerException(
+                f"Failed to list the CHS JobSets: {e}"
+            ) from e
+        statuses = self._statuses_from_jobsets(jobsets, job_ids)
+        self._start_jobsets(plan_admissions(jobsets, job_ids))
+        return statuses
+
+    @staticmethod
+    def _list_jobsets() -> list[dict]:
+        return k8s_client.list_custom_objects(
+            group=_JOBSET_GROUP,
+            version=_JOBSET_VERSION,
+            plural="jobsets",
+            namespace=CHS_NAMESPACE,
+        )
+
+    def _statuses_from_jobsets(
+        self, jobsets: list[dict], job_ids: list[str]
+    ) -> dict[str, str]:
+        statuses = {j: JobStatus.UNKNOWN.value for j in job_ids}
+        try:
             failed_jobset_ids = []
             for jobset in jobsets:
                 job_id = jobset.get("metadata", {}).get("name")
@@ -1094,18 +1169,79 @@ class KubernetesScheduler(BaseScheduler):
 
             if failed_jobset_ids:
                 self._check_and_update_deadlines(failed_jobset_ids, statuses)
-        except (
-            k8s_client.KubeError,
-            AttributeError,
-            TypeError,
-        ) as e:
+        except (AttributeError, TypeError) as e:
             logger.warning(
                 "Failed to retrieve the current execution statuses "
                 "for the scheduled JobSets. Error: %s",
                 e,
             )
-
         return statuses
+
+    def _start_jobsets(self, names: list[str]) -> None:
+        if not names:
+            return
+        executor = ThreadPoolExecutor(
+            max_workers=min(len(names), _API_MAX_CONCURRENCY)
+        )
+        try:
+            list(executor.map(self._start_jobset, names))
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    @staticmethod
+    def _start_jobset(name: str) -> None:
+        try:
+            k8s_client.patch_custom_object(
+                group=_JOBSET_GROUP,
+                version=_JOBSET_VERSION,
+                plural="jobsets",
+                name=name,
+                namespace=CHS_NAMESPACE,
+                body={"spec": {"suspend": False}},
+            )
+            logger.debug("Started JobSet '%s'.", name)
+        except k8s_client.KubeError as e:
+            logger.warning("Failed to start JobSet '%s'. Error: %s", name, e)
+
+    def get_unschedulable_jobs(self, job_ids: list[str]) -> list[str]:
+        """Returns JobSets that could not schedule all of their pods."""
+        if not job_ids:
+            return []
+        job_id_set = set(job_ids)
+        try:
+            pods = k8s_client.list_pods(
+                namespace=CHS_NAMESPACE,
+                field_selector="status.phase=Pending",
+            )
+        except k8s_client.KubeError as e:
+            logger.warning(
+                "Failed to list pending pods to check for unschedulable "
+                "JobSets. Error: %s",
+                e,
+            )
+            return []
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        unschedulable = set()
+        for pod in pods:
+            metadata = pod["metadata"]
+            jobset_name = metadata.get("labels", {}).get(_JOBSET_NAME_LABEL)
+            if jobset_name not in job_id_set:
+                continue
+            created = datetime.datetime.fromisoformat(
+                metadata["creationTimestamp"].replace("Z", "+00:00")
+            )
+            age_seconds = (now - created).total_seconds()
+            if age_seconds < GANG_SCHEDULING_TIMEOUT_SECONDS:
+                continue
+            if any(
+                c.get("type") == "PodScheduled"
+                and c.get("status") == "False"
+                and c.get("reason") == "Unschedulable"
+                for c in pod.get("status", {}).get("conditions", [])
+            ):
+                unschedulable.add(jobset_name)
+        return sorted(unschedulable)
 
     @staticmethod
     def _is_tpu_job(job_id: str) -> bool:
@@ -1205,22 +1341,64 @@ class KubernetesScheduler(BaseScheduler):
 
     def extract_job_id(self, experiment_dir: str) -> str:
         """Extracts the job ID (JobSet name) from the experiment directory."""
-        jobset_file = os.path.join(experiment_dir, "jobset.yaml")
+        objects = _read_manifests(experiment_dir)
+        return _find_jobset(objects, experiment_dir)["metadata"]["name"]
+
+    def submit_experiments(self, experiment_dirs: list[str]) -> dict[str, str]:
+        """Creates the Kubernetes objects of each experiment."""
+        if not experiment_dirs:
+            return {}
+        objects_by_dir = {d: _read_manifests(d) for d in experiment_dirs}
+        jobset_by_dir = {
+            d: _find_jobset(objects, d) for d, objects in objects_by_dir.items()
+        }
+        jobsets = list(jobset_by_dir.values())
+        for jobset in jobsets:
+            jobset["spec"]["suspend"] = True
         try:
-            with open(jobset_file, "r") as f:
-                docs = list(yaml.safe_load_all(f))
-                for doc in docs:
-                    if doc and doc.get("kind") == "JobSet":
-                        name = doc.get("metadata", {}).get("name")
-                        if name:
-                            return name
+            existing_jobsets = self._list_jobsets()
+        except k8s_client.KubeError as e:
             raise ChsSchedulerException(
-                f"JobSet kind not found in {jobset_file}"
-            )
-        except (OSError, yaml.YAMLError) as e:
-            raise ChsSchedulerException(
-                f"Failed to parse GKE jobset.yaml at {jobset_file}: {e}"
+                f"Failed to list the CHS JobSets: {e}"
             ) from e
+        queue = [jobset["metadata"]["name"] for jobset in jobsets]
+        start_now = set(plan_admissions(existing_jobsets + jobsets, queue))
+        for jobset in jobsets:
+            if jobset["metadata"]["name"] in start_now:
+                jobset["spec"]["suspend"] = False
+        logger.debug(
+            "Creating %d experiments, %d of them start immediately.",
+            len(experiment_dirs),
+            len(start_now),
+        )
+        submission_order = sorted(
+            experiment_dirs, key=lambda d: jobset_by_dir[d]["spec"]["suspend"]
+        )
+        self._create_objects(submission_order, objects_by_dir)
+        return {
+            jobset_by_dir[d]["metadata"]["name"]: d for d in experiment_dirs
+        }
+
+    @staticmethod
+    def _create_objects(
+        experiment_dirs: list[str], objects_by_dir: dict[str, list[dict]]
+    ) -> None:
+        executor = ThreadPoolExecutor(max_workers=_API_MAX_CONCURRENCY)
+        try:
+            futures = {
+                executor.submit(_apply_objects, objects_by_dir[d]): d
+                for d in experiment_dirs
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except k8s_client.KubeError as e:
+                    experiment = os.path.basename(futures[future])
+                    raise ChsSchedulerException(
+                        f"Failed to submit experiment '{experiment}': {e}"
+                    ) from e
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
 
     def _cleanup_dynamic_slices(self) -> None:
         """Deletes dynamic TPU slices created by CHS."""
@@ -1457,23 +1635,10 @@ class KubernetesScheduler(BaseScheduler):
             )
 
         self._ensure_namespace_exists()
-        if self.kueue_supported:
-            kueue_mgr = KueueManager(self)
-            kueue_mgr.apply_configs(self.workspace_config_dir)
 
     def cleanup_scheduler_resources(self) -> None:
         """Cleans up scheduler-specific resources statelessly."""
         self._cleanup_dynamic_slices()
-
-        kueue_mgr = KueueManager(self)
-        try:
-            kueue_mgr.cleanup()
-        except KueueException as e:
-            logger.warning(
-                "Failed to clean up Kueue workload resources. Manual "
-                "cleanup may be required. Error: %s",
-                e,
-            )
 
         if not self._delete_namespace():
             self._delete_job_secrets()
@@ -1501,7 +1666,7 @@ class KubernetesScheduler(BaseScheduler):
                 e,
             )
 
-        self._delete_job_secrets()
+        self._delete_job_secrets(job_ids)
 
     def get_active_job_names(self) -> list[str]:
         """Returns a list of active job names (JobSets) on the cluster."""

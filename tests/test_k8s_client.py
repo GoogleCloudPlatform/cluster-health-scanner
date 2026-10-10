@@ -935,45 +935,45 @@ class ClientFunctionsTest(unittest.TestCase):
 
     def test_get_and_list_custom_objects(self) -> None:
         self.sdk.custom.get_namespaced_custom_object.return_value = (
-            _FakeResponse({"metadata": {"name": "lq1"}})
+            _FakeResponse({"metadata": {"name": "js1"}})
         )
         self.assertEqual(
             k8s_client.get_custom_object(
-                group="kueue.x-k8s.io",
-                version="v1beta1",
-                plural="localqueues",
-                name="lq1",
+                group="jobset.x-k8s.io",
+                version="v1alpha2",
+                plural="jobsets",
+                name="js1",
                 namespace="chs",
             ),
-            {"metadata": {"name": "lq1"}},
+            {"metadata": {"name": "js1"}},
         )
         self.sdk.custom.get_namespaced_custom_object.assert_called_once_with(
-            group="kueue.x-k8s.io",
-            version="v1beta1",
+            group="jobset.x-k8s.io",
+            version="v1alpha2",
             namespace="chs",
-            plural="localqueues",
-            name="lq1",
+            plural="jobsets",
+            name="js1",
             _preload_content=False,
             _request_timeout=120,
         )
 
         self.sdk.custom.get_cluster_custom_object.return_value = _FakeResponse(
-            {"metadata": {"name": "cq1"}}
+            {"metadata": {"name": "s1"}}
         )
         self.assertEqual(
             k8s_client.get_custom_object(
-                group="kueue.x-k8s.io",
+                group="accelerator.gke.io",
                 version="v1beta1",
-                plural="clusterqueues",
-                name="cq1",
+                plural="slices",
+                name="s1",
             ),
-            {"metadata": {"name": "cq1"}},
+            {"metadata": {"name": "s1"}},
         )
         self.sdk.custom.get_cluster_custom_object.assert_called_once_with(
-            group="kueue.x-k8s.io",
+            group="accelerator.gke.io",
             version="v1beta1",
-            plural="clusterqueues",
-            name="cq1",
+            plural="slices",
+            name="s1",
             _preload_content=False,
             _request_timeout=120,
         )
@@ -1056,38 +1056,56 @@ class ClientFunctionsTest(unittest.TestCase):
             404, "NotFound", "not found"
         )
         k8s_client.delete_custom_objects(
-            group="kueue.x-k8s.io",
+            group="accelerator.gke.io",
             version="v1beta1",
-            plural="clusterqueues",
-            object_names=["cq1"],
+            plural="slices",
+            object_names=["s1"],
         )
         self.sdk.custom.delete_cluster_custom_object.assert_called_once_with(
-            group="kueue.x-k8s.io",
+            group="accelerator.gke.io",
             version="v1beta1",
-            plural="clusterqueues",
-            name="cq1",
+            plural="slices",
+            name="s1",
             _preload_content=False,
             _request_timeout=120,
         )
 
+    def test_apply_secret(self) -> None:
+        body = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "job1-ssh", "namespace": "chs"},
+            "stringData": {"ssh-privatekey": "key"},
+        }
+        self.sdk.core.patch_namespaced_secret.return_value = _FakeResponse({})
+        k8s_client.apply_secret(body=body)
+        self.sdk.core.patch_namespaced_secret.assert_called_once_with(
+            name="job1-ssh",
+            namespace="chs",
+            body=body,
+            _preload_content=False,
+            _request_timeout=120,
+            field_manager="chs",
+            force=True,
+            _content_type="application/apply-patch+yaml",
+        )
+
     def test_apply_custom_object(self) -> None:
         namespaced_body = {
-            "apiVersion": "kueue.x-k8s.io/v1beta1",
-            "kind": "LocalQueue",
-            "metadata": {"name": "lq1", "namespace": "chs"},
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "metadata": {"name": "js1", "namespace": "chs"},
         }
         self.sdk.custom.patch_namespaced_custom_object.return_value = (
             _FakeResponse({})
         )
-        k8s_client.apply_custom_object(
-            plural="localqueues", body=namespaced_body
-        )
+        k8s_client.apply_custom_object(plural="jobsets", body=namespaced_body)
         self.sdk.custom.patch_namespaced_custom_object.assert_called_once_with(
-            group="kueue.x-k8s.io",
-            version="v1beta1",
+            group="jobset.x-k8s.io",
+            version="v1alpha2",
             namespace="chs",
-            plural="localqueues",
-            name="lq1",
+            plural="jobsets",
+            name="js1",
             body=namespaced_body,
             _preload_content=False,
             _request_timeout=120,
@@ -1097,30 +1115,77 @@ class ClientFunctionsTest(unittest.TestCase):
         )
 
         cluster_body = {
-            "apiVersion": "kueue.x-k8s.io/v1beta1",
-            "kind": "ClusterQueue",
-            "metadata": {"name": "cq1"},
+            "apiVersion": "accelerator.gke.io/v1beta1",
+            "kind": "Slice",
+            "metadata": {"name": "s1"},
         }
         self.sdk.custom.patch_cluster_custom_object.return_value = (
             _FakeResponse({})
         )
         k8s_client.apply_custom_object(
-            plural="clusterqueues",
+            plural="slices",
             body=cluster_body,
             field_manager="custom-mgr",
             force=False,
         )
         self.sdk.custom.patch_cluster_custom_object.assert_called_once_with(
-            group="kueue.x-k8s.io",
+            group="accelerator.gke.io",
             version="v1beta1",
-            plural="clusterqueues",
-            name="cq1",
+            plural="slices",
+            name="s1",
             body=cluster_body,
             _preload_content=False,
             _request_timeout=120,
             field_manager="custom-mgr",
             force=False,
             _content_type="application/apply-patch+yaml",
+        )
+
+    def test_patch_custom_object(self) -> None:
+        namespaced_body = {"spec": {"suspend": False}}
+        self.sdk.custom.patch_namespaced_custom_object.return_value = (
+            _FakeResponse({})
+        )
+        k8s_client.patch_custom_object(
+            group="jobset.x-k8s.io",
+            version="v1alpha2",
+            plural="jobsets",
+            name="js1",
+            namespace="chs",
+            body=namespaced_body,
+        )
+        self.sdk.custom.patch_namespaced_custom_object.assert_called_once_with(
+            group="jobset.x-k8s.io",
+            version="v1alpha2",
+            namespace="chs",
+            plural="jobsets",
+            name="js1",
+            body=namespaced_body,
+            _preload_content=False,
+            _request_timeout=120,
+            _content_type="application/merge-patch+json",
+        )
+
+        cluster_body = {"spec": {"replicas": 2}}
+        self.sdk.custom.patch_cluster_custom_object.return_value = (
+            _FakeResponse({})
+        )
+        k8s_client.patch_custom_object(
+            group="accelerator.gke.io",
+            version="v1beta1",
+            plural="slices",
+            name="s1",
+            body=cluster_body,
+        )
+        self.sdk.custom.patch_cluster_custom_object.assert_called_once_with(
+            group="accelerator.gke.io",
+            version="v1beta1",
+            plural="slices",
+            name="s1",
+            body=cluster_body,
+            _preload_content=False,
+            _request_timeout=120,
+            _content_type="application/merge-patch+json",
         )
 
 
@@ -1179,6 +1244,16 @@ class FakeKubeClientContractTest(unittest.TestCase):
                     "kind": "JobSet",
                     "metadata": {"name": "js1"},
                 },
+            )
+        self.assertEqual(ctx.exception.status, 404)
+
+        with self.assertRaises(KubeError) as ctx:
+            fake.patch_custom_object(
+                group="jobset.x-k8s.io",
+                version="v1alpha2",
+                plural="jobsets",
+                name="js1",
+                body={"spec": {"suspend": False}},
             )
         self.assertEqual(ctx.exception.status, 404)
 

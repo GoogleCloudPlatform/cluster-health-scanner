@@ -22,7 +22,9 @@ gcloud container clusters get-credentials {cluster_name} \
 ```
 
 **Note:**
-**Pre-flight Checks:** CHS automatically runs pre-flight checks before executing tests. These checks automatically verify that your cluster environment is correctly configured (e.g., checking for required jobset and kueue versions). If you see "pre-flight" logs, this is expected behavior!
+**Pre-flight Checks:** CHS automatically runs pre-flight checks before executing tests. These checks automatically verify that your cluster environment is correctly configured (e.g., checking for the required JobSet version). If you see "pre-flight" logs, this is expected behavior!
+
+**Gang Scheduling:** CHS gang-schedules multi-node tests itself: JobSets are created suspended and started only when all of their target nodes are free, so the CHS process must stay running for the duration of the run. If it is killed before it can clean up (for example by `kill -9`), run `chs cancel` to remove the leftover resources.
 
 
 ### Slurm Configuration

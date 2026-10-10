@@ -341,6 +341,21 @@ def delete_secret(
             raise
 
 
+def apply_secret(*, body: dict, **query: Any) -> None:
+    """Creates or updates the Secret with server-side apply."""
+    metadata = body["metadata"]
+    query.setdefault("field_manager", "chs")
+    query.setdefault("force", True)
+    query.setdefault("_content_type", "application/apply-patch+yaml")
+    _request(
+        _sdk().core.patch_namespaced_secret,
+        name=metadata["name"],
+        namespace=metadata["namespace"],
+        body=body,
+        **query,
+    )
+
+
 def list_jobs(*, namespace: str | None = None, **query: Any) -> list[dict]:
     batch = _sdk().batch
     return _list(
@@ -460,6 +475,34 @@ def delete_custom_objects(
         **coords,
     )
     _delete_and_wait(delete, read, object_names, wait_timeout_seconds, **query)
+
+
+def patch_custom_object(
+    *,
+    group: str,
+    version: str,
+    plural: str,
+    name: str,
+    body: dict,
+    namespace: str | None = None,
+    **query: Any,
+) -> None:
+    """Patches the object with a JSON merge patch."""
+    query.setdefault("_content_type", "application/merge-patch+json")
+    custom = _sdk().custom
+    _request(
+        _scoped(
+            custom.patch_namespaced_custom_object,
+            custom.patch_cluster_custom_object,
+            namespace,
+            group=group,
+            version=version,
+            plural=plural,
+        ),
+        name=name,
+        body=body,
+        **query,
+    )
 
 
 def apply_custom_object(*, plural: str, body: dict, **query: Any) -> None:

@@ -22,7 +22,6 @@ from chs.utils.k8s_client import KubeError
 from tests.k8s_fakes import Call, install_fake_client, patch_k8s_client
 
 _JOBSET_CRD = "jobsets.jobset.sigs.k8s.io"
-_KUEUE_CRD = "kueues.kueue.sigs.k8s.io"
 _CRD_QUERY = Call("list_crds", {})
 
 
@@ -102,56 +101,16 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
         self._add_deployment(_deployment("jobset", "v0.7.2"))
 
     def test_check_crds_installed_version_valid(self):
-        """Test that preflight check passes if JobSet/Kueue are valid."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        """Test that preflight check passes if JobSet is valid."""
+        self._add_crds(_JOBSET_CRD)
         self._add_healthy_jobset()
-        self._add_deployment(_deployment("kueue", "v0.14.5"))
         original_tests = [{"name": "test1"}, {"name": "nccl-cluster"}]
-        filtered_tests, kueue_supported = self.checker.check(original_tests)
+        filtered_tests = self.checker.check(original_tests)
         self.assertEqual(
             self.kube.calls,
-            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
+            [_CRD_QUERY, _label_query("jobset")],
         )
         self.assertEqual(filtered_tests, original_tests)
-        self.assertTrue(kueue_supported)
-
-    def test_check_crds_installed_version_invalid(self):
-        """Test that invalid Kueue version raises exception."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
-        self._add_healthy_jobset()
-        self._add_deployment(_deployment("kueue", "v0.13.0"))
-        tests = [
-            {"name": "nccl-cluster"},
-            {"name": "tpu-info"},
-            {"name": "nvidia-smi"},
-        ]
-        with self.assertRaisesRegex(
-            ChsPreflightException, "Kueue is missing or incompatible"
-        ):
-            self.checker.check(tests)
-        self.assertEqual(
-            self.kube.calls,
-            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
-        )
-
-    def test_check_kueue_deployment_unhealthy_raises_exception(self):
-        """Test that unhealthy Kueue deployment raises exception."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
-        self._add_healthy_jobset()
-        self._add_deployment(_deployment("kueue", "v0.14.5", available=False))
-        tests = [
-            {"name": "nccl-cluster"},
-            {"name": "tpu-info"},
-            {"name": "nvidia-smi"},
-        ]
-        with self.assertRaisesRegex(
-            ChsPreflightException, "Kueue is missing or incompatible"
-        ):
-            self.checker.check(tests)
-        self.assertEqual(
-            self.kube.calls,
-            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
-        )
 
     def test_check_crds_missing_raises_exception(self):
         """Test that missing JobSet causes it to fail fast."""
@@ -208,27 +167,6 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             self.checker.check()
         self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
-    def test_check_with_none_tests_and_unsupported_kueue_raises_exception(self):
-        """Test checking None tests with unsupported Kueue raises exception."""
-        self._add_crds(_JOBSET_CRD)
-        self._add_healthy_jobset()
-        with self.assertRaisesRegex(
-            ChsPreflightException, "Kueue is missing or incompatible"
-        ):
-            self.checker.check(None)
-        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
-
-    def test_check_kueue_missing_raises_exception(self):
-        """Test that missing Kueue raises exception."""
-        self._add_crds(_JOBSET_CRD)
-        self._add_healthy_jobset()
-        tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-        with self.assertRaisesRegex(
-            ChsPreflightException, "Kueue is missing or incompatible"
-        ):
-            self.checker.check(tests)
-        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
-
     def test_check_crds_query_failure_raises_exception(self):
         """Test that Error when getting CRDs raises ChsPreflightException."""
         err = _forbidden("customresourcedefinitions.apiextensions.k8s.io")
@@ -259,75 +197,60 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
     def test_get_installed_crds_returns_lowercase_kubectl_names(self):
         """Test CRD names are returned in lowercase."""
         self._add_crds(
-            "jobsets.jobset.x-k8s.io", "ClusterQueues.Kueue.X-K8s.io"
+            "jobsets.jobset.x-k8s.io", "OtherResources.Example.X-K8s.io"
         )
         self.assertEqual(
             self.checker._get_installed_crds(),
             [
                 "jobsets.jobset.x-k8s.io",
-                "clusterqueues.kueue.x-k8s.io",
+                "otherresources.example.x-k8s.io",
             ],
         )
         self.assertEqual(self.kube.calls, [_CRD_QUERY])
 
     def test_check_version_unparsed_tag_passes(self):
         """Test unparsed tag (:latest) passes."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
-        self._add_healthy_jobset()
-        self._add_deployment(_deployment("kueue", "latest"))
+        self._add_crds(_JOBSET_CRD)
+        self._add_deployment(_deployment("jobset", "latest"))
         tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-        result_tests, supported = self.checker.check(tests)
+        result_tests = self.checker.check(tests)
         self.assertEqual(result_tests, tests)
-        self.assertTrue(supported)
         self.assertEqual(
             self.kube.calls,
-            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
+            [_CRD_QUERY, _label_query("jobset")],
         )
-
-    def test_check_without_kueue_raises_exception(self):
-        """Test that missing Kueue raises exception even for non-Kueue tests."""
-        self._add_crds(_JOBSET_CRD)
-        self._add_healthy_jobset()
-        tests = [{"name": "nvidia-smi"}, {"name": "dcgm"}]
-        with self.assertRaisesRegex(
-            ChsPreflightException, "Kueue is missing or incompatible"
-        ):
-            self.checker.check(tests)
-        self.assertEqual(self.kube.calls, [_CRD_QUERY, _label_query("jobset")])
 
     def test_check_with_none_tests_returns_none(self):
         """Test that checking without tests returns None."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_crds(_JOBSET_CRD)
         self._add_healthy_jobset()
-        self._add_deployment(_deployment("kueue", "v0.14.5"))
-        filtered, kueue_supported = self.checker.check(None)
-        self.assertIsNone(filtered)
-        self.assertTrue(kueue_supported)
+        result = self.checker.check(None)
+        self.assertIsNone(result)
         self.assertEqual(
             self.kube.calls,
-            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
+            [_CRD_QUERY, _label_query("jobset")],
         )
 
     def test_parse_version_string_ip_registry(self):
-        """Test parsing Kueue version from registry URL with IP and port."""
-        version_output = "192.168.1.100:5000/kueue/kueue:v0.14.5"
+        """Test parsing JobSet version from registry URL with IP and port."""
+        version_output = "192.168.1.100:5000/jobset/jobset:v0.7.2"
         version = self.checker._parse_version_string(version_output)
-        self.assertEqual(version, "0.14.5")
+        self.assertEqual(version, "0.7.2")
 
     def test_parse_version_string_without_v(self):
-        """Test parsing Kueue version without leading 'v'."""
-        version_output = "registry.k8s.io/kueue/kueue:0.14.5"
+        """Test parsing JobSet version without leading 'v'."""
+        version_output = "registry.k8s.io/jobset/jobset:0.7.2"
         version = self.checker._parse_version_string(version_output)
-        self.assertEqual(version, "0.14.5")
+        self.assertEqual(version, "0.7.2")
 
     def test_parse_version_string_with_sha256(self):
-        """Test parsing Kueue version with trailing sha256 digest."""
+        """Test parsing JobSet version with trailing sha256 digest."""
         version_output = (
-            "registry.k8s.io/kueue/kueue:v0.14.5@"
+            "registry.k8s.io/jobset/jobset:v0.7.2@"
             "sha256:5f32b1a5e12f6b8f36c53d9e2a84c8a2b5b3a4f6d8e0c1b2a3f4e5d6c7b8a9f0"
         )
         version = self.checker._parse_version_string(version_output)
-        self.assertEqual(version, "0.14.5")
+        self.assertEqual(version, "0.7.2")
 
     def test_extract_version_from_deployment_none_fields(self):
         """Test that None image or name in container dict is handled."""
@@ -339,7 +262,7 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
                             {"name": None, "image": None},
                             {
                                 "name": "manager",
-                                "image": "registry.k8s.io/kueue/kueue:v0.14.5",
+                                "image": "registry.k8s.io/jobset/jobset:v0.7.2",
                             },
                         ]
                     }
@@ -347,41 +270,35 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             }
         }
         version = self.checker._extract_version_from_deployment(
-            dep, app_name="kueue"
+            dep, app_name="jobset"
         )
-        self.assertEqual(version, "0.14.5")
+        self.assertEqual(version, "0.7.2")
 
-    def test_is_kueue_version_supported_exact(self):
-        """Test exact match of minimum supported Kueue version."""
-        self.assertTrue(self.checker._is_kueue_version_supported("0.14.5"))
-        self.assertTrue(self.checker._is_kueue_version_supported("v0.14.5"))
+    def test_is_jobset_version_supported_exact(self):
+        """Test exact match of minimum supported JobSet version."""
+        self.assertTrue(self.checker._is_jobset_version_supported("0.6.0"))
+        self.assertTrue(self.checker._is_jobset_version_supported("v0.6.0"))
 
-    def test_is_kueue_version_supported_higher(self):
-        """Test Kueue version higher than minimum."""
-        self.assertTrue(self.checker._is_kueue_version_supported("0.15.0"))
-        self.assertTrue(self.checker._is_kueue_version_supported("1.0.0"))
+    def test_is_jobset_version_supported_higher(self):
+        """Test JobSet version higher than minimum."""
+        self.assertTrue(self.checker._is_jobset_version_supported("0.7.0"))
+        self.assertTrue(self.checker._is_jobset_version_supported("1.0.0"))
 
-    def test_is_kueue_version_supported_lower(self):
-        """Test Kueue version lower than minimum."""
-        self.assertFalse(self.checker._is_kueue_version_supported("0.14.4"))
-        self.assertFalse(self.checker._is_kueue_version_supported("v0.13.0"))
+    def test_is_jobset_version_supported_lower(self):
+        """Test JobSet version lower than minimum."""
+        self.assertFalse(self.checker._is_jobset_version_supported("0.5.9"))
+        self.assertFalse(self.checker._is_jobset_version_supported("v0.5.0"))
 
-    def test_is_kueue_version_supported_prerelease(self):
-        """Test that a prerelease of the minimum version is not supported."""
-        self.assertFalse(self.checker._is_kueue_version_supported("0.14.5-rc1"))
-        self.assertTrue(self.checker._is_kueue_version_supported("0.14.6-rc1"))
-
-    def test_is_kueue_version_supported_invalid(self):
-        """Test invalid Kueue version formats are assumed supported."""
+    def test_is_jobset_version_supported_invalid(self):
+        """Test invalid JobSet version formats are assumed supported."""
         self.assertTrue(
-            self.checker._is_kueue_version_supported("invalid-version")
+            self.checker._is_jobset_version_supported("invalid-version")
         )
-        self.assertTrue(self.checker._is_kueue_version_supported("latest"))
+        self.assertTrue(self.checker._is_jobset_version_supported("latest"))
 
     def test_check_version_with_multicontainer_sidecar(self):
         """Test container selection skips kube-rbac-proxy at container 0."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
-        self._add_healthy_jobset()
+        self._add_crds(_JOBSET_CRD)
         containers = [
             {
                 "name": "kube-rbac-proxy",
@@ -389,37 +306,31 @@ class TestKubernetesPreflightChecker(unittest.TestCase):
             },
             {
                 "name": "manager",
-                "image": "registry.k8s.io/kueue/kueue:v0.14.5",
+                "image": "registry.k8s.io/jobset/jobset:v0.7.2",
             },
         ]
-        self._add_deployment(_deployment("kueue", containers=containers))
+        self._add_deployment(_deployment("jobset", containers=containers))
         tests = [{"name": "nccl-cluster"}, {"name": "nvidia-smi"}]
-        filtered, kueue_supported = self.checker.check(tests)
+        filtered = self.checker.check(tests)
         self.assertEqual(filtered, tests)
-        self.assertTrue(kueue_supported)
         self.assertEqual(
             self.kube.calls,
-            [_CRD_QUERY, _label_query("jobset"), _label_query("kueue")],
+            [_CRD_QUERY, _label_query("jobset")],
         )
 
     def test_discover_deployments_fallback_success(self):
         """Test that missing label triggers fallback to namespace query."""
-        self._add_crds(_JOBSET_CRD, _KUEUE_CRD)
+        self._add_crds(_JOBSET_CRD)
         self._add_deployment(_deployment("jobset", "v0.7.2", labeled=False))
-        self._add_deployment(_deployment("kueue", "v0.14.5", labeled=False))
-
         tests = [{"name": "nccl-cluster"}]
-        filtered, kueue_supported = self.checker.check(tests)
+        filtered = self.checker.check(tests)
         self.assertEqual(filtered, tests)
-        self.assertTrue(kueue_supported)
         self.assertEqual(
             self.kube.calls,
             [
                 _CRD_QUERY,
                 _label_query("jobset"),
                 _fallback_query("jobset"),
-                _label_query("kueue"),
-                _fallback_query("kueue"),
             ],
         )
 

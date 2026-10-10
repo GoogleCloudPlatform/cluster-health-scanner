@@ -38,7 +38,6 @@ MANIFESTS_DIR = Path(__file__).parent / "manifests"
 CONFIGS_DIR = Path(__file__).parent / "configs"
 
 DEFAULT_JOBSET_VERSION = "v0.6.0"
-DEFAULT_KUEUE_VERSION = "v0.14.5"
 KUBE_RBAC_PROXY_IMAGE = "quay.io/brancz/kube-rbac-proxy:v0.13.1"
 DEFAULT_CLUSTER_NAME = "chs-tpu-v6e-cluster"
 DEFAULT_ZONE = "us-east5-c"
@@ -176,7 +175,7 @@ def _is_disabled(config: dict[str, Any]) -> bool:
         return False
     state = str(config.get("state", "")).upper()
     return (
-        state in ("DISABLED", "MISSING", "MISSING_JOBSET", "MISSING_KUEUE")
+        state in ("DISABLED", "MISSING", "MISSING_JOBSET")
         or config.get("enabled") is False
     )
 
@@ -350,15 +349,10 @@ OFFICIAL_MANIFEST_URLS = {
         "https://github.com/kubernetes-sigs/jobset/releases/download/"
         "{version}/manifests.yaml"
     ),
-    "kueue": (
-        "https://github.com/kubernetes-sigs/kueue/releases/download/"
-        "{version}/manifests.yaml"
-    ),
 }
 
 OFFICIAL_IMAGES = {
     "jobset": "registry.k8s.io/jobset/jobset:{version}",
-    "kueue": "registry.k8s.io/kueue/kueue:{version}",
 }
 
 
@@ -450,18 +444,6 @@ def _uninstall_preflight_deployment(dep_name: str) -> None:
             ],
             check=False,
         )
-    elif dep_name == "kueue":
-        run(
-            [
-                "kubectl",
-                "delete",
-                "crd",
-                "-l",
-                "app.kubernetes.io/name=kueue",
-                "--ignore-not-found",
-            ],
-            check=False,
-        )
     run(
         [
             "kubectl",
@@ -479,11 +461,10 @@ def apply_preflight_deployments(
     dependencies: dict[str, Any] | None = None,
     cluster_name: str = "chs-tpu-v6e-cluster",
 ) -> None:
-    """Provisions preflight controller deployments (JobSet & Kueue)."""
+    """Provisions preflight controller deployments (JobSet)."""
     logger.info("[INFO] Reconciling preflight deployments...")
     default_deps = {
         "jobset": {"version": DEFAULT_JOBSET_VERSION},
-        "kueue": {"version": DEFAULT_KUEUE_VERSION},
     }
     deps = dependencies if isinstance(dependencies, dict) else default_deps
 
@@ -509,12 +490,7 @@ def apply_preflight_deployments(
                 )
                 continue
 
-            version = info.get(
-                "version",
-                DEFAULT_JOBSET_VERSION
-                if dep_name == "jobset"
-                else DEFAULT_KUEUE_VERSION,
-            )
+            version = info.get("version", DEFAULT_JOBSET_VERSION)
             manifest_url = OFFICIAL_MANIFEST_URLS[dep_name].format(
                 version=version
             )

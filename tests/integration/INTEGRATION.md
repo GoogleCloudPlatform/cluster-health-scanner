@@ -39,7 +39,7 @@ mv ./kubectl ~/.local/bin/kubectl
 ### 4. First Time Setup (Pre-pull Images)
 To speed up test runs and avoid timeouts on the first run, pre-pull the required Docker images:
 ```bash
-for img in "registry.k8s.io/jobset/jobset:v0.6.0" "registry.k8s.io/kueue/kueue:v0.14.5" "quay.io/brancz/kube-rbac-proxy:v0.13.1" "kindest/node:v1.30.0"; do docker pull "$img"; done
+for img in "registry.k8s.io/jobset/jobset:v0.6.0" "quay.io/brancz/kube-rbac-proxy:v0.13.1" "kindest/node:v1.30.0"; do docker pull "$img"; done
 ```
 
 ---
