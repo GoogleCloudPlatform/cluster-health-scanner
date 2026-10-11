@@ -30,6 +30,7 @@ from chs.constants import (
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
 from chs.schedulers.kubernetes import (
+    WORKER_LABEL,
     KubernetesScheduler,
     TpuSliceData,
 )
@@ -130,6 +131,48 @@ def _job_manifest(name: str, node: str) -> dict[str, Any]:
         "kind": "Job",
         **_job_object(name, [node]),
     }
+
+
+def _accelerator_pod(
+    name: str, node: str, labels: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Returns a running Pod on the node that uses GPUs."""
+    return {
+        "metadata": {"name": name, "labels": labels or {}},
+        "spec": {
+            "nodeName": node,
+            "containers": [
+                {
+                    "name": "main",
+                    "resources": {"limits": {"nvidia.com/gpu": "8"}},
+                }
+            ],
+        },
+        "status": {"phase": "Running"},
+    }
+
+
+def _finished_job(name: str, node: str, condition: str, reason: str) -> dict:
+    """Returns a started Job with a True terminal condition."""
+    job = _job_object(name, [node], suspended=False)
+    job["status"] = {
+        "conditions": [{"type": condition, "status": "True", "reason": reason}]
+    }
+    return job
+
+
+def _waiting_pod(name: str, job_name: str, node: str) -> dict[str, Any]:
+    """Returns a Job's pod pinned to the node, Unschedulable for 30 s."""
+    created = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        seconds=30
+    )
+    pod = _pending_pod(
+        name,
+        job_name=job_name,
+        creation_timestamp=created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    pod["spec"] = _job_object(job_name, [node])["spec"]["template"]["spec"]
+    return pod
 
 
 def _pending_pod(
@@ -2312,6 +2355,482 @@ ramble:
         scheduler = KubernetesScheduler()
         self.assertEqual(scheduler.poll_jobs([]), {})
         self.assertEqual(self.kube.calls, [])
+
+    def test_poll_jobs_skips_job_whose_node_is_taken(self, mock_logger):
+        """Test Jobs on a taken node are skipped and the others start."""
+        for name, node in (
+            ("job1", "node1"),
+            ("job2", "node2"),
+            ("job3", "node1"),
+        ):
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                _job_object(name, [node]),
+                namespace=CHS_NAMESPACE,
+            )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1", "job2", "job3"])
+
+        self.assertEqual(
+            statuses,
+            {"job1": "DEADLINE", "job2": "PENDING", "job3": "DEADLINE"},
+        )
+        self.assertEqual(
+            [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
+            ["job2"],
+        )
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 2)
+        self.assertEqual(
+            mock_logger.warning.call_args_list,
+            [
+                mock.call(
+                    "Job '%s' was not started because node %s is now used by "
+                    "another workload (pod %s).",
+                    name,
+                    "node1",
+                    "team-a/train",
+                )
+                for name in ("job1", "job3")
+            ],
+        )
+
+    def test_poll_jobs_starts_job_on_free_node_of_skipped_job(
+        self, mock_logger
+    ):
+        """Test a skipped Job does not hold its free nodes in that poll."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("pair", ["node1", "node2"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("single", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node2"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["pair", "single"])
+
+        self.assertEqual(statuses, {"pair": "DEADLINE", "single": "PENDING"})
+        self.assertEqual(
+            [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
+            ["single"],
+        )
+
+    def test_poll_jobs_checks_each_job_when_its_turn_comes(self, mock_logger):
+        """Test a Job that cannot start yet is checked when its turn comes."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("running", ["node2"], suspended=False),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("job1", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("pair", ["node1", "node2"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        first = scheduler.poll_jobs(["job1", "pair"])
+        del self.kube.objects[("batch", "jobs", CHS_NAMESPACE, "running")]
+        del self.kube.objects[("", "pods", "team-a", "train")]
+        second = scheduler.poll_jobs(["pair"])
+
+        self.assertEqual(first, {"job1": "DEADLINE", "pair": "PENDING"})
+        self.assertEqual(second, {"pair": "PENDING"})
+        self.assertEqual(
+            [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
+            ["pair"],
+        )
+
+    def test_poll_jobs_skips_all_waiting_jobs_of_taken_node(self, mock_logger):
+        """Test the queued Jobs of a taken node are skipped in one poll."""
+        for name in ("job1", "job2", "job3"):
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                _job_object(name, ["node1"]),
+                namespace=CHS_NAMESPACE,
+            )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1", "job2", "job3"])
+
+        self.assertEqual(
+            statuses,
+            {"job1": "DEADLINE", "job2": "DEADLINE", "job3": "DEADLINE"},
+        )
+        self.assertEqual(self.kube.calls_to("patch_job"), [])
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 1)
+
+    def test_poll_jobs_deletes_skipped_jobs(self, mock_logger):
+        """Test a skipped Job and its SSH Secret are deleted."""
+        for name in ("job1", "job2"):
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                _job_object(name, [name.replace("job", "node")]),
+                namespace=CHS_NAMESPACE,
+            )
+            self.kube.add_object(
+                "",
+                "secrets",
+                {"metadata": {"name": f"{name}-ssh"}},
+                namespace=CHS_NAMESPACE,
+            )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.poll_jobs(["job1", "job2"])
+
+        self.assertEqual(
+            self.kube.stored_names("batch", "jobs", CHS_NAMESPACE), ["job2"]
+        )
+        self.assertEqual(
+            self.kube.stored_names("", "secrets", CHS_NAMESPACE), ["job2-ssh"]
+        )
+
+    def test_poll_jobs_skips_multi_node_job_if_one_node_is_taken(
+        self, mock_logger
+    ):
+        """Test a gang is not started with one of its nodes taken."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("pair", ["node1", "node2"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node2"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler.poll_jobs(["pair"]), {"pair": "DEADLINE"})
+        self.assertEqual(self.kube.calls_to("patch_job"), [])
+        mock_logger.warning.assert_called_once_with(
+            "Job '%s' was not started because node %s is now used by "
+            "another workload (pod %s).",
+            "pair",
+            "node2",
+            "team-a/train",
+        )
+
+    def test_poll_jobs_ignores_chs_pods_on_nodes(self, mock_logger):
+        """Test CHS's own pods, such as terminating ones, do not block."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("job1", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _accelerator_pod("old-test", "node1", {WORKER_LABEL: "true"}),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1"])
+
+        self.assertEqual(statuses, {"job1": "PENDING"})
+        self.assertEqual(
+            [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
+            ["job1"],
+        )
+        mock_logger.warning.assert_not_called()
+
+    def test_poll_jobs_counts_unlabeled_pods_in_chs_namespace(
+        self, mock_logger
+    ):
+        """Test a pod in the chs namespace without the CHS label blocks."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("job1", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _accelerator_pod("other", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1"])
+
+        self.assertEqual(statuses, {"job1": "DEADLINE"})
+        self.assertEqual(self.kube.calls_to("patch_job"), [])
+
+    @mock.patch("time.sleep", return_value=None)
+    def test_poll_jobs_starts_jobs_if_node_check_fails(
+        self, mock_sleep, mock_logger
+    ):
+        """Test a node check that fails after retries never blocks a test."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("job1", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        error = k8s_client.KubeError("Too Many Requests", status=429)
+        self.kube.fail_next("list_pods", error, error, error)
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1"])
+
+        self.assertEqual(statuses, {"job1": "PENDING"})
+        self.assertEqual(
+            [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
+            ["job1"],
+        )
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_logger.warning.assert_not_called()
+        self.assertIn(
+            "Failed to check node '%s' for other workloads, so it is "
+            "treated as free. Error: %s",
+            [call.args[0] for call in mock_logger.debug.call_args_list],
+        )
+
+    @mock.patch("time.sleep", return_value=None)
+    def test_poll_jobs_retries_failed_node_check(self, mock_sleep, mock_logger):
+        """Test a failed node check is retried before the Job starts."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("job1", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        self.kube.fail_next(
+            "list_pods",
+            k8s_client.KubeError("Too Many Requests", status=429),
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1"])
+
+        self.assertEqual(statuses, {"job1": "DEADLINE"})
+        self.assertEqual(self.kube.calls_to("patch_job"), [])
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 2)
+        mock_sleep.assert_called_once()
+
+    def test_poll_jobs_checks_nodes_only_when_starting_jobs(self, mock_logger):
+        """Test polls that start nothing make no node checks."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("running", ["node1"], suspended=False),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("waiting", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        scheduler.poll_jobs(["running", "waiting"])
+
+        self.assertEqual(self.kube.calls_to("list_pods"), [])
+        self.assertEqual(self.kube.calls_to("patch_job"), [])
+
+    def test_get_unschedulable_jobs_returns_job_blocked_by_other_workload(
+        self, mock_logger
+    ):
+        """Test a waiting pod whose node another workload uses counts now."""
+        self.kube.add_object(
+            "",
+            "pods",
+            _waiting_pod("job1-1", "job1", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), ["job1"])
+        mock_logger.warning.assert_called_once_with(
+            "Job '%s' cannot schedule all of its pods because node %s "
+            "is now used by another workload (pod %s).",
+            "job1",
+            "node1",
+            "team-a/train",
+        )
+
+    def test_get_unschedulable_jobs_waits_for_chs_pods_to_leave(
+        self, mock_logger
+    ):
+        """Test a pod waiting only for CHS's own pod gets the full timeout."""
+        self.kube.add_object(
+            "",
+            "pods",
+            _waiting_pod("job1-1", "job1", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _accelerator_pod("old-test", "node1", {WORKER_LABEL: "true"}),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch("time.sleep", return_value=None)
+    def test_get_unschedulable_jobs_waits_if_node_check_fails(
+        self, mock_sleep, mock_logger
+    ):
+        """Test a failed node check falls back to the normal timeout."""
+        self.kube.add_object(
+            "",
+            "pods",
+            _waiting_pod("job1-1", "job1", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        error = k8s_client.KubeError("Too Many Requests", status=429)
+        self.kube.fail_next("list_pods", None, None, error, error, error)
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_logger.warning.assert_not_called()
+        self.assertIn(
+            "Failed to check node '%s' for other workloads, so it is "
+            "treated as free. Error: %s",
+            [call.args[0] for call in mock_logger.debug.call_args_list],
+        )
+
+    def test_get_unschedulable_jobs_waits_if_job_pods_cannot_be_listed(
+        self, mock_logger
+    ):
+        """Test no node is checked if the waiting Job's pods are unknown."""
+        self.kube.add_object(
+            "",
+            "pods",
+            _waiting_pod("job1-1", "job1", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
+        )
+        self.kube.fail_next(
+            "list_pods",
+            None,
+            k8s_client.KubeError("Too Many Requests", status=429),
+        )
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 2)
+        mock_logger.warning.assert_not_called()
+        self.assertIn(
+            "Failed to list the pods of waiting Jobs to check their nodes. "
+            "Error: %s",
+            [call.args[0] for call in mock_logger.debug.call_args_list],
+        )
+
+    def test_get_unschedulable_jobs_checks_only_nodes_without_job_pods(
+        self, mock_logger
+    ):
+        """Test only the nodes a waiting pod can still use are checked."""
+        for index, node in enumerate(("node1", "node2")):
+            self.kube.add_object(
+                "",
+                "pods",
+                _accelerator_pod(
+                    f"gang-{index}",
+                    node,
+                    {
+                        "batch.kubernetes.io/job-name": "gang",
+                        WORKER_LABEL: "true",
+                    },
+                ),
+                namespace=CHS_NAMESPACE,
+            )
+        waiting = _waiting_pod("gang-2", "gang", "node1")
+        waiting["spec"] = _job_object("gang", ["node1", "node2", "node3"])[
+            "spec"
+        ]["template"]["spec"]
+        self.kube.add_object("", "pods", waiting, namespace=CHS_NAMESPACE)
+        self.kube.add_object(
+            "", "pods", _accelerator_pod("train", "node3"), namespace="team-a"
+        )
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler.get_unschedulable_jobs(["gang"]), ["gang"])
+        node_checks = [
+            call.kwargs["field_selector"]
+            for call in self.kube.calls_to("list_pods")
+            if call.kwargs.get("field_selector", "").startswith(
+                "spec.nodeName="
+            )
+        ]
+        self.assertEqual(
+            node_checks,
+            [
+                "spec.nodeName=node3,status.phase!=Succeeded,status.phase!=Failed"
+            ],
+        )
+
+    def test_poll_jobs_keeps_failure_of_job_that_waited_briefly(
+        self, mock_logger
+    ):
+        """Test a real failure after a short wait is reported as is."""
+        self.kube.add_object(
+            "",
+            "pods",
+            _waiting_pod("job1-1", "job1", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _finished_job("job1", "node1", "Failed", "PodFailurePolicy"),
+            namespace=CHS_NAMESPACE,
+        )
+
+        self.assertEqual(scheduler.poll_jobs(["job1"]), {"job1": "UNKNOWN"})
 
     def _write_experiment(self, name: str, *objects: dict) -> str:
         experiment_dir = os.path.join(self.tmp_dir, "experiments", name)

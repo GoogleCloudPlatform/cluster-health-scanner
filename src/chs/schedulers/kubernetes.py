@@ -34,7 +34,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
 from chs.schedulers.base import BaseScheduler
-from chs.schedulers.gang_admission import plan_admissions
+from chs.schedulers.gang_admission import (
+    pinned_nodes,
+    plan_admissions,
+    pod_nodes,
+)
 from chs.utils import k8s_client
 from chs.exceptions import (
     ChsSchedulerException,
@@ -158,6 +162,35 @@ def _job_condition(job: dict, condition_type: str) -> dict | None:
         ):
             return condition
     return None
+
+
+def _requests_accelerator(pod: dict) -> bool:
+    """Returns True if a container of the pod asks for GPUs or TPUs."""
+    spec = pod.get("spec") or {}
+    for container in (spec.get("containers") or []) + (
+        spec.get("initContainers") or []
+    ):
+        container_resources = container.get("resources") or {}
+        for section in ("requests", "limits"):
+            for resource, quantity in (
+                container_resources.get(section) or {}
+            ).items():
+                resource_lower = resource.lower()
+                if (
+                    "gpu" in resource_lower or "tpu" in resource_lower
+                ) and quantity not in (0, "0", None, ""):
+                    return True
+    return False
+
+
+def _is_chs_pod(pod: dict) -> bool:
+    """Returns True for pods of CHS's own Jobs."""
+    metadata = pod.get("metadata") or {}
+    labels = metadata.get("labels") or {}
+    return (
+        metadata.get("namespace") == CHS_NAMESPACE
+        and labels.get(WORKER_LABEL) == "true"
+    )
 
 
 def _worker_service(namespace: str) -> dict:
@@ -510,6 +543,12 @@ class KubernetesScheduler(BaseScheduler):
 
     def _is_node_busy(self, node_name: str) -> bool:
         """Helper method to determine if a specific node is busy."""
+        pods = self._list_pods_on_node(node_name)
+        return any(_requests_accelerator(pod) for pod in pods)
+
+    @staticmethod
+    def _list_pods_on_node(node_name: str) -> list[dict]:
+        """Lists the unfinished pods on a node, retrying failed calls."""
         field_selector = (
             f"spec.nodeName={node_name},"
             "status.phase!=Succeeded,status.phase!=Failed"
@@ -531,22 +570,7 @@ class KubernetesScheduler(BaseScheduler):
                 backoff = (2**attempt) + random.uniform(0, 1)
                 time.sleep(backoff)
 
-        for pod in pods:
-            spec = pod.get("spec") or {}
-            for container in (spec.get("containers") or []) + (
-                spec.get("initContainers") or []
-            ):
-                container_resources = container.get("resources") or {}
-                for section in ("requests", "limits"):
-                    for resource, quantity in (
-                        container_resources.get(section) or {}
-                    ).items():
-                        resource_lower = resource.lower()
-                        if (
-                            "gpu" in resource_lower or "tpu" in resource_lower
-                        ) and quantity not in (0, "0", None, ""):
-                            return True
-        return False
+        return pods
 
     def _get_busy_nodes(self, target_nodes: list[str]) -> set[str]:
         """Returns a set of nodes running pods that request accelerators."""
@@ -594,6 +618,42 @@ class KubernetesScheduler(BaseScheduler):
                 raise
 
         return busy_nodes
+
+    def _find_taken_nodes(self, nodes: set[str]) -> dict[str, str]:
+        """Maps each node that another workload now uses to one of its pods."""
+        if not nodes:
+            return {}
+        taken = {}
+        with ThreadPoolExecutor(
+            max_workers=min(len(nodes), _BUSY_NODES_BATCH_SIZE)
+        ) as executor:
+            futures = {
+                executor.submit(self._other_workload_on_node, node): node
+                for node in nodes
+            }
+            for future in as_completed(futures):
+                node = futures[future]
+                try:
+                    pod = future.result()
+                except ChsSchedulerException as e:
+                    logger.debug(
+                        "Failed to check node '%s' for other workloads, so "
+                        "it is treated as free. Error: %s",
+                        node,
+                        e,
+                    )
+                    continue
+                if pod:
+                    taken[node] = pod
+        return taken
+
+    def _other_workload_on_node(self, node_name: str) -> str | None:
+        """Returns a pod outside CHS that uses accelerators on the node."""
+        for pod in self._list_pods_on_node(node_name):
+            if _requests_accelerator(pod) and not _is_chs_pod(pod):
+                metadata = pod.get("metadata") or {}
+                return f"{metadata.get('namespace')}/{metadata.get('name')}"
+        return None
 
     def _fetch_raw_node_resources(self) -> list[dict]:
         """Fetches raw node resource dictionaries from the Kubernetes API."""
@@ -1106,7 +1166,39 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to list the CHS Jobs: {e}"
             ) from e
         statuses = self._statuses_from_jobs(jobs, job_ids)
-        self._start_jobs(plan_admissions(jobs, job_ids))
+        queue = list(job_ids)
+        checked = set()
+        taken = {}
+        skipped = []
+        while True:
+            to_start = plan_admissions(jobs, queue)
+            nodes_by_job = pinned_nodes(jobs, to_start)
+            unchecked = set().union(*nodes_by_job.values()) - checked
+            taken.update(self._find_taken_nodes(unchecked))
+            checked |= unchecked
+            blocked = [
+                name
+                for name in to_start
+                if not nodes_by_job[name].isdisjoint(taken)
+            ]
+            if not blocked:
+                break
+            for name in blocked:
+                busy = sorted(nodes_by_job[name].intersection(taken))
+                logger.warning(
+                    "Job '%s' was not started because node %s is now used by "
+                    "another workload (pod %s).",
+                    name,
+                    ", ".join(busy),
+                    ", ".join(taken[node] for node in busy),
+                )
+                statuses[name] = JobStatus.DEADLINE.value
+            skipped += blocked
+            # Skipped Jobs hold no nodes, so the Jobs behind them may start.
+            queue = [name for name in queue if name not in blocked]
+        self._start_jobs(to_start)
+        if skipped:
+            self.cancel_jobs(skipped)
         return statuses
 
     @staticmethod
@@ -1154,7 +1246,12 @@ class KubernetesScheduler(BaseScheduler):
             logger.warning("Failed to start Job '%s'. Error: %s", name, e)
 
     def get_unschedulable_jobs(self, job_ids: list[str]) -> list[str]:
-        """Returns Jobs that could not schedule all of their pods."""
+        """Returns Jobs that could not schedule all of their pods.
+
+        A Job is returned once a pod has waited for
+        GANG_SCHEDULING_TIMEOUT_SECONDS, or as soon as a pod is waiting and
+        another workload uses one of the Job's nodes.
+        """
         if not job_ids:
             return []
         job_id_set = set(job_ids)
@@ -1173,25 +1270,72 @@ class KubernetesScheduler(BaseScheduler):
 
         now = datetime.datetime.now(datetime.timezone.utc)
         unschedulable = set()
+        waiting = defaultdict(set)
         for pod in pods:
             metadata = pod["metadata"]
             job_name = metadata.get("labels", {}).get(_JOB_NAME_LABEL)
             if job_name not in job_id_set:
                 continue
-            created = datetime.datetime.fromisoformat(
-                metadata["creationTimestamp"].replace("Z", "+00:00")
-            )
-            age_seconds = (now - created).total_seconds()
-            if age_seconds < GANG_SCHEDULING_TIMEOUT_SECONDS:
-                continue
-            if any(
+            if not any(
                 c.get("type") == "PodScheduled"
                 and c.get("status") == "False"
                 and c.get("reason") == "Unschedulable"
                 for c in pod.get("status", {}).get("conditions", [])
             ):
+                continue
+            created = datetime.datetime.fromisoformat(
+                metadata["creationTimestamp"].replace("Z", "+00:00")
+            )
+            age_seconds = (now - created).total_seconds()
+            if age_seconds >= GANG_SCHEDULING_TIMEOUT_SECONDS:
+                unschedulable.add(job_name)
+            else:
+                waiting[job_name] |= pod_nodes(pod)
+
+        for job_name in unschedulable:
+            waiting.pop(job_name, None)
+        candidates = self._nodes_without_job_pods(waiting)
+        taken = self._find_taken_nodes(set().union(*candidates.values()))
+        for job_name, nodes in sorted(candidates.items()):
+            busy = sorted(nodes.intersection(taken))
+            if busy:
+                logger.warning(
+                    "Job '%s' cannot schedule all of its pods because node %s "
+                    "is now used by another workload (pod %s).",
+                    job_name,
+                    ", ".join(busy),
+                    ", ".join(taken[node] for node in busy),
+                )
                 unschedulable.add(job_name)
         return sorted(unschedulable)
+
+    @staticmethod
+    def _nodes_without_job_pods(
+        waiting: dict[str, set[str]],
+    ) -> dict[str, set[str]]:
+        """Returns each Job's nodes that none of its pods is on yet."""
+        if not waiting:
+            return {}
+        try:
+            pods = k8s_client.list_pods(
+                namespace=CHS_NAMESPACE,
+                label_selector=(
+                    f"{_JOB_NAME_LABEL} in ({','.join(sorted(waiting))})"
+                ),
+                field_selector="status.phase!=Succeeded,status.phase!=Failed",
+            )
+        except k8s_client.KubeError as e:
+            logger.debug(
+                "Failed to list the pods of waiting Jobs to check their "
+                "nodes. Error: %s",
+                e,
+            )
+            return {}
+        used = defaultdict(set)
+        for pod in pods:
+            job_name = pod["metadata"].get("labels", {}).get(_JOB_NAME_LABEL)
+            used[job_name].add(pod.get("spec", {}).get("nodeName"))
+        return {job: nodes - used[job] for job, nodes in waiting.items()}
 
     @staticmethod
     def _is_tpu_job(job_id: str) -> bool:

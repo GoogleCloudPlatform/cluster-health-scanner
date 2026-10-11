@@ -14,7 +14,7 @@
 
 """Gang admission for Kubernetes Jobs."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 _HOSTNAME_LABEL = "kubernetes.io/hostname"
 _FINISHED_CONDITIONS = ("Complete", "Failed")
@@ -40,10 +40,9 @@ def _is_suspended(job: dict) -> bool:
     return bool(job.get("spec", {}).get("suspend"))
 
 
-def _target_nodes(job: dict) -> frozenset[str] | None:
+def _required_hostnames(pod_spec: dict) -> frozenset[str] | None:
     required = (
-        _pod_spec(job)
-        .get("affinity", {})
+        pod_spec.get("affinity", {})
         .get("nodeAffinity", {})
         .get("requiredDuringSchedulingIgnoredDuringExecution", {})
     )
@@ -56,6 +55,10 @@ def _target_nodes(job: dict) -> frozenset[str] | None:
             ):
                 nodes.update(expression.get("values", []))
     return frozenset(nodes) if nodes else None
+
+
+def _target_nodes(job: dict) -> frozenset[str] | None:
+    return _required_hostnames(_pod_spec(job))
 
 
 def plan_admissions(jobs: list[dict], queue: Sequence[str]) -> list[str]:
@@ -90,3 +93,20 @@ def plan_admissions(jobs: list[dict], queue: Sequence[str]) -> list[str]:
         if can_start:
             admitted.append(_name(job))
     return admitted
+
+
+def pinned_nodes(
+    jobs: list[dict], names: Iterable[str]
+) -> dict[str, frozenset[str]]:
+    """Returns the nodes that each named Job is pinned to."""
+    wanted = set(names)
+    return {
+        _name(job): _target_nodes(job) or frozenset()
+        for job in jobs
+        if _name(job) in wanted
+    }
+
+
+def pod_nodes(pod: dict) -> frozenset[str]:
+    """Returns the nodes that a pod is pinned to."""
+    return _required_hostnames(pod.get("spec") or {}) or frozenset()

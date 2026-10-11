@@ -16,7 +16,11 @@
 
 from typing import Any
 import unittest
-from chs.schedulers.gang_admission import plan_admissions
+from chs.schedulers.gang_admission import (
+    pinned_nodes,
+    plan_admissions,
+    pod_nodes,
+)
 
 
 def _make_job(
@@ -186,6 +190,28 @@ class TestGangAdmission(unittest.TestCase):
             [job_without_template, job_pinned], ["job-pinned"]
         )
         self.assertEqual(admitted, [])
+
+
+class TestPinnedNodes(unittest.TestCase):
+    """Tests for pinned_nodes."""
+
+    def test_returns_the_nodes_of_each_named_job(self):
+        jobs = [
+            _make_job("pair", ["node1", "node2"]),
+            _make_job("single", ["node3"]),
+            _make_job("unpinned", None),
+        ]
+        self.assertEqual(
+            pinned_nodes(jobs, ["pair", "unpinned"]),
+            {"pair": frozenset({"node1", "node2"}), "unpinned": frozenset()},
+        )
+        self.assertEqual(pinned_nodes(jobs, []), {})
+
+    def test_pod_nodes_reads_the_pod_spec(self):
+        job = _make_job("pair", ["node1", "node2"])
+        pod = {"spec": job["spec"]["template"]["spec"]}
+        self.assertEqual(pod_nodes(pod), frozenset({"node1", "node2"}))
+        self.assertEqual(pod_nodes({"spec": {}}), frozenset())
 
 
 if __name__ == "__main__":
