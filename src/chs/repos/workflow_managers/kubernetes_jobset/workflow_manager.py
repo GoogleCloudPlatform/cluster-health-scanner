@@ -24,9 +24,16 @@ import uuid
 from ramble.wmkit import *
 from ramble.experiment_result import ExperimentStatus
 
+_POD_SPEC_INDENT = 6
+_CONTAINER_INDENT = 8
+_CONTAINER_FIELD_INDENT = 10
+
+_WORKER_LABEL = "chs.gke.io/worker"
+_DNS_WAIT_TIMEOUT_SECONDS = 300
+
 
 class KubernetesJobset(WorkflowManagerBase):
-    """Kubernetes workflow manager that uses JobSet CRD"""
+    """Kubernetes workflow manager that runs each test as an Indexed Job"""
 
     name = "kubernetes-jobset"
 
@@ -43,7 +50,7 @@ class KubernetesJobset(WorkflowManagerBase):
     workflow_manager_variable(
         name="job_name",
         default="{chs_run_id}-{application_name}-{workload_name}",
-        description="Kubernetes JobSet resource base name",
+        description="Kubernetes Job resource base name",
     )
 
     workflow_manager_variable(
@@ -55,7 +62,7 @@ class KubernetesJobset(WorkflowManagerBase):
     workflow_manager_variable(
         name="jobset_template",
         default="jobset_standard.yaml.tpl",
-        description="Default JobSet template file",
+        description="Default Job template file",
     )
 
     workflow_manager_variable(
@@ -67,19 +74,19 @@ class KubernetesJobset(WorkflowManagerBase):
     workflow_manager_variable(
         name="jobset_labels_yaml",
         default="",
-        description="Raw YAML string for JobSet metadata.labels",
+        description="Raw YAML string for Job metadata.labels",
     )
 
     workflow_manager_variable(
         name="suspend_jobset",
         default="false",
-        description="Whether to create the JobSet in a suspended state",
+        description="Whether to create the Job in a suspended state",
     )
 
     workflow_manager_variable(
         name="jobset_annotations_yaml",
         default="",
-        description="Raw YAML string for JobSet metadata.annotations",
+        description="Raw YAML string for Job metadata.annotations",
     )
 
     workflow_manager_variable(
@@ -240,7 +247,7 @@ class KubernetesJobset(WorkflowManagerBase):
 
         return priv_key, pub_key
 
-    def _jobset_vars(self):
+    def _jobset_vars(self) -> dict[str, str]:
         """Returns the experiment's template variables, computed once."""
         experiment_run_dir = self.app_inst.expander.expand_var_name(
             "experiment_run_dir"
@@ -251,7 +258,18 @@ class KubernetesJobset(WorkflowManagerBase):
             )
         return dict(self._jobset_vars_by_experiment_run_dir[experiment_run_dir])
 
-    def _compute_jobset_vars(self):
+    def _pod_labels_section(
+        self, raw_job_name: str, sanitized_job_name: str
+    ) -> str:
+        """Returns the pod labels block, always including the CHS worker label."""
+        user_labels = self._yaml_append(
+            "pod_labels_yaml", _CONTAINER_INDENT
+        ).replace(raw_job_name, sanitized_job_name)
+        chs_labels = f'{" " * _CONTAINER_INDENT}{_WORKER_LABEL}: "true"'
+        labels = "\n".join(s for s in [user_labels, chs_labels] if s)
+        return f"{' ' * _POD_SPEC_INDENT}labels:\n{labels}"
+
+    def _compute_jobset_vars(self) -> dict[str, str]:
         expander = self.app_inst.expander
         raw_job_name = expander.expand_var_name("job_name")
         # K8S resource names can be max 63 chars and no `_` is supported
@@ -277,8 +295,12 @@ class KubernetesJobset(WorkflowManagerBase):
 
         workdir = app_workdir if app_workdir else experiment_run_dir
 
-        indented_mpi_command = raw_cmd.replace("\n", "\n" + (" " * 20))
-        indented_standard_command = raw_cmd.replace("\n", "\n" + (" " * 18))
+        indented_mpi_command = raw_cmd.replace(
+            "\n", "\n" + (" " * (_CONTAINER_FIELD_INDENT + 2))
+        )
+        indented_standard_command = raw_cmd.replace(
+            "\n", "\n" + (" " * _CONTAINER_FIELD_INDENT)
+        )
 
         # Top-Level blocks
         jl = self._yaml_block("jobset_labels_yaml", "labels", 2).replace(
@@ -289,45 +311,61 @@ class KubernetesJobset(WorkflowManagerBase):
         ).replace(raw_job_name, sanitized_job_name)
 
         # Pod Spec blocks
-        pl = self._yaml_block("pod_labels_yaml", "labels", 14).replace(
-            raw_job_name, sanitized_job_name
+        pl = self._pod_labels_section(raw_job_name, sanitized_job_name)
+        base_pa = self._yaml_append("pod_annotations_yaml", _CONTAINER_INDENT)
+        extra_pa = self._yaml_append(
+            "extra_pod_annotations_yaml", _CONTAINER_INDENT
         )
-        base_pa = self._yaml_append("pod_annotations_yaml", 16)
-        extra_pa = self._yaml_append("extra_pod_annotations_yaml", 16)
         all_pa = "\n".join(s for s in [base_pa, extra_pa] if s).replace(
             raw_job_name, sanitized_job_name
         )
-        pa = f"{' ' * 14}annotations:\n{all_pa}" if all_pa else ""
-        ns = self._yaml_block("node_selector_yaml", "nodeSelector", 14).replace(
-            raw_job_name, sanitized_job_name
-        )
-        aff = self._yaml_block("affinity_yaml", "affinity", 14).replace(
-            raw_job_name, sanitized_job_name
-        )
-        tol = self._yaml_block("tolerations_yaml", "tolerations", 14).replace(
-            raw_job_name, sanitized_job_name
-        )
+        pa = f"{' ' * _POD_SPEC_INDENT}annotations:\n{all_pa}" if all_pa else ""
+        ns = self._yaml_block(
+            "node_selector_yaml", "nodeSelector", _POD_SPEC_INDENT
+        ).replace(raw_job_name, sanitized_job_name)
+        aff = self._yaml_block(
+            "affinity_yaml", "affinity", _POD_SPEC_INDENT
+        ).replace(raw_job_name, sanitized_job_name)
+        tol = self._yaml_block(
+            "tolerations_yaml", "tolerations", _POD_SPEC_INDENT
+        ).replace(raw_job_name, sanitized_job_name)
 
-        base_cr = self._yaml_append("container_resources_yaml", 18)
-        extra_cr = self._yaml_append("extra_container_resources_yaml", 18)
+        base_cr = self._yaml_append(
+            "container_resources_yaml", _CONTAINER_FIELD_INDENT
+        )
+        extra_cr = self._yaml_append(
+            "extra_container_resources_yaml", _CONTAINER_FIELD_INDENT
+        )
         all_cr = "\n".join(s for s in [base_cr, extra_cr] if s)
-        c_res = f"{' ' * 16}resources:\n{all_cr}" if all_cr else ""
+        c_res = (
+            f"{' ' * _CONTAINER_INDENT}resources:\n{all_cr}" if all_cr else ""
+        )
         c_sec = self._yaml_block(
-            "container_security_context_yaml", "securityContext", 16
+            "container_security_context_yaml",
+            "securityContext",
+            _CONTAINER_INDENT,
         )
 
         # Standard templating (where 'volumes' keys are entirely optional)
-        svol = self._yaml_block("extra_volumes_yaml", "volumes", 14)
-        smnt = self._yaml_block("extra_volume_mounts_yaml", "volumeMounts", 16)
-        init_c = self._yaml_block("init_containers_yaml", "initContainers", 14)
-        mvol_add = self._yaml_append("extra_volumes_yaml", 14)
-        mmnt_add = self._yaml_append("extra_volume_mounts_yaml", 16)
+        svol = self._yaml_block(
+            "extra_volumes_yaml", "volumes", _POD_SPEC_INDENT
+        )
+        smnt = self._yaml_block(
+            "extra_volume_mounts_yaml", "volumeMounts", _CONTAINER_INDENT
+        )
+        init_c = self._yaml_block(
+            "init_containers_yaml", "initContainers", _POD_SPEC_INDENT
+        )
+        mvol_add = self._yaml_append("extra_volumes_yaml", _POD_SPEC_INDENT)
+        mmnt_add = self._yaml_append(
+            "extra_volume_mounts_yaml", _CONTAINER_INDENT
+        )
 
         custom_res = self.app_inst.expander.expand_var_name(
             "custom_resources_yaml"
         ).replace(raw_job_name, sanitized_job_name)
         pod_claims = self._yaml_block(
-            "pod_resource_claims_yaml", "resourceClaims", 14
+            "pod_resource_claims_yaml", "resourceClaims", _POD_SPEC_INDENT
         ).replace(raw_job_name, sanitized_job_name)
 
         priv_key, pub_key = self._generate_ssh_keys()
@@ -350,6 +388,7 @@ class KubernetesJobset(WorkflowManagerBase):
             "init_containers_section": init_c,
             "mpi_volumes_append": mvol_add,
             "mpi_volume_mounts_append": mmnt_add,
+            "dns_wait_timeout": str(_DNS_WAIT_TIMEOUT_SECONDS),
             "sanitized_job_name": sanitized_job_name,
             "container_image": container_image,
             "indented_mpi_command": indented_mpi_command,
@@ -380,20 +419,6 @@ class KubernetesJobset(WorkflowManagerBase):
         name="execute_experiment",
         src_path="batch_submit.tpl",
         dest_path="execute_experiment",
-        extra_vars_func="jobset_vars",
-    )
-
-    register_template(
-        name="batch_cancel",
-        src_path="batch_cancel.tpl",
-        dest_path="batch_cancel",
-        extra_vars_func="jobset_vars",
-    )
-
-    register_template(
-        name="batch_wait",
-        src_path="batch_wait.tpl",
-        dest_path="batch_wait",
         extra_vars_func="jobset_vars",
     )
 

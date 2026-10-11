@@ -86,17 +86,8 @@ DEFAULT_TYPES = (
     FakeResourceType("", "pods", "Pod", True),
     FakeResourceType("", "configmaps", "ConfigMap", True),
     FakeResourceType("", "secrets", "Secret", True),
-    FakeResourceType("apps", "deployments", "Deployment", True),
+    FakeResourceType("", "services", "Service", True),
     FakeResourceType("batch", "jobs", "Job", True),
-    FakeResourceType(
-        "apiextensions.k8s.io",
-        "customresourcedefinitions",
-        "CustomResourceDefinition",
-        False,
-    ),
-    FakeResourceType(
-        "jobset.x-k8s.io", "jobsets", "JobSet", True, ("v1alpha2",)
-    ),
     FakeResourceType(
         "networking.gke.io",
         "networks",
@@ -146,16 +137,14 @@ RECORDED_METHODS = frozenset(
         "list_secrets",
         "delete_secret",
         "apply_secret",
+        "apply_service",
         "list_jobs",
-        "list_deployments",
-        "get_deployment",
-        "list_crds",
-        "get_crd",
-        "get_custom_object",
+        "apply_job",
+        "patch_job",
+        "delete_jobs",
         "list_custom_objects",
         "delete_custom_objects",
         "apply_custom_object",
-        "patch_custom_object",
     }
 )
 
@@ -226,25 +215,6 @@ class FakeKubeClient:
             metadata.pop("namespace", None)
         self._store((group, plural, object_namespace, name), stored, rtype)
         return copy.deepcopy(stored)
-
-    def add_crd(self, name: str, versions: tuple[str, ...] = ("v1",)) -> None:
-        """Stores a CustomResourceDefinition object."""
-        plural, _, group = name.partition(".")
-        self.add_object(
-            "apiextensions.k8s.io",
-            "customresourcedefinitions",
-            {
-                "metadata": {"name": name},
-                "spec": {
-                    "group": group,
-                    "names": {"plural": plural},
-                    "versions": [
-                        {"name": version, "served": True, "storage": idx == 0}
-                        for idx, version in enumerate(versions)
-                    ],
-                },
-            },
-        )
 
     def stored_names(
         self, group: str, plural: str, namespace: str | None = None
@@ -359,43 +329,52 @@ class FakeKubeClient:
         self._store(key, stored, rtype)
 
     @_recorded()
+    def apply_service(self, *, body: dict[str, Any], **query: Any) -> None:
+        del query
+        self._apply_namespaced("", "services", body)
+
+    @_recorded()
     def list_jobs(
         self, *, namespace: str | None = None, **query: Any
     ) -> list[dict[str, Any]]:
         return self._list_many("batch", "jobs", namespace=namespace, **query)
 
     @_recorded()
-    def list_deployments(
-        self, *, namespace: str | None = None, **query: Any
-    ) -> list[dict[str, Any]]:
-        return self._list_many(
-            "apps", "deployments", namespace=namespace, **query
-        )
-
-    @_recorded()
-    def get_deployment(
-        self, *, name: str, namespace: str | None = None, **query: Any
-    ) -> dict[str, Any]:
+    def apply_job(self, *, body: dict[str, Any], **query: Any) -> None:
         del query
-        return self._get_one(
-            "apps",
-            "deployments",
-            name,
-            namespace=namespace or self.namespace,
-        )
+        self._apply_namespaced("batch", "jobs", body)
 
     @_recorded()
-    def list_crds(self, **query: Any) -> list[dict[str, Any]]:
-        return self._list_many(
-            "apiextensions.k8s.io", "customresourcedefinitions", **query
-        )
-
-    @_recorded()
-    def get_crd(self, *, name: str, **query: Any) -> dict[str, Any]:
+    def patch_job(
+        self,
+        *,
+        name: str,
+        namespace: str,
+        body: dict[str, Any],
+        **query: Any,
+    ) -> None:
         del query
-        return self._get_one(
-            "apiextensions.k8s.io", "customresourcedefinitions", name
-        )
+        rtype = self._served("batch", "jobs")
+        existing = self.objects.get(self._key(rtype, name, namespace))
+        if existing is None:
+            raise _not_found(rtype, name)
+        _merge_patch(existing, copy.deepcopy(body))
+
+    @_recorded()
+    def delete_jobs(
+        self,
+        *,
+        object_names: list[str],
+        namespace: str,
+        wait_timeout_seconds: float = k8s_client._REQUEST_TIMEOUT_SECONDS,
+        **query: Any,
+    ) -> None:
+        del wait_timeout_seconds, query
+        rtype = self._served("batch", "jobs")
+        for name in object_names:
+            key = self._key(rtype, name, namespace)
+            if key in self.objects:
+                self._remove(key)
 
     @_recorded()
     def list_custom_objects(
@@ -409,20 +388,6 @@ class FakeKubeClient:
     ) -> list[dict[str, Any]]:
         del version
         return self._list_many(group, plural, namespace=namespace, **query)
-
-    @_recorded()
-    def get_custom_object(
-        self,
-        *,
-        group: str,
-        version: str,
-        plural: str,
-        name: str,
-        namespace: str | None = None,
-        **query: Any,
-    ) -> dict[str, Any]:
-        del version, query
-        return self._get_one(group, plural, name, namespace=namespace)
 
     @_recorded()
     def delete_custom_objects(
@@ -470,30 +435,22 @@ class FakeKubeClient:
                 stored["metadata"]["uid"] = uid
         self._store(key, stored, rtype)
 
-    @_recorded()
-    def patch_custom_object(
-        self,
-        *,
-        group: str,
-        version: str,
-        plural: str,
-        name: str,
-        body: dict[str, Any],
-        namespace: str | None = None,
-        **query: Any,
+    def _apply_namespaced(
+        self, group: str, plural: str, body: dict[str, Any]
     ) -> None:
-        del query
+        """Server-side applies a namespaced object, keeping its status."""
         rtype = self._served(group, plural)
-        if version not in rtype.versions:
-            raise KubeError(
-                f'no matches for version "{version}" in {group}',
-                status=404,
-            )
-        key = self._key(rtype, name, namespace)
+        stored = copy.deepcopy(body)
+        key = self._key(
+            rtype, stored["metadata"]["name"], stored["metadata"]["namespace"]
+        )
         existing = self.objects.get(key)
-        if existing is None:
-            raise _not_found(rtype, name)
-        _merge_patch(existing, copy.deepcopy(body))
+        if existing is not None:
+            if "status" in existing:
+                stored["status"] = copy.deepcopy(existing["status"])
+            if uid := existing.get("metadata", {}).get("uid"):
+                stored["metadata"]["uid"] = uid
+        self._store(key, stored, rtype)
 
     def _get_one(
         self,

@@ -421,7 +421,7 @@ class RambleManager:
         run_entry["submission_complete"] = True
         self._app_data.update_run(self._workspace_name, run_entry)
         logger.debug(
-            "All JobSets submitted successfully. "
+            "All Jobs submitted successfully. "
             "submission_complete set to True."
         )
 
@@ -435,7 +435,7 @@ class RambleManager:
             self._execute_shell_command(
                 cmd=["bash", "-eo", "pipefail", "-c", cmd_script],
                 capture_output=True,
-                error_context="Failed to submit diagnostic jobsets",
+                error_context="Failed to submit diagnostic jobs",
             )
         else:
             logger.debug(

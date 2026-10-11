@@ -38,11 +38,7 @@ class TestKubernetesJobsetTemplates(unittest.TestCase):
     """Every kubectl call in the batch templates must be time-bounded."""
 
     def test_every_kubectl_call_has_timeout(self):
-        for template in [
-            "batch_submit.tpl",
-            "batch_cancel.tpl",
-            "batch_wait.tpl",
-        ]:
+        for template in ["batch_submit.tpl"]:
             with self.subTest(template=template):
                 lines = _kubectl_lines(template)
                 self.assertTrue(lines, f"no kubectl calls found in {template}")
@@ -54,13 +50,21 @@ class TestKubernetesJobsetTemplates(unittest.TestCase):
                     )
 
     def test_delete_bounds_finalizer_wait(self):
-        for template in ["batch_submit.tpl", "batch_cancel.tpl"]:
+        for template in ["batch_submit.tpl"]:
             with self.subTest(template=template):
                 deletes = _kubectl_lines(template, "kubectl delete")
                 self.assertTrue(deletes)
                 for line in deletes:
                     # --request-timeout does not bound the finalizer wait.
                     self.assertRegex(line, r"(?<!request-)--timeout=\d+s")
+
+    def test_unused_batch_templates_are_removed(self):
+        """batch_wait/batch_cancel are not rendered since CHS submits Jobs."""
+        self.assertFalse((_TEMPLATE_DIR / "batch_wait.tpl").exists())
+        self.assertFalse((_TEMPLATE_DIR / "batch_cancel.tpl").exists())
+        manager = (_TEMPLATE_DIR / "workflow_manager.py").read_text()
+        self.assertNotIn("batch_wait", manager)
+        self.assertNotIn("batch_cancel", manager)
 
     def test_submit_pre_delete_stays_non_fatal(self):
         text = (_TEMPLATE_DIR / "batch_submit.tpl").read_text()

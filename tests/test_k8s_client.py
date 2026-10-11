@@ -184,12 +184,8 @@ class SdkTest(unittest.TestCase):
         self.assertEqual(sdk.context, "ctx-a")
         self.assertEqual(sdk.namespace, "team-ns")
         self.assertIsInstance(sdk.core, kubernetes.client.CoreV1Api)
-        self.assertIsInstance(sdk.apps, kubernetes.client.AppsV1Api)
         self.assertIsInstance(sdk.batch, kubernetes.client.BatchV1Api)
         self.assertIsInstance(sdk.custom, kubernetes.client.CustomObjectsApi)
-        self.assertIsInstance(
-            sdk.apiextensions, kubernetes.client.ApiextensionsV1Api
-        )
         self.assertIs(sdk.api_error, ApiException)
         self.assertIs(sdk.transport_error, urllib3.exceptions.HTTPError)
 
@@ -397,10 +393,8 @@ class ClientFunctionsTest(unittest.TestCase):
             context="gke_proj_zone_cluster",
             namespace="ctx-default",
             core=mock.Mock(),
-            apps=mock.Mock(),
             batch=mock.Mock(),
             custom=mock.Mock(),
-            apiextensions=mock.Mock(),
             api_error=ApiException,
             transport_error=urllib3.exceptions.HTTPError,
         )
@@ -852,150 +846,25 @@ class ClientFunctionsTest(unittest.TestCase):
             _request_timeout=120,
         )
 
-    def test_deployments(self) -> None:
-        self.sdk.apps.list_namespaced_deployment.return_value = _FakeResponse(
-            {"items": [{"metadata": {"name": "d-ns"}}]}
-        )
-        self.assertEqual(
-            k8s_client.list_deployments(
-                namespace="jobset-system", label_selector="app=jobset"
-            ),
-            [{"metadata": {"name": "d-ns"}}],
-        )
-        self.sdk.apps.list_namespaced_deployment.assert_called_once_with(
-            namespace="jobset-system",
-            label_selector="app=jobset",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-        self.sdk.apps.list_deployment_for_all_namespaces.return_value = (
-            _FakeResponse({"items": [{"metadata": {"name": "d1"}}]})
-        )
-        self.assertEqual(
-            k8s_client.list_deployments(label_selector="app=jobset"),
-            [{"metadata": {"name": "d1"}}],
-        )
-        self.sdk.apps.list_deployment_for_all_namespaces.assert_called_once_with(
-            label_selector="app=jobset",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-        self.sdk.apps.read_namespaced_deployment.return_value = _FakeResponse(
-            {"metadata": {"name": "d1"}}
-        )
-        self.assertEqual(
-            k8s_client.get_deployment(name="d1", namespace="jobset-system"),
-            {"metadata": {"name": "d1"}},
-        )
-        self.sdk.apps.read_namespaced_deployment.assert_called_once_with(
-            name="d1",
-            namespace="jobset-system",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-        self.sdk.apps.read_namespaced_deployment.reset_mock()
-        self.assertEqual(
-            k8s_client.get_deployment(name="d1"),
-            {"metadata": {"name": "d1"}},
-        )
-        self.sdk.apps.read_namespaced_deployment.assert_called_once_with(
-            name="d1",
-            namespace="ctx-default",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-    def test_crds(self) -> None:
-        self.sdk.apiextensions.list_custom_resource_definition.return_value = (
-            _FakeResponse({"items": [{"metadata": {"name": "crd1"}}]})
-        )
-        self.assertEqual(
-            k8s_client.list_crds(limit=25), [{"metadata": {"name": "crd1"}}]
-        )
-        self.sdk.apiextensions.list_custom_resource_definition.assert_called_once_with(
-            limit=25,
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-        self.sdk.apiextensions.read_custom_resource_definition.return_value = (
-            _FakeResponse({"metadata": {"name": "crd1"}})
-        )
-        self.assertEqual(
-            k8s_client.get_crd(name="crd1"), {"metadata": {"name": "crd1"}}
-        )
-        self.sdk.apiextensions.read_custom_resource_definition.assert_called_once_with(
-            name="crd1",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-    def test_get_and_list_custom_objects(self) -> None:
-        self.sdk.custom.get_namespaced_custom_object.return_value = (
-            _FakeResponse({"metadata": {"name": "js1"}})
-        )
-        self.assertEqual(
-            k8s_client.get_custom_object(
-                group="jobset.x-k8s.io",
-                version="v1alpha2",
-                plural="jobsets",
-                name="js1",
-                namespace="chs",
-            ),
-            {"metadata": {"name": "js1"}},
-        )
-        self.sdk.custom.get_namespaced_custom_object.assert_called_once_with(
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
-            namespace="chs",
-            plural="jobsets",
-            name="js1",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
-        self.sdk.custom.get_cluster_custom_object.return_value = _FakeResponse(
-            {"metadata": {"name": "s1"}}
-        )
-        self.assertEqual(
-            k8s_client.get_custom_object(
-                group="accelerator.gke.io",
-                version="v1beta1",
-                plural="slices",
-                name="s1",
-            ),
-            {"metadata": {"name": "s1"}},
-        )
-        self.sdk.custom.get_cluster_custom_object.assert_called_once_with(
-            group="accelerator.gke.io",
-            version="v1beta1",
-            plural="slices",
-            name="s1",
-            _preload_content=False,
-            _request_timeout=120,
-        )
-
+    def test_list_custom_objects(self) -> None:
         self.sdk.custom.list_namespaced_custom_object.return_value = (
-            _FakeResponse({"items": [{"metadata": {"name": "js1"}}]})
+            _FakeResponse({"items": [{"metadata": {"name": "cd1"}}]})
         )
         self.assertEqual(
             k8s_client.list_custom_objects(
-                group="jobset.x-k8s.io",
-                version="v1alpha2",
-                plural="jobsets",
+                group="resource.nvidia.com",
+                version="v1beta1",
+                plural="computedomains",
                 namespace="chs",
                 label_selector="k=v",
             ),
-            [{"metadata": {"name": "js1"}}],
+            [{"metadata": {"name": "cd1"}}],
         )
         self.sdk.custom.list_namespaced_custom_object.assert_called_once_with(
             namespace="chs",
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
-            plural="jobsets",
+            group="resource.nvidia.com",
+            version="v1beta1",
+            plural="computedomains",
             label_selector="k=v",
             _preload_content=False,
             _request_timeout=120,
@@ -1030,20 +899,20 @@ class ClientFunctionsTest(unittest.TestCase):
             404, "NotFound", "not found"
         )
         k8s_client.delete_custom_objects(
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
-            plural="jobsets",
-            object_names=["js1"],
+            group="resource.nvidia.com",
+            version="v1beta1",
+            plural="computedomains",
+            object_names=["cd1"],
             namespace="chs",
             wait_timeout_seconds=60,
             propagation_policy="Background",
         )
         self.sdk.custom.delete_namespaced_custom_object.assert_called_once_with(
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
+            group="resource.nvidia.com",
+            version="v1beta1",
             namespace="chs",
-            plural="jobsets",
-            name="js1",
+            plural="computedomains",
+            name="cd1",
             propagation_policy="Background",
             _preload_content=False,
             _request_timeout=120,
@@ -1090,22 +959,112 @@ class ClientFunctionsTest(unittest.TestCase):
             _content_type="application/apply-patch+yaml",
         )
 
+    def test_apply_service(self) -> None:
+        body = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "chs", "namespace": "chs"},
+            "spec": {"clusterIP": "None"},
+        }
+        self.sdk.core.patch_namespaced_service.return_value = _FakeResponse({})
+        k8s_client.apply_service(body=body)
+        self.sdk.core.patch_namespaced_service.assert_called_once_with(
+            name="chs",
+            namespace="chs",
+            body=body,
+            _preload_content=False,
+            _request_timeout=120,
+            field_manager="chs",
+            force=True,
+            _content_type="application/apply-patch+yaml",
+        )
+
+    def test_apply_and_patch_job(self) -> None:
+        body = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {"name": "job1", "namespace": "chs"},
+            "spec": {"suspend": True},
+        }
+        self.sdk.batch.patch_namespaced_job.return_value = _FakeResponse({})
+        k8s_client.apply_job(body=body)
+        k8s_client.patch_job(
+            name="job1", namespace="chs", body={"spec": {"suspend": False}}
+        )
+        self.assertEqual(
+            self.sdk.batch.patch_namespaced_job.call_args_list,
+            [
+                mock.call(
+                    name="job1",
+                    namespace="chs",
+                    body=body,
+                    _preload_content=False,
+                    _request_timeout=120,
+                    field_manager="chs",
+                    force=True,
+                    _content_type="application/apply-patch+yaml",
+                ),
+                mock.call(
+                    name="job1",
+                    namespace="chs",
+                    body={"spec": {"suspend": False}},
+                    _preload_content=False,
+                    _request_timeout=120,
+                    _content_type="application/merge-patch+json",
+                ),
+            ],
+        )
+
+    def test_delete_jobs_uses_foreground_propagation_and_waits(self) -> None:
+        self.sdk.batch.delete_namespaced_job.return_value = _FakeResponse({})
+        self.sdk.batch.read_namespaced_job.side_effect = [
+            _FakeResponse({}),
+            _api_error(404, "NotFound", "not found"),
+        ]
+        k8s_client.delete_jobs(
+            object_names=["job1"],
+            namespace="chs",
+            wait_timeout_seconds=60,
+            propagation_policy="Orphan",
+        )
+        self.sdk.batch.delete_namespaced_job.assert_called_once_with(
+            namespace="chs",
+            name="job1",
+            propagation_policy="Foreground",
+            _preload_content=False,
+            _request_timeout=120,
+        )
+        self.assertEqual(
+            self.sdk.batch.read_namespaced_job.call_args_list,
+            [
+                mock.call(
+                    namespace="chs",
+                    name="job1",
+                    _preload_content=False,
+                    _request_timeout=120,
+                )
+            ]
+            * 2,
+        )
+
     def test_apply_custom_object(self) -> None:
         namespaced_body = {
-            "apiVersion": "jobset.x-k8s.io/v1alpha2",
-            "kind": "JobSet",
-            "metadata": {"name": "js1", "namespace": "chs"},
+            "apiVersion": "resource.nvidia.com/v1beta1",
+            "kind": "ComputeDomain",
+            "metadata": {"name": "cd1", "namespace": "chs"},
         }
         self.sdk.custom.patch_namespaced_custom_object.return_value = (
             _FakeResponse({})
         )
-        k8s_client.apply_custom_object(plural="jobsets", body=namespaced_body)
+        k8s_client.apply_custom_object(
+            plural="computedomains", body=namespaced_body
+        )
         self.sdk.custom.patch_namespaced_custom_object.assert_called_once_with(
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
+            group="resource.nvidia.com",
+            version="v1beta1",
             namespace="chs",
-            plural="jobsets",
-            name="js1",
+            plural="computedomains",
+            name="cd1",
             body=namespaced_body,
             _preload_content=False,
             _request_timeout=120,
@@ -1141,53 +1100,6 @@ class ClientFunctionsTest(unittest.TestCase):
             _content_type="application/apply-patch+yaml",
         )
 
-    def test_patch_custom_object(self) -> None:
-        namespaced_body = {"spec": {"suspend": False}}
-        self.sdk.custom.patch_namespaced_custom_object.return_value = (
-            _FakeResponse({})
-        )
-        k8s_client.patch_custom_object(
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
-            plural="jobsets",
-            name="js1",
-            namespace="chs",
-            body=namespaced_body,
-        )
-        self.sdk.custom.patch_namespaced_custom_object.assert_called_once_with(
-            group="jobset.x-k8s.io",
-            version="v1alpha2",
-            namespace="chs",
-            plural="jobsets",
-            name="js1",
-            body=namespaced_body,
-            _preload_content=False,
-            _request_timeout=120,
-            _content_type="application/merge-patch+json",
-        )
-
-        cluster_body = {"spec": {"replicas": 2}}
-        self.sdk.custom.patch_cluster_custom_object.return_value = (
-            _FakeResponse({})
-        )
-        k8s_client.patch_custom_object(
-            group="accelerator.gke.io",
-            version="v1beta1",
-            plural="slices",
-            name="s1",
-            body=cluster_body,
-        )
-        self.sdk.custom.patch_cluster_custom_object.assert_called_once_with(
-            group="accelerator.gke.io",
-            version="v1beta1",
-            plural="slices",
-            name="s1",
-            body=cluster_body,
-            _preload_content=False,
-            _request_timeout=120,
-            _content_type="application/merge-patch+json",
-        )
-
 
 class FakeKubeClientContractTest(unittest.TestCase):
     """Tests that FakeKubeClient mirrors k8s_client signatures and semantics."""
@@ -1214,46 +1126,27 @@ class FakeKubeClientContractTest(unittest.TestCase):
     ) -> None:
         fake = k8s_fakes.FakeKubeClient()
         fake.add_object(
-            "jobset.x-k8s.io",
-            "jobsets",
-            {"metadata": {"name": "js1", "namespace": "chs"}},
+            "resource.nvidia.com",
+            "computedomains",
+            {"metadata": {"name": "cd1", "namespace": "chs"}},
         )
         with self.assertRaises(KubeError) as ctx:
-            fake.get_custom_object(
-                group="jobset.x-k8s.io",
-                version="v1alpha2",
-                plural="jobsets",
-                name="js1",
-            )
-        self.assertEqual(ctx.exception.status, 404)
-
-        with self.assertRaises(KubeError) as ctx:
             fake.delete_custom_objects(
-                group="jobset.x-k8s.io",
-                version="v1alpha2",
-                plural="jobsets",
-                object_names=["js1"],
+                group="resource.nvidia.com",
+                version="v1beta1",
+                plural="computedomains",
+                object_names=["cd1"],
             )
         self.assertEqual(ctx.exception.status, 404)
 
         with self.assertRaises(KubeError) as ctx:
             fake.apply_custom_object(
-                plural="jobsets",
+                plural="computedomains",
                 body={
-                    "apiVersion": "jobset.x-k8s.io/v1alpha2",
-                    "kind": "JobSet",
-                    "metadata": {"name": "js1"},
+                    "apiVersion": "resource.nvidia.com/v1beta1",
+                    "kind": "ComputeDomain",
+                    "metadata": {"name": "cd1"},
                 },
-            )
-        self.assertEqual(ctx.exception.status, 404)
-
-        with self.assertRaises(KubeError) as ctx:
-            fake.patch_custom_object(
-                group="jobset.x-k8s.io",
-                version="v1alpha2",
-                plural="jobsets",
-                name="js1",
-                body={"spec": {"suspend": False}},
             )
         self.assertEqual(ctx.exception.status, 404)
 

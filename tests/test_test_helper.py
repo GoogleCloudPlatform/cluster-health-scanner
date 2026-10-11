@@ -1286,11 +1286,11 @@ class TestTestHelper(unittest.TestCase):
 
         # Check container resources merged
         self.assertIn(
-            "limits:\n                    nvidia.com/gpu: 4",
+            "limits:\n            nvidia.com/gpu: 4",
             res["container_resources_section"],
         )
         self.assertIn(
-            "claims:\n                  - name: compute-domain-channel",
+            "claims:\n          - name: compute-domain-channel",
             res["container_resources_section"],
         )
 
@@ -1421,7 +1421,7 @@ class KubernetesJobsetTest(unittest.TestCase):
         )
 
     def test_jobset_vars_are_computed_once_per_experiment(self):
-        """All templates of one experiment share one JobSet name and key."""
+        """All templates of one experiment share one Job name and key."""
         wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
 
         rendered_vars = [wm._jobset_vars() for _ in range(5)]
@@ -1434,7 +1434,7 @@ class KubernetesJobsetTest(unittest.TestCase):
         self.assertTrue(all(v == rendered_vars[0] for v in rendered_vars))
 
     def test_jobset_vars_differ_between_experiments(self):
-        """Different experiments never share a JobSet name or key pair."""
+        """Different experiments never share a Job name or key pair."""
         var_map = dict(_JOBSET_VARS_INPUTS)
         wm = _workflow_manager(var_map)
         self.generate_ssh_keys.side_effect = [
@@ -1466,45 +1466,227 @@ class KubernetesJobsetTest(unittest.TestCase):
 
         self.assertEqual(wm._jobset_vars()["sanitized_job_name"], job_name)
 
-    def test_mpi_pods_have_short_termination_grace_period(self):
-        """Every pod spec of the MPI JobSet uses a 5s grace period."""
-        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+    def _render(self, template_name, var_map, **extra_vars):
+        """Renders a kubernetes-jobset template like Ramble does."""
+        wm = _workflow_manager(var_map)
         template_vars = {
             "kubernetes_namespace": "chs",
-            "n_nodes": "2",
+            "n_nodes": var_map.get("n_nodes", "2"),
             "timeout": "3600",
             "ssh_port": "222",
             "processes_per_node": "8",
+            **extra_vars,
             **wm._jobset_vars(),
         }
         template_path = os.path.join(
             os.path.dirname(sys.modules[KubernetesJobset.__module__].__file__),
-            "jobset_mpi.yaml.tpl",
+            template_name,
         )
         with open(template_path) as template_file:
             template = template_file.read()
-
         rendered = _TEMPLATE_PLACEHOLDER.sub(
             lambda match: template_vars[match.group(1)], template
         )
-        jobsets = [
-            doc
-            for doc in yaml.safe_load_all(rendered)
-            if doc and doc.get("kind") == "JobSet"
-        ]
+        return template_vars, [d for d in yaml.safe_load_all(rendered) if d]
 
-        self.assertEqual(len(jobsets), 1)
-        pod_specs = [
-            replicated_job["template"]["spec"]["template"]["spec"]
-            for replicated_job in jobsets[0]["spec"]["replicatedJobs"]
+    def _assert_job_spec(self, job, job_name, n_nodes):
+        self.assertEqual(job["apiVersion"], "batch/v1")
+        self.assertEqual(job["kind"], "Job")
+        self.assertEqual(job["metadata"]["name"], job_name)
+        self.assertEqual(job["metadata"]["namespace"], "chs")
+        spec = job["spec"]
+        self.assertEqual(
+            {k: v for k, v in spec.items() if k != "template"},
+            {
+                "suspend": True,
+                "completionMode": "Indexed",
+                "backoffLimit": 0,
+                "podFailurePolicy": {
+                    "rules": [
+                        {
+                            "action": "FailJob",
+                            "onExitCodes": {
+                                "operator": "NotIn",
+                                "values": [0],
+                            },
+                        }
+                    ]
+                },
+                "parallelism": n_nodes,
+                "completions": n_nodes,
+                "activeDeadlineSeconds": 3600,
+                "ttlSecondsAfterFinished": 86400,
+            },
+        )
+        self.assertEqual(
+            spec["template"]["metadata"]["labels"],
+            {
+                "chs.gke.io/worker": "true",
+            },
+        )
+        pod_spec = spec["template"]["spec"]
+        self.assertEqual(pod_spec["subdomain"], "chs")
+        self.assertEqual(pod_spec["restartPolicy"], "Never")
+        self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 5)
+        return pod_spec
+
+    def test_standard_template_renders_one_indexed_job(self):
+        """Golden structure of the standard template for a TPU test."""
+        var_map = {
+            **_JOBSET_VARS_INPUTS,
+            "command": "echo one\necho two",
+            "n_nodes": "2",
+            "affinity_yaml": (
+                "nodeAffinity:\n"
+                "  requiredDuringSchedulingIgnoredDuringExecution:\n"
+                "    nodeSelectorTerms:\n"
+                "    - matchExpressions:\n"
+                "      - key: kubernetes.io/hostname\n"
+                "        operator: In\n"
+                "        values:\n"
+                "        - node-1"
+            ),
+            "container_security_context_yaml": "privileged: true",
+            "extra_volumes_yaml": "- name: shm\n  emptyDir: {}",
+            "extra_volume_mounts_yaml": "- name: shm\n  mountPath: /dev/shm",
+            "pod_resource_claims_yaml": (
+                "- name: claim\n  resourceClaimTemplateName: tmpl"
+            ),
+        }
+
+        template_vars, docs = self._render("jobset_standard.yaml.tpl", var_map)
+
+        job_name = template_vars["sanitized_job_name"]
+        self.assertEqual(len(docs), 1)
+        pod_spec = self._assert_job_spec(docs[0], job_name, 2)
+        self.assertEqual(
+            docs[0]["spec"]["template"]["metadata"]["annotations"],
+            {"networking.gke.io/default-interface": "eth0"},
+        )
+        self.assertEqual(
+            pod_spec["nodeSelector"],
+            {"cloud.google.com/gke-nodepool": "pool-1"},
+        )
+        self.assertEqual(
+            pod_spec["tolerations"],
+            [
+                {
+                    "key": "nvidia.com/gpu",
+                    "operator": "Exists",
+                    "effect": "NoSchedule",
+                }
+            ],
+        )
+        self.assertEqual(
+            pod_spec["affinity"]["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"],
+            ["node-1"],
+        )
+        self.assertEqual(
+            pod_spec["resourceClaims"],
+            [{"name": "claim", "resourceClaimTemplateName": "tmpl"}],
+        )
+        self.assertEqual(pod_spec["volumes"], [{"name": "shm", "emptyDir": {}}])
+        (container,) = pod_spec["containers"]
+        self.assertEqual(container["image"], "image:latest")
+        self.assertEqual(container["securityContext"], {"privileged": True})
+        self.assertEqual(
+            container["resources"], {"limits": {"nvidia.com/gpu": 8}}
+        )
+        self.assertEqual(
+            container["volumeMounts"],
+            [{"name": "shm", "mountPath": "/dev/shm"}],
+        )
+        self.assertEqual(
+            container["env"],
+            [
+                {
+                    "name": "MY_NODE_NAME",
+                    "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
+                },
+            ],
+        )
+        self.assertEqual(container["command"][:2], ["bash", "-c"])
+        self.assertTrue(
+            container["command"][2].endswith("echo one\necho two\n")
+        )
+
+    def test_mpi_template_renders_secret_and_one_indexed_job(self):
+        """Golden structure of the MPI template."""
+        var_map = {
+            **_JOBSET_VARS_INPUTS,
+            "command": "mpirun -n 16 \\\n  all_gather_perf",
+            "n_nodes": "3",
+            "extra_volumes_yaml": "- name: shm\n  emptyDir: {}",
+            "extra_volume_mounts_yaml": "- name: shm\n  mountPath: /dev/shm",
+        }
+
+        template_vars, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+
+        job_name = template_vars["sanitized_job_name"]
+        self.assertEqual([d["kind"] for d in docs], ["Secret", "Job"])
+        self.assertEqual(docs[0]["metadata"]["name"], f"{job_name}-ssh")
+        pod_spec = self._assert_job_spec(docs[1], job_name, 3)
+        self.assertEqual(
+            [c["name"] for c in pod_spec["initContainers"]], ["tcpxo-daemon"]
+        )
+        self.assertEqual(
+            [v["name"] for v in pod_spec["volumes"]], ["mpi-id", "shm"]
+        )
+        self.assertEqual(
+            pod_spec["volumes"][0]["secret"]["secretName"], f"{job_name}-ssh"
+        )
+        (container,) = pod_spec["containers"]
+        self.assertEqual(
+            [m["name"] for m in container["volumeMounts"]], ["mpi-id", "shm"]
+        )
+        self.assertEqual(
+            [e["name"] for e in container["env"]],
+            [
+                "OMPI_ALLOW_RUN_AS_ROOT",
+                "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM",
+                "MY_NODE_NAME",
+            ],
+        )
+        script = container["command"][2]
+        self.assertIn(f'OTHER="{job_name}-${{i}}.chs"', script)
+        self.assertIn(f'HEAD_NODE="{job_name}-0.chs"', script)
+        self.assertNotIn("getent", script)
+        # The launcher's ssh discovery is bounded only by the Job's
+        # activeDeadlineSeconds.
+        discovery = script[
+            script.index("Discovering hosts") : script.index("STARTING MPI")
         ]
-        self.assertTrue(pod_specs)
-        for pod_spec in pod_specs:
-            self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 5)
-            self.assertEqual(
-                [c["name"] for c in pod_spec["initContainers"]],
-                ["tcpxo-daemon"],
-            )
+        self.assertNotIn("DNS_DEADLINE", discovery)
+        self.assertIn("$(seq 0 $(( 3 - 1 )))", script)
+        self.assertNotIn("POD_NAME", script)
+        self.assertIn("\n  mpirun -n 16 \\\n    all_gather_perf\n", script)
+
+    def test_tpu_worker_env_is_left_to_gke(self):
+        """CHS sets no TPU worker variables; GKE's TPU webhook injects them."""
+        _, docs = self._render(
+            "jobset_standard.yaml.tpl", dict(_JOBSET_VARS_INPUTS)
+        )
+
+        env_names = [
+            e["name"]
+            for e in docs[0]["spec"]["template"]["spec"]["containers"][0]["env"]
+        ]
+        self.assertEqual(env_names, ["MY_NODE_NAME"])
+
+    def test_user_pod_labels_are_kept_next_to_chs_labels(self):
+        var_map = {**_JOBSET_VARS_INPUTS, "pod_labels_yaml": "team: chs"}
+
+        _, docs = self._render("jobset_standard.yaml.tpl", var_map)
+
+        self.assertEqual(
+            docs[0]["spec"]["template"]["metadata"]["labels"],
+            {
+                "team": "chs",
+                "chs.gke.io/worker": "true",
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -12,76 +12,75 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Gang admission for Kubernetes JobSets."""
+"""Gang admission for Kubernetes Jobs."""
 
 from collections.abc import Sequence
 
 _HOSTNAME_LABEL = "kubernetes.io/hostname"
+_FINISHED_CONDITIONS = ("Complete", "Failed")
 
 
-def _is_finished(jobset: dict) -> bool:
-    conditions = jobset.get("status", {}).get("conditions", [])
+def _name(job: dict) -> str:
+    return job["metadata"]["name"]
+
+
+def _pod_spec(job: dict) -> dict:
+    return job.get("spec", {}).get("template", {}).get("spec", {})
+
+
+def _is_finished(job: dict) -> bool:
+    conditions = job.get("status", {}).get("conditions") or []
     return any(
-        c.get("type") in ("Completed", "Failed") and c.get("status") == "True"
+        c.get("type") in _FINISHED_CONDITIONS and c.get("status") == "True"
         for c in conditions
     )
 
 
-def _is_suspended(jobset: dict) -> bool:
-    return bool(jobset.get("spec", {}).get("suspend"))
+def _is_suspended(job: dict) -> bool:
+    return bool(job.get("spec", {}).get("suspend"))
 
 
-def _target_nodes(jobset: dict) -> frozenset[str] | None:
+def _target_nodes(job: dict) -> frozenset[str] | None:
+    required = (
+        _pod_spec(job)
+        .get("affinity", {})
+        .get("nodeAffinity", {})
+        .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+    )
     nodes = set()
-    for replicated_job in jobset.get("spec", {}).get("replicatedJobs", []):
-        pod_spec = (
-            replicated_job.get("template", {})
-            .get("spec", {})
-            .get("template", {})
-            .get("spec", {})
-        )
-        required = (
-            pod_spec.get("affinity", {})
-            .get("nodeAffinity", {})
-            .get("requiredDuringSchedulingIgnoredDuringExecution", {})
-        )
-        for term in required.get("nodeSelectorTerms", []):
-            for expression in term.get("matchExpressions", []):
-                if (
-                    expression.get("key") == _HOSTNAME_LABEL
-                    and expression.get("operator") == "In"
-                ):
-                    nodes.update(expression.get("values", []))
+    for term in required.get("nodeSelectorTerms", []):
+        for expression in term.get("matchExpressions", []):
+            if (
+                expression.get("key") == _HOSTNAME_LABEL
+                and expression.get("operator") == "In"
+            ):
+                nodes.update(expression.get("values", []))
     return frozenset(nodes) if nodes else None
 
 
-def plan_admissions(jobsets: list[dict], queue: Sequence[str]) -> list[str]:
-    """Returns the names of suspended JobSets that can be started now."""
+def plan_admissions(jobs: list[dict], queue: Sequence[str]) -> list[str]:
+    """Returns the names of suspended Jobs that can be started now."""
     queue_position = {name: index for index, name in enumerate(queue)}
-    active = [j for j in jobsets if not _is_finished(j)]
+    active = [j for j in jobs if not _is_finished(j)]
     used_nodes = set()
     all_nodes_used = False
-    for jobset in active:
-        if _is_suspended(jobset):
+    for job in active:
+        if _is_suspended(job):
             continue
-        nodes = _target_nodes(jobset)
+        nodes = _target_nodes(job)
         if nodes is None:
             all_nodes_used = True
         else:
             used_nodes |= nodes
 
     waiting = sorted(
-        (
-            j
-            for j in active
-            if _is_suspended(j) and j["metadata"]["name"] in queue_position
-        ),
-        key=lambda j: queue_position[j["metadata"]["name"]],
+        (j for j in active if _is_suspended(j) and _name(j) in queue_position),
+        key=lambda j: queue_position[_name(j)],
     )
 
     admitted = []
-    for jobset in waiting:
-        nodes = _target_nodes(jobset)
+    for job in waiting:
+        nodes = _target_nodes(job)
         if nodes is None:
             can_start = not all_nodes_used and not used_nodes
             all_nodes_used = True
@@ -89,5 +88,5 @@ def plan_admissions(jobsets: list[dict], queue: Sequence[str]) -> list[str]:
             can_start = not all_nodes_used and used_nodes.isdisjoint(nodes)
             used_nodes |= nodes
         if can_start:
-            admitted.append(jobset["metadata"]["name"])
+            admitted.append(_name(job))
     return admitted

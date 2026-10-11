@@ -17,8 +17,6 @@ project: "chs-test-project"
 default_zone: "us-central1-a"
 
 dependencies:
-  jobset:
-    version: "v0.6.0"
   gke_multinetwork:
     enabled: true
 

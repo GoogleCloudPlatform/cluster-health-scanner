@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 if [ "{application_name}" = "chs" ]; then
-    echo "Skipping JobSet submission for {application_name} scaffolding experiment."
+    echo "Skipping Job submission for {application_name} scaffolding experiment."
     echo "Submitted {experiment_name} at $(date)" > {log_file}
     exit 0
 fi

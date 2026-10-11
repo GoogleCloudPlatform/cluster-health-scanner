@@ -122,10 +122,8 @@ def _sdk() -> SimpleNamespace:
         context=context,
         namespace=namespace,
         core=kubernetes.client.CoreV1Api(api_client),
-        apps=kubernetes.client.AppsV1Api(api_client),
         batch=kubernetes.client.BatchV1Api(api_client),
         custom=kubernetes.client.CustomObjectsApi(api_client),
-        apiextensions=kubernetes.client.ApiextensionsV1Api(api_client),
         api_error=kubernetes.client.ApiException,
         transport_error=urllib3.exceptions.HTTPError,
     )
@@ -356,6 +354,21 @@ def apply_secret(*, body: dict, **query: Any) -> None:
     )
 
 
+def apply_service(*, body: dict, **query: Any) -> None:
+    """Creates or updates the Service with server-side apply."""
+    metadata = body["metadata"]
+    query.setdefault("field_manager", "chs")
+    query.setdefault("force", True)
+    query.setdefault("_content_type", "application/apply-patch+yaml")
+    _request(
+        _sdk().core.patch_namespaced_service,
+        name=metadata["name"],
+        namespace=metadata["namespace"],
+        body=body,
+        **query,
+    )
+
+
 def list_jobs(*, namespace: str | None = None, **query: Any) -> list[dict]:
     batch = _sdk().batch
     return _list(
@@ -366,40 +379,53 @@ def list_jobs(*, namespace: str | None = None, **query: Any) -> list[dict]:
     )
 
 
-def list_deployments(
-    *, namespace: str | None = None, **query: Any
-) -> list[dict]:
-    apps = _sdk().apps
-    return _list(
-        apps.list_namespaced_deployment,
-        apps.list_deployment_for_all_namespaces,
+def apply_job(*, body: dict, **query: Any) -> None:
+    """Creates or updates the batch/v1 Job with server-side apply."""
+    metadata = body["metadata"]
+    query.setdefault("field_manager", "chs")
+    query.setdefault("force", True)
+    query.setdefault("_content_type", "application/apply-patch+yaml")
+    _request(
+        _sdk().batch.patch_namespaced_job,
+        name=metadata["name"],
+        namespace=metadata["namespace"],
+        body=body,
+        **query,
+    )
+
+
+def patch_job(*, name: str, namespace: str, body: dict, **query: Any) -> None:
+    """Patches the batch/v1 Job with a JSON merge patch."""
+    query.setdefault("_content_type", "application/merge-patch+json")
+    _request(
+        _sdk().batch.patch_namespaced_job,
+        name=name,
         namespace=namespace,
+        body=body,
         **query,
     )
 
 
-def get_deployment(
-    *, name: str, namespace: str | None = None, **query: Any
-) -> dict:
-    sdk = _sdk()
-    return _get(
-        sdk.apps.read_namespaced_deployment,
-        name=name,
-        namespace=namespace or sdk.namespace,
-        **query,
-    )
+def delete_jobs(
+    *,
+    object_names: list[str],
+    namespace: str,
+    wait_timeout_seconds: float = _REQUEST_TIMEOUT_SECONDS,
+    **query: Any,
+) -> None:
+    """Deletes the named Jobs and waits until they and their pods are gone.
 
-
-def list_crds(**query: Any) -> list[dict]:
-    return _get(_sdk().apiextensions.list_custom_resource_definition, **query)[
-        "items"
-    ]
-
-
-def get_crd(*, name: str, **query: Any) -> dict:
-    return _get(
-        _sdk().apiextensions.read_custom_resource_definition,
-        name=name,
+    Foreground propagation keeps each Job until its pods are deleted, so
+    waiting for the Job to disappear also waits for its pods. It is not
+    overridable: the default for batch/v1 Jobs orphans the pods.
+    """
+    batch = _sdk().batch
+    query["propagation_policy"] = "Foreground"
+    _delete_and_wait(
+        functools.partial(batch.delete_namespaced_job, namespace=namespace),
+        functools.partial(batch.read_namespaced_job, namespace=namespace),
+        object_names,
+        wait_timeout_seconds,
         **query,
     )
 
@@ -421,30 +447,6 @@ def list_custom_objects(
         group=group,
         version=version,
         plural=plural,
-        **query,
-    )
-
-
-def get_custom_object(
-    *,
-    group: str,
-    version: str,
-    plural: str,
-    name: str,
-    namespace: str | None = None,
-    **query: Any,
-) -> dict:
-    custom = _sdk().custom
-    return _get(
-        _scoped(
-            custom.get_namespaced_custom_object,
-            custom.get_cluster_custom_object,
-            namespace,
-            group=group,
-            version=version,
-            plural=plural,
-        ),
-        name=name,
         **query,
     )
 
@@ -475,34 +477,6 @@ def delete_custom_objects(
         **coords,
     )
     _delete_and_wait(delete, read, object_names, wait_timeout_seconds, **query)
-
-
-def patch_custom_object(
-    *,
-    group: str,
-    version: str,
-    plural: str,
-    name: str,
-    body: dict,
-    namespace: str | None = None,
-    **query: Any,
-) -> None:
-    """Patches the object with a JSON merge patch."""
-    query.setdefault("_content_type", "application/merge-patch+json")
-    custom = _sdk().custom
-    _request(
-        _scoped(
-            custom.patch_namespaced_custom_object,
-            custom.patch_cluster_custom_object,
-            namespace,
-            group=group,
-            version=version,
-            plural=plural,
-        ),
-        name=name,
-        body=body,
-        **query,
-    )
 
 
 def apply_custom_object(*, plural: str, body: dict, **query: Any) -> None:

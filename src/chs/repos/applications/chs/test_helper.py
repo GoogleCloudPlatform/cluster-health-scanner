@@ -18,6 +18,7 @@ import math
 import os
 import textwrap
 from chs.constants import TOPOLOGY_TO_MESH
+from chs.testkit import context as kubernetes_context
 from chs.utils import sanitize_dns_1123
 from ramble.context import Context, create_context_from_dict
 from chs.utils.topology import (
@@ -37,31 +38,17 @@ class TestHelper:
 
     @staticmethod
     def _k8s_settings(variables, nodes_str=None, nodes_list=None):
-        affinity_yaml = ""
-        node_affinity_only_yaml = ""
-        if nodes_str:
-            node_affinity_only_yaml = f"""nodeAffinity:
-  requiredDuringSchedulingIgnoredDuringExecution:
-    nodeSelectorTerms:
-    - matchExpressions:
-      - key: kubernetes.io/hostname
-        operator: In
-        values:
-{nodes_str}"""
-
-            affinity_yaml = (
-                node_affinity_only_yaml
-                + '''
-podAntiAffinity:
-  requiredDuringSchedulingIgnoredDuringExecution:
-  - labelSelector:
-      matchExpressions:
-      - key: jobset.sigs.k8s.io/jobset-name
-        operator: Exists
-    topologyKey: "kubernetes.io/hostname"'''
+        node_affinity_only_yaml = (
+            kubernetes_context.node_affinity_yaml(nodes_str)
+            if nodes_str
+            else ""
+        )
+        variables["affinity_yaml"] = (
+            kubernetes_context.kubernetes_affinity_yaml(
+                nodes_str,
+                kubernetes_context.pop_exclusive_tpu_slice(variables),
             )
-
-        variables["affinity_yaml"] = affinity_yaml
+        )
         variables["node_affinity_only_yaml"] = node_affinity_only_yaml
         lines = node_affinity_only_yaml.split("\n")
         variables["cd_affinity_yaml"] = (
@@ -344,27 +331,8 @@ podAntiAffinity:
                     "tpu_dynamic_pools", []
                 )
                 if is_dynamic_slice:
-                    old_annotations = slice_vars.get(
-                        "jobset_annotations_yaml", ""
-                    ).strip()
-                    new_annotations = "alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-tpu-slice"
-                    slice_vars["jobset_annotations_yaml"] = (
-                        f"{old_annotations}\\n{new_annotations}"
-                        if old_annotations
-                        else new_annotations
-                    )
-
-                    topo = slice_vars.get("tpu_topology")
-                    new_annotations = (
-                        f'cloud.google.com/gke-tpu-slice-topology: "{topo}"'
-                    )
-                    old_annotations = slice_vars.get(
-                        "pod_annotations_yaml", ""
-                    ).strip()
-                    slice_vars["pod_annotations_yaml"] = (
-                        f"{old_annotations}\\n{new_annotations}"
-                        if old_annotations
-                        else new_annotations
+                    kubernetes_context.apply_dynamic_slice_annotations(
+                        slice_vars
                     )
 
                 if len(tpu_slices) == 1:

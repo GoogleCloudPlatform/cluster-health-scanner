@@ -1276,8 +1276,7 @@ class TestCli(unittest.TestCase):
     def test_cancel_action_kube_error_raises_cancellation_exception(self):
         """Test cancel_action wraps a Kubernetes API error of either step."""
         err = KubeError(
-            "Error from server (Forbidden): jobsets.jobset.x-k8s.io is "
-            "forbidden",
+            "Error from server (Forbidden): jobs.batch is " "forbidden",
             status=403,
         )
         for step in ("cancel_jobs_by_prefix", "cleanup_scheduler_resources"):
@@ -1294,7 +1293,7 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(
                     str(ctx.exception),
                     "CHS cancellation failed: KubeError('Error from server "
-                    "(Forbidden): jobsets.jobset.x-k8s.io is forbidden')",
+                    "(Forbidden): jobs.batch is forbidden')",
                 )
                 self.assertIs(ctx.exception.__cause__, err)
                 self.mock_get_scheduler.assert_called_with("kubernetes")

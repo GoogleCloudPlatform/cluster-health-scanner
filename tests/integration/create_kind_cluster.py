@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 from pathlib import Path
@@ -37,8 +36,6 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 MANIFESTS_DIR = Path(__file__).parent / "manifests"
 CONFIGS_DIR = Path(__file__).parent / "configs"
 
-DEFAULT_JOBSET_VERSION = "v0.6.0"
-KUBE_RBAC_PROXY_IMAGE = "quay.io/brancz/kube-rbac-proxy:v0.13.1"
 DEFAULT_CLUSTER_NAME = "chs-tpu-v6e-cluster"
 DEFAULT_ZONE = "us-east5-c"
 DEFAULT_PROJECT = "chs-test-project"
@@ -174,10 +171,7 @@ def _is_disabled(config: dict[str, Any]) -> bool:
     if not isinstance(config, dict):
         return False
     state = str(config.get("state", "")).upper()
-    return (
-        state in ("DISABLED", "MISSING", "MISSING_JOBSET")
-        or config.get("enabled") is False
-    )
+    return state in ("DISABLED", "MISSING") or config.get("enabled") is False
 
 
 def load_manifest(filename: str, **kwargs: Any) -> str:
@@ -342,223 +336,6 @@ def apply_crd_stubs(dependencies: dict[str, Any] | None = None) -> None:
             )
         elif manifest_content:
             run(["kubectl", "apply", "-f", "-"], input_str=manifest_content)
-
-
-OFFICIAL_MANIFEST_URLS = {
-    "jobset": (
-        "https://github.com/kubernetes-sigs/jobset/releases/download/"
-        "{version}/manifests.yaml"
-    ),
-}
-
-OFFICIAL_IMAGES = {
-    "jobset": "registry.k8s.io/jobset/jobset:{version}",
-}
-
-
-def _is_deployment_ready(dep_name: str) -> bool:
-    ns = f"{dep_name}-system"
-    dep_obj = f"deployment/{dep_name}-controller-manager"
-    res = run(
-        [
-            "kubectl",
-            "get",
-            dep_obj,
-            "-n",
-            ns,
-            "-o",
-            "jsonpath={.status.readyReplicas}",
-        ],
-        check=False,
-    )
-    if (
-        res.returncode == 0
-        and res.stdout.strip().isdigit()
-        and int(res.stdout.strip()) > 0
-    ):
-        return True
-    return False
-
-
-def _load_image(img: str, kind_name: str) -> None:
-    run(
-        [get_kind_bin(), "load", "docker-image", img, "--name", kind_name],
-        check=False,
-    )
-
-
-def _crd_exists(crd_fragment: str) -> bool:
-    """Checks whether any CRD matching crd_fragment exists on the cluster."""
-    res = run(["kubectl", "get", "crd", "-o", "name"], check=False)
-    if res.returncode == 0:
-        return any(
-            crd_fragment.lower() in line.lower()
-            for line in res.stdout.splitlines()
-        )
-    return False
-
-
-def _uninstall_preflight_deployment(dep_name: str) -> None:
-    """Uninstalls a preflight controller deployment, CRDs, and webhooks."""
-    logger.info(f"[INFO] Removing preflight deployment '{dep_name}'...")
-    run(
-        [
-            "kubectl",
-            "delete",
-            "mutatingwebhookconfiguration",
-            f"{dep_name}-mutating-webhook-configuration",
-            "--ignore-not-found",
-        ],
-        check=False,
-    )
-    run(
-        [
-            "kubectl",
-            "delete",
-            "validatingwebhookconfiguration",
-            f"{dep_name}-validating-webhook-configuration",
-            "--ignore-not-found",
-        ],
-        check=False,
-    )
-    run(
-        [
-            "kubectl",
-            "delete",
-            "deployment",
-            f"{dep_name}-controller-manager",
-            "-n",
-            f"{dep_name}-system",
-            "--ignore-not-found",
-        ],
-        check=False,
-    )
-    if dep_name == "jobset":
-        run(
-            [
-                "kubectl",
-                "delete",
-                "crd",
-                "jobsets.jobset.x-k8s.io",
-                "--ignore-not-found",
-            ],
-            check=False,
-        )
-    run(
-        [
-            "kubectl",
-            "delete",
-            "namespace",
-            f"{dep_name}-system",
-            "--ignore-not-found",
-            "--timeout=30s",
-        ],
-        check=False,
-    )
-
-
-def apply_preflight_deployments(
-    dependencies: dict[str, Any] | None = None,
-    cluster_name: str = "chs-tpu-v6e-cluster",
-) -> None:
-    """Provisions preflight controller deployments (JobSet)."""
-    logger.info("[INFO] Reconciling preflight deployments...")
-    default_deps = {
-        "jobset": {"version": DEFAULT_JOBSET_VERSION},
-    }
-    deps = dependencies if isinstance(dependencies, dict) else default_deps
-
-    kind_name = sanitize_k8s_name(cluster_name)
-    images_to_load: set[str] = set()
-    deployments_to_apply: list[tuple[str, str, str]] = []
-
-    for dep_name, info in deps.items():
-        if not isinstance(info, dict):
-            continue
-
-        if _is_disabled(info):
-            if dep_name in OFFICIAL_MANIFEST_URLS:
-                if _is_deployment_ready(dep_name) or _crd_exists(dep_name):
-                    _uninstall_preflight_deployment(dep_name)
-            continue
-
-        if dep_name in OFFICIAL_MANIFEST_URLS:
-            if _is_deployment_ready(dep_name):
-                logger.info(
-                    f"[INFO] Preflight deployment '{dep_name}' is already"
-                    " running and ready."
-                )
-                continue
-
-            version = info.get("version", DEFAULT_JOBSET_VERSION)
-            manifest_url = OFFICIAL_MANIFEST_URLS[dep_name].format(
-                version=version
-            )
-            img = OFFICIAL_IMAGES[dep_name].format(version=version)
-
-            images_to_load.add(img)
-            images_to_load.add(KUBE_RBAC_PROXY_IMAGE)
-            deployments_to_apply.append((dep_name, version, manifest_url))
-
-    if not deployments_to_apply and not images_to_load:
-        return
-
-    if images_to_load:
-        logger.info(
-            f"[INFO] Side-loading {len(images_to_load)} docker image(s) in"
-            " parallel..."
-        )
-        with ThreadPoolExecutor(max_workers=len(images_to_load)) as executor:
-            list(
-                executor.map(
-                    lambda img: _load_image(img, kind_name), images_to_load
-                )
-            )
-
-    def _deploy_and_wait(dep_info: tuple[str, str, str]) -> None:
-        dep_name, version, manifest_url = dep_info
-        logger.info(f"[INFO] Deploying {dep_name} ({version})...")
-        run(
-            [
-                "kubectl",
-                "apply",
-                "--server-side",
-                "--force-conflicts",
-                "-f",
-                manifest_url,
-            ],
-            check=True,
-        )
-        ns = f"{dep_name}-system"
-        dep_obj = f"deployment/{dep_name}-controller-manager"
-        run(
-            [
-                "kubectl",
-                "set",
-                "image",
-                dep_obj,
-                f"kube-rbac-proxy={KUBE_RBAC_PROXY_IMAGE}",
-                "-n",
-                ns,
-            ],
-            check=False,
-        )
-        run(
-            [
-                "kubectl",
-                "rollout",
-                "status",
-                dep_obj,
-                "-n",
-                ns,
-                "--timeout=120s",
-            ],
-            check=True,
-        )
-
-    if deployments_to_apply:
-        for dep_info in deployments_to_apply:
-            _deploy_and_wait(dep_info)
 
 
 def get_worker_nodes() -> list[str]:
@@ -918,7 +695,6 @@ def main() -> None:
     )
     worker_nodes = wait_for_worker_nodes(expected_workers=max(1, total_workers))
     apply_crd_stubs(dependencies)
-    apply_preflight_deployments(dependencies, cluster_name=cluster_name)
     configure_nodes(
         nodepools,
         default_zone=default_zone,

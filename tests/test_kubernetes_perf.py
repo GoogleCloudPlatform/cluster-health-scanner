@@ -41,11 +41,8 @@ _BETA_INSTANCE_TYPE = "beta.kubernetes.io/instance-type"
 _INSTANCE_ID = "container.googleapis.com/instance_id"
 _CLUSTER_NAME = "container.googleapis.com/cluster_name"
 _NODEPOOL = "cloud.google.com/gke-nodepool"
-_JOBSET_GROUP = "jobset.x-k8s.io"
-_JOBSET_VERSION = "v1alpha2"
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
-_SLICE_CRD = "slices.accelerator.gke.io"
 _SLICE_LIST = Call(
     "list_custom_objects",
     {
@@ -105,7 +102,7 @@ class _KubernetesTestBase(unittest.TestCase):
 
 
 class TestFetchJobLogConcurrency(_KubernetesTestBase):
-    """Tests for fetching the pod logs of a JobSet concurrently."""
+    """Tests for fetching the pod logs of a Job concurrently."""
 
     def setUp(self):
         super().setUp()
@@ -128,7 +125,7 @@ class TestFetchJobLogConcurrency(_KubernetesTestBase):
             executor.shutdown(wait=True, cancel_futures=True)
 
     def _fetch(self, pod_names, job_id="chs-tpu-test"):
-        """Runs fetch_job_log for a JobSet with the given pods."""
+        """Runs fetch_job_log for a Job with the given pods."""
         scheduler = KubernetesScheduler()
         pod_objs = [_pod(name) for name in pod_names]
         with mock.patch.object(
@@ -930,7 +927,6 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
 
     def test_back_to_back_cleanups_delete_slices_once(self):
         """cancel_jobs_by_prefix + cleanup deletes slices once statelessly."""
-        self.kube.add_crd(_SLICE_CRD)
         for name, labels in (
             ("chs-slice", {"created-by": "chs"}),
             ("user-slice", {}),
@@ -941,8 +937,8 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
                 {"metadata": {"name": name, "labels": labels}},
             )
         self.kube.add_object(
-            _JOBSET_GROUP,
-            "jobsets",
+            "batch",
+            "jobs",
             {"metadata": {"name": "chs-run1-nccl"}},
             namespace=CHS_NAMESPACE,
         )
@@ -966,7 +962,7 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
                 ),
             ],
         )
-        self.assertEqual(self.kube.stored_names(_JOBSET_GROUP, "jobsets"), [])
+        self.assertEqual(self.kube.stored_names("batch", "jobs"), [])
         self.assertEqual(
             self.kube.stored_names(_SLICE_GROUP, "slices"), ["user-slice"]
         )
@@ -974,7 +970,6 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
     def test_cleanup_dynamic_slices_is_stateless(self):
         """_cleanup_dynamic_slices holds no flag and always queries cluster."""
         self.assertFalse(hasattr(self.scheduler, "_dynamic_slices_cleaned"))
-        self.kube.add_crd(_SLICE_CRD)
 
         self.scheduler._cleanup_dynamic_slices()
         self.scheduler._cleanup_dynamic_slices()
@@ -996,15 +991,15 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
 
     def test_get_job_statuses_uses_namespaced_list_for_multiple_jobs(self):
         """get_job_statuses lists chs namespace once and filters."""
-        completed = {"conditions": [{"type": "Completed", "status": "True"}]}
+        completed = {"conditions": [{"type": "Complete", "status": "True"}]}
         for name, status in (
             ("chs-run-job1", completed),
-            ("chs-run-job2", {"replicatedJobsStatus": [{"active": 1}]}),
-            ("unrelated-jobset", completed),
+            ("chs-run-job2", {"active": 1}),
+            ("unrelated-job", completed),
         ):
             self.kube.add_object(
-                _JOBSET_GROUP,
-                "jobsets",
+                "batch",
+                "jobs",
                 {"metadata": {"name": name}, "status": status},
                 namespace=CHS_NAMESPACE,
             )
@@ -1014,19 +1009,9 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
         )
         self.assertEqual(
             self.kube.calls,
-            [
-                Call(
-                    "list_custom_objects",
-                    {
-                        "group": _JOBSET_GROUP,
-                        "version": _JOBSET_VERSION,
-                        "plural": "jobsets",
-                        "namespace": CHS_NAMESPACE,
-                    },
-                )
-            ],
+            [Call("list_jobs", {"namespace": CHS_NAMESPACE})],
         )
-        self.assertNotIn("unrelated-jobset", statuses)
+        self.assertNotIn("unrelated-job", statuses)
         self.assertEqual(
             statuses,
             {
@@ -1039,17 +1024,7 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
         self.scheduler.get_job_statuses(["chs-run-job1"])
         self.assertEqual(
             self.kube.calls,
-            [
-                Call(
-                    "list_custom_objects",
-                    {
-                        "group": _JOBSET_GROUP,
-                        "version": _JOBSET_VERSION,
-                        "plural": "jobsets",
-                        "namespace": CHS_NAMESPACE,
-                    },
-                )
-            ],
+            [Call("list_jobs", {"namespace": CHS_NAMESPACE})],
         )
 
     def test_apply_cleans_slices_only_for_dynamic_pools(self):
@@ -1148,11 +1123,8 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
             self.kube.calls,
             [
                 Call(
-                    "delete_custom_objects",
+                    "delete_jobs",
                     {
-                        "group": _JOBSET_GROUP,
-                        "version": _JOBSET_VERSION,
-                        "plural": "jobsets",
                         "object_names": ["chs-job1"],
                         "namespace": CHS_NAMESPACE,
                         "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,

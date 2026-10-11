@@ -41,7 +41,6 @@ from chs.exceptions import (
     ChsValidationError,
 )
 from chs.utils.lifecycle import JobStatus
-from chs.preflights.kubernetes_preflight import KubernetesPreflightChecker
 from chs import resources
 from chs.constants import (
     CHS_NAMESPACE,
@@ -56,16 +55,17 @@ _MAX_NODES_UNDER_TEST = 500
 
 GANG_SCHEDULING_TIMEOUT_SECONDS = 300
 
-_JOBSET_GROUP = "jobset.x-k8s.io"
-_JOBSET_VERSION = "v1alpha2"
-_JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
+_JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
+_JOB_COMPLETION_INDEX_LABEL = "batch.kubernetes.io/job-completion-index"
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
+
+WORKER_SERVICE_NAME = "chs"
+WORKER_LABEL = "chs.gke.io/worker"
 
 _API_MAX_CONCURRENCY = 32
 _APPLY_ATTEMPTS = 5
 _CUSTOM_RESOURCE_PLURALS = {
-    "JobSet": "jobsets",
     "ComputeDomain": "computedomains",
 }
 
@@ -98,25 +98,27 @@ def _read_manifests(experiment_dir: str) -> list[dict]:
         ) from e
     for obj in objects:
         kind = obj.get("kind")
-        if kind != "Secret" and kind not in _CUSTOM_RESOURCE_PLURALS:
+        if kind not in ("Secret", "Job", *_CUSTOM_RESOURCE_PLURALS):
             raise ChsSchedulerException(
                 f"Unsupported kind '{kind}' in {manifest_path}"
             )
     return objects
 
 
-def _find_jobset(objects: list[dict], experiment_dir: str) -> dict:
+def _find_job(objects: list[dict], experiment_dir: str) -> dict:
     for obj in objects:
-        if obj["kind"] == "JobSet" and obj.get("metadata", {}).get("name"):
+        if obj["kind"] == "Job" and obj.get("metadata", {}).get("name"):
             return obj
     raise ChsSchedulerException(
-        f"JobSet kind not found in {experiment_dir}/jobset.yaml"
+        f"Job kind not found in {experiment_dir}/jobset.yaml"
     )
 
 
 def _apply_object(obj: dict) -> None:
     if obj["kind"] == "Secret":
         k8s_client.apply_secret(body=obj)
+    elif obj["kind"] == "Job":
+        k8s_client.apply_job(body=obj)
     else:
         k8s_client.apply_custom_object(
             plural=_CUSTOM_RESOURCE_PLURALS[obj["kind"]], body=obj
@@ -145,6 +147,30 @@ def _apply_objects(objects: list[dict]) -> None:
                     e,
                 )
                 time.sleep(delay)
+
+
+def _job_condition(job: dict, condition_type: str) -> dict | None:
+    """Returns the Job's condition of the given type if it is True."""
+    for condition in job.get("status", {}).get("conditions") or []:
+        if (
+            condition.get("type") == condition_type
+            and condition.get("status") == "True"
+        ):
+            return condition
+    return None
+
+
+def _worker_service(namespace: str) -> dict:
+    return {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"name": WORKER_SERVICE_NAME, "namespace": namespace},
+        "spec": {
+            "clusterIP": "None",
+            "publishNotReadyAddresses": True,
+            "selector": {WORKER_LABEL: "true"},
+        },
+    }
 
 
 @dataclass
@@ -290,16 +316,6 @@ class KubernetesScheduler(BaseScheduler):
 
         return sorted(unique_types)
 
-    def run_preflight_checks(
-        self,
-        tests: list[dict[str, Any]] | None = None,
-        workspace_name: str | None = None,
-        run_id: str | None = None,
-    ) -> list[dict[str, Any]] | None:
-        """Checks for JobSet dependencies on Kubernetes."""
-        preflight_checker = KubernetesPreflightChecker(self)
-        return preflight_checker.check(tests)
-
     def setup_scheduler_resources(
         self,
         workspace_config_dir: str,
@@ -348,8 +364,9 @@ class KubernetesScheduler(BaseScheduler):
         return None
 
     def _ensure_namespace_exists(self) -> None:
-        """Ensures the chs namespace exists before deploying resources."""
+        """Ensures the chs namespace and worker Service exist."""
         k8s_client.create_namespace_if_not_exists(name=CHS_NAMESPACE)
+        k8s_client.apply_service(body=_worker_service(CHS_NAMESPACE))
 
     def _delete_namespace(self) -> bool:
         """Deletes the chs namespace during cleanup."""
@@ -1048,163 +1065,98 @@ class KubernetesScheduler(BaseScheduler):
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-    def _check_and_update_deadlines(
-        self, failed_jobset_ids: list[str], statuses: dict[str, str]
-    ) -> None:
-        """Batch checks jobs for deadline exceeded and updates statuses."""
-        try:
-            failed_set = set(failed_jobset_ids)
-            label_selector = (
-                "jobset.sigs.k8s.io/jobset-name in "
-                f"({','.join(failed_jobset_ids)})"
-                if len(failed_jobset_ids) <= 50
-                else None
-            )
-            jobs_data = k8s_client.list_jobs(
-                namespace=CHS_NAMESPACE, label_selector=label_selector
-            )
-            deadlined_jobsets = set()
-
-            for job in jobs_data:
-                jobset_name = (
-                    job.get("metadata", {})
-                    .get("labels", {})
-                    .get("jobset.sigs.k8s.io/jobset-name")
-                )
-                if (
-                    not jobset_name
-                    or jobset_name not in failed_set
-                    or jobset_name in deadlined_jobsets
-                ):
-                    continue
-
-                for condition in job.get("status", {}).get("conditions", []):
-                    if (
-                        condition.get("type") == "Failed"
-                        and condition.get("status") == "True"
-                        and condition.get("reason") == "DeadlineExceeded"
-                    ):
-                        deadlined_jobsets.add(jobset_name)
-                        statuses[jobset_name] = JobStatus.TIMEOUT.value
-                        break
-        except (
-            k8s_client.KubeError,
-            AttributeError,
-            TypeError,
-        ) as e:
-            logger.debug("Failed to batch check deadlines: %s", e)
-
-    def _evaluate_jobset_status(self, jobset_data: dict) -> str:
-        """Evaluates JobSet conditions and fallbacks to active count."""
-        status = jobset_data.get("status", {})
-
-        conditions = status.get("conditions", [])
-        for condition in conditions:
-            condition_type = condition.get("type", "")
-            is_true = condition.get("status") == "True"
-
-            if condition_type == "Completed" and is_true:
-                return "Completed"
-            elif condition_type == "Failed" and is_true:
-                return "Failed"
-
-        replicated_jobs = status.get("replicatedJobsStatus", [])
-        is_pending = all(
-            job.get("active", 0) == 0 and job.get("failed", 0) == 0
-            for job in replicated_jobs
-        )
-        return "PENDING" if is_pending else "RUNNING"
+    @staticmethod
+    def _evaluate_job_status(job: dict) -> str:
+        """Returns the JobStatus value of a batch/v1 Job."""
+        if _job_condition(job, "Complete"):
+            return JobStatus.COMPLETED.value
+        failed = _job_condition(job, "Failed")
+        if failed:
+            if failed.get("reason") == "DeadlineExceeded":
+                return JobStatus.TIMEOUT.value
+            return JobStatus.UNKNOWN.value
+        status = job.get("status", {})
+        if status.get("failed", 0) > 0:
+            return JobStatus.UNKNOWN.value
+        if status.get("active", 0) == 0:
+            return JobStatus.PENDING.value
+        return JobStatus.RUNNING.value
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         """Gets the status of the given jobs from the Kubernetes API."""
         if not job_ids:
             return {}
         try:
-            jobsets = self._list_jobsets()
+            jobs = self._list_jobs()
         except k8s_client.KubeError as e:
             logger.warning(
                 "Failed to retrieve the current execution statuses "
-                "for the scheduled JobSets. Error: %s",
+                "for the scheduled Jobs. Error: %s",
                 e,
             )
             return {j: JobStatus.UNKNOWN.value for j in job_ids}
-        return self._statuses_from_jobsets(jobsets, job_ids)
+        return self._statuses_from_jobs(jobs, job_ids)
 
     def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
-        """Starts waiting JobSets with free nodes and returns job statuses."""
+        """Starts waiting Jobs with free nodes and returns job statuses."""
         if not job_ids:
             return {}
         try:
-            jobsets = self._list_jobsets()
+            jobs = self._list_jobs()
         except k8s_client.KubeError as e:
             raise ChsSchedulerException(
-                f"Failed to list the CHS JobSets: {e}"
+                f"Failed to list the CHS Jobs: {e}"
             ) from e
-        statuses = self._statuses_from_jobsets(jobsets, job_ids)
-        self._start_jobsets(plan_admissions(jobsets, job_ids))
+        statuses = self._statuses_from_jobs(jobs, job_ids)
+        self._start_jobs(plan_admissions(jobs, job_ids))
         return statuses
 
     @staticmethod
-    def _list_jobsets() -> list[dict]:
-        return k8s_client.list_custom_objects(
-            group=_JOBSET_GROUP,
-            version=_JOBSET_VERSION,
-            plural="jobsets",
-            namespace=CHS_NAMESPACE,
-        )
+    def _list_jobs() -> list[dict]:
+        return k8s_client.list_jobs(namespace=CHS_NAMESPACE)
 
-    def _statuses_from_jobsets(
-        self, jobsets: list[dict], job_ids: list[str]
+    def _statuses_from_jobs(
+        self, jobs: list[dict], job_ids: list[str]
     ) -> dict[str, str]:
         statuses = {j: JobStatus.UNKNOWN.value for j in job_ids}
         try:
-            failed_jobset_ids = []
-            for jobset in jobsets:
-                job_id = jobset.get("metadata", {}).get("name")
+            for job in jobs:
+                job_id = job.get("metadata", {}).get("name")
                 if job_id in statuses:
-                    raw_status = self._evaluate_jobset_status(jobset)
-                    if raw_status == "Failed":
-                        failed_jobset_ids.append(job_id)
-                    statuses[job_id] = JobStatus.from_string(raw_status)
-
-            if failed_jobset_ids:
-                self._check_and_update_deadlines(failed_jobset_ids, statuses)
+                    statuses[job_id] = self._evaluate_job_status(job)
         except (AttributeError, TypeError) as e:
             logger.warning(
                 "Failed to retrieve the current execution statuses "
-                "for the scheduled JobSets. Error: %s",
+                "for the scheduled Jobs. Error: %s",
                 e,
             )
         return statuses
 
-    def _start_jobsets(self, names: list[str]) -> None:
+    def _start_jobs(self, names: list[str]) -> None:
         if not names:
             return
         executor = ThreadPoolExecutor(
             max_workers=min(len(names), _API_MAX_CONCURRENCY)
         )
         try:
-            list(executor.map(self._start_jobset, names))
+            list(executor.map(self._start_job, names))
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
-    def _start_jobset(name: str) -> None:
+    def _start_job(name: str) -> None:
         try:
-            k8s_client.patch_custom_object(
-                group=_JOBSET_GROUP,
-                version=_JOBSET_VERSION,
-                plural="jobsets",
+            k8s_client.patch_job(
                 name=name,
                 namespace=CHS_NAMESPACE,
                 body={"spec": {"suspend": False}},
             )
-            logger.debug("Started JobSet '%s'.", name)
+            logger.debug("Started Job '%s'.", name)
         except k8s_client.KubeError as e:
-            logger.warning("Failed to start JobSet '%s'. Error: %s", name, e)
+            logger.warning("Failed to start Job '%s'. Error: %s", name, e)
 
     def get_unschedulable_jobs(self, job_ids: list[str]) -> list[str]:
-        """Returns JobSets that could not schedule all of their pods."""
+        """Returns Jobs that could not schedule all of their pods."""
         if not job_ids:
             return []
         job_id_set = set(job_ids)
@@ -1216,7 +1168,7 @@ class KubernetesScheduler(BaseScheduler):
         except k8s_client.KubeError as e:
             logger.warning(
                 "Failed to list pending pods to check for unschedulable "
-                "JobSets. Error: %s",
+                "Jobs. Error: %s",
                 e,
             )
             return []
@@ -1225,8 +1177,8 @@ class KubernetesScheduler(BaseScheduler):
         unschedulable = set()
         for pod in pods:
             metadata = pod["metadata"]
-            jobset_name = metadata.get("labels", {}).get(_JOBSET_NAME_LABEL)
-            if jobset_name not in job_id_set:
+            job_name = metadata.get("labels", {}).get(_JOB_NAME_LABEL)
+            if job_name not in job_id_set:
                 continue
             created = datetime.datetime.fromisoformat(
                 metadata["creationTimestamp"].replace("Z", "+00:00")
@@ -1240,7 +1192,7 @@ class KubernetesScheduler(BaseScheduler):
                 and c.get("reason") == "Unschedulable"
                 for c in pod.get("status", {}).get("conditions", [])
             ):
-                unschedulable.add(jobset_name)
+                unschedulable.add(job_name)
         return sorted(unschedulable)
 
     @staticmethod
@@ -1249,20 +1201,16 @@ class KubernetesScheduler(BaseScheduler):
         return "tpu-" in job_id
 
     def _get_pods(self, job_id: str, head_pod_only: bool = False) -> list[dict]:
-        """Queries Kubernetes for the pods of a JobSet."""
+        """Queries Kubernetes for the pods of a Job."""
+        label_selector = f"{_JOB_NAME_LABEL}={job_id}"
         if head_pod_only:
-            label_selector = (
-                f"jobset.sigs.k8s.io/jobset-name={job_id},"
-                "batch.kubernetes.io/job-completion-index=0"
-            )
-        else:
-            label_selector = f"jobset.sigs.k8s.io/jobset-name={job_id}"
+            label_selector += f",{_JOB_COMPLETION_INDEX_LABEL}=0"
         try:
             pods = k8s_client.list_pods(
                 namespace=CHS_NAMESPACE, label_selector=label_selector
             )
         except k8s_client.KubeError as e:
-            logger.debug("Failed to query pods for JobSet %s: %s", job_id, e)
+            logger.debug("Failed to query pods for Job %s: %s", job_id, e)
             return []
         return pods[:1] if head_pod_only else pods
 
@@ -1273,15 +1221,13 @@ class KubernetesScheduler(BaseScheduler):
 
     def fetch_job_log(self, job_id: str, log_path: str) -> None:
         """Fetches the log for a completed Kubernetes job."""
-        logger.debug("Fetching logs for JobSet %s to %s", job_id, log_path)
+        logger.debug("Fetching logs for Job %s to %s", job_id, log_path)
         temp_paths: list[str] = []
         try:
             is_tpu = self._is_tpu_job(job_id)
             pods = self._get_pods(job_id, head_pod_only=not is_tpu)
             if not pods:
-                logger.debug(
-                    "No pods found to fetch logs for JobSet %s.", job_id
-                )
+                logger.debug("No pods found to fetch logs for Job %s.", job_id)
                 return
             logger.debug(
                 "Fetching logs from %d pods: %s",
@@ -1320,7 +1266,7 @@ class KubernetesScheduler(BaseScheduler):
                 future.result()
         except k8s_client.KubeError as e:
             logger.error(
-                "Failed to retrieve execution logs for JobSet '%s'. "
+                "Failed to retrieve execution logs for Job '%s'. "
                 "Result parsing may be incomplete. Error: %s",
                 job_id,
                 e,
@@ -1340,44 +1286,42 @@ class KubernetesScheduler(BaseScheduler):
                     pass
 
     def extract_job_id(self, experiment_dir: str) -> str:
-        """Extracts the job ID (JobSet name) from the experiment directory."""
+        """Extracts the job ID (Job name) from the experiment directory."""
         objects = _read_manifests(experiment_dir)
-        return _find_jobset(objects, experiment_dir)["metadata"]["name"]
+        return _find_job(objects, experiment_dir)["metadata"]["name"]
 
     def submit_experiments(self, experiment_dirs: list[str]) -> dict[str, str]:
         """Creates the Kubernetes objects of each experiment."""
         if not experiment_dirs:
             return {}
         objects_by_dir = {d: _read_manifests(d) for d in experiment_dirs}
-        jobset_by_dir = {
-            d: _find_jobset(objects, d) for d, objects in objects_by_dir.items()
+        job_by_dir = {
+            d: _find_job(objects, d) for d, objects in objects_by_dir.items()
         }
-        jobsets = list(jobset_by_dir.values())
-        for jobset in jobsets:
-            jobset["spec"]["suspend"] = True
+        jobs = list(job_by_dir.values())
+        for job in jobs:
+            job["spec"]["suspend"] = True
         try:
-            existing_jobsets = self._list_jobsets()
+            existing_jobs = self._list_jobs()
         except k8s_client.KubeError as e:
             raise ChsSchedulerException(
-                f"Failed to list the CHS JobSets: {e}"
+                f"Failed to list the CHS Jobs: {e}"
             ) from e
-        queue = [jobset["metadata"]["name"] for jobset in jobsets]
-        start_now = set(plan_admissions(existing_jobsets + jobsets, queue))
-        for jobset in jobsets:
-            if jobset["metadata"]["name"] in start_now:
-                jobset["spec"]["suspend"] = False
+        queue = [job["metadata"]["name"] for job in jobs]
+        start_now = set(plan_admissions(existing_jobs + jobs, queue))
+        for job in jobs:
+            if job["metadata"]["name"] in start_now:
+                job["spec"]["suspend"] = False
         logger.debug(
             "Creating %d experiments, %d of them start immediately.",
             len(experiment_dirs),
             len(start_now),
         )
         submission_order = sorted(
-            experiment_dirs, key=lambda d: jobset_by_dir[d]["spec"]["suspend"]
+            experiment_dirs, key=lambda d: job_by_dir[d]["spec"]["suspend"]
         )
         self._create_objects(submission_order, objects_by_dir)
-        return {
-            jobset_by_dir[d]["metadata"]["name"]: d for d in experiment_dirs
-        }
+        return {job_by_dir[d]["metadata"]["name"]: d for d in experiment_dirs}
 
     @staticmethod
     def _create_objects(
@@ -1644,88 +1588,76 @@ class KubernetesScheduler(BaseScheduler):
             self._delete_job_secrets()
 
     def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given JobSets by deleting them via the Kubernetes API."""
+        """Cancels the given Jobs by deleting them via the Kubernetes API."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
             return
 
         try:
-            k8s_client.delete_custom_objects(
-                group=_JOBSET_GROUP,
-                version=_JOBSET_VERSION,
-                plural="jobsets",
+            k8s_client.delete_jobs(
                 object_names=job_ids,
                 namespace=CHS_NAMESPACE,
                 wait_timeout_seconds=DELETE_WAIT_TIMEOUT_SEC,
             )
-            logger.debug("Successfully deleted JobSets: %s", ", ".join(job_ids))
+            logger.debug("Successfully deleted Jobs: %s", ", ".join(job_ids))
         except k8s_client.KubeError as e:
             logger.error(
                 "Encountered an error while attempting to "
-                "delete active JobSets. Error: %s",
+                "delete active Jobs. Error: %s",
                 e,
             )
 
         self._delete_job_secrets(job_ids)
 
     def get_active_job_names(self) -> list[str]:
-        """Returns a list of active job names (JobSets) on the cluster."""
+        """Returns the names of active CHS Jobs on the cluster."""
         try:
-            jobsets = k8s_client.list_custom_objects(
-                group=_JOBSET_GROUP,
-                version=_JOBSET_VERSION,
-                plural="jobsets",
-                namespace=CHS_NAMESPACE,
-            )
-            job_names = [
-                jobset.get("metadata", {}).get("name") for jobset in jobsets
+            jobs = self._list_jobs()
+            names = [
+                job.get("metadata", {}).get("name")
+                for job in jobs
+                if not _job_condition(job, "Complete")
+                and not _job_condition(job, "Failed")
             ]
-            return [name for name in job_names if name]
+            return [name for name in names if name]
         except k8s_client.KubeError as e:
             if e.status is None:
                 raise ChsSchedulerException(
-                    "Failed to list active JobSets; cannot verify that no "
+                    "Failed to list active Jobs; cannot verify that no "
                     f"other CHS run is in progress: {e}"
                 ) from e
             logger.warning(
-                "Failed to retrieve the list of active JobSets "
+                "Failed to retrieve the list of active Jobs "
                 "from the cluster. Error: %s",
                 e,
             )
             return []
 
     def cancel_jobs_by_prefix(self, prefix: str) -> None:
-        """Cancels all JobSets matching the specified prefix natively."""
+        """Cancels all Jobs matching the specified prefix natively."""
         logger.debug("Attempting native cancel for prefix: %s", prefix)
         sanitized_match = prefix.replace("_", "-").replace(".", "-").lower()
 
         try:
-            jobsets = k8s_client.list_custom_objects(
-                group=_JOBSET_GROUP,
-                version=_JOBSET_VERSION,
-                plural="jobsets",
-                namespace=CHS_NAMESPACE,
-            )
-            if not jobsets:
+            jobs = self._list_jobs()
+            if not jobs:
                 return
 
-            job_names = [
-                jobset.get("metadata", {}).get("name") for jobset in jobsets
-            ]
+            job_names = [job.get("metadata", {}).get("name") for job in jobs]
             job_ids = [
                 name for name in job_names if name and sanitized_match in name
             ]
 
             if job_ids:
                 logger.debug(
-                    "Found %d JobSets to cancel matching %s.",
+                    "Found %d Jobs to cancel matching %s.",
                     len(job_ids),
                     prefix,
                 )
                 self.cancel_jobs(job_ids)
             else:
-                logger.debug("No matching JobSets found for %s.", prefix)
-        except Exception as e:
+                logger.debug("No matching Jobs found for %s.", prefix)
+        except k8s_client.KubeError as e:
             logger.warning(
                 "Failed to execute native job cancellation "
                 "via Kubernetes. Error: %s",

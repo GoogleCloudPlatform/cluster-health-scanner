@@ -16,8 +16,6 @@ cluster_name: chs-kind-cluster
 project: chs-test-project
 default_zone: us-east5-c
 dependencies:
-  jobset:
-    version: v0.6.0
   gke_multinetwork:
     enabled: true
 nodepools:

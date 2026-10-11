@@ -713,45 +713,6 @@ class IntegrationValidator:
             )
             return ValidationReport(passed=passed, results=results)
 
-        # Check for preflight dependency failures (e.g. JobSet missing)
-        deps = (
-            blueprint_config.get("dependencies", {})
-            if isinstance(blueprint_config.get("dependencies"), dict)
-            else {}
-        )
-        jobset_dep = (
-            deps.get("jobset", {})
-            if isinstance(deps.get("jobset"), dict)
-            else {}
-        )
-        jobset_disabled = jobset_dep.get("enabled") is False or str(
-            jobset_dep.get("state", "")
-        ).upper() in ("DISABLED", "MISSING", "MISSING_JOBSET")
-        if jobset_disabled:
-            passed = (
-                exit_code != 0
-                and "JobSet is missing or incompatible" in combined_output
-            )
-            results.append(
-                CheckResult(
-                    check_name="jobset_preflight_failure_expected",
-                    passed=passed,
-                    message=(
-                        "JobSet missing preflight error verified in CHS output"
-                        if passed
-                        else "Expected JobSet missing error missing from output"
-                    ),
-                    expected=(
-                        "exit_code != 0 and 'JobSet is missing or incompatible'"
-                    ),
-                    actual=(
-                        f"exit_code={exit_code}, "
-                        f"output={combined_output[-200:]}"
-                    ),
-                )
-            )
-            return ValidationReport(passed=passed, results=results)
-
         passed_exit = exit_code == 0
         results.append(
             CheckResult(

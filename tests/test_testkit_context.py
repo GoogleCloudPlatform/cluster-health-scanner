@@ -21,6 +21,8 @@ import textwrap
 import unittest
 from unittest import mock
 
+import yaml
+
 from chs.testkit import context as ctx
 
 
@@ -72,7 +74,25 @@ class KubernetesAffinityTest(unittest.TestCase):
         ctx.apply_kubernetes_affinity(values, "            - node-1")
 
         self.assertIn("kubernetes.io/hostname", values["affinity_yaml"])
-        self.assertIn("podAntiAffinity", values["affinity_yaml"])
+        affinity = yaml.safe_load(values["affinity_yaml"])
+        self.assertEqual(
+            affinity["podAntiAffinity"],
+            {
+                "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                        "labelSelector": {
+                            "matchExpressions": [
+                                {
+                                    "key": "chs.gke.io/worker",
+                                    "operator": "Exists",
+                                }
+                            ]
+                        },
+                        "topologyKey": "kubernetes.io/hostname",
+                    }
+                ]
+            },
+        )
 
     def test_without_nodes_affinity_is_empty(self):
         values = {}
@@ -432,11 +452,61 @@ class SliceContextTest(unittest.TestCase):
         )
 
         static, dynamic = (c[1]["variables"] for c in contexts)
-        self.assertNotIn("jobset_annotations_yaml", static)
-        self.assertIn("exclusive-topology", dynamic["jobset_annotations_yaml"])
+        self.assertNotIn("jobset_annotations_yaml", dynamic)
+        self.assertNotIn("podAffinity", static["affinity_yaml"])
         self.assertIn("2x2x2", dynamic["pod_annotations_yaml"])
+        for ctx_vars in (static, dynamic):
+            self.assertNotIn(ctx.EXCLUSIVE_SLICE_KEY, ctx_vars)
 
-    def test_dynamic_annotations_are_added_to_existing_ones(self):
+        affinity = yaml.safe_load(
+            dynamic["affinity_yaml"].replace("{job_name}", "my-job")
+        )
+        slice_key = "cloud.google.com/gke-tpu-slice"
+        self.assertEqual(
+            affinity["podAffinity"],
+            {
+                "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                        "labelSelector": {
+                            "matchExpressions": [
+                                {
+                                    "key": "batch.kubernetes.io/job-name",
+                                    "operator": "In",
+                                    "values": ["my-job"],
+                                }
+                            ]
+                        },
+                        "topologyKey": slice_key,
+                    }
+                ]
+            },
+        )
+        anti_terms = affinity["podAntiAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]
+        self.assertEqual(
+            [t["topologyKey"] for t in anti_terms],
+            ["kubernetes.io/hostname", slice_key],
+        )
+        self.assertEqual(
+            anti_terms[1]["labelSelector"]["matchExpressions"],
+            [
+                {"key": "chs.gke.io/worker", "operator": "Exists"},
+                {
+                    "key": "batch.kubernetes.io/job-name",
+                    "operator": "NotIn",
+                    "values": ["my-job"],
+                },
+            ],
+        )
+        self.assertIn(
+            "node-2",
+            affinity["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"],
+        )
+
+    def test_dynamic_slice_keeps_existing_job_annotations(self):
         contexts = self.build(
             variables(
                 tpu_slices={"b": ["node-2"]},
@@ -445,9 +515,9 @@ class SliceContextTest(unittest.TestCase):
             )
         )
 
-        annotations = contexts[0][1]["variables"]["jobset_annotations_yaml"]
-        self.assertTrue(annotations.startswith("keep: me\\n"))
-        self.assertIn("exclusive-topology", annotations)
+        self.assertEqual(
+            contexts[0][1]["variables"]["jobset_annotations_yaml"], "keep: me"
+        )
 
     def test_slurm_collapses_to_a_single_node_matrix(self):
         contexts = self.build(variables(scheduler="slurm"))
