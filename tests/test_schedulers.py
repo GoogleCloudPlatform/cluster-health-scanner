@@ -1776,13 +1776,14 @@ ramble:
         cases = {
             "done": {"conditions": [{"type": "Complete", "status": "True"}]},
             "timed-out": {
+                "failed": 1,
                 "conditions": [
                     {
                         "type": "Failed",
                         "status": "True",
                         "reason": "DeadlineExceeded",
                     }
-                ]
+                ],
             },
             "failed": {
                 "failed": 1,
@@ -1823,7 +1824,7 @@ ramble:
                 "done": "COMPLETED",
                 "timed-out": "TIMEOUT",
                 "failed": "UNKNOWN",
-                "pod-failed-with-active-siblings": "UNKNOWN",
+                "pod-failed-with-active-siblings": "RUNNING",
                 "finishing": "RUNNING",
                 "running": "RUNNING",
                 "pending": "PENDING",

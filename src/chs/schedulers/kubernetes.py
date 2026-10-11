@@ -1076,8 +1076,6 @@ class KubernetesScheduler(BaseScheduler):
                 return JobStatus.TIMEOUT.value
             return JobStatus.UNKNOWN.value
         status = job.get("status", {})
-        if status.get("failed", 0) > 0:
-            return JobStatus.UNKNOWN.value
         if status.get("active", 0) == 0:
             return JobStatus.PENDING.value
         return JobStatus.RUNNING.value

@@ -632,18 +632,43 @@ class ClientFunctionsTest(unittest.TestCase):
                 "spec": {"containers": [{"name": "main"}]},
             }
             out = io.BytesIO()
-            with self.assertRaisesRegex(
-                KubeError, "Failed to read log of pod p2: stream broke"
-            ):
-                k8s_client.stream_pod_log(pod=pod, out=out)
+            with mock.patch.object(k8s_client.time, "sleep") as mock_sleep:
+                with self.assertRaisesRegex(
+                    KubeError, "Failed to read log of pod p2: stream broke"
+                ):
+                    k8s_client.stream_pod_log(pod=pod, out=out)
+                self.assertEqual(mock_sleep.call_count, 3)
             self.assertTrue(resp.released)
             self.assertTrue(resp.closed)
-            self.sdk.core.read_namespaced_pod_log.assert_called_once_with(
-                name="p2",
-                namespace="chs",
-                container="main",
-                _preload_content=False,
-                _request_timeout=120,
+            self.assertEqual(
+                self.sdk.core.read_namespaced_pod_log.call_count, 4
+            )
+
+        with self.subTest("retries on transient error and succeeds"):
+            self.sdk.core.read_namespaced_pod_log.reset_mock()
+            fail_resp = _FakeResponse(
+                chunks=[b"bad\n"],
+                stream_error=urllib3.exceptions.HTTPError("RST_STREAM"),
+            )
+            ok_resp = _FakeResponse(chunks=[b"good log\n"])
+            self.sdk.core.read_namespaced_pod_log.side_effect = [
+                fail_resp,
+                ok_resp,
+            ]
+            pod = {
+                "metadata": {
+                    "name": "p3",
+                    "namespace": "chs",
+                },
+                "spec": {"containers": [{"name": "main"}]},
+            }
+            out = io.BytesIO()
+            with mock.patch.object(k8s_client.time, "sleep") as mock_sleep:
+                k8s_client.stream_pod_log(pod=pod, out=out)
+                self.assertEqual(mock_sleep.call_count, 1)
+            self.assertEqual(out.getvalue(), b"good log\n")
+            self.assertEqual(
+                self.sdk.core.read_namespaced_pod_log.call_count, 2
             )
 
     def test_create_and_delete_namespace(self) -> None:

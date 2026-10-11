@@ -259,6 +259,28 @@ def list_pods(*, namespace: str | None = None, **query: Any) -> list[dict]:
     )
 
 
+_LOG_STREAM_MAX_RETRIES = 3
+_LOG_STREAM_INITIAL_BACKOFF = 0.5
+
+
+def _stream_once(
+    sdk: SimpleNamespace, name: str, namespace: str, out: BinaryIO, query: dict
+) -> None:
+    response = _open(
+        sdk.core.read_namespaced_pod_log,
+        name=name,
+        namespace=namespace,
+        **query,
+    )
+    try:
+        for chunk in response.stream():
+            out.write(chunk)
+    except sdk.transport_error as e:
+        raise KubeError(f"Failed to read log of pod {name}: {e}") from e
+    finally:
+        _close_response(response)
+
+
 def stream_pod_log(*, pod: dict, out: BinaryIO, **query: Any) -> None:
     """Writes the log of the pod's default (or specified) container to out."""
     metadata = pod["metadata"]
@@ -267,21 +289,22 @@ def stream_pod_log(*, pod: dict, out: BinaryIO, **query: Any) -> None:
             "kubectl.kubernetes.io/default-container"
         ) or pod["spec"]["containers"][0]["name"]
     sdk = _sdk()
-    response = _open(
-        sdk.core.read_namespaced_pod_log,
-        name=metadata["name"],
-        namespace=metadata.get("namespace") or sdk.namespace,
-        **query,
-    )
-    try:
-        for chunk in response.stream():
-            out.write(chunk)
-    except sdk.transport_error as e:
-        raise KubeError(
-            f"Failed to read log of pod {metadata['name']}: {e}"
-        ) from e
-    finally:
-        _close_response(response)
+    name = metadata["name"]
+    namespace = metadata.get("namespace") or sdk.namespace
+    start_pos = out.tell() if out.seekable() else None
+    for attempt in range(_LOG_STREAM_MAX_RETRIES + 1):
+        if attempt > 0 and start_pos is not None:
+            out.seek(start_pos)
+            out.truncate()
+        try:
+            _stream_once(sdk, name, namespace, out, query)
+            return
+        except KubeError as e:
+            if attempt == _LOG_STREAM_MAX_RETRIES or (
+                e.status is not None and e.status < 500 and e.status != 429
+            ):
+                raise
+        time.sleep(_LOG_STREAM_INITIAL_BACKOFF * (2**attempt))
 
 
 def create_namespace_if_not_exists(*, name: str, **query: Any) -> None:
