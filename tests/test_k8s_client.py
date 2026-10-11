@@ -637,11 +637,19 @@ class ClientFunctionsTest(unittest.TestCase):
                     KubeError, "Failed to read log of pod p2: stream broke"
                 ):
                     k8s_client.stream_pod_log(pod=pod, out=out)
-                self.assertEqual(mock_sleep.call_count, 3)
+                self.assertEqual(mock_sleep.call_count, 4)
+                mock_sleep.assert_has_calls(
+                    [
+                        mock.call(1.0),
+                        mock.call(2.0),
+                        mock.call(4.0),
+                        mock.call(8.0),
+                    ]
+                )
             self.assertTrue(resp.released)
             self.assertTrue(resp.closed)
             self.assertEqual(
-                self.sdk.core.read_namespaced_pod_log.call_count, 4
+                self.sdk.core.read_namespaced_pod_log.call_count, 5
             )
 
         with self.subTest("retries on transient error and succeeds"):
@@ -665,7 +673,7 @@ class ClientFunctionsTest(unittest.TestCase):
             out = io.BytesIO()
             with mock.patch.object(k8s_client.time, "sleep") as mock_sleep:
                 k8s_client.stream_pod_log(pod=pod, out=out)
-                self.assertEqual(mock_sleep.call_count, 1)
+                mock_sleep.assert_called_once_with(1.0)
             self.assertEqual(out.getvalue(), b"good log\n")
             self.assertEqual(
                 self.sdk.core.read_namespaced_pod_log.call_count, 2

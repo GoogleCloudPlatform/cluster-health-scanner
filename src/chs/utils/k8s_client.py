@@ -259,8 +259,8 @@ def list_pods(*, namespace: str | None = None, **query: Any) -> list[dict]:
     )
 
 
-_LOG_STREAM_MAX_RETRIES = 3
-_LOG_STREAM_INITIAL_BACKOFF = 0.5
+_LOG_STREAM_MAX_RETRIES = 4
+_LOG_STREAM_INITIAL_BACKOFF = 1.0
 
 
 def _stream_once(
