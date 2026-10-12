@@ -10,16 +10,16 @@ All development should be done on the `develop` branch. Main branch is strictly 
 *   Python 3.10 or higher
 *   `git`
 *   `pip`
-*   Access to the Gerrit repository
 
-### Cloning the Repository
+### Forking and Cloning the Repository
 
-Clone the repository from Gerrit:
+1. Fork the [GoogleCloudPlatform/cluster-health-scanner](https://github.com/GoogleCloudPlatform/cluster-health-scanner) repository on GitHub (make sure to uncheck *"Copy the `main` branch only"* so your fork includes the `develop` branch).
+2. Clone your fork locally and add the upstream repository as a remote:
 
 ```bash
-git clone -b develop https://cluster-toolkit.googlesource.com/cluster-health-scanner chs
-
+git clone -b develop https://github.com/<your-username>/cluster-health-scanner.git chs
 cd chs
+git remote add upstream https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
 ```
 
 ### Environment Setup
@@ -57,7 +57,13 @@ python3 setup.py build_py
 ```
 This will regenerate files in `src/chs/protos/`.
 
-### Container Image Dependencies
+### Container Image Dependencies & Local Docker Build
+
+To build and test the CHS container image locally from source:
+
+```bash
+docker build -t chs:dev .
+```
 
 The Docker image installs third-party Python packages only from hash-pinned lockfiles. Every `pip install` in the `Dockerfile` must either use `--require-hashes` or install a local source tree with `--no-deps --no-index`.
 
@@ -111,7 +117,7 @@ pre-commit run --all-files
 *   **YAML:** Syntax and formatting (`check-yaml`).
 *   **Python:** Formatting (`black`) and linting (`ruff`).
 *   **Whitespace:** Trailing whitespace and end-of-file validation.
-*   **Lockfiles:** `requirements.txt` and `requirements-system.txt` match their inputs (`pip-compile`, see [Container Image Dependencies](#container-image-dependencies)).
+*   **Lockfiles:** `requirements.txt` and `requirements-system.txt` match their inputs (`pip-compile`, see [Container Image Dependencies & Local Docker Build](#container-image-dependencies--local-docker-build)).
 
 ## 3. Running Tests
 
@@ -134,13 +140,13 @@ Code coverage is also enforced locally via our `pre-commit` hooks. You can run t
 
 Tests should be run from the root of the repository. Ensure your virtual environment is activated and dependencies are installed.
 
-## 4. Code Review Process (Gerrit)
+## 4. Submitting Changes (GitHub Pull Requests)
 
-We use Gerrit for code reviews.
+All external contributions are developed in your personal fork and submitted via GitHub Pull Requests targeting the **`develop`** branch of `GoogleCloudPlatform/cluster-health-scanner`. Direct pushes to the upstream repository are disabled. See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor license agreement (CLA) and review details.
 
 ### Setup (First Time Only)
 
-Ensure your git user and email match your Gerrit account.
+Ensure your Git author name and email match the account associated with your Google CLA:
 
 ```bash
 git config --global user.name "Your Name"
@@ -149,52 +155,35 @@ git config --global user.email "your-email@example.com"
 
 ### Workflow
 
-1.  **Create a local branch:**
+1.  **Sync with `upstream/develop` and create a feature branch in your fork:**
     ```bash
-    git checkout -b feature/my-new-feature
+    git fetch upstream
+    git checkout -b feature/my-new-feature upstream/develop
     ```
 
-2.  **Make changes and commit:**
+2.  **Make changes, validate locally, and commit:**
     ```bash
+    pre-commit run --all-files
+    coverage run -m unittest discover tests
     git add .
     git commit
     ```
-    *   **Commit Message:** Follow standard git commit conventions.
-        *   First line: Short summary (Imperative mood).
-        *   Body: Detailed explanation.
-        *   Footer: Issue reference if applicable.
+    *   **Commit Message:** Follow standard Git commit conventions:
+        *   First line: Short summary (imperative mood).
+        *   Body: Detailed explanation of what changed and why.
+        *   Footer: GitHub Issue reference if applicable (e.g., `Fixes #123`).
 
-3.  **Upload for Review:**
+3.  **Push the branch to your fork (`origin`) and open a Pull Request:**
     ```bash
-    git push origin HEAD:refs/for/develop
+    git push -u origin feature/my-new-feature
     ```
+    On GitHub, open a Pull Request from your fork's `feature/my-new-feature` branch targeting the **`develop`** branch of `GoogleCloudPlatform/cluster-health-scanner` (`main` is reserved for stable releases and does not accept PRs).
 
-4.  **Address Feedback:**
-    *   make changes locally.
-    *   Amend the previous commit:
-        ```bash
-        git add .
-        git commit --amend
-        ```
-    *   Push the update:
-        ```bash
-        git push origin HEAD:refs/for/develop
-        ```
+4.  **Automated Checks & Review:**
+    *   GitHub Actions will verify `google-cla`, `pre-commit` checks, unit tests, and vulnerability scanning.
+    *   Address review comments by pushing additional commits to your fork's branch or rebasing onto `upstream/develop`. Once approved by a maintainer, the PR will be imported, validated, and merged automatically.
 
-## 5. AI-Assisted Development & Review
-
-We leverage the **Gerrit Review Agent** to provide automated, AI-driven insights during the code review process. The agent automatically analyzes CLs and suggests improvements based on project-specific context.
-
-### Coordination with `.gemini/`
-
-The Review Agent (and other Gemini-based dev tools) uses the files in the `.gemini/` directory to understand the project's architecture, goals, and coding standards:
-
-*   **`GEMINI.md`**: Provides the project context, architecture overview, and layer responsibilities.
-*   **`styleguide.md`**: Outlines the project's coding style, and best practices.
-
-Contributors are encouraged to keep these files updated as the project evolves, as the quality of the AI's feedback directly depends on the accuracy of this documentation.
-
-## 7. Adding Plugins (Directory-Based)
+## 5. Adding Plugins (Directory-Based)
 
 For better scalability and organization, CHS uses a directory-based plugin architecture. Each plugin should be its own Python package.
 
@@ -246,7 +235,7 @@ The `test_name` is used as a prefix to match against the raw Ramble experiment n
 
 By using a directory-based structure, you can easily add other abstractions (e.g., `data_processors`, `validators`) as separate files within the plugin package, keeping the codebase clean and modular.
 
-## 8. Resources
+## 6. Resources
 
-*   [Style Guide](.gemini/styleguide.md): Coding standards and conventions.
+*   [Contributing Guide](CONTRIBUTING.md): CLA, pull request lifecycle, and review guidelines.
 *   [README](README.md): Project overview and usage instructions.
