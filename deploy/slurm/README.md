@@ -4,7 +4,7 @@ Steps to do before running the scripts:
 
 *   Login to the Slurm login node.
 
-*   Run `git clone
+*   Run `git clone -b legacy-archive
     https://github.com/GoogleCloudPlatform/cluster-health-scanner.git` to
     download code to your login node.
 

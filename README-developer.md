@@ -304,7 +304,7 @@ health check. It uses the code found in the [`src/`](src/) directory.
 
 After the images have been built and uploaded to a registry, the Helm chart for
 the Health Runner can be installed as described in the
-[Usage README](https://github.com/GoogleCloudPlatform/cluster-health-scanner?tab=readme-ov-file#3-running-chs)
+[Usage README](https://github.com/GoogleCloudPlatform/cluster-health-scanner/blob/legacy-archive/README.md#3-advanced-running-via-helm)
 but instead specifying the image repo and tag for the health check in the
 configuration.
 

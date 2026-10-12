@@ -1,5 +1,11 @@
 # Cluster Health Scanner
 
+> [!IMPORTANT]
+> **Legacy Version (`legacy-archive`):** This snapshot preserves the legacy v1 (`cluster_diag` / Helm `health_runner`) implementation of Cluster Health Scanner under the immutable [`legacy-archive`](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/legacy-archive) tag.
+>
+> * **Latest Version:** See the [`main` branch](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/main) for the active `chs` CLI release.
+> * **Cloning this legacy snapshot:** `git clone -b legacy-archive https://github.com/GoogleCloudPlatform/cluster-health-scanner.git`
+
 ## 1. Introduction
 
 The
@@ -41,7 +47,7 @@ While currently structured for Google Kubernetes Engine (GKE), CHS can
 theoretically run on clusters using other Kubernetes orchestration
 implementations.
 We have enabled CHS to run on additional cluster orchestrators, such
-as [Slurm](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/main/deploy/slurm/README.md)
+as [Slurm](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/legacy-archive/deploy/slurm/README.md)
 for HPC.
 
 ## 2. Running via `cluster_diag`
@@ -60,7 +66,7 @@ tests.
 NOTE: The `cluster_diag` tool aims to provide a joyful experience for running
 Cluster Health Scanner; however it may not support all use cases. To run CHS
 directly, see the instructions
-[via the instructions in the developer guide](https://github.com/GoogleCloudPlatform/cluster-health-scanner/blob/main/README-developer.md#32-running-chs)
+[via the instructions in the developer guide](https://github.com/GoogleCloudPlatform/cluster-health-scanner/blob/legacy-archive/README-developer.md#32-running-chs)
 .
 
 ### Installation
@@ -72,7 +78,7 @@ Note the following:
 * Python >= 3.9 version is required on the host machine to run the `cluster_diag` CLI.
 * To run `healthscan` command on GKE, helm must be installed. You can install it by following the instructions at https://helm.sh/docs/intro/install/.
 
-1. Clone this repository
+1. Clone this repository (`git clone -b legacy-archive https://github.com/GoogleCloudPlatform/cluster-health-scanner.git`)
 2. If you don't already have them, install dependencies for the CLI:
 
    ```
@@ -558,7 +564,7 @@ health_checks:
 
 To start with, download the repository: with
 ```
-git clone https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
+git clone -b legacy-archive https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
 cd cluster-health-scanner/
 ```
 
