@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.0,<9.0.0",
-    "ramble @ git+https://github.com/Ramble-Project/ramble.git@fbe8ae277e411ffc3e87b8069529a223e62c6a9e",  # May 13, 2026
+    "ramble @ git+https://github.com/Ramble-Project/ramble.git@c4f7213432ff78e7e8f40d9742c44ea199c8f7f7",  # Oct 07, 2026
     "platformdirs>=3.0.0,<5.0.0",
     "protobuf>=4.21.0",
     "rich>=13.0.0",
