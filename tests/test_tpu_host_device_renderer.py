@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from chs.plugins.tpu_host_device.renderer import TpuHostDeviceRenderer
+from chs.tests.tpu_host_device.renderer import TpuHostDeviceRenderer
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import Console
 import os

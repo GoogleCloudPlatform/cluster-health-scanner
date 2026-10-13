@@ -26,6 +26,6 @@ class Plugin(SingleNodePlugin):
         "floating-point compute throughput (TFLOPS) and verify computation "
         "correctness."
     )
-    application = "nvidia-gemm"
+    application = "gemm"
     default_workloads = ("check",)
     experiment_label = "nvidia-gemm"

@@ -292,10 +292,8 @@ class TestRambleManager(unittest.TestCase):
                 manager, "_update_registry"
             ) as mock_update_registry,
         ):
-            mock_scheduler.extract_job_id.side_effect = (
-                lambda path: "nvidia-smi-id"
-                if "nvidia-smi" in path
-                else "chs-id"
+            mock_scheduler.extract_job_id.side_effect = lambda path: (
+                "nvidia-smi-id" if "nvidia-smi" in path else "chs-id"
             )
             job_ids = manager.execute_experiments()
 
@@ -303,7 +301,7 @@ class TestRambleManager(unittest.TestCase):
         mock_update_registry.assert_called_once_with(
             {
                 "nvidia-smi-id": (
-                    "/tmp/workspace/experiments/" "nvidia-smi/local/nvidia-smi"
+                    "/tmp/workspace/experiments/nvidia-smi/local/nvidia-smi"
                 )
             },
             tier=1,
@@ -576,10 +574,8 @@ mycriteria:
     def test_upload_boh_success(self):
         """Test _upload_boh calls provider.upload_file."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_os_path_exists.side_effect = (
-            lambda p: True
-            if "bill_of_health.json" in p
-            else self.real_os_path_exists(p)
+        self.mock_os_path_exists.side_effect = lambda p: (
+            True if "bill_of_health.json" in p else self.real_os_path_exists(p)
         )
         mock_provider = mock.Mock()
         manager._upload_boh(mock_provider)
@@ -591,10 +587,8 @@ mycriteria:
     def test_upload_boh_failure(self):
         """Test _upload_boh returns success=False on provider failure."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        self.mock_os_path_exists.side_effect = (
-            lambda p: True
-            if "bill_of_health.json" in p
-            else self.real_os_path_exists(p)
+        self.mock_os_path_exists.side_effect = lambda p: (
+            True if "bill_of_health.json" in p else self.real_os_path_exists(p)
         )
         mock_provider = mock.Mock()
         mock_provider.upload_file.side_effect = Exception("Upload failed")
@@ -762,6 +756,43 @@ mycriteria:
                 return_value={"is_archived": False}
             )
             self.assertFalse(manager.is_archived())
+
+    def test_add_custom_repository_registers_both_repositories(self):
+        """The engine repository, then the test catalog."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+
+        with mock.patch.object(
+            manager, "_execute_ramble_command", autospec=True
+        ) as mock_ramble:
+            manager.add_custom_repository()
+
+        self.assertEqual(mock_ramble.call_count, 2)
+        engine_args = mock_ramble.call_args_list[0].kwargs["args"]
+        catalog_args = mock_ramble.call_args_list[1].kwargs["args"]
+
+        # The engine repository is added for every object type, so it carries
+        # no type restriction.
+        self.assertEqual(engine_args[0], "add")
+        self.assertNotIn("-t", engine_args)
+        self.assertTrue(engine_args[-1].endswith("repos"))
+
+        # The catalog holds applications and nothing else.
+        self.assertEqual(catalog_args[:3], ["add", "-t", "applications"])
+        self.assertTrue(catalog_args[-1].endswith(os.path.join("chs", "tests")))
+
+    def test_the_test_catalog_is_added_last_so_it_wins(self):
+        """Ramble searches the newest repository first, so order matters."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+
+        with mock.patch.object(
+            manager, "_execute_ramble_command", autospec=True
+        ) as mock_ramble:
+            manager.add_custom_repository()
+
+        paths = [call.kwargs["args"][-1] for call in mock_ramble.call_args_list]
+        self.assertEqual(
+            [os.path.basename(p) for p in paths], ["repos", "tests"]
+        )
 
 
 if __name__ == "__main__":

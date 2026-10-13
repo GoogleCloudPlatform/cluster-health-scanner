@@ -23,21 +23,13 @@ from unittest import mock
 
 import yaml
 
+from chs.testkit import config as chs_config
 from chs.testkit import context as ctx
-
-
-def machine_configs(**app_config):
-    """Builds the smallest configuration a context build will accept."""
-    return {
-        "machine-x": {
-            "variables": {"machine_wide": "yes"},
-            "demo": app_config,
-        }
-    }
 
 
 def variables(**overrides):
     values = {
+        "chs_test_name": "demo",
         "scheduler": "kubernetes",
         "machine_type": "machine-x",
         "nodes": ["node-1", "node-2"],
@@ -46,6 +38,19 @@ def variables(**overrides):
     }
     values.update(overrides)
     return values
+
+
+class StubbedConfigTestCase(unittest.TestCase):
+    """Serves a fixed resolved config instead of reading test files."""
+
+    def setUp(self):
+        patcher = mock.patch.object(
+            ctx.chs_config,
+            "resolve_test",
+            return_value={"variables": {"machine_wide": "yes"}},
+        )
+        self.resolve_test = patcher.start()
+        self.addCleanup(patcher.stop)
 
 
 class NodesStringTest(unittest.TestCase):
@@ -139,56 +144,31 @@ class SbatchHeaderTest(unittest.TestCase):
                     ctx.common_sbatch_headers(values, "node-1")
 
 
-class MergeMachineConfigTest(unittest.TestCase):
-    def test_unknown_machine_type_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "Machine type 'other'"):
-            ctx.merge_machine_config(
-                {"variables": {}}, machine_configs(), "other", "demo"
-            )
-
-    def test_test_missing_from_a_machine_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "Test 'absent' not found"):
-            ctx.merge_machine_config(
-                {"variables": {}}, machine_configs(), "machine-x", "absent"
-            )
-
-    def test_a_context_cannot_be_built_without_a_configuration(self):
-        with self.assertRaisesRegex(ValueError, "Machine configuration"):
-            ctx.build_base_context(
-                {"machine_type": "machine-x"}, None, "demo", "node-1"
-            )
-
+class ResolvedConfigTest(unittest.TestCase):
     def test_caller_values_win_over_configuration(self):
         context = {"variables": {"shared": "from-caller"}}
-        ctx.merge_machine_config(
-            context,
-            machine_configs(variables={"shared": "from-config"}),
-            "machine-x",
-            "demo",
+        ctx.merge_resolved_config(
+            context, {"variables": {"shared": "from-config"}}
         )
 
         self.assertEqual(context["variables"]["shared"], "from-caller")
 
     def test_an_empty_caller_value_is_filled_in(self):
         context = {"variables": {"shared": ""}}
-        ctx.merge_machine_config(
-            context,
-            machine_configs(variables={"shared": "from-config"}),
-            "machine-x",
-            "demo",
+        ctx.merge_resolved_config(
+            context, {"variables": {"shared": "from-config"}}
         )
 
         self.assertEqual(context["variables"]["shared"], "from-config")
 
     def test_a_modifier_named_twice_is_applied_once(self):
         context = {"variables": {}, "modifiers": [{"name": "detector"}]}
-        ctx.merge_machine_config(
+        ctx.merge_resolved_config(
             context,
-            machine_configs(
-                modifiers=[{"name": "detector"}, {"name": "persistence"}]
-            ),
-            "machine-x",
-            "demo",
+            {
+                "variables": {},
+                "modifiers": [{"name": "detector"}, {"name": "persistence"}],
+            },
         )
 
         self.assertEqual(
@@ -196,28 +176,92 @@ class MergeMachineConfigTest(unittest.TestCase):
             [{"name": "detector"}, {"name": "persistence"}],
         )
 
-    def test_the_domain_section_overrides_the_application_defaults(self):
-        context = {"variables": {}}
-        ctx.merge_machine_config(
-            context,
-            machine_configs(
-                variables={"expected": 100},
-                intradomain={"variables": {"expected": 400}},
-            ),
+
+class DomainPrecedenceTest(unittest.TestCase):
+    """Where a run variable and a domain block disagree, the run wins."""
+
+    @staticmethod
+    def platform():
+        return {"schedulers": ["kubernetes"], "variables": {}}
+
+    @staticmethod
+    def config(**intradomain_vars):
+        return {
+            "platforms": [{"machine-x": ["kubernetes"]}],
+            "machines": {
+                "machine-x": {
+                    "kubernetes": {},
+                    "intradomain": {"variables": dict(intradomain_vars)},
+                }
+            },
+        }
+
+    def resolved(self, **intradomain_vars):
+        return chs_config.resolve(
+            self.platform(),
+            self.config(**intradomain_vars),
             "machine-x",
-            "demo",
+            "kubernetes",
             domain_type="intradomain",
         )
 
+    def test_a_run_variable_beats_a_domain_variable(self):
+        context = {"variables": {"expected": "from-run"}}
+        ctx.merge_resolved_config(context, self.resolved(expected=400))
+
+        self.assertEqual(context["variables"]["expected"], "from-run")
+
+    def test_a_domain_variable_still_fills_a_gap(self):
+        context = {"variables": {}}
+        ctx.merge_resolved_config(context, self.resolved(expected=400))
+
         self.assertEqual(context["variables"]["expected"], 400)
 
-    def test_a_configuration_that_is_not_a_mapping_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "to be dictionaries"):
-            ctx.merge_machine_config({"variables": {}}, [], "machine-x", "demo")
+    def test_a_domain_variable_leaves_unrelated_run_variables_alone(self):
+        context = {"variables": {"other": "untouched"}}
+        ctx.merge_resolved_config(context, self.resolved(expected=400))
 
-    def test_a_context_that_is_not_a_mapping_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "to be dictionaries"):
-            ctx.merge_machine_config([], machine_configs(), "machine-x", "demo")
+        self.assertEqual(
+            context["variables"], {"other": "untouched", "expected": 400}
+        )
+
+
+class BuildBaseContextTest(unittest.TestCase):
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        platforms_root = os.path.join(temp_dir.name, "platforms")
+        tests_root = os.path.join(temp_dir.name, "tests")
+        os.makedirs(platforms_root)
+        os.makedirs(os.path.join(tests_root, "demo"))
+        with open(os.path.join(platforms_root, "machine-x.yaml"), "w") as f:
+            f.write("schedulers: [kubernetes]\nvariables:\n  gpus: 8\n")
+        with open(os.path.join(tests_root, "demo", "config.yaml"), "w") as f:
+            f.write(
+                "platforms: [machine-x]\n"
+                "defaults:\n  variables:\n    image: demo-image\n"
+            )
+        for name, root in (
+            ("PLATFORMS_ROOT", platforms_root),
+            ("TESTS_ROOT", tests_root),
+        ):
+            patcher = mock.patch.object(chs_config, name, root)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_the_test_config_files_are_resolved(self):
+        context = ctx.build_base_context(
+            {
+                "chs_test_name": "demo",
+                "machine_type": "machine-x",
+                "scheduler": "kubernetes",
+                "image": "from-run",
+            },
+            "node-1",
+        )
+
+        self.assertEqual(context["variables"]["gpus"], 8)
+        self.assertEqual(context["variables"]["image"], "from-run")
 
 
 class MergeSectionTest(unittest.TestCase):
@@ -265,19 +309,6 @@ class MergeSectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "to be dictionaries"):
             ctx._merge_section({}, "s", [], "s")
 
-    def test_override_replaces_a_value_the_context_already_has(self):
-        context = {"variables": {"expected": 100}}
-
-        ctx._merge_section(
-            {"variables": {"expected": 400}},
-            "variables",
-            context,
-            "variables",
-            override=True,
-        )
-
-        self.assertEqual(400, context["variables"]["expected"])
-
     def test_a_caller_that_asked_for_false_or_zero_keeps_it(self):
         for asked_for in (False, 0, 0.0):
             with self.subTest(asked_for=asked_for):
@@ -319,14 +350,12 @@ class MergeSectionTest(unittest.TestCase):
         self.assertEqual("from-config", context["variables"]["chosen"])
 
 
-class BaseContextTest(unittest.TestCase):
+class BaseContextTest(StubbedConfigTestCase):
     """What the shared builders put in a context beyond the merge."""
 
     def test_the_domain_is_recorded_so_results_can_be_judged_by_it(self):
         context = ctx.build_base_context(
             variables(),
-            machine_configs(),
-            "demo",
             "node-1",
             domain_type="intradomain",
         )
@@ -334,17 +363,13 @@ class BaseContextTest(unittest.TestCase):
         self.assertEqual("intradomain", context["variables"]["domain_type"])
 
     def test_no_domain_leaves_no_marker(self):
-        context = ctx.build_base_context(
-            variables(), machine_configs(), "demo", "node-1"
-        )
+        context = ctx.build_base_context(variables(), "node-1")
 
         self.assertNotIn("domain_type", context["variables"])
 
     def test_a_test_may_add_its_own_sbatch_headers(self):
         context = ctx.build_base_context(
             variables(scheduler="slurm"),
-            machine_configs(),
-            "demo",
             "node-1",
             extra_sbatch_headers={"--gpu-bind": "single:1"},
         )
@@ -355,9 +380,7 @@ class BaseContextTest(unittest.TestCase):
 
     def test_an_unrecognised_scheduler_gets_no_placement(self):
         """Neither Slurm headers nor Kubernetes affinity would mean anything."""
-        context = ctx.build_base_context(
-            variables(scheduler="pbs"), machine_configs(), "demo", "node-1"
-        )
+        context = ctx.build_base_context(variables(scheduler="pbs"), "node-1")
 
         self.assertNotIn("extra_sbatch_headers", context["variables"])
         self.assertNotIn("affinity_yaml", context["variables"])
@@ -368,9 +391,8 @@ class BaseContextTest(unittest.TestCase):
         ):
             context = ctx.build_node_context(
                 variables(),
-                machine_configs(),
-                "demo",
                 benchmark_config="input.yaml",
+                benchmarks_dir="/tmp/benchmarks",
             )
 
         self.assertEqual("cfg", context["variables"]["benchmarks_yaml_escaped"])
@@ -381,9 +403,8 @@ class BaseContextTest(unittest.TestCase):
         ):
             context = ctx.build_cluster_context(
                 variables(),
-                machine_configs(),
-                "demo",
                 benchmark_config="input.yaml",
+                benchmarks_dir="/tmp/benchmarks",
             )
 
         self.assertEqual("cfg", context["variables"]["benchmarks_yaml_escaped"])
@@ -392,17 +413,15 @@ class BaseContextTest(unittest.TestCase):
         """Both builders copy, so one experiment cannot affect the next."""
         original = variables()
 
-        ctx.build_node_context(original, machine_configs(), "demo")
-        ctx.build_cluster_context(original, machine_configs(), "demo")
+        ctx.build_node_context(original)
+        ctx.build_cluster_context(original)
 
         self.assertEqual(variables(), original)
 
 
-class SliceContextTest(unittest.TestCase):
+class SliceContextTest(StubbedConfigTestCase):
     def build(self, values, name="exp"):
-        return ctx.build_slice_contexts(
-            values, name, machine_configs(variables={}), "demo"
-        )
+        return ctx.build_slice_contexts(values, name)
 
     def test_an_ungrouped_allocation_is_treated_as_one_slice(self):
         contexts = self.build(variables())

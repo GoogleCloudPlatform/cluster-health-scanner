@@ -71,7 +71,7 @@ class TestTpuHbmStressApp(unittest.TestCase):
         module_name = "tpu_hbm_stress"
         module_path = os.path.join(
             os.path.dirname(__file__),
-            "../src/chs/repos/applications/tpu-hbm-stress/tpu_hbm_stress.py",
+            "../src/chs/tests/tpu-hbm-stress/tpu_hbm_stress.py",
         )
         module_path = os.path.abspath(module_path)
 

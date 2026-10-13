@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from chs.plugins.utils import rendering, validation_renderer
+from chs.core.utils import rendering, validation_renderer
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import RenderableType, Group
 from rich.panel import Panel

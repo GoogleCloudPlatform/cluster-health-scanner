@@ -22,7 +22,6 @@ from typing import Any
 class TestRequest:
     variables: dict[str, Any]
     base_prefix: str
-    configs: dict[str, Any] | None = None
     workloads: tuple[str, ...] = ()
     workspace_root: str | None = None
 
@@ -81,7 +80,6 @@ def build_test_request(
     base_prefix: str,
     workspace_root: str | None = None,
     suite_deadline: Any = None,
-    configs: dict[str, Any] | None = None,
 ) -> TestRequest:
     variables = {
         key: value
@@ -109,7 +107,6 @@ def build_test_request(
     return TestRequest(
         variables=variables,
         base_prefix=base_prefix,
-        configs=configs,
         workloads=tuple(workloads),
         workspace_root=workspace_root,
     )

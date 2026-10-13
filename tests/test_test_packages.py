@@ -31,6 +31,8 @@ from unittest import mock
 
 from chs.testkit import NodeGrouping
 from chs.testkit import TestRequest, available_tests, load_plugin
+from chs.testkit import config as chs_config
+from chs.testkit import context
 from chs.utils import topology as topology_utils
 
 TOPOLOGY_FILENAME = "topology.json"
@@ -46,11 +48,10 @@ TOPOLOGY = {
 }
 
 
-def request(
-    nodes=("node-1", "node-2"), workspace_root=None, configs=None, **overrides
-):
+def request(nodes=("node-1", "node-2"), workspace_root=None, **overrides):
     """Builds the smallest request a plugin will act on."""
     variables = {
+        "chs_test_name": "demo",
         "scheduler": "kubernetes",
         "machine_type": "machine-x",
         "nodes": list(nodes),
@@ -59,8 +60,16 @@ def request(
     return TestRequest(
         variables=variables,
         base_prefix="chs-run",
-        configs=configs,
         workspace_root=workspace_root,
+    )
+
+
+def stub_config(**variables):
+    """Serves a fixed resolved config instead of reading test files."""
+    return mock.patch.object(
+        context.chs_config,
+        "resolve_test",
+        return_value={"variables": variables},
     )
 
 
@@ -374,16 +383,8 @@ class PairwiseGroupingTest(unittest.TestCase):
 
     def test_two_nodes_are_enough_for_one_pair(self):
         """A 2-node cluster has exactly one pair, and it is worth measuring."""
-        specs = self.plugin.build(
-            request(
-                configs={
-                    "machine-x": {
-                        "variables": {},
-                        "nccl-tests": {"variables": {}},
-                    }
-                }
-            )
-        )
+        with stub_config():
+            specs = self.plugin.build(request())
 
         self.assertEqual(
             ["chs-run-nccl-pairwise-all-gather-node-1-node-2"],
@@ -599,13 +600,13 @@ class NcclDomainTest(unittest.TestCase):
             )
 
     def test_experiments_are_named_after_the_domain(self):
-        specs = self.plugin.build(
-            request(
-                nodes=self.nodes(),
-                workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
-                configs={"machine-x": {"variables": {}, "nccl-tests": {}}},
+        with stub_config():
+            specs = self.plugin.build(
+                request(
+                    nodes=self.nodes(),
+                    workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+                )
             )
-        )
 
         self.assertEqual(
             [
@@ -643,6 +644,66 @@ class NcclDomainTest(unittest.TestCase):
         self.assertEqual([], grouping.groups)
 
 
+class NcclClusterTest(unittest.TestCase):
+    """The domain_type label on the cluster-wide NCCL test."""
+
+    def setUp(self):
+        self.plugin = plugin("nccl-cluster")
+        self.root = tempfile.mkdtemp(prefix="chs-cluster-")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def domain_type(self, nodes, topology=None):
+        workspace_root = (
+            _write_topology(self.root, topology) if topology else None
+        )
+        variables = {}
+        self.plugin.prepare_variables(
+            variables,
+            "all-reduce",
+            request(nodes=nodes, workspace_root=workspace_root),
+        )
+        return variables["domain_type"]
+
+    def test_domain_type_follows_the_topology(self):
+        self.assertEqual(
+            "intradomain",
+            self.domain_type(["node-1", "node-2", "node-3"], DOMAIN_TOPOLOGY),
+        )
+        self.assertEqual(
+            "interdomain",
+            self.domain_type(["node-1", "node-2", "node-4"], DOMAIN_TOPOLOGY),
+        )
+        self.assertEqual(
+            "unknown", self.domain_type(["node-1", "node-2", "node-3"])
+        )
+        self.assertEqual(
+            "unknown",
+            self.domain_type(["node-1", "node-2", "ghost"], DOMAIN_TOPOLOGY),
+        )
+
+    def test_domain_type_does_not_merge_domain_config(self):
+        """The domain_type label must not pull in per-domain config blocks."""
+
+        def resolve_test(test_name, machine_type, scheduler, domain_type=None):
+            return {"variables": {"mnnvl_enable": 0 if domain_type else 2}}
+
+        with mock.patch(
+            "chs.testkit.config.resolve_test", side_effect=resolve_test
+        ):
+            specs = self.plugin.build(
+                request(
+                    nodes=["node-1", "node-2", "node-4"],
+                    workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+                )
+            )
+
+        self.assertTrue(specs)
+        for spec in specs:
+            variables = spec.context["variables"]
+            self.assertEqual("interdomain", variables["domain_type"])
+            self.assertEqual(2, variables["mnnvl_enable"])
+
+
 class SingleNodeNcclTest(unittest.TestCase):
     """The intra-node NCCL test."""
 
@@ -650,18 +711,10 @@ class SingleNodeNcclTest(unittest.TestCase):
         self.plugin = plugin("nccl-single-node")
 
     def test_each_workload_expands_per_node_with_one_node_count(self):
-        req = request(
-            nodes=["node-1", "node-2"],
-            configs={
-                "machine-x": {
-                    self.plugin.config_name: {
-                        "variables": {"timeout": 600, "deadline": 600}
-                    }
-                }
-            },
-        )
+        req = request(nodes=["node-1", "node-2"])
 
-        specs = self.plugin.build(req)
+        with stub_config(timeout=600, deadline=600):
+            specs = self.plugin.build(req)
 
         self.assertEqual(
             [
@@ -811,15 +864,10 @@ class TpuCollectivesTest(unittest.TestCase):
         req = request(
             slices={"slice-0": ["node-1", "node-2"]},
             tpu_topology="2x2x2",
-            configs={
-                "machine-x": {
-                    "variables": {"cores_per_chip": 2},
-                    "tpu-collectives": {"variables": {}},
-                }
-            },
         )
 
-        specs = self.plugin.build(req)
+        with stub_config(cores_per_chip=2):
+            specs = self.plugin.build(req)
 
         self.assertEqual(len(self.plugin.default_workloads), len(specs))
         for spec in specs:
@@ -846,7 +894,8 @@ class TpuCollectivesSingleNodeTest(unittest.TestCase):
         self.assertEqual("tpu-collectives", self.plugin.application)
 
     def test_its_settings_are_kept_apart_from_the_multi_node_ones(self):
-        self.assertNotEqual(self.plugin.application, self.plugin.config_name)
+        self.assertTrue(chs_config.load_test_config(self.plugin.name))
+        self.assertNotEqual(self.plugin.name, self.plugin.application)
 
     def test_the_collective_is_held_to_a_single_slice(self):
         """So the measurement never crosses the links between hosts."""
@@ -902,17 +951,14 @@ class TpuCollectivesSingleNodeTest(unittest.TestCase):
 class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
     """Package-specific declarations on the remaining GPU and TPU plugins."""
 
-    def _configs(self, app_key):
-        return {
-            "machine-x": {
-                "variables": {"cores_per_chip": 2},
-                app_key: {"variables": {"timeout": 600, "deadline": 600}},
-            }
-        }
+    def setUp(self):
+        patcher = stub_config(cores_per_chip=2, timeout=600, deadline=600)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_dcgm_fans_out_over_node_and_diagnostic_level(self):
         p = plugin("dcgm")
-        req = request(configs=self._configs(p.config_name))
+        req = request()
 
         specs = p.build(req)
 
@@ -924,7 +970,7 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
 
     def test_gemm_keeps_its_historical_experiment_label(self):
         p = plugin("gemm")
-        req = request(configs=self._configs(p.config_name))
+        req = request()
 
         specs = p.build(req)
 
@@ -933,12 +979,7 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
 
     def test_stream_binds_one_gpu_per_rank_on_slurm(self):
         p = plugin("stream")
-        req = request(
-            scheduler="slurm",
-            timeout=600,
-            deadline=600,
-            configs=self._configs(p.config_name),
-        )
+        req = request(scheduler="slurm", timeout=600, deadline=600)
 
         specs = p.build(req)
 
@@ -950,15 +991,10 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
 
     def test_nccl_cluster_skips_below_three_nodes_and_runs_at_three(self):
         p = plugin("nccl-cluster")
-        two_nodes = request(
-            nodes=["node-1", "node-2"], configs=self._configs(p.config_name)
-        )
+        two_nodes = request(nodes=["node-1", "node-2"])
         self.assertEqual([], p.build(two_nodes))
 
-        three_nodes = request(
-            nodes=["node-1", "node-2", "node-3"],
-            configs=self._configs(p.config_name),
-        )
+        three_nodes = request(nodes=["node-1", "node-2", "node-3"])
         specs = p.build(three_nodes)
         self.assertEqual(2, len(specs))
         self.assertEqual(3, specs[0].context["variables"]["n_nodes"])
@@ -970,10 +1006,7 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
             ("tpu-host-device", "host_device.yaml"),
         ):
             p = plugin(test_name)
-            req = request(
-                slices={"slice-0": ["node-1"]},
-                configs=self._configs(p.config_name),
-            )
+            req = request(slices={"slice-0": ["node-1"]})
             with self.subTest(test=test_name):
                 self.assertEqual(expected_file, p.benchmark_config)
                 specs = p.build(req)

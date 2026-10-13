@@ -22,7 +22,7 @@ from typing import Any
 
 from chs.core.plugin_manager import PluginManager
 from chs.core.summary_aggregator import aggregate_boh_summary
-from chs.plugins.utils.validation_analyzer import extract_validation_data
+from chs.core.utils.validation_analyzer import extract_validation_data
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils.config import load_yaml_config
 from chs.utils.tests import get_all_supported_tests_details

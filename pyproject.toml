@@ -94,6 +94,9 @@ unfixable = []
 # Ramble repos use star imports and special DSLs that Ruff doesn't fully understand.
 # We only want basic lint checks like trailing whitespace here.
 "src/chs/repos/**" = ["E402", "F403", "F405", "E501"]
+"src/chs/tests/*/application.py" = ["E402", "F403", "F405", "E501"]
+"src/chs/tests/tpu-*/tpu_*.py" = ["E402", "E501"]
+"tests/test_tpu_*_stress.py" = ["E402", "E501"]
 
 [tool.ruff.format]
 # Like Black, use double quotes for strings.

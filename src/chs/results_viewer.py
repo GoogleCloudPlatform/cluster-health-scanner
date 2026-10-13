@@ -23,7 +23,7 @@ from rich.panel import Panel
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs import exceptions as ex
-from chs.plugins.utils import rendering
+from chs.core.utils import rendering
 from chs.utils import lifecycle
 from chs.utils.topology import load_topology
 from chs.core.summary_aggregator import (

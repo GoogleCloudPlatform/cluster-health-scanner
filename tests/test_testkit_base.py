@@ -17,6 +17,7 @@
 import unittest
 from unittest import mock
 
+from chs.testkit import context
 from chs.testkit import (
     MultiNodePlugin,
     SingleNodePlugin,
@@ -25,17 +26,9 @@ from chs.testkit import (
 )
 
 
-def machine_configs(**app_config):
-    return {
-        "machine-x": {
-            "variables": {"machine_wide": "yes"},
-            "demo": app_config,
-        }
-    }
-
-
 def variables(**overrides):
     values = {
+        "chs_test_name": "demo",
         "scheduler": "kubernetes",
         "machine_type": "machine-x",
         "nodes": ["node-1", "node-2"],
@@ -59,10 +52,18 @@ class DemoClusterPlugin(MultiNodePlugin):
 
 
 class PluginContractTest(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(
+            context.chs_config,
+            "resolve_test",
+            return_value={"variables": {"machine_wide": "yes"}},
+        )
+        self.resolve_test = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def request(self, **overrides):
         defaults = {
             "variables": variables(),
-            "configs": machine_configs(variables={}),
             "base_prefix": "chs-run",
         }
         defaults.update(overrides)
@@ -81,12 +82,6 @@ class PluginContractTest(unittest.TestCase):
                 plugin_class = type("P", (SingleNodePlugin,), attributes)
                 with self.assertRaisesRegex(ValueError, message):
                     plugin_class()
-
-    def test_the_configuration_key_falls_back_to_the_application(self):
-        self.assertEqual(DemoNodePlugin().config_name, "demo")
-
-        renamed = type("P", (DemoNodePlugin,), {"config_key": "demo-variant"})()
-        self.assertEqual(renamed.config_name, "demo-variant")
 
     def test_the_suite_choice_of_workloads_wins(self):
         plugin = DemoNodePlugin()
@@ -176,7 +171,7 @@ class PluginContractTest(unittest.TestCase):
         plugin.build(request)
 
         self.assertNotIn("job_name", request.variables)
-        self.assertEqual(request.configs, machine_configs(variables={}))
+        self.assertEqual(request.variables, variables())
 
     def test_class_level_extras_are_not_shared_between_experiments(self):
         plugin = type(
@@ -189,13 +184,16 @@ class PluginContractTest(unittest.TestCase):
                 "extra_context": {"modifiers": []},
             },
         )()
+        self.resolve_test.return_value = {
+            "variables": {},
+            "modifiers": [{"name": "detector"}],
+        }
 
         specs = plugin.build(
             self.request(
                 variables=variables(
                     tpu_slices={"a": ["node-1"], "b": ["node-2"]}
                 ),
-                configs=machine_configs(modifiers=[{"name": "detector"}]),
                 base_prefix="chs-run",
             )
         )

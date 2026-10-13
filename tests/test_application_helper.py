@@ -44,17 +44,7 @@ sys.modules["spack"] = MagicMock()
 sys.modules["spack.util.spack_yaml"] = MagicMock()
 
 from chs.repos.applications.chs.test_helper import TestHelper as _TestHelper  # noqa: E402
-from chs.repos.applications.chs.application import Chs  # noqa: E402
 from chs.resources import is_tpu  # noqa: E402
-
-
-@dataclasses.dataclass
-class _DeepMergeTestCase:
-    name: str
-    dest: dict
-    src: dict
-    expected_dest: dict = None
-    expected_exception: type = None
 
 
 @dataclasses.dataclass
@@ -76,95 +66,6 @@ class TestApplicationHelper(unittest.TestCase):
         self.assertFalse(is_tpu("a3-megagpu-8g"))
         self.assertFalse(is_tpu(""))
         self.assertFalse(is_tpu(None))
-
-    def test_deep_merge_cases(self):
-        # For _deep_merge(dest, src):
-        #    - dest: Base configuration (common.yaml).
-        #    - src: Overriding configuration (kubernetes.yaml or slurm.yaml).
-        chs_app = Chs()
-
-        circular_src = {}
-        circular_src["self"] = circular_src
-
-        test_cases = [
-            _DeepMergeTestCase(
-                name="precedence_src_overwrites_dest_scalar",
-                dest={"var": "common_val"},
-                src={"var": "slurm_val"},
-                expected_dest={"var": "slurm_val"},
-            ),
-            _DeepMergeTestCase(
-                name="precedence_src_merges_dest_dict",
-                dest={"nested": {"var1": "common_val"}},
-                src={"nested": {"var2": "slurm_val"}},
-                expected_dest={
-                    "nested": {"var1": "common_val", "var2": "slurm_val"}
-                },
-            ),
-            _DeepMergeTestCase(
-                name="precedence_src_overwrites_dest_dict_with_scalar",
-                dest={"key": {"nested": "val"}},
-                src={"key": "scalar_val"},
-                expected_dest={"key": "scalar_val"},
-            ),
-            _DeepMergeTestCase(
-                name="precedence_src_overwrites_dest_scalar_with_dict",
-                dest={"key": "scalar_val"},
-                src={"key": {"nested": "val"}},
-                expected_dest={"key": {"nested": "val"}},
-            ),
-            _DeepMergeTestCase(
-                name="new_keys_added",
-                dest={"var1": "val1"},
-                src={"var2": "val2"},
-                expected_dest={"var1": "val1", "var2": "val2"},
-            ),
-            _DeepMergeTestCase(
-                name="lists_overwritten_not_extended",
-                dest={"list_key": [1, 2]},
-                src={"list_key": [3, 4]},
-                expected_dest={"list_key": [3, 4]},
-            ),
-            _DeepMergeTestCase(
-                name="none_values",
-                dest={"key": "val"},
-                src={"key": None},
-                expected_dest={"key": None},
-            ),
-            _DeepMergeTestCase(
-                name="empty_src_and_dest",
-                dest={},
-                src={},
-                expected_dest={},
-            ),
-            _DeepMergeTestCase(
-                name="circular_reference",
-                dest={},
-                src=circular_src,
-                expected_dest={"self": circular_src},
-            ),
-            _DeepMergeTestCase(
-                name="crash_when_dest_is_list_and_src_is_dict",
-                dest=[],
-                src={"key": "val"},
-                expected_exception=ValueError,
-            ),
-            _DeepMergeTestCase(
-                name="crash_when_src_is_list",
-                dest={},
-                src=["a", "b"],
-                expected_exception=ValueError,
-            ),
-        ]
-
-        for case in test_cases:
-            with self.subTest(case.name):
-                if case.expected_exception:
-                    with self.assertRaises(case.expected_exception):
-                        chs_app._deep_merge(case.dest, case.src)
-                else:
-                    result = chs_app._deep_merge(case.dest, case.src)
-                    self.assertEqual(result, case.expected_dest)
 
     def test_merge_configs_cases(self):
         # For _TestHelper._merge_configs(context_dict, configs, ...):

@@ -18,18 +18,10 @@ import math
 import os
 import textwrap
 
+from chs.testkit import config as chs_config
 from chs.utils.cluster import sanitize_dns_1123
 
 logger = logging.getLogger(__name__)
-
-BENCHMARKS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "repos",
-    "applications",
-    "chs",
-    "configs",
-    "benchmarks",
-)
 
 _NODE_LIST_INDENT = 12
 
@@ -169,50 +161,14 @@ def common_sbatch_headers(variables: dict, nodes_block: str) -> dict:
     }
 
 
-def merge_machine_config(
-    context_dict: dict,
-    configs: dict,
-    machine_type: str,
-    config_key: str,
-    domain_type: str | None = None,
-) -> None:
-    if not isinstance(configs, dict) or not isinstance(context_dict, dict):
-        raise ValueError(
-            f"Expected both configs and context_dict to be dictionaries, "
-            f"got configs={type(configs).__name__} and "
-            f"context_dict={type(context_dict).__name__}"
-        )
-    if machine_type not in configs:
-        raise ValueError(f"Machine type '{machine_type}' not found in configs")
-
-    machine_config = configs[machine_type]
-    _merge_section(machine_config, "variables", context_dict, "variables")
-
-    if config_key not in machine_config:
-        raise ValueError(
-            f"Test '{config_key}' not found in configs for machine type "
-            f"'{machine_type}'"
-        )
-
-    app_config = machine_config[config_key]
-    _merge_section(app_config, "env_vars", context_dict, "env_vars")
+def merge_resolved_config(context_dict: dict, resolved: dict) -> None:
+    _merge_section(resolved, "env_vars", context_dict, "env_vars")
     # Ramble's create_context_from_dict expects the key "success_criteria".
     _merge_section(
-        app_config, "success_criteria", context_dict, "success_criteria"
+        resolved, "success_criteria", context_dict, "success_criteria"
     )
-    _merge_section(app_config, "modifiers", context_dict, "modifiers")
-    _merge_section(app_config, "variables", context_dict, "variables")
-
-    if domain_type:
-        domain_config = app_config.get(domain_type)
-        if domain_config:
-            _merge_section(
-                domain_config,
-                "variables",
-                context_dict,
-                "variables",
-                override=True,
-            )
+    _merge_section(resolved, "modifiers", context_dict, "modifiers")
+    _merge_section(resolved, "variables", context_dict, "variables")
 
 
 _UNSET = object()
@@ -228,7 +184,6 @@ def _merge_section(
     src_key: str,
     dst: dict,
     dst_key: str,
-    override: bool = False,
 ) -> None:
     if not isinstance(src, dict) or not isinstance(dst, dict):
         raise ValueError(
@@ -253,7 +208,7 @@ def _merge_section(
     target_value = dst[dst_key]
     if isinstance(source_value, dict) and isinstance(target_value, dict):
         for key, value in source_value.items():
-            if override or _is_empty(target_value.get(key, _UNSET)):
+            if _is_empty(target_value.get(key, _UNSET)):
                 target_value[key] = value
     elif isinstance(source_value, list) and isinstance(target_value, list):
         for item in source_value:
@@ -269,8 +224,6 @@ def _merge_section(
 
 def build_base_context(
     variables: dict,
-    configs: dict | None,
-    config_key: str,
     nodes_block: str,
     extra_context: dict | None = None,
     extra_sbatch_headers: dict | None = None,
@@ -287,18 +240,18 @@ def build_base_context(
         if "variables" in extra_context:
             raise ValueError(
                 "Cannot set 'variables' in extra_context; configure variables "
-                "via the machine configuration or prepare_variables()."
+                "via config.yaml or prepare_variables()."
             )
         context_dict.update(copy.deepcopy(extra_context))
 
-    if not configs:
-        raise ValueError("Machine configuration is required.")
-    merge_machine_config(
+    merge_resolved_config(
         context_dict,
-        configs,
-        machine_type,
-        config_key,
-        domain_type=domain_type,
+        chs_config.resolve_test(
+            variables["chs_test_name"],
+            machine_type,
+            scheduler,
+            domain_type,
+        ),
     )
 
     if scheduler == "slurm":
@@ -314,11 +267,10 @@ def build_base_context(
 
 def build_node_context(
     variables: dict,
-    configs: dict | None,
-    config_key: str,
     extra_context: dict | None = None,
     extra_sbatch_headers: dict | None = None,
     benchmark_config: str | None = None,
+    benchmarks_dir: str | None = None,
 ) -> dict:
     ctx_vars = copy.deepcopy(variables)
     scheduler = ctx_vars.get("scheduler", "kubernetes")
@@ -334,27 +286,26 @@ def build_node_context(
 
     context_dict = build_base_context(
         ctx_vars,
-        configs,
-        config_key,
         nodes_block,
         extra_context=extra_context,
         extra_sbatch_headers=extra_sbatch_headers,
     )
 
     if benchmark_config:
-        apply_benchmark_config(context_dict["variables"], benchmark_config)
+        apply_benchmark_config(
+            context_dict["variables"], benchmark_config, benchmarks_dir
+        )
 
     return context_dict
 
 
 def build_cluster_context(
     variables: dict,
-    configs: dict | None,
-    config_key: str,
     nodes_list: list[str] | None = None,
     extra_context: dict | None = None,
     extra_sbatch_headers: dict | None = None,
     benchmark_config: str | None = None,
+    benchmarks_dir: str | None = None,
     domain_type: str | None = None,
 ) -> dict:
     ctx_vars = copy.deepcopy(variables)
@@ -369,8 +320,6 @@ def build_cluster_context(
 
     context_dict = build_base_context(
         ctx_vars,
-        configs,
-        config_key,
         nodes_str(scheduler, nodes_list),
         extra_context=extra_context,
         extra_sbatch_headers=extra_sbatch_headers,
@@ -378,7 +327,9 @@ def build_cluster_context(
     )
 
     if benchmark_config:
-        apply_benchmark_config(context_dict["variables"], benchmark_config)
+        apply_benchmark_config(
+            context_dict["variables"], benchmark_config, benchmarks_dir
+        )
 
     return context_dict
 
@@ -386,22 +337,20 @@ def build_cluster_context(
 def build_slice_contexts(
     variables: dict,
     experiment_name: str,
-    configs: dict | None,
-    config_key: str,
     extra_context: dict | None = None,
     extra_sbatch_headers: dict | None = None,
     benchmark_config: str | None = None,
+    benchmarks_dir: str | None = None,
 ) -> list[tuple[str, dict]]:
     scheduler = variables.get("scheduler", "kubernetes")
 
     if scheduler == "slurm":
         context_dict = build_node_context(
             variables,
-            configs,
-            config_key,
             extra_context=extra_context,
             extra_sbatch_headers=extra_sbatch_headers,
             benchmark_config=benchmark_config,
+            benchmarks_dir=benchmarks_dir,
         )
         return [(f"{experiment_name}-{{node}}", context_dict)]
 
@@ -433,10 +382,9 @@ def build_slice_contexts(
 
         context_dict = build_cluster_context(
             slice_vars,
-            configs,
-            config_key,
             extra_context=extra_context,
             benchmark_config=benchmark_config,
+            benchmarks_dir=benchmarks_dir,
         )
         contexts.append((slice_experiment_name, context_dict))
 
@@ -455,9 +403,7 @@ def apply_dynamic_slice_annotations(slice_vars: dict) -> None:
     )
 
 
-def load_benchmark_config(
-    filename: str | None, benchmarks_dir: str = BENCHMARKS_DIR
-) -> str:
+def load_benchmark_config(filename: str | None, benchmarks_dir: str) -> str:
     if not filename:
         return ""
     path = os.path.join(benchmarks_dir, filename)
@@ -488,7 +434,7 @@ def load_benchmark_config(
 def apply_benchmark_config(
     variables: dict,
     default_filename: str | None,
-    benchmarks_dir: str = BENCHMARKS_DIR,
+    benchmarks_dir: str,
 ) -> None:
     filename = variables.get("benchmarks_yaml_file")
     if not filename:

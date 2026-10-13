@@ -22,6 +22,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
+from chs.testkit import build_thresholds
+
 
 def _first_numeric_metric(
     metrics: Dict[str, Any], keys: tuple[str, ...]
@@ -541,12 +543,7 @@ class IntegrationValidator:
     def _load_thresholds(self, path: Optional[str]) -> Dict[str, Any]:
         """Loads thresholds configuration YAML file."""
         if path is None:
-            path = os.path.normpath(
-                os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "../../../src/chs/configs/thresholds.yaml",
-                )
-            )
+            return build_thresholds()
         if os.path.exists(path):
             try:
                 with open(path, "r") as f:

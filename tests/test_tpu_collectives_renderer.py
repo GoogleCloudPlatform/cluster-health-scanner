@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from chs.plugins.tpu_collectives.renderer import TpuCollectivesRenderer
-from chs.plugins.tpu_collectives_single_node.renderer import (
+from chs.tests.tpu_collectives.renderer import TpuCollectivesRenderer
+from chs.tests.tpu_collectives_single_node.renderer import (
     TpuCollectivesSingleNodeRenderer,
 )
 from chs.protos import bill_of_health_pb2 as pb
