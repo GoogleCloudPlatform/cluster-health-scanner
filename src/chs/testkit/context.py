@@ -14,6 +14,7 @@
 
 import copy
 import logging
+import math
 import os
 import textwrap
 
@@ -47,29 +48,92 @@ def nodes_str(scheduler: str, nodes: list[str] | None) -> str:
     return ""
 
 
-def apply_kubernetes_affinity(
-    variables: dict,
-    nodes_block: str | None,
-) -> None:
-    affinity_yaml = ""
-    if nodes_block:
-        affinity_yaml = f'''nodeAffinity:
+_WORKER_LABEL = "chs.gke.io/worker"
+_JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
+_TPU_SLICE_TOPOLOGY_KEY = "cloud.google.com/gke-tpu-slice"
+EXCLUSIVE_SLICE_KEY = "_chs_exclusive_tpu_slice"
+
+_ONE_POD_PER_NODE_TERM = f'''- labelSelector:
+    matchExpressions:
+    - key: {_WORKER_LABEL}
+      operator: Exists
+  topologyKey: "kubernetes.io/hostname"'''
+
+_SAME_SLICE_POD_AFFINITY = f"""podAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+  - labelSelector:
+      matchExpressions:
+      - key: {_JOB_NAME_LABEL}
+        operator: In
+        values:
+        - {{job_name}}
+    topologyKey: {_TPU_SLICE_TOPOLOGY_KEY}"""
+
+_EXCLUSIVE_SLICE_TERM = f"""- labelSelector:
+    matchExpressions:
+    - key: {_WORKER_LABEL}
+      operator: Exists
+    - key: {_JOB_NAME_LABEL}
+      operator: NotIn
+      values:
+      - {{job_name}}
+  topologyKey: {_TPU_SLICE_TOPOLOGY_KEY}"""
+
+
+def node_affinity_yaml(nodes_block: str) -> str:
+    return f"""nodeAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
     nodeSelectorTerms:
     - matchExpressions:
       - key: kubernetes.io/hostname
         operator: In
         values:
-{nodes_block}
-podAntiAffinity:
-  requiredDuringSchedulingIgnoredDuringExecution:
-  - labelSelector:
-      matchExpressions:
-      - key: jobset.sigs.k8s.io/jobset-name
-        operator: Exists
-    topologyKey: "kubernetes.io/hostname"'''
+{nodes_block}"""
 
-    variables["affinity_yaml"] = affinity_yaml
+
+def kubernetes_affinity_yaml(
+    nodes_block: str | None, exclusive_slice: bool = False
+) -> str:
+    """Returns the pod affinity YAML of a CHS test.
+
+    Pods are pinned to nodes_block and at most one CHS pod runs per node.
+    With exclusive_slice, all pods of the Job share one TPU slice that no
+    other CHS Job uses.
+    """
+    sections = []
+    anti_affinity_terms = []
+    if nodes_block:
+        sections.append(node_affinity_yaml(nodes_block))
+        anti_affinity_terms.append(_ONE_POD_PER_NODE_TERM)
+    if exclusive_slice:
+        sections.append(_SAME_SLICE_POD_AFFINITY)
+        anti_affinity_terms.append(_EXCLUSIVE_SLICE_TERM)
+    if anti_affinity_terms:
+        terms = "\n".join(textwrap.indent(t, "  ") for t in anti_affinity_terms)
+        sections.append(
+            "podAntiAffinity:\n"
+            "  requiredDuringSchedulingIgnoredDuringExecution:\n"
+            f"{terms}"
+        )
+    return "\n".join(sections)
+
+
+def mark_exclusive_tpu_slice(variables: dict) -> None:
+    """Makes the affinity of the test request an exclusive TPU slice."""
+    variables[EXCLUSIVE_SLICE_KEY] = True
+
+
+def pop_exclusive_tpu_slice(variables: dict) -> bool:
+    return bool(variables.pop(EXCLUSIVE_SLICE_KEY, False))
+
+
+def apply_kubernetes_affinity(
+    variables: dict,
+    nodes_block: str | None,
+) -> None:
+    variables["affinity_yaml"] = kubernetes_affinity_yaml(
+        nodes_block, pop_exclusive_tpu_slice(variables)
+    )
 
 
 def sbatch_headers(headers: dict) -> str:
@@ -99,7 +163,8 @@ def common_sbatch_headers(variables: dict, nodes_block: str) -> dict:
     deadline_seconds = _int_var(variables, "deadline")
     return {
         "-w": nodes_block,
-        "--time": str(timeout_seconds // 60),
+        # Slurm takes whole minutes; round up so short timeouts are not 0.
+        "--time": str(max(1, math.ceil(timeout_seconds / 60))),
         "--deadline": f"now+{deadline_seconds + timeout_seconds}seconds",
     }
 
@@ -357,7 +422,7 @@ def build_slice_contexts(
             slice_vars["tpu_topology"] = slice_topology
 
         if slice_id in dynamic_pools:
-            _apply_dynamic_slice_annotations(slice_vars)
+            apply_dynamic_slice_annotations(slice_vars)
 
         if len(tpu_slices) == 1:
             slice_experiment_name = experiment_name
@@ -378,15 +443,9 @@ def build_slice_contexts(
     return contexts
 
 
-def _apply_dynamic_slice_annotations(slice_vars: dict) -> None:
-    existing = slice_vars.get("jobset_annotations_yaml", "").strip()
-    exclusive = (
-        "alpha.jobset.sigs.k8s.io/exclusive-topology: "
-        "cloud.google.com/gke-tpu-slice"
-    )
-    slice_vars["jobset_annotations_yaml"] = (
-        f"{existing}\\n{exclusive}" if existing else exclusive
-    )
+def apply_dynamic_slice_annotations(slice_vars: dict) -> None:
+    """Requests an exclusive, correctly shaped dynamic TPU slice."""
+    mark_exclusive_tpu_slice(slice_vars)
 
     topology = slice_vars.get("tpu_topology")
     shape = f'cloud.google.com/gke-tpu-slice-topology: "{topology}"'

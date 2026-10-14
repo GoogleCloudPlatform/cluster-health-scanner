@@ -17,11 +17,7 @@ All development should be done on the `develop` branch. Main branch is strictly 
 Clone the repository from Gerrit:
 
 ```bash
-# Using HTTPS
 git clone -b develop https://cluster-toolkit.googlesource.com/cluster-health-scanner chs
-
-# Using SSO
-git clone -b develop https://github.com/GoogleCloudPlatform/cluster-health-scanner.git chs
 
 cd chs
 ```
@@ -163,10 +159,10 @@ git config --global user.email "your-email@example.com"
     git add .
     git commit
     ```
-    *   **Commit Message:** Follow the guidelines in [styleguide.md](.gemini/styleguide.md).
+    *   **Commit Message:** Follow standard git commit conventions.
         *   First line: Short summary (Imperative mood).
         *   Body: Detailed explanation.
-        *   Footer: `Bug: b/12345`.
+        *   Footer: Issue reference if applicable.
 
 3.  **Upload for Review:**
     ```bash

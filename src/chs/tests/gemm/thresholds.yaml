@@ -12,25 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cluster_name: chs-kind-cluster
-project: chs-test-project
-default_zone: us-east5-c
-dependencies:
-  jobset:
-    enabled: false
-  kueue:
-    version: v0.14.5
-  gke_multinetwork:
-    enabled: true
-nodepools:
-- name: tpu-v6e-pool-01
-  count: 2
-  machine_type: ct6e-standard-4t
-  accelerator: tpu-v6e-slice
-  topology: 2x4
-  zone: us-east5-c
-  health:
-    ready_count: 2
-    unschedulable_count: 0
-    busy_count: 0
-test_scenarios: []
+
+type: min
+a3-ultragpu-8g:
+  performance: 50000
+a3-megagpu-8g:
+  performance: 50000
+a4-highgpu-8g:
+  performance: 70000
+a4x-highgpu-4g:
+  performance: 35000
+a4x-maxgpu-4g-metal:
+  performance: 1000

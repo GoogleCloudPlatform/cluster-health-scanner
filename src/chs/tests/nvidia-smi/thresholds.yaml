@@ -1,0 +1,28 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+type: scalar
+a3-ultragpu-8g:
+  gpus: 8
+a3-megagpu-8g:
+  gpus: 8
+a4-highgpu-8g:
+  gpus: 8
+a4x-highgpu-4g:
+  gpus: 4
+a4x-maxgpu-4g-metal:
+  gpus: 4
+a5x-highgpu-4g-metal:
+  gpus: 4

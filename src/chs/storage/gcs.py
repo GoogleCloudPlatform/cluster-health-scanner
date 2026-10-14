@@ -14,14 +14,23 @@
 
 """GCS storage provider implementation for CHS."""
 
+import functools
 import logging
 import uuid
 from chs.exceptions import ChsValidationError, StorageObjectNotFoundException
 from chs.storage.base import StorageProvider
+from chs.utils import gcp
 from google.cloud import storage
 from google.api_core import exceptions as gcp_ex
 
 logger = logging.getLogger(__name__)
+
+
+@functools.cache
+def _storage_client() -> storage.Client:
+    """Returns the process-wide GCS client."""
+    credentials, project = gcp.get_default_credentials()
+    return storage.Client(credentials=credentials, project=project)
 
 
 class GcsStorageProvider(StorageProvider):
@@ -34,7 +43,7 @@ class GcsStorageProvider(StorageProvider):
     def upload_file(self, local_src: str, remote_dest: str) -> None:
         """Uploads a local file to the GCS bucket."""
         try:
-            client = storage.Client()
+            client = _storage_client()
             bucket = client.bucket(self.bucket_name)
             blob = bucket.blob(remote_dest)
             blob.upload_from_filename(local_src)
@@ -53,7 +62,7 @@ class GcsStorageProvider(StorageProvider):
     def download_file(self, remote_src: str, local_dest: str) -> None:
         """Downloads a file from the GCS bucket to local path."""
         try:
-            client = storage.Client()
+            client = _storage_client()
             bucket = client.bucket(self.bucket_name)
             blob = bucket.blob(remote_src)
             blob.download_to_filename(local_dest)
@@ -78,7 +87,7 @@ class GcsStorageProvider(StorageProvider):
         if not self.bucket_name:
             raise ChsValidationError("GCS bucket name cannot be empty.")
 
-        client = storage.Client()
+        client = _storage_client()
         bucket = client.bucket(self.bucket_name)
 
         canary_name = f".chs-connectivity-test-{uuid.uuid4()}"
@@ -146,7 +155,7 @@ class GcsStorageProvider(StorageProvider):
     def exists(self, remote_path: str) -> bool:
         """Checks if blob exists in GCS bucket."""
         try:
-            client = storage.Client()
+            client = _storage_client()
             bucket = client.bucket(self.bucket_name)
             blob = bucket.blob(remote_path)
             return blob.exists()

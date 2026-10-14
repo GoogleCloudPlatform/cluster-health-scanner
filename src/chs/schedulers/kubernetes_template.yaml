@@ -28,8 +28,8 @@ ramble:
     tests: []
     default_interface_name: ""
     all_interfaces_json: ""
-    jobset_labels_yaml: ""
-    suspend_jobset: false
+    jobset_labels_yaml: "app.kubernetes.io/managed-by: chs"
+    suspend_jobset: "true"
 
   applications:
     chs:

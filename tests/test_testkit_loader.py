@@ -27,6 +27,7 @@ import unittest
 from unittest import mock
 
 from chs.testkit import available_tests, clear_cache, load_plugin
+from chs.testkit import config as chs_config
 from chs.testkit import loader
 from chs.testkit import SingleNodePlugin
 
@@ -73,7 +74,7 @@ class LoaderTest(unittest.TestCase):
 
     def test_a_missing_directory_lists_nothing(self):
         with (
-            mock.patch.object(loader, "TESTS_ROOT", "/nonexistent/tests"),
+            mock.patch.object(chs_config, "TESTS_ROOT", "/nonexistent/tests"),
             mock.patch.object(loader, "logger") as logger,
         ):
             self.assertEqual(available_tests(), [])

@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
+from chs.exceptions import ChsSchedulerException
 from chs.ramble_manager import RambleManager  # noqa: E402
 from chs.schedulers.kubernetes import KubernetesScheduler  # noqa: E402
 from chs.schedulers.slurm import SlurmScheduler  # noqa: E402
@@ -82,7 +84,7 @@ class TestJobMonitoring(unittest.TestCase):
             ),
         ):
             # Mock job completion (job-1 running -> completed, job-2 completed)
-            mock_scheduler.get_job_statuses.side_effect = [
+            mock_scheduler.poll_jobs.side_effect = [
                 {"job-1": "RUNNING", "job-2": "COMPLETED"},
                 {"job-1": "COMPLETED"},
             ]
@@ -113,9 +115,7 @@ class TestJobMonitoring(unittest.TestCase):
                 return_value={"job-1": "/path/log"},
             ),
         ):
-            mock_scheduler.get_job_statuses.return_value = {
-                "job-1": "COMPLETED"
-            }
+            mock_scheduler.poll_jobs.return_value = {"job-1": "COMPLETED"}
             mock_scheduler.fetch_job_log.side_effect = Exception("Fetch failed")
 
             # Execute (should not raise)
@@ -158,7 +158,7 @@ class TestJobMonitoring(unittest.TestCase):
             ),
         ):
             # Mock completion
-            mock_scheduler.get_job_statuses.side_effect = [
+            mock_scheduler.poll_jobs.side_effect = [
                 {"job-1": "RUNNING"},
                 {"job-1": "COMPLETED"},
             ]
@@ -167,10 +167,194 @@ class TestJobMonitoring(unittest.TestCase):
             self.manager._monitor_jobs(MagicMock(), poll_interval=1, tier=None)
 
             # Verify
-            # Should have called get_job_statuses twice
-            self.assertEqual(mock_scheduler.get_job_statuses.call_count, 2)
+            self.assertEqual(mock_scheduler.poll_jobs.call_count, 2)
             # Should NOT have called fetch_job_log (no map)
             mock_scheduler.fetch_job_log.assert_not_called()
+
+    @patch("time.sleep", side_effect=KeyboardInterrupt)
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_propagates_keyboard_interrupt(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.return_value = {"job-1": "RUNNING"}
+
+        with (
+            patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.manager._monitor_jobs(
+                    MagicMock(), poll_interval=1, tier=None
+                )
+
+    @patch("time.sleep", side_effect=KeyboardInterrupt)
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_interrupt_does_not_wait_for_log_fetches(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        release_fetch = threading.Event()
+        fetch_finished = threading.Event()
+
+        def slow_fetch(job_id, log_path):
+            release_fetch.wait(timeout=10)
+            fetch_finished.set()
+
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.return_value = {
+            "job-1": "COMPLETED",
+            "job-2": "RUNNING",
+        }
+        mock_scheduler.fetch_job_log.side_effect = slow_fetch
+
+        with (
+            patch.object(
+                self.manager, "get_job_ids", return_value=["job-1", "job-2"]
+            ),
+            patch.object(
+                self.manager,
+                "_map_jobs_to_log_paths",
+                return_value={"job-1": "/path/to/job-1.log"},
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self.manager._monitor_jobs(
+                    MagicMock(), poll_interval=1, tier=None
+                )
+            interrupted_before_fetch_finished = not fetch_finished.is_set()
+            release_fetch.set()
+
+        self.assertTrue(interrupted_before_fetch_finished)
+
+    @patch("time.sleep")
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_polls_in_registry_order(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.return_value = {
+            "job-b": "COMPLETED",
+            "job-a": "COMPLETED",
+            "job-c": "COMPLETED",
+        }
+
+        with (
+            patch.object(
+                self.manager,
+                "get_job_ids",
+                return_value=["job-b", "job-a", "job-c"],
+            ),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            mock_app_data = MagicMock()
+            mock_app_data.get_run.return_value = {}
+            self.manager._monitor_jobs(
+                mock_app_data, poll_interval=1, tier=None
+            )
+
+            mock_scheduler.poll_jobs.assert_called_once_with(
+                ["job-b", "job-a", "job-c"]
+            )
+
+    @patch("time.sleep")
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_retries_failed_poll(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.side_effect = [
+            ChsSchedulerException("connection reset"),
+            {"job-1": "COMPLETED"},
+        ]
+
+        with (
+            patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            mock_app_data = MagicMock()
+            mock_app_data.get_run.return_value = {}
+            self.manager._monitor_jobs(
+                mock_app_data, poll_interval=1, tier=None
+            )
+
+            self.assertEqual(mock_scheduler.poll_jobs.call_count, 2)
+            mock_sleep.assert_called()
+            mock_app_data.update_run_status.assert_called_once_with(
+                ANY, {"job-1": "COMPLETED"}
+            )
+
+    @patch("chs.ramble_manager.time")
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_marks_deadline_after_poll_outage(
+        self, mock_get_scheduler, mock_time
+    ):
+        mock_time.time.side_effect = lambda: sum(
+            call.args[0] for call in mock_time.sleep.call_args_list
+        )
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.side_effect = ChsSchedulerException(
+            "connection refused"
+        )
+
+        with (
+            patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
+            patch.object(
+                self.manager,
+                "_map_jobs_to_log_paths",
+                return_value={"job-1": "/tmp/job-1.log"},
+            ),
+            patch.object(self.manager, "_safe_fetch_log") as mock_fetch_log,
+        ):
+            mock_app_data = MagicMock()
+            mock_app_data.get_run.return_value = {}
+            self.manager._monitor_jobs(
+                mock_app_data, poll_interval=60, tier=None
+            )
+
+        self.assertEqual(mock_scheduler.poll_jobs.call_count, 4)
+        mock_fetch_log.assert_not_called()
+        mock_app_data.update_run_status.assert_called_once_with(
+            ANY, {"job-1": "DEADLINE"}
+        )
+
+    @patch("time.sleep")
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_cancels_unschedulable_jobs_as_deadline(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.return_value = {"job-1": "PENDING"}
+        mock_scheduler.get_unschedulable_jobs.return_value = ["job-1"]
+
+        with (
+            patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            mock_app_data = MagicMock()
+            mock_app_data.get_run.return_value = {}
+            self.manager._monitor_jobs(
+                mock_app_data, poll_interval=1, tier=None
+            )
+
+            mock_scheduler.cancel_jobs.assert_called_once_with(["job-1"])
+            mock_app_data.update_run_status.assert_called_with(
+                ANY, {"job-1": "DEADLINE"}
+            )
+            mock_sleep.assert_not_called()
 
 
 if __name__ == "__main__":

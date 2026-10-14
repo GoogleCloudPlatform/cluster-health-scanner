@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 from chs.ramble_manager import RambleManager
 from chs.utils.app_data import ChsAppData
 
@@ -21,8 +21,8 @@ from chs.utils.app_data import ChsAppData
 class TestRambleManagerStatus(unittest.TestCase):
     @patch("chs.ramble_manager.get_scheduler")
     def test_monitor_jobs_updates_status(self, mock_get_scheduler):
-        mock_scheduler = Mock()
-        mock_scheduler.get_job_statuses.return_value = {"job1": "COMPLETED"}
+        mock_scheduler = MagicMock()
+        mock_scheduler.poll_jobs.return_value = {"job1": "COMPLETED"}
 
         mock_get_scheduler.return_value = mock_scheduler
 
@@ -53,8 +53,8 @@ class TestRambleManagerStatus(unittest.TestCase):
 
     @patch("chs.ramble_manager.get_scheduler")
     def test_monitor_jobs_preserves_terminal_status(self, mock_get_scheduler):
-        mock_scheduler = Mock()
-        mock_scheduler.get_job_statuses.return_value = {"job1": "UNKNOWN"}
+        mock_scheduler = MagicMock()
+        mock_scheduler.poll_jobs.return_value = {"job1": "UNKNOWN"}
 
         mock_get_scheduler.return_value = mock_scheduler
 

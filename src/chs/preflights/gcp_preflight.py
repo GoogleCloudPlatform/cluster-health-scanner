@@ -13,9 +13,9 @@
 # limitations under the License.
 
 import logging
-import google.auth
 from google.auth.exceptions import DefaultCredentialsError
 from chs.exceptions import ChsPreflightException
+from chs.utils import gcp
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def verify_gcp_credentials() -> None:
     """Verifies that GCP Application Default Credentials are available."""
     try:
-        google.auth.default()
+        gcp.get_default_credentials()
         logger.debug("GCP Credentials verified successfully.")
     except DefaultCredentialsError as e:
         raise ChsPreflightException(

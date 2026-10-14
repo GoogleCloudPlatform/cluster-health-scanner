@@ -20,10 +20,15 @@ import tempfile
 import unittest
 from unittest import mock
 
-from chs.exceptions import ChsException, ChsValidationError
+from chs.exceptions import (
+    ChsException,
+    ChsValidationError,
+)
 from chs.storage import StorageProviderFactory
+from chs.storage import gcs
 from chs.storage.gcs import GcsStorageProvider
 from chs.storage.path import PathStorageProvider
+from chs.utils import gcp
 from google.api_core import exceptions as gcp_ex
 
 
@@ -173,6 +178,18 @@ class TestPathStorageProvider(unittest.TestCase):
 class TestGcsStorageProvider(unittest.TestCase):
     """Tests for GcsStorageProvider."""
 
+    def setUp(self):
+        super().setUp()
+        gcs._storage_client.cache_clear()
+        self.addCleanup(gcs._storage_client.cache_clear)
+        patcher = mock.patch.object(
+            gcp,
+            "get_default_credentials",
+            return_value=(mock.sentinel.credentials, "my-project"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @mock.patch("chs.storage.gcs.storage.Client")
     def test_validate_success(self, mock_storage_client):
         """Test validate succeeds if write and delete succeed."""
@@ -251,6 +268,88 @@ class TestGcsStorageProvider(unittest.TestCase):
         provider.validate()
         mock_blob.upload_from_string.assert_called_once()
         mock_blob.delete.assert_called_once()
+
+
+class TestGcsStorageProviderClientReuse(unittest.TestCase):
+    """Tests that GCS providers share one process-wide GCS client."""
+
+    def setUp(self):
+        super().setUp()
+        gcs._storage_client.cache_clear()
+        self.addCleanup(gcs._storage_client.cache_clear)
+        self.credentials = mock.sentinel.credentials
+        patcher = mock.patch.object(
+            gcp,
+            "get_default_credentials",
+            return_value=(self.credentials, "my-project"),
+        )
+        self.mock_get_credentials = patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch("chs.storage.gcs.storage.Client")
+        self.mock_client_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.mock_blob = (
+            self.mock_client_cls.return_value.bucket.return_value.blob
+        ).return_value
+        self.provider = GcsStorageProvider({"bucket_name": "my-bucket"})
+
+    def test_client_is_not_created_until_needed(self):
+        """Test constructing the provider does not create a client."""
+        self.mock_client_cls.assert_not_called()
+
+    def test_client_is_reused_across_calls(self):
+        """Test uploads, downloads and existence checks share one client."""
+        self.mock_blob.exists.return_value = True
+
+        self.provider.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+        self.provider.upload_file("/tmp/boh.html", "bills_of_health/r.html")
+        self.provider.download_file("bills_of_health/r.json", "/tmp/r.json")
+        self.assertTrue(self.provider.exists("bills_of_health/r.json"))
+
+        self.mock_client_cls.assert_called_once_with(
+            credentials=self.credentials, project="my-project"
+        )
+        self.assertEqual(self.mock_client_cls.return_value.bucket.call_count, 4)
+
+    def test_client_is_shared_across_providers(self):
+        """Test a second provider reuses the first provider's client."""
+        other = GcsStorageProvider({"bucket_name": "other-bucket"})
+
+        self.provider.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+        other.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+
+        self.mock_client_cls.assert_called_once()
+        self.mock_get_credentials.assert_called_once_with()
+        self.assertEqual(
+            self.mock_client_cls.return_value.bucket.call_args_list,
+            [mock.call("my-bucket"), mock.call("other-bucket")],
+        )
+
+    def test_failed_client_creation_is_retried(self):
+        """Test a failed client creation is not cached."""
+        self.mock_client_cls.side_effect = [
+            Exception("no credentials"),
+            mock.DEFAULT,
+        ]
+
+        with self.assertRaises(OSError) as ctx:
+            self.provider.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+        self.assertEqual(
+            str(ctx.exception),
+            "Failed to upload /tmp/boh.json to "
+            "gs://my-bucket/bills_of_health/r.json: no credentials",
+        )
+
+        self.provider.upload_file("/tmp/boh.json", "bills_of_health/r.json")
+        self.assertEqual(self.mock_client_cls.call_count, 2)
+        self.mock_blob.upload_from_filename.assert_called_once_with(
+            "/tmp/boh.json"
+        )
+
+    def test_exists_is_false_when_client_creation_fails(self):
+        """Test exists() still reports False if no client can be created."""
+        self.mock_client_cls.side_effect = Exception("no credentials")
+        self.assertFalse(self.provider.exists("bills_of_health/r.json"))
 
 
 if __name__ == "__main__":

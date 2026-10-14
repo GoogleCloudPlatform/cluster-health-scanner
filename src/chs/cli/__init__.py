@@ -25,9 +25,12 @@ import logging
 import os
 import pathlib
 import shlex
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import warnings
 from contextlib import contextmanager
 from typing import Any
@@ -55,9 +58,11 @@ from chs import (
 from chs.boh_generator import parse_tier_results_from_boh
 from chs.cli import help_command_text
 from chs.cli import list_formatting
+from chs.cli.background_cleanup import BackgroundCleanup
 from chs.storage import StorageProviderFactory
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
+from chs.utils.k8s_client import KubeError
 from chs.version import get_version
 
 warnings.filterwarnings(
@@ -86,8 +91,8 @@ def handle_chs_exceptions(f):
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
-        except ex.ChsDetachedException:
-            raise click.exceptions.Exit(0)
+        except KeyboardInterrupt:
+            raise click.exceptions.Exit(130)
 
     return wrapper
 
@@ -212,7 +217,7 @@ def archive_workspace(
     """Context manager to ensure workspace is archived even in error cases."""
     try:
         yield
-    except ex.ChsDetachedException:
+    except KeyboardInterrupt:
         raise
     except BaseException:
         if ramble_manager.is_workspace_created:
@@ -245,23 +250,36 @@ def cancel_jobs_on_failure(
         if active:
             is_interrupt = isinstance(e, KeyboardInterrupt)
             spinner_label = (
-                "[bold red]Interrupt received. Cleaning up CHS resources..."
-                "[/bold red]"
+                "[bold red]Interrupt received. Cancelling run and cleaning up "
+                "CHS resources...[/bold red]"
                 if is_interrupt
                 else "[bold red]Run failed. Cleaning up CHS resources..."
                 "[/bold red]"
             )
 
-            with theme.get_progress_spinner(spinner_label):
+            cleaned_up = False
+            with (
+                _handle_termination_signals(_continue_cleanup),
+                theme.get_progress_spinner(spinner_label),
+            ):
                 try:
                     scheduler_obj.cancel_jobs_by_prefix(prefix)
                     scheduler_obj.cleanup_scheduler_resources()
-                except Exception as e:
+                    cleaned_up = True
+                except KeyboardInterrupt:
+                    Console().print(
+                        "[bold red]WARNING: Cleanup interrupted. "
+                        "Please run `chs cancel` to finish cleaning up."
+                        "[/bold red]"
+                    )
+                    raise
+                except Exception as cleanup_err:
                     # We catch broad Exception here as a fallback to ensure we
                     # don't hide the original exception that triggered cleanup.
                     logger.error(
                         "Failed to clean CHS resources. Please run "
-                        "`chs cancel`. Error: {e}"
+                        "`chs cancel`. Error: %s",
+                        cleanup_err,
                     )
                     Console().print(
                         "\n[bold red]WARNING: Automatic cleanup failed. "
@@ -271,13 +289,56 @@ def cancel_jobs_on_failure(
                         "[/bold red]"
                     )
 
-            if is_interrupt:
+            if is_interrupt and cleaned_up:
                 Console().print(
-                    f"[{theme.CHS_SUCCESS_STYLE}]Successfully cleaned up CHS "
-                    "resources."
-                    f"[/{theme.CHS_SUCCESS_STYLE}]"
+                    f"[{theme.CHS_NEUTRAL_STYLE}]CHS cleanup finished."
+                    f"[/{theme.CHS_NEUTRAL_STYLE}]"
                 )
         raise
+
+
+def _is_regular_file(fd: int) -> bool:
+    try:
+        return stat.S_ISREG(os.fstat(fd).st_mode)
+    except OSError:
+        return False
+
+
+def _discard_output_after_hangup() -> None:
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    for fd in (1, 2):
+        if not _is_regular_file(fd):
+            os.dup2(devnull, fd)
+    if devnull > 2:
+        os.close(devnull)
+
+
+def _continue_cleanup(signum, frame) -> None:
+    if signum == signal.SIGHUP:
+        _discard_output_after_hangup()
+
+
+def _interrupt_run(signum, frame) -> None:
+    for termination_signal in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(termination_signal) is _interrupt_run:
+            signal.signal(termination_signal, _continue_cleanup)
+    _continue_cleanup(signum, frame)
+    raise KeyboardInterrupt
+
+
+@contextmanager
+def _handle_termination_signals(handler):
+    """Handles SIGTERM and SIGHUP with handler unless they are ignored."""
+    previous_handlers = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            if signal.getsignal(signum) in (signal.SIG_DFL, _interrupt_run):
+                previous_handlers[signum] = signal.signal(signum, handler)
+    try:
+        yield
+    finally:
+        for signum, previous_handler in previous_handlers.items():
+            signal.signal(signum, previous_handler)
 
 
 def _submit_next_tier(
@@ -313,12 +374,10 @@ def _submit_next_tier(
     )
     app_data.update_run(workspace_name, run_entry)
 
-    scheduler = get_scheduler(run_entry.get("scheduler", "kubernetes"))
-    with cancel_jobs_on_failure(scheduler, "chs-", active=True):
-        with theme.get_progress_spinner("Submitting follow-up diagnostics..."):
-            ramble_manager.execute_experiments(
-                tier=next_tier, active_tests=next_tests
-            )
+    with theme.get_progress_spinner("Submitting follow-up diagnostics..."):
+        ramble_manager.execute_experiments(
+            tier=next_tier, active_tests=next_tests
+        )
 
     Console().print(
         f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted "
@@ -596,7 +655,7 @@ def run_action(
                         "for details."
                     )
                 return job_ids
-            except (OSError, subprocess.CalledProcessError) as e:
+            except (OSError, subprocess.CalledProcessError, KubeError) as e:
                 raise ex.ChsExecutionException(
                     f"CHS execution failed: {ex.format_subprocess_error(e)}"
                 ) from e
@@ -605,12 +664,14 @@ def run_action(
 def _analyze_action(
     app_data: ChsAppData,
     run_id: str,
+    scheduler_obj: BaseScheduler,
 ) -> str:
     """Analyzes results from a specific test run.
 
     Args:
       app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
+      scheduler_obj: Scheduler that runs the jobs of the test run.
 
     Returns:
       The run_id of the analyzed test run.
@@ -654,7 +715,10 @@ def _analyze_action(
             _show_results(app_data, run_id)
             return run_id
 
-        with archive_workspace(ramble_manager, on_success=True):
+        with (
+            BackgroundCleanup(run_id) as background_cleanup,
+            archive_workspace(ramble_manager, on_success=True),
+        ):
             try:
                 # 2. If results.latest.json exists (but no BoH), generate BoH
                 if results_json_path.exists() and is_boh_final:
@@ -663,26 +727,14 @@ def _analyze_action(
                         "of Health..."
                     )
                     with theme.get_progress_spinner(
-                        "Generating Bill of Health and cleaning up..."
+                        "Generating Bill of Health..."
                     ):
                         ramble_manager.generate_boh(
                             str(results_json_path),
                         )
-                        try:
-                            ramble_manager.cancel_experiments()
-                            logger.debug(
-                                "Cleaned up CHS resources for run %s", run_id
-                            )
-                        except (
-                            ex.ChsException,
-                            subprocess.CalledProcessError,
-                        ) as e:
-                            logger.warning(
-                                "Failed to clean CHS resources. Error: %s", e
-                            )
+                        background_cleanup.start(ramble_manager)
                     Console().print(
-                        f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated "
-                        "and CHS resources cleaned up."
+                        f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated."
                         f"[/{theme.CHS_SUCCESS_STYLE}]"
                     )
                     _show_results(app_data, run_id, suppress_boh_uri=True)
@@ -697,102 +749,91 @@ def _analyze_action(
                     else None
                 )
 
-                while not run_entry.get("is_boh_final", False):
-                    active_tier = run_entry.get("active_tier", 1)
-                    active_tier_tests_raw = (
-                        run_entry.get("active_tier_tests") or []
-                    )
-                    active_tier_tests = set(
-                        t.get("name") if isinstance(t, dict) else t
-                        for t in active_tier_tests_raw
-                    )
-
-                    if tier_manager:
-                        tier_manager.fast_forward_to_tier(active_tier)
-
-                    logger.debug("Waiting for tier %s jobs...", active_tier)
-                    ramble_manager.wait_for_jobs(
-                        app_data=app_data,
-                        tier=active_tier if is_tiered else None,
-                    )
-
-                    if is_tiered and active_tier == 1:
-                        spinner_msg = "Analyzing initial health checks..."
-                    elif is_tiered:
-                        spinner_msg = "Analyzing follow-up diagnostics..."
-                    else:
-                        spinner_msg = "Analyzing logs..."
-
-                    with theme.get_progress_spinner(spinner_msg):
-                        results_path = ramble_manager.analyze_experiments()
-                        boh_dir = ramble_manager.generate_boh(
-                            results_path,
+                with cancel_jobs_on_failure(scheduler_obj, "chs-"):
+                    while not run_entry.get("is_boh_final", False):
+                        active_tier = run_entry.get("active_tier", 1)
+                        active_tier_tests_raw = (
+                            run_entry.get("active_tier_tests") or []
                         )
-                    Console().print(
-                        f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
-                        f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
-                    )
-
-                    next_tests = None
-                    if tier_manager:
-                        boh_file = os.path.join(boh_dir, "bill_of_health.json")
-                        tier_results, hard_failures_present = (
-                            parse_tier_results_from_boh(
-                                boh_file, active_tier_tests
-                            )
+                        active_tier_tests = set(
+                            t.get("name") if isinstance(t, dict) else t
+                            for t in active_tier_tests_raw
                         )
-                        if hard_failures_present:
-                            Console().print(
-                                f"[{theme.CHS_WARNING_STYLE}]Hard failure "
-                                "detected. Halting follow-up diagnostic tiers."
-                                f"[/{theme.CHS_WARNING_STYLE}]"
-                            )
-                            next_tests = None
+
+                        if tier_manager:
+                            tier_manager.fast_forward_to_tier(active_tier)
+
+                        logger.debug("Waiting for tier %s jobs...", active_tier)
+                        ramble_manager.wait_for_jobs(
+                            app_data=app_data,
+                            tier=active_tier if is_tiered else None,
+                        )
+
+                        if is_tiered and active_tier == 1:
+                            spinner_msg = "Analyzing initial health checks..."
+                        elif is_tiered:
+                            spinner_msg = "Analyzing follow-up diagnostics..."
                         else:
-                            next_tests = tier_manager.get_next_tier_tests(
-                                tier_results
+                            spinner_msg = "Analyzing logs..."
+
+                        with theme.get_progress_spinner(spinner_msg):
+                            results_path = ramble_manager.analyze_experiments()
+                            boh_dir = ramble_manager.generate_boh(
+                                results_path,
                             )
-
-                    if not next_tests:
-                        with theme.get_progress_spinner(
-                            "Cleaning up CHS resources..."
-                        ):
-                            try:
-                                ramble_manager.cancel_experiments()
-                                logger.debug(
-                                    "Cleaned up CHS resources for run %s",
-                                    run_id,
-                                )
-                            except (
-                                ex.ChsException,
-                                subprocess.CalledProcessError,
-                            ) as e:
-                                logger.warning(
-                                    "Failed to clean CHS resources. Error: %s",
-                                    e,
-                                )
-
-                        run_entry["is_boh_final"] = True
-                        app_data.update_run(workspace_name, run_entry)
                         Console().print(
-                            f"[{theme.CHS_SUCCESS_STYLE}]All checks completed. "
-                            "Bill of Health generated."
-                            f"[/{theme.CHS_SUCCESS_STYLE}]"
+                            f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
+                            f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
                         )
-                        break
 
-                    _submit_next_tier(
-                        app_data,
-                        ramble_manager,
-                        run_entry,
-                        workspace_name,
-                        active_tier + 1,
-                        list(next_tests),
-                        tier_results=tier_results,
-                    )
+                        next_tests = None
+                        if tier_manager:
+                            boh_file = os.path.join(
+                                boh_dir, "bill_of_health.json"
+                            )
+                            tier_results, hard_failures_present = (
+                                parse_tier_results_from_boh(
+                                    boh_file, active_tier_tests
+                                )
+                            )
+                            if hard_failures_present:
+                                Console().print(
+                                    f"[{theme.CHS_WARNING_STYLE}]Hard failure "
+                                    "detected. Halting follow-up diagnostic "
+                                    "tiers."
+                                    f"[/{theme.CHS_WARNING_STYLE}]"
+                                )
+                                next_tests = None
+                            else:
+                                next_tests = tier_manager.get_next_tier_tests(
+                                    tier_results
+                                )
 
+                        if not next_tests:
+                            run_entry["is_boh_final"] = True
+                            app_data.update_run(
+                                workspace_name, {"is_boh_final": True}
+                            )
+                            Console().print(
+                                f"[{theme.CHS_SUCCESS_STYLE}]All checks "
+                                "completed. Bill of Health generated."
+                                f"[/{theme.CHS_SUCCESS_STYLE}]"
+                            )
+                            break
+
+                        _submit_next_tier(
+                            app_data,
+                            ramble_manager,
+                            run_entry,
+                            workspace_name,
+                            active_tier + 1,
+                            list(next_tests),
+                            tier_results=tier_results,
+                        )
+
+                background_cleanup.start(ramble_manager)
                 _show_results(app_data, run_id, suppress_boh_uri=True)
-            except (OSError, subprocess.CalledProcessError) as e:
+            except (OSError, subprocess.CalledProcessError, KubeError) as e:
                 err_msg = ex.format_subprocess_error(e)
                 raise ex.ChsAnalysisException(
                     f"CHS analysis failed for run_id={run_id}: {err_msg}"
@@ -825,13 +866,17 @@ def _show_results(
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
 
     boh_uri = None
-    if run_provider and not suppress_boh_uri:
-        html_remote = f"bills_of_health/{workspace_name}.html"
-        json_remote = f"bills_of_health/{workspace_name}.json"
-        if run_provider.exists(html_remote):
-            boh_uri = run_provider.get_uri(html_remote)
-        elif run_provider.exists(json_remote):
-            boh_uri = run_provider.get_uri(json_remote)
+    if not suppress_boh_uri:
+        run_data = app_data.get_run(workspace_name)
+        if isinstance(run_data, dict):
+            boh_uri = run_data.get("boh_html_uri") or run_data.get("boh_uri")
+        if not boh_uri and run_provider:
+            html_remote = f"bills_of_health/{workspace_name}.html"
+            json_remote = f"bills_of_health/{workspace_name}.json"
+            if run_provider.exists(html_remote):
+                boh_uri = run_provider.get_uri(html_remote)
+            elif run_provider.exists(json_remote):
+                boh_uri = run_provider.get_uri(json_remote)
 
     if not boh_path.exists():
         logger.debug(
@@ -860,9 +905,7 @@ def _show_results(
                 raise ex.BillOfHealthNotFoundException(
                     f"Results not found for run '{run_id}'.\n"
                     "This usually happens if the jobs are still running, "
-                    "the run was canceled, or the upload failed.\n"
-                    "Tip: Run 'chs run' to re-attach to any active run "
-                    "and check its status."
+                    "the run was canceled, or the upload failed."
                 ) from e
             except Exception as e:
                 raise ex.BillOfHealthNotFoundException(
@@ -889,8 +932,8 @@ def cancel_action(scheduler_name: str | None = None) -> None:
         scheduler.cleanup_scheduler_resources()
     except (
         subprocess.CalledProcessError,
+        KubeError,
         ex.ChsSchedulerException,
-        ex.KueueException,
     ) as e:
         raise ex.ChsCancellationException(
             f"CHS cancellation failed: {e!r}"
@@ -1242,99 +1285,42 @@ def _check_for_foreign_runs(app_data: ChsAppData, scheduler: str) -> None:
 def _handle_previous_run(
     app_data: ChsAppData,
     scheduler: str,
-    suite: str | None,
     auto_approve: bool,
-) -> RunExecutionResult | None:
-    """Checks for a previous run, optionally attaches to it, or cleans up."""
+) -> None:
+    """Checks for a previous run and cleans up leftover resources."""
     _check_for_foreign_runs(app_data, scheduler)
 
+    msg = None
     try:
         latest_run_id = app_data.get_latest_run_id()
-        if not latest_run_id:
-            safe_cancel_action(
-                scheduler, auto_approve=auto_approve, action_type="setup"
-            )
-            return None
-
-        workspace_name = app_data.resolve_run_id(latest_run_id)
-        run_entry = app_data.get_run(workspace_name)
-        if not run_entry:
-            safe_cancel_action(
-                scheduler, auto_approve=auto_approve, action_type="setup"
-            )
-            return None
-
-        submission_complete = run_entry.get("submission_complete", False)
-        scheduler = run_entry.get("scheduler", scheduler)
-        scheduler_instance = get_scheduler(scheduler)
-
-        has_no_failed_jobs = False
-        is_boh_final = run_entry.get("is_boh_final", False)
-
-        try:
-            if scheduler_instance.has_no_failed_jobs():
-                logger.warning(
-                    "An active Cluster Health Scanner diagnostics run is "
-                    "already executing on this cluster."
-                )
-                has_no_failed_jobs = True
-        except ex.NoActiveJobsException:
-            safe_cancel_action(
-                scheduler,
-                auto_approve=auto_approve,
-                message=(
-                    "Previous run found but tests no longer "
-                    "exist on the cluster. Cleaning all "
-                    "stale resources."
-                ),
-                action_type="setup",
-            )
-            return None
-
-        if submission_complete and has_no_failed_jobs and not is_boh_final:
-            logger.warning(
-                "Parallel CHS runs are not supported. "
-                f"Attaching to the existing run ID: {latest_run_id}. "
-                f"To start a new run, terminate the current "
-                "one using `chs cancel`."
-            )
-            _analyze_action(app_data, latest_run_id)
-            return RunExecutionResult(
-                suite=run_entry.get("suite", suite or "lite"),
-                scheduler_name=scheduler,
-                tests=None,
-                workspace_name=workspace_name,
-                workspaces_base_dir=app_data.get_workspaces_dir(),
-                job_ids=None,
-            )
-
-        if is_boh_final:
-            msg = (
-                "Previous run is already completed. "
-                "Cleaning all stale resources"
-            )
-        elif not submission_complete:
-            msg = (
-                "Previous run died mid-submission. "
-                "Cleaning all stale resources"
-            )
-        else:
-            msg = (
-                "Previous run found but some tests "
-                "errored out. Cleaning all stale resources"
-            )
-        safe_cancel_action(
-            scheduler,
-            auto_approve=auto_approve,
-            message=msg,
-            action_type="setup",
-        )
+        if latest_run_id:
+            workspace_name = app_data.resolve_run_id(latest_run_id)
+            run_entry = app_data.get_run(workspace_name)
+            if run_entry:
+                if run_entry.get("is_boh_final", False):
+                    msg = (
+                        "Previous run is already completed. "
+                        "Cleaning all stale resources"
+                    )
+                elif not run_entry.get("submission_complete", False):
+                    msg = (
+                        "Previous run died mid-submission. "
+                        "Cleaning all stale resources"
+                    )
+                else:
+                    msg = (
+                        "Previous run found with leftover resources. "
+                        "Cleaning all stale resources"
+                    )
     except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-        safe_cancel_action(
-            scheduler, auto_approve=auto_approve, action_type="setup"
-        )
+        pass
 
-    return None
+    safe_cancel_action(
+        scheduler,
+        auto_approve=auto_approve,
+        message=msg,
+        action_type="setup",
+    )
 
 
 @cli.command(epilog=help_command_text.generate_run_epilog())
@@ -1425,6 +1411,7 @@ def _handle_previous_run(
     callback=validators.validate_run_id,
 )
 @click.pass_obj
+@_handle_termination_signals(_interrupt_run)
 def run(
     obj,
     *,
@@ -1657,14 +1644,11 @@ def run(
         f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
 
-    attach_result = _handle_previous_run(
+    _handle_previous_run(
         app_data=app_data,
         scheduler=scheduler,
-        suite=suite,
         auto_approve=auto_approve,
     )
-    if attach_result:
-        return attach_result
 
     with theme.get_progress_spinner(
         f"[{theme.CHS_HEADER_STYLE}]Identifying idle nodes for testing..."
@@ -1847,6 +1831,7 @@ def run(
     _analyze_action(
         app_data,
         run_id,
+        scheduler_obj,
     )
 
     return result
@@ -1928,7 +1913,7 @@ def cancel(obj, auto_approve: bool = False) -> None:
                 workspaces_base_dir, workspace_name, run_id=latest_run_id
             )
             if (
-                os.path.exists(ramble_manager.path)
+                ramble_manager.is_workspace_created
                 and not ramble_manager.is_archived()
             ):
                 logger.debug(
@@ -2128,5 +2113,7 @@ def main(args: list[str] | None = None) -> None:
     logger.debug("CHS CLI starting...")
     try:
         cli(args=args, obj={})
+    except KeyboardInterrupt:
+        sys.exit(130)
     finally:
         logger.debug("CHS CLI finished.")

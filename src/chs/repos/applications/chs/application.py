@@ -220,7 +220,11 @@ class Chs(ExecutableApplication):
                 "nccl-domain",
             ]:
                 topology = None
-                if test.name in ("nccl-pairwise", "nccl-domain"):
+                if test.name in (
+                    "nccl-cluster",
+                    "nccl-pairwise",
+                    "nccl-domain",
+                ):
                     topology = load_topology(workspace.root, warn_on_error=True)
 
                 workloads = (

@@ -121,15 +121,9 @@ class ChsAppData:
             logger.debug("AppData: Removed storage config")
 
     def update_run(self, run_id: str, run_data: dict[str, Any]) -> None:
-        """Updates or adds a run entry in the app data.
-
-        Args:
-            run_id: The unique identifier for the run.
-            run_data: A dictionary containing run details.
-        """
+        """Updates or adds a run entry in the app data."""
         runs = self._load_json(self._runs_file)
 
-        # Merge with existing data if present
         if run_id in runs:
             if "job_entries" in run_data and "job_entries" in runs[run_id]:
                 existing_entries = dict(runs[run_id]["job_entries"])
@@ -142,9 +136,14 @@ class ChsAppData:
                         new_status = new_entry.get("status")
                         if (
                             JobStatus.is_terminal(curr_status)
-                            and new_status == JobStatus.PENDING.value
+                            and new_status
+                            and not JobStatus.is_terminal(new_status)
                         ):
-                            continue
+                            new_entry = {
+                                k: v
+                                for k, v in new_entry.items()
+                                if k != "status"
+                            }
                         existing_entries[job_id].update(new_entry)
                 run_data["job_entries"] = existing_entries
             runs[run_id].update(run_data)
@@ -162,18 +161,34 @@ class ChsAppData:
         Terminal statuses are preserved.
         """
         runs = self._load_json(self._runs_file)
-        job_entries = runs.get(run_id, {}).setdefault("job_entries", {})
+        changed = False
+        if run_id not in runs:
+            runs[run_id] = {}
+            changed = True
+        run_entry = runs[run_id]
+        if "job_entries" not in run_entry:
+            run_entry["job_entries"] = {}
+            changed = True
+        job_entries = run_entry["job_entries"]
         for job_id, new_status in new_job_statuses.items():
-            entry = job_entries.setdefault(job_id, {})
+            if job_id not in job_entries:
+                job_entries[job_id] = {}
+                changed = True
+            job_entry = job_entries[job_id]
             # Update the status only if the job is in a non-terminal state.
-            if not JobStatus.is_terminal(entry.get("status")):
-                entry["status"] = (
+            curr_status = job_entry.get("status")
+            if not JobStatus.is_terminal(curr_status):
+                resolved_status = (
                     new_status.value
                     if isinstance(new_status, JobStatus)
                     else str(new_status)
                 )
-        self._save_json(self._runs_file, runs)
-        logger.debug("AppData: Updated status for run %s", run_id)
+                if curr_status != resolved_status:
+                    job_entry["status"] = resolved_status
+                    changed = True
+        if changed:
+            self._save_json(self._runs_file, runs)
+            logger.debug("AppData: Updated status for run %s", run_id)
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         """Retrieves a run entry from the app data."""

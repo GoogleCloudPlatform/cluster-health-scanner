@@ -16,15 +16,12 @@ import importlib.util
 import logging
 import os
 import sys
+from collections.abc import Iterator
 
+from chs.testkit import config as chs_config
 from chs.testkit.base import BaseTestPlugin
 
 logger = logging.getLogger(__name__)
-
-TESTS_ROOT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "tests",
-)
 
 PLUGIN_FILENAME = "plugin.py"
 
@@ -40,11 +37,11 @@ def clear_cache() -> None:
 
 
 def plugin_path(test_name: str) -> str:
-    return os.path.join(TESTS_ROOT, test_name, PLUGIN_FILENAME)
+    return os.path.join(chs_config.TESTS_ROOT, test_name, PLUGIN_FILENAME)
 
 
 def available_tests() -> list[str]:
-    root = TESTS_ROOT
+    root = chs_config.TESTS_ROOT
     if not os.path.isdir(root):
         logger.warning("Test directory '%s' does not exist.", root)
         return []
@@ -53,6 +50,14 @@ def available_tests() -> list[str]:
         for entry in os.listdir(root)
         if os.path.isfile(os.path.join(root, entry, PLUGIN_FILENAME))
     )
+
+
+def enabled_tests() -> Iterator[tuple[str, dict]]:
+    """Yields (test_name, config) for every test not set to enabled: false."""
+    for test_name in available_tests():
+        config = chs_config.load_test_config(test_name)
+        if config.get("enabled", True):
+            yield test_name, config
 
 
 def load_plugin(test_name: str) -> BaseTestPlugin | None:

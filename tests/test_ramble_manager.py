@@ -16,6 +16,7 @@
 
 import logging
 import os
+import pathlib
 import subprocess
 import sys
 import sysconfig
@@ -208,32 +209,30 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
         self.assertEqual(kwargs["env"].get("EXTRA_VAR"), "value")
 
+    def _write_all_experiments(self, manager, experiment_dirs):
+        os.makedirs(manager.path, exist_ok=True)
+        with open(os.path.join(manager.path, "all_experiments"), "w") as f:
+            f.write("#!/bin/bash\n")
+            f.writelines(f"{d}/batch_submit\n" for d in experiment_dirs)
+
     def test_execute_experiments(self):
         """Test execute_experiments executes correct all_experiments script by
         default.
         """
 
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        mock_scheduler = mock.Mock()
+        mock_scheduler = mock.Mock(submits_directly=False)
         mock_scheduler.name = "mock_scheduler"
         mock_scheduler.get_extra_env.return_value = {}
         mock_scheduler.extract_job_id.return_value = "123"
         manager._scheduler = mock_scheduler
+        self._write_all_experiments(
+            manager, ["/tmp/workspace/experiments/exp1"]
+        )
 
         with (
-            mock.patch("os.path.exists", return_value=True),
             mock.patch(
                 "chs.ramble_manager.get_scheduler", return_value=mock_scheduler
-            ),
-            mock.patch(
-                "os.walk",
-                return_value=[
-                    (
-                        "/tmp/workspace/experiments/exp1",
-                        [],
-                        ["execute_experiment"],
-                    )
-                ],
             ),
             mock.patch.object(
                 manager, "_update_registry"
@@ -272,32 +271,22 @@ class TestRambleManager(unittest.TestCase):
     def test_execute_experiments_skips_scaffolding(self):
         """Test execute_experiments skips registering scaffolding 'chs' app."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
-        mock_scheduler = mock.Mock()
+        mock_scheduler = mock.Mock(submits_directly=False)
         mock_scheduler.name = "mock_scheduler"
         mock_scheduler.get_extra_env.return_value = {}
         mock_scheduler.extract_job_id.return_value = "123"
         manager._scheduler = mock_scheduler
+        self._write_all_experiments(
+            manager,
+            [
+                "/tmp/workspace/experiments/chs/cluster_health/chs",
+                "/tmp/workspace/experiments/nvidia-smi/local/nvidia-smi",
+            ],
+        )
 
         with (
-            mock.patch("os.path.exists", return_value=True),
             mock.patch(
                 "chs.ramble_manager.get_scheduler", return_value=mock_scheduler
-            ),
-            mock.patch(
-                "os.walk",
-                return_value=[
-                    (
-                        "/tmp/workspace/experiments/chs/cluster_health/chs",
-                        [],
-                        ["execute_experiment"],
-                    ),
-                    (
-                        "/tmp/workspace/experiments/nvidia-smi/"
-                        "local/nvidia-smi",
-                        [],
-                        ["execute_experiment"],
-                    ),
-                ],
             ),
             mock.patch.object(
                 manager, "_update_registry"
@@ -320,6 +309,81 @@ class TestRambleManager(unittest.TestCase):
             tier=1,
         )
 
+    def test_execute_experiments_submits_directly_in_suite_order(self):
+        """Test direct submission gets test experiments in script order."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        experiments_dir = os.path.join(manager.path, "experiments")
+        scaffold_dir = os.path.join(
+            experiments_dir, "chs", "cluster_health", "chs"
+        )
+        smi_dir = os.path.join(
+            experiments_dir, "nvidia-smi", "local", "run-smi"
+        )
+        dcgm_dir = os.path.join(
+            experiments_dir, "nvidia-dcgm", "diag", "run-dcgm"
+        )
+        gemm_dir = os.path.join(experiments_dir, "gemm", "local", "run-gemm")
+        script_order = [scaffold_dir, smi_dir, dcgm_dir, gemm_dir]
+        for experiment_dir in script_order:
+            os.makedirs(experiment_dir)
+        self._write_all_experiments(manager, script_order)
+        mock_scheduler = mock.Mock(submits_directly=True)
+        mock_scheduler.submit_experiments.side_effect = lambda dirs: {
+            f"job-{os.path.basename(d)}": d for d in dirs
+        }
+
+        with self.subTest("all tests"):
+            with (
+                mock.patch(
+                    "chs.ramble_manager.get_scheduler",
+                    return_value=mock_scheduler,
+                ),
+                mock.patch.object(manager, "_update_registry") as registry,
+            ):
+                job_ids = manager.execute_experiments()
+
+            mock_scheduler.submit_experiments.assert_called_once_with(
+                [smi_dir, dcgm_dir, gemm_dir]
+            )
+            self.mock_run.assert_not_called()
+            self.assertEqual(
+                job_ids, ["job-run-smi", "job-run-dcgm", "job-run-gemm"]
+            )
+            registry.assert_called_once_with(
+                {
+                    "job-run-smi": smi_dir,
+                    "job-run-dcgm": dcgm_dir,
+                    "job-run-gemm": gemm_dir,
+                },
+                tier=1,
+            )
+            for experiment_dir in (smi_dir, dcgm_dir, gemm_dir):
+                name = os.path.basename(experiment_dir)
+                with open(os.path.join(experiment_dir, f"{name}.out")) as f:
+                    self.assertTrue(
+                        f.read().startswith(f"Submitted {name} at ")
+                    )
+            self.assertFalse(
+                os.path.exists(os.path.join(scaffold_dir, "chs.out"))
+            )
+
+        with self.subTest("active tests"):
+            mock_scheduler.submit_experiments.reset_mock()
+            with (
+                mock.patch(
+                    "chs.ramble_manager.get_scheduler",
+                    return_value=mock_scheduler,
+                ),
+                mock.patch.object(manager, "_update_registry"),
+            ):
+                manager.execute_experiments(
+                    tier=2, active_tests=["gemm", "smi"]
+                )
+
+            mock_scheduler.submit_experiments.assert_called_once_with(
+                [smi_dir, gemm_dir]
+            )
+
     def test_update_registry_preserves_custom_fields(self):
         """Test _update_registry preserves custom flags."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
@@ -327,13 +391,13 @@ class TestRambleManager(unittest.TestCase):
         mock_scheduler.name = "kubernetes"
         manager._scheduler = mock_scheduler
 
-        self.mock_app_data.get_run.return_value = {"kueue_supported": True}
+        self.mock_app_data.get_run.return_value = {"custom_flag": True}
 
         manager._update_registry({"job1": "/path/to/job1"})
 
         self.mock_app_data.update_run.assert_called_once()
         updated_run = self.mock_app_data.update_run.call_args[0][1]
-        self.assertTrue(updated_run.get("kueue_supported"))
+        self.assertTrue(updated_run.get("custom_flag"))
         self.assertIn("job1", updated_run.get("job_entries", {}))
         self.assertEqual(
             updated_run.get("job_entries")["job1"]["experiment_dir"],
@@ -540,7 +604,7 @@ mycriteria:
         self.assertFalse(upload_success)
 
     def test_upload_workspace_success(self):
-        """Test _upload_workspace archives and calls provider.upload_file."""
+        """Test creating and uploading a workspace archive."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
@@ -548,16 +612,29 @@ mycriteria:
         mock_provider = mock.Mock()
 
         # Mock glob to return a dummy archive file
-        mock_glob = mock.patch("pathlib.Path.glob").start()
+        mock_glob = self.enterContext(mock.patch("pathlib.Path.glob"))
         mock_archive_file = mock.Mock()
         mock_archive_file.name = "ws1.tar.gz"
+        mock_archive_file.is_symlink.return_value = False
+        mock_archive_file.is_file.return_value = True
+        mock_archive_file.stat.return_value.st_mtime = 1.0
+        mock_archive_file.parent = mock.MagicMock()
+        mock_archive_file.parent.iterdir.return_value = []
+        mock_rmtree = self.enterContext(
+            mock.patch("chs.ramble_manager.shutil.rmtree")
+        )
         mock_glob.side_effect = (
             lambda pat: [mock_archive_file] if "tar.gz" in pat else []
         )
 
         with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager._upload_workspace(mock_provider)
+            archive_file = manager._create_workspace_archive()
+            self.assertEqual(archive_file, mock_archive_file)
+            dest = manager._upload_workspace_archive(
+                mock_provider, archive_file
+            )
 
+            self.assertEqual(dest, "workspaces/ws1.tar.gz")
             mock_exec.assert_called_once_with(
                 "workspace",
                 [
@@ -577,24 +654,32 @@ mycriteria:
                 str(mock_archive_file), "workspaces/ws1.tar.gz"
             )
             mock_archive_file.unlink.assert_called_once()
-        mock_glob.stop()
+            mock_rmtree.assert_called_once_with(
+                mock_archive_file.parent / "ws1", ignore_errors=True
+            )
 
     def test_upload_workspace_no_archive_found(self):
-        """Test _upload_workspace logs warning if no archive found."""
+        """Test _create_workspace_archive logs failure if no archive found."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
         os.makedirs(
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
         mock_provider = mock.Mock()
 
-        mock_glob = mock.patch("pathlib.Path.glob").start()
+        mock_glob = self.enterContext(mock.patch("pathlib.Path.glob"))
         mock_glob.return_value = []  # No files found
 
-        with mock.patch.object(manager, "_execute_ramble_command") as mock_exec:
-            manager._upload_workspace(mock_provider)
+        with (
+            mock.patch.object(manager, "_execute_ramble_command") as mock_exec,
+            mock.patch.object(
+                manager, "_log_workspace_archive_failure"
+            ) as mock_log_failure,
+        ):
+            archive_file = manager._create_workspace_archive()
+            self.assertIsNone(archive_file)
             mock_exec.assert_called_once()
+            mock_log_failure.assert_called_once()
             mock_provider.upload_file.assert_not_called()
-        mock_glob.stop()
 
     def test_archive_success(self):
         """Test archive retrieves provider and calls upload methods."""
@@ -603,6 +688,7 @@ mycriteria:
             os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
         )
         mock_provider = mock.Mock()
+        archive_file = pathlib.Path(manager.path, "archive", "ws1.tar.gz")
 
         with (
             mock.patch(
@@ -614,11 +700,21 @@ mycriteria:
                 "_upload_boh",
                 return_value=("dest_json", "dest_html", True),
             ) as mock_boh,
-            mock.patch.object(manager, "_upload_workspace") as mock_workspace,
+            mock.patch.object(
+                manager,
+                "_create_workspace_archive",
+                return_value=archive_file,
+            ) as mock_create_archive,
+            mock.patch.object(
+                manager, "_upload_workspace_archive", return_value="dest_ws"
+            ) as mock_upload_archive,
         ):
             manager.archive()
             mock_boh.assert_called_once_with(mock_provider)
-            mock_workspace.assert_called_once_with(mock_provider)
+            mock_create_archive.assert_called_once_with()
+            mock_upload_archive.assert_called_once_with(
+                mock_provider, archive_file
+            )
 
     def test_archive_no_provider(self):
         """Test archive skips upload if provider cannot be loaded."""
@@ -632,11 +728,13 @@ mycriteria:
                 return_value=None,
             ),
             mock.patch.object(manager, "_upload_boh") as mock_boh,
-            mock.patch.object(manager, "_upload_workspace") as mock_workspace,
+            mock.patch.object(
+                manager, "_create_workspace_archive"
+            ) as mock_create_archive,
         ):
             manager.archive()
             mock_boh.assert_not_called()
-            mock_workspace.assert_not_called()
+            mock_create_archive.assert_not_called()
 
     def test_is_archived(self):
         """Test is_archived returns status based on storage provider."""

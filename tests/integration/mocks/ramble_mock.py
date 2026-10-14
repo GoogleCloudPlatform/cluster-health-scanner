@@ -73,24 +73,7 @@ def mock_ramble_workloads(output_generator):
                 cleaned_docs.append(doc)
 
                 specs = []
-                if doc.get("kind") == "JobSet":
-                    jobset_name = doc.get("metadata", {}).get("name")
-                    for rj in doc.get("spec", {}).get("replicatedJobs", []):
-                        job_spec = rj.get("template", {}).get("spec", {})
-                        job_spec["activeDeadlineSeconds"] = 75
-                        pod_template = job_spec.get("template", {})
-
-                        if pod_template.get("metadata") is None:
-                            pod_template["metadata"] = {}
-                        if "labels" not in pod_template["metadata"]:
-                            pod_template["metadata"]["labels"] = {}
-
-                        pod_template["metadata"]["labels"][
-                            "jobset.sigs.k8s.io/jobset-name"
-                        ] = jobset_name
-
-                        specs.append(pod_template.get("spec", {}))
-                elif doc.get("kind") == "Job":
+                if doc.get("kind") == "Job":
                     job_spec = doc.get("spec", {})
                     job_spec["activeDeadlineSeconds"] = 75
                     specs.append(job_spec.get("template", {}).get("spec", {}))
@@ -133,19 +116,6 @@ def mock_ramble_workloads(output_generator):
 
             with open(manifest_path, "w") as f:
                 yaml.dump_all(cleaned_docs, f)
-
-        # Strip the topologyName constraint so mock nodes don't deadlock
-        # Kueue TAS
-        kueue_yaml = os.path.join(self.path, "configs", "kueue-configs.yaml")
-        if os.path.exists(kueue_yaml):
-            with open(kueue_yaml, "r") as f:
-                content = f.read()
-            content = content.replace(
-                "topologyName: chs-node-topology",
-                "# topologyName: chs-node-topology",
-            )
-            with open(kueue_yaml, "w") as f:
-                f.write(content)
 
     with mock.patch(
         "chs.ramble_manager.RambleManager.setup_workspace",

@@ -131,24 +131,6 @@ class MachineTypeDiscoveryException(ChsException):
     """Raised when machine type discovery fails."""
 
 
-class KueueException(ChsException):
-    """Raised for Kueue-related errors."""
-
-    pass
-
-
-class ChsDetachedException(ChsException):
-    """Raised when the user intentionally detaches from a CHS run."""
-
-    pass
-
-
-class NoActiveJobsException(ChsException):
-    """Raised when there are no CHS jobs found on the cluster."""
-
-    pass
-
-
 class InvalidTestConfigException(ChsException):
     """Raised test config defined in suites.yaml is invalid"""
 

@@ -1786,6 +1786,61 @@ class TestBOHGenerator(unittest.TestCase):
             48.0,
         )
 
+    def test_a4x_nccl_cluster_thresholds_gated_on_domain(self):
+        """A4X nccl-cluster is validated intradomain only.
+
+        Interdomain runs have no threshold and report UNKNOWN.
+        """
+
+        def exp(name, domain_type, value):
+            return {
+                "experiment_name": name,
+                "workload_name": "all-reduce",
+                "RAMBLE_VARIABLES": {
+                    "chs_test_name": "nccl-cluster",
+                    "machine_type": "a4x-highgpu-4g",
+                    "domain_type": domain_type,
+                },
+                "RAMBLE_RAW_VARIABLES": {"nodes": [f"{name}-n1", f"{name}-n2"]},
+                "CONTEXTS": [
+                    {
+                        "name": "8589934592",
+                        "foms": [
+                            {
+                                "name": "Out of Place Bus Bandwidth",
+                                "value": value,
+                            }
+                        ],
+                    }
+                ],
+            }
+
+        self._write_json(
+            {
+                "experiments": [
+                    exp("intra", "intradomain", 780.0),
+                    exp("inter", "interdomain", 400.0),
+                ]
+            }
+        )
+        report = BOHGenerator(self.test_json_path).generate()
+        by_node = {
+            r.target_resources[0].node_name: r for r in report.test_results
+        }
+
+        intra = by_node["intra-n1"]
+        self.assertEqual(intra.result_status, pb.RESULT_STATUS_SUCCESS)
+        self.assertIn(
+            760.0,
+            [
+                m.validation_criteria.expected_value.number_value
+                for m in intra.metrics
+            ],
+        )
+        self.assertEqual(
+            by_node["inter-n1"].result_status, pb.RESULT_STATUS_UNKNOWN
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

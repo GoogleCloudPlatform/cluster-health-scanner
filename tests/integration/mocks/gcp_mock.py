@@ -19,6 +19,8 @@ from unittest import mock
 
 import hashlib
 
+from chs.storage import gcs
+
 
 @contextlib.contextmanager
 def mock_gce_instances(cluster_name: str):
@@ -50,9 +52,18 @@ def mock_gce_instances(cluster_name: str):
 
 @contextlib.contextmanager
 def mock_gcs_bucket():
+    """Mocks GCS without resolving real Application Default Credentials."""
+    gcs._storage_client.cache_clear()
     with (
+        mock.patch(
+            "chs.utils.gcp.get_default_credentials",
+            return_value=(mock.MagicMock(), None),
+        ),
         mock.patch("google.cloud.storage.Client"),
         mock.patch("google.cloud.storage.Bucket"),
         mock.patch("google.cloud.storage.Blob"),
     ):
-        yield
+        try:
+            yield
+        finally:
+            gcs._storage_client.cache_clear()

@@ -12,25 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cluster_name: chs-kind-cluster
-project: chs-test-project
-default_zone: us-east5-c
-dependencies:
-  jobset:
-    version: v0.6.0
-  kueue:
-    enabled: false
-  gke_multinetwork:
-    enabled: true
-nodepools:
-- name: tpu-v6e-pool-01
-  count: 2
-  machine_type: ct6e-standard-4t
-  accelerator: tpu-v6e-slice
-  topology: 2x4
-  zone: us-east5-c
-  health:
-    ready_count: 2
-    unschedulable_count: 0
-    busy_count: 0
-test_scenarios: []
+
+type: min
+default:
+  bandwidth: 50
+a4x-highgpu-4g:
+  bandwidth:
+    - value: 780.0
+      conditions:
+        workload_name: all-reduce
+    - value: 600.0
+      conditions:
+        workload_name: all-gather
+a4x-maxgpu-4g-metal:
+  bandwidth:
+    - value: 780.0
+      conditions:
+        workload_name: all-reduce
+    - value: 600.0
+      conditions:
+        workload_name: all-gather
+a5x-highgpu-4g-metal:
+  bandwidth:
+    - value: 880.0
+      conditions:
+        workload_name: all-reduce
+    - value: 800.0
+      conditions:
+        workload_name: all-gather

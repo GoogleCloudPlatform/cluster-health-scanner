@@ -15,9 +15,14 @@
 """Unit tests for TestHelper."""
 
 import copy
+import os
+import pathlib
+import re
 import sys
 import unittest
 from unittest import mock
+
+import yaml
 
 # Mock ramble module dependencies
 ramble_mock = mock.Mock()
@@ -173,6 +178,117 @@ class TestTestHelper(unittest.TestCase):
         }
         pairs = _TestHelper.generate_topological_pairs(topology)
         self.assertEqual(pairs, [])
+
+    def test_a4x_nccl_cluster_gets_compute_domain(self):
+        """nccl-cluster on A4X needs a ComputeDomain for IMEX.
+
+        Without it, cross-node MNNVL/NVLS setup fails with CUDA error 801.
+        """
+        config_path = (
+            pathlib.Path(__file__).parents[1]
+            / "src/chs/repos/applications/chs/configs/kubernetes.yaml"
+        )
+        with open(config_path) as f:
+            configs = yaml.safe_load(f)
+
+        variables = {
+            "machine_type": "a4x-highgpu-4g",
+            "nodes": ["node1", "node2", "node3", "node4"],
+            "timeout": 600,
+            "deadline": 2400,
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(variables, "exp", configs, "nccl-cluster")
+
+        self.assertEqual(len(contexts_created), 1)
+        ctx_vars = contexts_created[0][1]["variables"]
+        self.assertIn("kind: ComputeDomain", ctx_vars["custom_resources_yaml"])
+        self.assertIn(
+            "compute-domain-channel", ctx_vars["pod_resource_claims_yaml"]
+        )
+        self.assertIn(
+            "compute-domain-channel", ctx_vars["extra_container_resources_yaml"]
+        )
+
+    def _cluster_domain_type(self, nodes, topology, configs=None, **extra):
+        variables = {
+            "machine_type": "a4x-maxgpu-4g-metal",
+            "nodes": nodes,
+            "timeout": 600,
+            "deadline": 2400,
+            **extra,
+        }
+        configs = configs or {
+            "a4x-maxgpu-4g-metal": {"nccl-tests": {"variables": {}}}
+        }
+        contexts_created = []
+
+        def mock_create(name, ctx):
+            contexts_created.append((name, ctx))
+            return mock.Mock(context_name=name)
+
+        with mock.patch(
+            "chs.repos.applications.chs.test_helper.create_context_from_dict",
+            side_effect=mock_create,
+        ):
+            _TestHelper.nccl_test(
+                variables, "exp", configs, "nccl-cluster", topology=topology
+            )
+        self.assertEqual(len(contexts_created), 1)
+        return contexts_created[0][1]
+
+    def test_nccl_cluster_domain_type(self):
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2", "node3"],
+                "subblock2": ["node4"],
+            }
+        }
+        ctx = self._cluster_domain_type(["node1", "node2", "node3"], topology)
+        self.assertEqual(ctx["variables"]["domain_type"], "intradomain")
+        ctx = self._cluster_domain_type(
+            ["node1", "node2", "node3", "node4"], topology
+        )
+        self.assertEqual(ctx["variables"]["domain_type"], "interdomain")
+        ctx = self._cluster_domain_type(["node1", "node2", "node3"], None)
+        self.assertEqual(ctx["variables"]["domain_type"], "unknown")
+        ctx = self._cluster_domain_type(["node1", "node2", "ghost"], topology)
+        self.assertEqual(ctx["variables"]["domain_type"], "unknown")
+
+    def test_nccl_cluster_does_not_merge_domain_config(self):
+        """The domain_type label must not pull in per-domain config blocks."""
+        topology = {
+            "block1": {
+                "subblock1": ["node1", "node2"],
+                "subblock2": ["node3", "node4"],
+            }
+        }
+        configs = {
+            "a4x-maxgpu-4g-metal": {
+                "nccl-tests": {
+                    "variables": {"mnnvl_enable": 2},
+                    "intradomain": {"variables": {"mnnvl_enable": 1}},
+                    "interdomain": {"variables": {"mnnvl_enable": 0}},
+                }
+            }
+        }
+        ctx = self._cluster_domain_type(
+            ["node1", "node2", "node3", "node4"],
+            topology,
+            configs=configs,
+            scheduler="slurm",
+        )
+        self.assertEqual(ctx["variables"]["domain_type"], "interdomain")
+        self.assertEqual(ctx["variables"]["mnnvl_enable"], 2)
 
     def test_nccl_test_domain_type_variable(self):
         topology = {
@@ -1170,18 +1286,18 @@ class TestTestHelper(unittest.TestCase):
 
         # Check container resources merged
         self.assertIn(
-            "limits:\n                    nvidia.com/gpu: 4",
+            "limits:\n            nvidia.com/gpu: 4",
             res["container_resources_section"],
         )
         self.assertIn(
-            "claims:\n                  - name: compute-domain-channel",
+            "claims:\n          - name: compute-domain-channel",
             res["container_resources_section"],
         )
 
         # When extra fields are empty
         var_map["extra_pod_annotations_yaml"] = ""
         var_map["extra_container_resources_yaml"] = ""
-        res_empty = wm._jobset_vars()
+        res_empty = wm._compute_jobset_vars()
         self.assertIn(
             "networking.gke.io/default-interface: eth0",
             res_empty["pod_annotations_section"],
@@ -1258,6 +1374,319 @@ class TestTestHelper(unittest.TestCase):
                 vars_2_nodes, "exp", configs, "nccl-cluster"
             )
             self.assertEqual(res_cluster_2, [])
+
+
+_JOBSET_VARS_INPUTS = {
+    "job_name": "chs-run1-nccl-tests-all-gather",
+    "command": "mpirun -n 16 all_gather_perf",
+    "experiment_run_dir": "/workspace/experiments/nccl/all-gather/exp1",
+    "container_image": "image:latest",
+    "pod_annotations_yaml": "networking.gke.io/default-interface: eth0",
+    "node_selector_yaml": "cloud.google.com/gke-nodepool: pool-1",
+    "tolerations_yaml": (
+        "- key: nvidia.com/gpu\n  operator: Exists\n  effect: NoSchedule"
+    ),
+    "init_containers_yaml": (
+        "- name: tcpxo-daemon\n  image: daemon:latest\n"
+        "  restartPolicy: Always"
+    ),
+    "container_resources_yaml": "limits:\n  nvidia.com/gpu: 8",
+    "suspend_jobset": "true",
+}
+
+_TEMPLATE_PLACEHOLDER = re.compile(r"(?<![$\w])\{(\w+)\}")
+
+
+def _workflow_manager(var_map: dict[str, str]) -> KubernetesJobset:
+    wm = KubernetesJobset(mock.Mock())
+    wm.app_inst = mock.Mock()
+    wm.app_inst.expander.expand_var_name.side_effect = lambda name: (
+        var_map.get(name, "")
+    )
+    return wm
+
+
+class KubernetesJobsetTest(unittest.TestCase):
+    """Tests for the kubernetes-jobset workflow manager."""
+
+    def setUp(self):
+        super().setUp()
+        self.generate_ssh_keys = self.enterContext(
+            mock.patch.object(
+                KubernetesJobset,
+                "_generate_ssh_keys",
+                autospec=True,
+                return_value=("private-key", "public-key"),
+            )
+        )
+
+    def test_jobset_vars_are_computed_once_per_experiment(self):
+        """All templates of one experiment share one Job name and key."""
+        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+
+        rendered_vars = [wm._jobset_vars() for _ in range(5)]
+
+        self.generate_ssh_keys.assert_called_once()
+        self.assertEqual(
+            {v["sanitized_job_name"] for v in rendered_vars},
+            {rendered_vars[0]["sanitized_job_name"]},
+        )
+        self.assertTrue(all(v == rendered_vars[0] for v in rendered_vars))
+
+    def test_jobset_vars_differ_between_experiments(self):
+        """Different experiments never share a Job name or key pair."""
+        var_map = dict(_JOBSET_VARS_INPUTS)
+        wm = _workflow_manager(var_map)
+        self.generate_ssh_keys.side_effect = [
+            ("private-key-1", "public-key-1"),
+            ("private-key-2", "public-key-2"),
+        ]
+
+        first = wm._jobset_vars()
+        var_map["experiment_run_dir"] = (
+            "/workspace/experiments/nccl/all-gather/exp2"
+        )
+        second = wm._jobset_vars()
+
+        self.assertEqual(self.generate_ssh_keys.call_count, 2)
+        self.assertNotEqual(
+            first["sanitized_job_name"], second["sanitized_job_name"]
+        )
+        self.assertNotEqual(
+            first["ssh_private_key_indented"],
+            second["ssh_private_key_indented"],
+        )
+
+    def test_returned_jobset_vars_do_not_alias_the_cache(self):
+        """Mutating returned variables does not leak into later templates."""
+        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+        job_name = wm._jobset_vars()["sanitized_job_name"]
+
+        wm._jobset_vars()["sanitized_job_name"] = "mutated"
+
+        self.assertEqual(wm._jobset_vars()["sanitized_job_name"], job_name)
+
+    def _render(self, template_name, var_map, **extra_vars):
+        """Renders a kubernetes-jobset template like Ramble does."""
+        wm = _workflow_manager(var_map)
+        template_vars = {
+            "kubernetes_namespace": "chs",
+            "n_nodes": var_map.get("n_nodes", "2"),
+            "timeout": "3600",
+            "ssh_port": "222",
+            "processes_per_node": "8",
+            **extra_vars,
+            **wm._jobset_vars(),
+        }
+        template_path = os.path.join(
+            os.path.dirname(sys.modules[KubernetesJobset.__module__].__file__),
+            template_name,
+        )
+        with open(template_path) as template_file:
+            template = template_file.read()
+        rendered = _TEMPLATE_PLACEHOLDER.sub(
+            lambda match: template_vars[match.group(1)], template
+        )
+        return template_vars, [d for d in yaml.safe_load_all(rendered) if d]
+
+    def _assert_job_spec(self, job, job_name, n_nodes):
+        self.assertEqual(job["apiVersion"], "batch/v1")
+        self.assertEqual(job["kind"], "Job")
+        self.assertEqual(job["metadata"]["name"], job_name)
+        self.assertEqual(job["metadata"]["namespace"], "chs")
+        spec = job["spec"]
+        self.assertEqual(
+            {k: v for k, v in spec.items() if k != "template"},
+            {
+                "suspend": True,
+                "completionMode": "Indexed",
+                "backoffLimit": 0,
+                "podFailurePolicy": {
+                    "rules": [
+                        {
+                            "action": "FailJob",
+                            "onExitCodes": {
+                                "operator": "NotIn",
+                                "values": [0],
+                            },
+                        }
+                    ]
+                },
+                "parallelism": n_nodes,
+                "completions": n_nodes,
+                "activeDeadlineSeconds": 3600,
+                "ttlSecondsAfterFinished": 86400,
+            },
+        )
+        self.assertEqual(
+            spec["template"]["metadata"]["labels"],
+            {
+                "chs.gke.io/worker": "true",
+            },
+        )
+        pod_spec = spec["template"]["spec"]
+        self.assertEqual(pod_spec["subdomain"], "chs")
+        self.assertEqual(pod_spec["restartPolicy"], "Never")
+        self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 5)
+        return pod_spec
+
+    def test_standard_template_renders_one_indexed_job(self):
+        """Golden structure of the standard template for a TPU test."""
+        var_map = {
+            **_JOBSET_VARS_INPUTS,
+            "command": "echo one\necho two",
+            "n_nodes": "2",
+            "affinity_yaml": (
+                "nodeAffinity:\n"
+                "  requiredDuringSchedulingIgnoredDuringExecution:\n"
+                "    nodeSelectorTerms:\n"
+                "    - matchExpressions:\n"
+                "      - key: kubernetes.io/hostname\n"
+                "        operator: In\n"
+                "        values:\n"
+                "        - node-1"
+            ),
+            "container_security_context_yaml": "privileged: true",
+            "extra_volumes_yaml": "- name: shm\n  emptyDir: {}",
+            "extra_volume_mounts_yaml": "- name: shm\n  mountPath: /dev/shm",
+            "pod_resource_claims_yaml": (
+                "- name: claim\n  resourceClaimTemplateName: tmpl"
+            ),
+        }
+
+        template_vars, docs = self._render("jobset_standard.yaml.tpl", var_map)
+
+        job_name = template_vars["sanitized_job_name"]
+        self.assertEqual(len(docs), 1)
+        pod_spec = self._assert_job_spec(docs[0], job_name, 2)
+        self.assertEqual(
+            docs[0]["spec"]["template"]["metadata"]["annotations"],
+            {"networking.gke.io/default-interface": "eth0"},
+        )
+        self.assertEqual(
+            pod_spec["nodeSelector"],
+            {"cloud.google.com/gke-nodepool": "pool-1"},
+        )
+        self.assertEqual(
+            pod_spec["tolerations"],
+            [
+                {
+                    "key": "nvidia.com/gpu",
+                    "operator": "Exists",
+                    "effect": "NoSchedule",
+                }
+            ],
+        )
+        self.assertEqual(
+            pod_spec["affinity"]["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"],
+            ["node-1"],
+        )
+        self.assertEqual(
+            pod_spec["resourceClaims"],
+            [{"name": "claim", "resourceClaimTemplateName": "tmpl"}],
+        )
+        self.assertEqual(pod_spec["volumes"], [{"name": "shm", "emptyDir": {}}])
+        (container,) = pod_spec["containers"]
+        self.assertEqual(container["image"], "image:latest")
+        self.assertEqual(container["securityContext"], {"privileged": True})
+        self.assertEqual(
+            container["resources"], {"limits": {"nvidia.com/gpu": 8}}
+        )
+        self.assertEqual(
+            container["volumeMounts"],
+            [{"name": "shm", "mountPath": "/dev/shm"}],
+        )
+        self.assertEqual(
+            container["env"],
+            [
+                {
+                    "name": "MY_NODE_NAME",
+                    "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
+                },
+            ],
+        )
+        self.assertEqual(container["command"][:2], ["bash", "-c"])
+        self.assertTrue(
+            container["command"][2].endswith("echo one\necho two\n")
+        )
+
+    def test_mpi_template_renders_secret_and_one_indexed_job(self):
+        """Golden structure of the MPI template."""
+        var_map = {
+            **_JOBSET_VARS_INPUTS,
+            "command": "mpirun -n 16 \\\n  all_gather_perf",
+            "n_nodes": "3",
+            "extra_volumes_yaml": "- name: shm\n  emptyDir: {}",
+            "extra_volume_mounts_yaml": "- name: shm\n  mountPath: /dev/shm",
+        }
+
+        template_vars, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+
+        job_name = template_vars["sanitized_job_name"]
+        self.assertEqual([d["kind"] for d in docs], ["Secret", "Job"])
+        self.assertEqual(docs[0]["metadata"]["name"], f"{job_name}-ssh")
+        pod_spec = self._assert_job_spec(docs[1], job_name, 3)
+        self.assertEqual(
+            [c["name"] for c in pod_spec["initContainers"]], ["tcpxo-daemon"]
+        )
+        self.assertEqual(
+            [v["name"] for v in pod_spec["volumes"]], ["mpi-id", "shm"]
+        )
+        self.assertEqual(
+            pod_spec["volumes"][0]["secret"]["secretName"], f"{job_name}-ssh"
+        )
+        (container,) = pod_spec["containers"]
+        self.assertEqual(
+            [m["name"] for m in container["volumeMounts"]], ["mpi-id", "shm"]
+        )
+        self.assertEqual(
+            [e["name"] for e in container["env"]],
+            [
+                "OMPI_ALLOW_RUN_AS_ROOT",
+                "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM",
+                "MY_NODE_NAME",
+            ],
+        )
+        script = container["command"][2]
+        self.assertIn(f'OTHER="{job_name}-${{i}}.chs"', script)
+        self.assertIn(f'HEAD_NODE="{job_name}-0.chs"', script)
+        self.assertNotIn("getent", script)
+        # The launcher's ssh discovery is bounded only by the Job's
+        # activeDeadlineSeconds.
+        discovery = script[
+            script.index("Discovering hosts") : script.index("STARTING MPI")
+        ]
+        self.assertNotIn("DNS_DEADLINE", discovery)
+        self.assertIn("$(seq 0 $(( 3 - 1 )))", script)
+        self.assertNotIn("POD_NAME", script)
+        self.assertIn("\n  mpirun -n 16 \\\n    all_gather_perf\n", script)
+
+    def test_tpu_worker_env_is_left_to_gke(self):
+        """CHS sets no TPU worker variables; GKE's TPU webhook injects them."""
+        _, docs = self._render(
+            "jobset_standard.yaml.tpl", dict(_JOBSET_VARS_INPUTS)
+        )
+
+        env_names = [
+            e["name"]
+            for e in docs[0]["spec"]["template"]["spec"]["containers"][0]["env"]
+        ]
+        self.assertEqual(env_names, ["MY_NODE_NAME"])
+
+    def test_user_pod_labels_are_kept_next_to_chs_labels(self):
+        var_map = {**_JOBSET_VARS_INPUTS, "pod_labels_yaml": "team: chs"}
+
+        _, docs = self._render("jobset_standard.yaml.tpl", var_map)
+
+        self.assertEqual(
+            docs[0]["spec"]["template"]["metadata"]["labels"],
+            {
+                "team": "chs",
+                "chs.gke.io/worker": "true",
+            },
+        )
 
 
 if __name__ == "__main__":

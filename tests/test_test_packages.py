@@ -29,7 +29,11 @@ import tempfile
 import unittest
 from unittest import mock
 
+from chs.testkit import NodeGrouping
 from chs.testkit import TestRequest, available_tests, load_plugin
+from chs.utils import topology as topology_utils
+
+TOPOLOGY_FILENAME = "topology.json"
 
 # A two-subblock cluster. Small enough to write the expected pairs out by
 # hand, large enough that the within-subblock and across-subblock passes both
@@ -255,17 +259,38 @@ class PairwisePairingTest(unittest.TestCase):
 
         self.assertEqual(forwards, backwards)
 
+    def test_without_interdomain_pairs_only_subblock_pairs_are_made(self):
+        pairs = self.module.generate_topological_pairs(
+            {
+                "block-a": {
+                    "sub-1": ["node-1", "node-2", "node-3"],
+                    "sub-2": ["node-4", "node-5"],
+                },
+                "block-b": {"sub-3": ["node-6", "node-7"]},
+            },
+            allow_interdomain_pairs=False,
+        )
+
+        self.assertEqual(
+            [
+                ["node-1", "node-2"],
+                ["node-2", "node-3"],
+                ["node-4", "node-5"],
+                ["node-6", "node-7"],
+            ],
+            pairs,
+        )
+
 
 class PairwiseTopologyFileTest(unittest.TestCase):
     """Reading the topology file the CLI leaves in the workspace."""
 
     def setUp(self):
-        self.module = _pairwise_module()
         self.root = tempfile.mkdtemp(prefix="chs-pairwise-")
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def write(self, content):
-        path = os.path.join(self.root, self.module.TOPOLOGY_FILENAME)
+        path = os.path.join(self.root, TOPOLOGY_FILENAME)
         with open(path, "w") as f:
             f.write(content)
         return path
@@ -273,10 +298,15 @@ class PairwiseTopologyFileTest(unittest.TestCase):
     def test_a_written_topology_is_read_back(self):
         self.write(json.dumps(TOPOLOGY))
 
-        self.assertEqual(TOPOLOGY, self.module.load_topology(self.root))
+        self.assertEqual(TOPOLOGY, topology_utils.load_topology(self.root))
 
     def test_no_workspace_means_no_topology(self):
-        self.assertIsNone(self.module.load_topology(None))
+        self.assertEqual({}, topology_utils.load_topology(None))
+
+    def test_a_topology_that_is_not_an_object_is_ignored(self):
+        self.write("[]")
+
+        self.assertEqual({}, topology_utils.load_topology(self.root))
 
     def assert_warns_and_carries_on(self):
         """The warning is checked on a stub, not through the root logger.
@@ -285,17 +315,23 @@ class PairwiseTopologyFileTest(unittest.TestCase):
         switch it back on, which would make assertLogs fail here depending on
         the order the suite runs in.
         """
-        with mock.patch.object(self.module, "logger") as logger:
-            self.assertIsNone(self.module.load_topology(self.root))
+        with mock.patch.object(topology_utils, "logger") as logger:
+            self.assertEqual(
+                {}, topology_utils.load_topology(self.root, warn_on_error=True)
+            )
 
         logger.warning.assert_called_once()
         self.assertIn(
-            "Pairing nodes arbitrarily", logger.warning.call_args[0][0]
+            "Could not load cluster topology", logger.warning.call_args[0][0]
         )
 
-    def test_a_missing_file_is_reported_and_not_fatal(self):
-        """The test still runs; it just cannot tell near pairs from far ones."""
-        self.assert_warns_and_carries_on()
+    def test_a_missing_file_means_no_topology_without_a_warning(self):
+        with mock.patch.object(topology_utils, "logger") as logger:
+            self.assertEqual(
+                {}, topology_utils.load_topology(self.root, warn_on_error=True)
+            )
+
+        logger.warning.assert_not_called()
 
     def test_malformed_json_is_reported_and_not_fatal(self):
         self.write("{not json")
@@ -308,6 +344,14 @@ class PairwiseTopologyFileTest(unittest.TestCase):
         with mock.patch("builtins.open", side_effect=IOError("denied")):
             self.assert_warns_and_carries_on()
 
+    def test_errors_are_not_reported_unless_asked(self):
+        self.write("{not json")
+
+        with mock.patch.object(topology_utils, "logger") as logger:
+            self.assertEqual({}, topology_utils.load_topology(self.root))
+
+        logger.warning.assert_not_called()
+
 
 class PairwiseGroupingTest(unittest.TestCase):
     """Turning the topology into groups, names and expectations."""
@@ -319,7 +363,7 @@ class PairwiseGroupingTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def with_topology(self):
-        path = os.path.join(self.root, self.module.TOPOLOGY_FILENAME)
+        path = os.path.join(self.root, TOPOLOGY_FILENAME)
         with open(path, "w") as f:
             json.dump(TOPOLOGY, f)
         return self.root
@@ -379,7 +423,8 @@ class PairwiseGroupingTest(unittest.TestCase):
 
     def test_an_experiment_is_named_after_the_pair_it_measures(self):
         self.assertEqual(
-            "-node-1-node-2", self.plugin.group_suffix(["node-1", "node-2"])
+            "-node-1-node-2",
+            self.plugin.group_suffix(["node-1", "node-2"], None),
         )
 
     def test_a_pair_in_one_subblock_is_judged_as_a_near_pair(self):
@@ -441,6 +486,161 @@ class PairwiseGroupingTest(unittest.TestCase):
             "interdomain",
             self.plugin.group_domain_type(["node-1"], grouping),
         )
+
+    def test_a_malformed_topology_falls_back_to_one_flat_group(self):
+        with open(os.path.join(self.root, TOPOLOGY_FILENAME), "w") as f:
+            f.write("{not json")
+
+        grouping = self.plugin.grouping(
+            request(nodes=["n1", "n2", "n3", "n4"], workspace_root=self.root)
+        )
+
+        self.assertEqual([["n1", "n2"], ["n3", "n4"]], grouping.groups)
+
+    def test_intradomain_only_keeps_pairs_inside_a_subblock(self):
+        grouping = self.plugin.grouping(
+            request(
+                nodes=["node-1", "node-2", "node-3", "node-4"],
+                workspace_root=self.with_topology(),
+                allow_interdomain_pairs=False,
+            )
+        )
+
+        self.assertEqual(
+            [["node-1", "node-2"], ["node-3", "node-4"]], grouping.groups
+        )
+        self.assertEqual(
+            "intradomain",
+            self.plugin.group_domain_type(["node-1", "node-2"], grouping),
+        )
+
+    def test_intradomain_only_without_a_topology_is_skipped(self):
+        """It cannot tell which pairs share a domain."""
+        grouping = self.plugin.grouping(
+            request(nodes=["n1", "n2", "n3"], allow_interdomain_pairs=False)
+        )
+
+        self.assertEqual([], grouping.groups)
+
+    def test_no_pairs_means_no_experiments(self):
+        """Single-node subblocks with interdomain pairs turned off."""
+        root = _write_topology(
+            self.root, {"block-a": {"sub-1": ["node-1"], "sub-2": ["node-2"]}}
+        )
+
+        specs = self.plugin.build(
+            request(
+                nodes=["node-1", "node-2"],
+                workspace_root=root,
+                allow_interdomain_pairs=False,
+            )
+        )
+
+        self.assertEqual([], specs)
+
+
+# Two NVLink domains of three nodes and one of two, which is too small.
+DOMAIN_TOPOLOGY = {
+    "block-a": {
+        "sub-1": ["node-1", "node-2", "node-3"],
+        "sub-2": ["node-4", "node-5", "node-6"],
+    },
+    "block-b": {"sub-3": ["node-7", "node-8"]},
+}
+
+
+class NcclDomainTest(unittest.TestCase):
+    """One NCCL job per NVLink domain."""
+
+    def setUp(self):
+        self.plugin = plugin("nccl-domain")
+        self.root = tempfile.mkdtemp(prefix="chs-domain-")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def nodes(self):
+        return sorted(
+            n for b in DOMAIN_TOPOLOGY.values() for s in b.values() for n in s
+        )
+
+    def test_each_domain_with_three_nodes_gets_its_own_group(self):
+        grouping = self.plugin.grouping(
+            request(
+                nodes=self.nodes(),
+                workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+            )
+        )
+
+        self.assertEqual(
+            [["node-1", "node-2", "node-3"], ["node-4", "node-5", "node-6"]],
+            grouping.groups,
+        )
+
+    def test_only_allocated_nodes_are_used(self):
+        grouping = self.plugin.grouping(
+            request(
+                nodes=["node-1", "node-2", "node-3", "node-4", "node-5"],
+                workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+            )
+        )
+
+        self.assertEqual([["node-1", "node-2", "node-3"]], grouping.groups)
+
+    def test_every_domain_is_judged_as_intradomain(self):
+        grouping = self.plugin.grouping(
+            request(
+                nodes=self.nodes(),
+                workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+            )
+        )
+
+        for nodes in grouping.groups:
+            self.assertEqual(
+                "intradomain", self.plugin.group_domain_type(nodes, grouping)
+            )
+
+    def test_experiments_are_named_after_the_domain(self):
+        specs = self.plugin.build(
+            request(
+                nodes=self.nodes(),
+                workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+                configs={"machine-x": {"variables": {}, "nccl-tests": {}}},
+            )
+        )
+
+        self.assertEqual(
+            [
+                "chs-run-nccl-domain-all-gather-sub-1",
+                "chs-run-nccl-domain-all-gather-sub-2",
+                "chs-run-nccl-domain-all-reduce-sub-1",
+                "chs-run-nccl-domain-all-reduce-sub-2",
+            ],
+            sorted(spec.name for spec in specs),
+        )
+
+    def test_the_domain_label_is_made_safe_for_kubernetes(self):
+        grouping = NodeGrouping(
+            groups=[["node-1"]],
+            node_locations={"node-1": {"block": "b", "subblock": "Rack_A"}},
+        )
+
+        self.assertEqual(
+            "-rack-a", self.plugin.group_suffix(["node-1"], grouping)
+        )
+
+    def test_without_a_topology_it_is_skipped(self):
+        self.assertEqual(
+            [], self.plugin.grouping(request(nodes=self.nodes())).groups
+        )
+
+    def test_when_no_domain_is_big_enough_it_is_skipped(self):
+        grouping = self.plugin.grouping(
+            request(
+                nodes=["node-7", "node-8"],
+                workspace_root=_write_topology(self.root, DOMAIN_TOPOLOGY),
+            )
+        )
+
+        self.assertEqual([], grouping.groups)
 
 
 class SingleNodeNcclTest(unittest.TestCase):
@@ -785,6 +985,12 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
                 self.assertTrue(
                     specs[0].context["variables"]["benchmarks_yaml_escaped"]
                 )
+
+
+def _write_topology(root, topology):
+    with open(os.path.join(root, TOPOLOGY_FILENAME), "w") as f:
+        json.dump(topology, f)
+    return root
 
 
 def _pairwise_module():

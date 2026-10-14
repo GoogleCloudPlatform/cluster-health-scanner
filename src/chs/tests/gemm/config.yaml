@@ -1,0 +1,69 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+platforms:
+- a3-ultragpu-8g
+- a4-highgpu-8g
+- a3-megagpu-8g
+- a4x-highgpu-4g
+- a4x-maxgpu-4g-metal
+defaults:
+  modifiers:
+  - name: generic-error-detector
+  variables:
+    gpu_affinity: 0:1:2:3:4:5:6:7
+    iter: 32
+    k: 16384
+    m: 16384
+    n: 16384
+    type: fp64
+  kubernetes:
+    modifiers:
+    - name: gpu-persistence-mode
+    variables:
+      app_workdir: /workspace/microbenchmarks
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      jobset_template: jobset_standard.yaml.tpl
+      mpi_command: mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES
+  slurm:
+    modifiers:
+    - name: pyxis-enroot
+    variables:
+      container_name: hpc-benchmarks:25.09
+      container_uri: docker://nvcr.io#nvidia/hpc-benchmarks:25.09
+      srun_args: --cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60
+machines:
+  a4-highgpu-8g:
+    variables:
+      k: 32768
+      m: 32768
+      n: 32768
+      type: fp64emu
+  a4x-highgpu-4g:
+    variables:
+      gpu_affinity: 0:1:2:3
+      k: 51200
+      m: 51200
+      n: 51200
+  a4x-maxgpu-4g-metal:
+    variables:
+      gpu_affinity: 0:1:2:3
+    kubernetes:
+      variables:
+        container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+    slurm:
+      variables:
+        container_name: hpc-benchmarks:26.02
+        container_uri: docker://nvcr.io#nvidia/hpc-benchmarks:26.02

@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 class BaseScheduler(abc.ABC):
     """Base class for cluster schedulers."""
 
+    submits_directly = False
+
     def __init__(self):
         """Initializes the scheduler."""
         self.node_to_instance_id: dict[
@@ -190,15 +192,6 @@ class BaseScheduler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def has_no_failed_jobs(self) -> bool:
-        """Checks if there are any failed CHS jobs.
-
-        Returns:
-            True if all are healthy (active/completed).
-        """
-        pass
-
-    @abc.abstractmethod
     def extract_job_id(self, experiment_dir: str) -> str:
         """Extracts the job ID from the experiment directory.
 
@@ -222,6 +215,18 @@ class BaseScheduler(abc.ABC):
             'COMPLETED', 'FAILED').
         """
         pass
+
+    def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
+        """Starts waiting jobs that can run and returns job statuses."""
+        return self.get_job_statuses(job_ids)
+
+    def get_unschedulable_jobs(self, job_ids: list[str]) -> list[str]:
+        """Returns active jobs whose pods have timed out waiting to schedule."""
+        return []
+
+    def submit_experiments(self, experiment_dirs: list[str]) -> dict[str, str]:
+        """Submits experiments without running the Ramble batch scripts."""
+        raise NotImplementedError
 
     @abc.abstractmethod
     def fetch_job_log(self, job_id: str, log_path: str) -> None:
