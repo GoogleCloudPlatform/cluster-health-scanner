@@ -14,6 +14,7 @@
 
 """Slurm scheduler implementation for Cluster Health Scanner."""
 
+import collections
 import concurrent.futures
 import importlib.resources as pkg_resources
 import logging
@@ -33,9 +34,17 @@ from chs.utils.lifecycle import JobStatus
 import click
 
 from chs import exceptions as ex
-from chs.constants import SLURM_CMD_TIMEOUT_SEC
+from chs.constants import SLURM_CMD_TIMEOUT_SEC, SLURM_RUN_ID_COMMENT_PREFIX
 
 _MAX_CONCURRENT_API_REQUESTS = 10
+_MAX_CONCURRENT_HOSTLIST_EXPANSIONS = 10
+# squeue prints these, in any case, when a job has no requested or allocated
+# nodes.
+_EMPTY_HOSTLISTS = frozenset({"", "(null)", "n/a", "none"})
+
+_BENIGN_SCANCEL_ERROR = re.compile(
+    r"already completing or completed|Invalid job id specified"
+)
 
 
 def boolean_representer(dumper, data):
@@ -278,7 +287,22 @@ class SlurmScheduler(BaseScheduler):
                 ", ".join(sorted(busy_nodes)),
             )
 
-        valid_nodes = [node for node in raw_nodes if node in idle_nodes]
+        targeted_nodes = set()
+        for run_id, run_nodes in sorted(
+            self.find_runs_targeting_nodes(raw_nodes).items()
+        ):
+            targeted_nodes.update(run_nodes)
+            logger.warning(
+                "Skipping %d node(s) targeted by CHS run '%s'.",
+                len(run_nodes),
+                run_id,
+            )
+
+        valid_nodes = [
+            node
+            for node in raw_nodes
+            if node in idle_nodes and node not in targeted_nodes
+        ]
         self._resolved_nodes = valid_nodes
         return self._resolved_nodes
 
@@ -559,76 +583,200 @@ class SlurmScheduler(BaseScheduler):
                 f"Failed to cancel jobs: {err_msg}"
             ) from e
 
-    def get_active_job_names(self) -> list[str]:
-        """Returns a list of active job names on the cluster."""
-        try:
-            cmd = ["squeue", "-h", "-o", "%.200j"]
-            result = self._run_slurm_cmd(cmd)
-            if result.returncode != 0:
-                return []
+    def find_runs_targeting_nodes(
+        self, nodes: list[str]
+    ) -> dict[str, list[str]]:
+        """Finds CHS runs whose unfinished jobs target the given nodes.
 
-            job_names = []
-            for line in result.stdout.splitlines():
-                name = line.strip()
-                if name:
-                    job_names.append(name)
-            return job_names
-        except FileNotFoundError:
+        A job targets the nodes it is allocated and, while pending, the nodes
+        it requested.
+
+        Raises:
+          ChsSchedulerException: If Slurm cannot be queried.
+        """
+        if not nodes:
+            return {}
+        if self._jobs_are_private():
             logger.warning(
-                "The 'squeue' command was not found in your PATH. "
-                "Cannot retrieve the list of active jobs."
+                "This Slurm cluster sets PrivateData=jobs, so jobs of other "
+                "users are hidden unless you are a Slurm operator. CHS only "
+                "guarantees exclusive nodes among your own runs."
             )
-            return []
-        except subprocess.TimeoutExpired as e:
+        try:
+            run_hostlists = self._list_run_hostlists()
+            nodes_by_hostlist = self._expand_hostlists(
+                {hostlist for _, hostlist in run_hostlists}
+            )
+        except (OSError, subprocess.SubprocessError) as e:
             raise ex.ChsSchedulerException(
-                "Timed out listing active jobs with 'squeue'; cannot verify "
-                f"that no other CHS run is in progress: {e}"
+                "Failed to list active CHS jobs; cannot verify that no other "
+                "CHS run targets the requested nodes: "
+                f"{ex.format_subprocess_error(e)}"
             ) from e
 
-    def cancel_jobs_by_prefix(self, prefix: str) -> None:
-        """Cancels all jobs matching the specified prefix natively."""
-        logger.debug("Attempting native cancel for prefix: %s", prefix)
-        try:
-            # List jobs for current user and extract job IDs matching the prefix
-            cmd = [
-                "squeue",
-                "-h",
-                "-o",
-                "%i %.200j",
-                "-u",
-                os.environ.get("USER", ""),
-            ]
-            result = self._run_slurm_cmd(cmd)
-            if result.returncode != 0:
-                logger.warning(
-                    "Failed to retrieve the list of active jobs using "
-                    "'squeue' during the cancellation process."
-                )
-                return
+        requested_nodes = set(nodes)
+        targeted: dict[str, set[str]] = collections.defaultdict(set)
+        for run_id, hostlist in run_hostlists:
+            targeted[run_id] |= nodes_by_hostlist[hostlist] & requested_nodes
+        return {
+            run_id: sorted(run_nodes)
+            for run_id, run_nodes in targeted.items()
+            if run_nodes
+        }
 
-            job_ids = []
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].startswith(prefix):
-                    job_ids.append(parts[0])
+    def _list_run_hostlists(self) -> list[tuple[str, str]]:
+        """Lists (run ID, hostlist) pairs of the visible CHS jobs.
 
-            if job_ids:
-                logger.debug(
-                    "Found %d jobs to cancel for prefix %s.",
-                    len(job_ids),
-                    prefix,
-                )
-                self.cancel_jobs(job_ids)
-            else:
-                logger.debug("No matching jobs found for prefix %s.", prefix)
-        except FileNotFoundError:
-            logger.warning(
-                "The 'squeue' command was not found in your PATH. "
-                "Cannot perform native job cancellation."
+        Each job contributes its requested and its allocated hostlist. Jobs
+        without a run ID comment are skipped.
+        """
+        # The comment is free text, so it comes last.
+        cmd = ["squeue", "--all", "--noheader", "--format=%n|%N|%k"]
+        result = self._run_slurm_cmd(cmd, check=True)
+        run_hostlists = []
+        for line in result.stdout.splitlines():
+            requested, _, rest = line.partition("|")
+            allocated, _, comment = rest.partition("|")
+            comment = comment.strip()
+            if not comment.startswith(SLURM_RUN_ID_COMMENT_PREFIX):
+                continue
+            run_id = comment.removeprefix(SLURM_RUN_ID_COMMENT_PREFIX)
+            run_hostlists.extend(
+                (run_id, hostlist)
+                for hostlist in (requested.strip(), allocated.strip())
+                if hostlist.lower() not in _EMPTY_HOSTLISTS
             )
-        except Exception as e:
+        return run_hostlists
+
+    def _expand_hostlists(
+        self, hostlists: set[str]
+    ) -> dict[str, frozenset[str]]:
+        """Expands Slurm hostlist expressions into node names, concurrently.
+
+        `scontrol show hostnames` runs locally without contacting slurmctld.
+        """
+
+        def expand(hostlist: str) -> frozenset[str]:
+            cmd = ["scontrol", "show", "hostnames", hostlist]
+            return frozenset(
+                self._run_slurm_cmd(cmd, check=True).stdout.split()
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=_MAX_CONCURRENT_HOSTLIST_EXPANSIONS
+        ) as executor:
+            return dict(zip(hostlists, executor.map(expand, hostlists)))
+
+    def _jobs_are_private(self) -> bool:
+        """Returns whether Slurm hides other users' jobs (PrivateData=jobs)."""
+        try:
+            result = self._run_slurm_cmd(
+                ["scontrol", "show", "config"], check=True
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.debug("Could not read the Slurm PrivateData setting: %s", e)
+            return False
+        for line in result.stdout.splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "PrivateData":
+                return "jobs" in re.split(r"[,\s]+", value.strip().lower())
+        return False
+
+    def cancel_run(self, run_id: str) -> bool:
+        """Cancels the visible jobs whose comment stamps run_id.
+
+        Returns:
+          Whether the run was active, i.e. had jobs on the cluster.
+
+        Raises:
+          ChsCancellationException: If the jobs cannot be listed or any of
+            them cannot be cancelled, e.g. another user's job without
+            operator privileges.
+        """
+        comment = f"{SLURM_RUN_ID_COMMENT_PREFIX}{run_id}"
+        job_ids = [
+            job_id
+            for job_id, job_comment in self._list_visible_jobs("%k")
+            if job_comment == comment
+        ]
+        self._scancel(job_ids, f"run '{run_id}'")
+        return bool(job_ids)
+
+    def cancel_all_runs(self) -> None:
+        """Cancels all CHS jobs visible to the caller.
+
+        With PrivateData=jobs, only Slurm operators see other users' jobs.
+
+        Raises:
+          ChsCancellationException: If the jobs cannot be listed or any of
+            them cannot be cancelled, e.g. another user's job without
+            operator privileges.
+        """
+        if self._jobs_are_private():
             logger.warning(
-                "Failed to execute native job "
-                "cancellation via Slurm. Error: %s",
-                e,
+                "This Slurm cluster sets PrivateData=jobs, so only your own "
+                "CHS jobs are cancelled unless you are a Slurm operator."
+            )
+        self._scancel(
+            [
+                job_id
+                for job_id, comment in self._list_visible_jobs("%k")
+                if comment.startswith(SLURM_RUN_ID_COMMENT_PREFIX)
+            ],
+            "all CHS runs",
+        )
+
+    def _list_visible_jobs(self, field: str) -> list[tuple[str, str]]:
+        """Lists (job ID, field value) pairs of the jobs visible to the caller.
+
+        Raises:
+          ChsCancellationException: If the jobs cannot be listed.
+        """
+        cmd = ["squeue", "--all", "--noheader", f"--format=%A|{field}"]
+        try:
+            result = self._run_slurm_cmd(cmd, check=True)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise ex.ChsCancellationException(
+                "Failed to list the Slurm jobs to cancel: "
+                f"{ex.format_subprocess_error(e)}"
+            ) from e
+        return [
+            (job_id.strip(), value.strip())
+            for job_id, _, value in (
+                line.partition("|") for line in result.stdout.splitlines()
+            )
+        ]
+
+    def _scancel(self, job_ids: list[str], scope: str) -> None:
+        """Cancels the jobs; jobs that already finished are not errors.
+
+        Raises:
+          ChsCancellationException: If any job cannot be cancelled.
+        """
+        if not job_ids:
+            logger.debug("No Slurm jobs to cancel for %s.", scope)
+            return
+        logger.debug("Cancelling %d Slurm jobs of %s.", len(job_ids), scope)
+        try:
+            result = self._run_slurm_cmd(["scancel", ",".join(job_ids)])
+        except (OSError, subprocess.SubprocessError) as e:
+            raise ex.ChsCancellationException(
+                f"Failed to cancel the Slurm jobs of {scope}: "
+                f"{ex.format_subprocess_error(e)}"
+            ) from e
+        if result.returncode == 0:
+            return
+        stderr = result.stderr.strip()
+        errors = [
+            line
+            for line in stderr.splitlines()
+            if line.strip() and not _BENIGN_SCANCEL_ERROR.search(line)
+        ]
+        if not stderr:
+            errors = [f"scancel exited with code {result.returncode}"]
+        if errors:
+            raise ex.ChsCancellationException(
+                f"Failed to cancel some Slurm jobs of {scope}. Jobs of other "
+                "users can only be cancelled by their owner or a Slurm "
+                "operator. Errors: " + "; ".join(errors)
             )

@@ -84,3 +84,25 @@ def validate_run_id(
         raise click.BadParameter("\n".join(errors), ctx=ctx, param=param)
 
     return val
+
+
+def validate_existing_run_id(
+    ctx: click.Context, param: click.Parameter, value: str | None
+) -> str | None:
+    """Validates the ID of an existing CHS run, as printed by `chs run`.
+
+    Run IDs are at most 63 lowercase alphanumeric characters or '-', and
+    start and end with an alphanumeric character.
+    """
+    if value is None:
+        return None
+    if not re.fullmatch(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?", value):
+        raise click.BadParameter(
+            f"'{value}' is not a valid CHS run ID. Pass the run ID printed "
+            "by `chs run` (e.g. my-cluster-lite-ab12): at most 63 lowercase "
+            "alphanumeric characters or '-', starting and ending with an "
+            "alphanumeric character.",
+            ctx=ctx,
+            param=param,
+        )
+    return value

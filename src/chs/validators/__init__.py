@@ -25,7 +25,11 @@ from chs.validators.suite import SuiteValidator
 from chs.validators.tests import TestsValidator
 from chs.validators.thresholds import ThresholdsValidator
 from chs.validators.topology import TpuTopologyValidator
-from chs.validators.utils import validate_non_empty_string, validate_run_id
+from chs.validators.utils import (
+    validate_existing_run_id,
+    validate_non_empty_string,
+    validate_run_id,
+)
 
 __all__ = [
     "Validator",
@@ -39,6 +43,7 @@ __all__ = [
     "ProjectConfigValidator",
     "ThresholdsValidator",
     "TpuTopologyValidator",
+    "validate_existing_run_id",
     "validate_non_empty_string",
     "validate_run_id",
 ]

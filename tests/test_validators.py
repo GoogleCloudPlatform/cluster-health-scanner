@@ -334,6 +334,30 @@ class TestValidators(unittest.TestCase):
                 with self.assertRaises(click.BadParameter):
                     validators.validate_run_id(None, None, case)
 
+    def test_validate_existing_run_id_valid(self):
+        for run_id in ("my-cluster-lite-ab12", "a", "a" * 63, None):
+            with self.subTest(run_id=run_id):
+                self.assertEqual(
+                    validators.validate_existing_run_id(None, None, run_id),
+                    run_id,
+                )
+
+    def test_validate_existing_run_id_invalid(self):
+        for run_id in (
+            "",
+            "Upper-Case",
+            "under_score",
+            "-leading-dash",
+            "trailing-dash-",
+            "20261014-084121_cluster-lite-ab12",
+            "a" * 64,
+        ):
+            with self.subTest(run_id=run_id):
+                with self.assertRaisesRegex(
+                    click.BadParameter, "not a valid CHS run ID"
+                ):
+                    validators.validate_existing_run_id(None, None, run_id)
+
     def test_homogeneity_validator_valid(self):
         v = validators.HomogeneityValidator()
         errors = v.validate(

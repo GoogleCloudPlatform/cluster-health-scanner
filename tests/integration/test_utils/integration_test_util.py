@@ -17,12 +17,18 @@ import io
 import json
 import os
 import re
+import subprocess
 from typing import Any, Dict, Optional, Tuple
 import pytest
+import yaml
 
 from chs.cli import cli
 import chs.exceptions as ex
 from chs.utils.app_data import ChsAppData
+from tests.integration.create_kind_cluster import (
+    resolve_config_path,
+    sanitize_k8s_name,
+)
 from tests.integration.mocks.gcp_mock import mock_gce_instances, mock_gcs_bucket
 from tests.integration.mocks.ramble_mock import mock_ramble_workloads
 from tests.integration.test_utils.validator import (
@@ -58,6 +64,13 @@ def run_suite_and_capture(
     suite_name: str, nodepools: str
 ) -> Tuple[int, str, str]:
     """Runs a CHS suite while capturing exit code, stdout, and stderr."""
+    return run_cli_and_capture(
+        ["run", "--suite", suite_name, "--nodepools", nodepools, "-y"]
+    )
+
+
+def run_cli_and_capture(args: list[str]) -> Tuple[int, str, str]:
+    """Runs a CHS CLI command while capturing exit code, stdout, and stderr."""
     stdout_io = io.StringIO()
     stderr_io = io.StringIO()
     tee_stdout = TeeStream(sys.stdout, stdout_io)
@@ -68,17 +81,7 @@ def run_suite_and_capture(
             contextlib.redirect_stdout(tee_stdout),
             contextlib.redirect_stderr(tee_stderr),
         ):
-            cli(
-                [
-                    "run",
-                    "--suite",
-                    suite_name,
-                    "--nodepools",
-                    nodepools,
-                    "-y",
-                ],
-                standalone_mode=False,
-            )
+            cli(args, standalone_mode=False)
     except SystemExit as e:
         exit_code = e.code if isinstance(e.code, int) else 1
     except Exception as e:
@@ -101,12 +104,17 @@ def get_latest_boh(
 
     if not run_id:
         return None, None
+    return get_run_boh(app_data, run_id)
 
+
+def get_run_boh(
+    app_data: ChsAppData, run_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Retrieves the Bill of Health dict and file path for a run."""
     try:
         workspace_name = app_data.resolve_run_id(run_id)
     except ex.WorkspaceNotFoundException:
         return None, None
-
     workspace_path = os.path.join(app_data.get_workspaces_dir(), workspace_name)
     boh_file = os.path.join(workspace_path, "bill_of_health.json")
 
@@ -167,3 +175,43 @@ def get_nodepools_csv(cluster_config: dict) -> str:
         pytest.skip(f"No nodepools defined in config: {config_path}")
 
     return ",".join(nodepools)
+
+
+def provision_kind_cluster(config_path_str: str) -> Dict[str, Any]:
+    """Relabels the Kind cluster to match a blueprint and returns its config."""
+    with open(resolve_config_path(config_path_str), "r") as f:
+        config_data = yaml.safe_load(f) or {}
+
+    # RELABEL the cluster dynamically so nodes match the test config exactly
+    try:
+        subprocess.run(
+            [
+                "python3",
+                "tests/integration/create_kind_cluster.py",
+                config_path_str,
+            ],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        pytest.fail(f"Failed to provision kind cluster dynamically! {e}")
+    _require_kind_context(config_data.get("cluster_name", "chs-cluster"))
+    config_data["_config_path_str"] = config_path_str
+    return config_data
+
+
+def _require_kind_context(cluster_name: str) -> None:
+    """Aborts the session unless kubectl targets the local Kind cluster."""
+    expected = f"kind-{sanitize_k8s_name(cluster_name)}"
+    res = subprocess.run(
+        ["kubectl", "config", "current-context"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    current = res.stdout.strip()
+    if current != expected:
+        pytest.exit(
+            f"Refusing to run integration tests: kubectl context is "
+            f"'{current}', expected '{expected}'.",
+            returncode=1,
+        )

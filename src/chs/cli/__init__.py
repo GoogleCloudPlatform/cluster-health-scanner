@@ -71,6 +71,12 @@ warnings.filterwarnings(
 
 logger = logging.getLogger(__name__)
 
+_CANCELLATION_CLUSTER_ERRORS = (
+    subprocess.CalledProcessError,
+    KubeError,
+    ex.ChsSchedulerException,
+)
+
 
 @dataclasses.dataclass
 class RunExecutionResult:
@@ -240,60 +246,56 @@ def archive_workspace(
 
 
 @contextmanager
-def cancel_jobs_on_failure(
-    scheduler_obj: BaseScheduler, prefix: str, active: bool = True
-):
-    """Context manager to ensure jobs are cancelled on failure."""
+def cancel_jobs_on_failure(scheduler_obj: BaseScheduler, run_id: str):
+    """Context manager to ensure the run's jobs are cancelled on failure."""
     try:
         yield
     except BaseException as e:
-        if active:
-            is_interrupt = isinstance(e, KeyboardInterrupt)
-            spinner_label = (
-                "[bold red]Interrupt received. Cancelling run and cleaning up "
-                "CHS resources...[/bold red]"
-                if is_interrupt
-                else "[bold red]Run failed. Cleaning up CHS resources..."
-                "[/bold red]"
-            )
+        is_interrupt = isinstance(e, KeyboardInterrupt)
+        spinner_label = (
+            "[bold red]Interrupt received. Cancelling run and cleaning up "
+            "CHS resources...[/bold red]"
+            if is_interrupt
+            else "[bold red]Run failed. Cleaning up CHS resources...[/bold red]"
+        )
 
-            cleaned_up = False
-            with (
-                _handle_termination_signals(_continue_cleanup),
-                theme.get_progress_spinner(spinner_label),
-            ):
-                try:
-                    scheduler_obj.cancel_jobs_by_prefix(prefix)
-                    scheduler_obj.cleanup_scheduler_resources()
-                    cleaned_up = True
-                except KeyboardInterrupt:
-                    Console().print(
-                        "[bold red]WARNING: Cleanup interrupted. "
-                        "Please run `chs cancel` to finish cleaning up."
-                        "[/bold red]"
-                    )
-                    raise
-                except Exception as cleanup_err:
-                    # We catch broad Exception here as a fallback to ensure we
-                    # don't hide the original exception that triggered cleanup.
-                    logger.error(
-                        "Failed to clean CHS resources. Please run "
-                        "`chs cancel`. Error: %s",
-                        cleanup_err,
-                    )
-                    Console().print(
-                        "\n[bold red]WARNING: Automatic cleanup failed. "
-                        "You may have resources from lingering tests on the "
-                        "cluster. Please run `chs cancel` to manually clean "
-                        "up."
-                        "[/bold red]"
-                    )
-
-            if is_interrupt and cleaned_up:
+        cleaned_up = False
+        with (
+            _handle_termination_signals(_continue_cleanup),
+            theme.get_progress_spinner(spinner_label),
+        ):
+            try:
+                scheduler_obj.cancel_run(run_id)
+                cleaned_up = True
+            except KeyboardInterrupt:
                 Console().print(
-                    f"[{theme.CHS_NEUTRAL_STYLE}]CHS cleanup finished."
-                    f"[/{theme.CHS_NEUTRAL_STYLE}]"
+                    "[bold red]WARNING: Cleanup interrupted. "
+                    f"Please run `chs cancel {run_id}` to finish cleaning up."
+                    "[/bold red]"
                 )
+                raise
+            except Exception as cleanup_err:
+                # We catch broad Exception here as a fallback to ensure we
+                # don't hide the original exception that triggered cleanup.
+                logger.error(
+                    "Failed to clean CHS resources. Please run "
+                    "`chs cancel %s`. Error: %s",
+                    run_id,
+                    cleanup_err,
+                )
+                Console().print(
+                    "\n[bold red]WARNING: Automatic cleanup failed. "
+                    "You may have resources from lingering tests on the "
+                    f"cluster. Please run `chs cancel {run_id}` to manually "
+                    "clean up."
+                    "[/bold red]"
+                )
+
+        if is_interrupt and cleaned_up:
+            Console().print(
+                f"[{theme.CHS_NEUTRAL_STYLE}]CHS cleanup finished."
+                f"[/{theme.CHS_NEUTRAL_STYLE}]"
+            )
         raise
 
 
@@ -630,6 +632,7 @@ def run_action(
                         tests=tests,
                         machine_type=machine_type,
                         workspace_name=workspace_name,
+                        run_id=run_id,
                     )
                     scheduler_obj.apply_scheduler_resources()
 
@@ -664,14 +667,12 @@ def run_action(
 def _analyze_action(
     app_data: ChsAppData,
     run_id: str,
-    scheduler_obj: BaseScheduler,
 ) -> str:
     """Analyzes results from a specific test run.
 
     Args:
       app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
-      scheduler_obj: Scheduler that runs the jobs of the test run.
 
     Returns:
       The run_id of the analyzed test run.
@@ -749,87 +750,84 @@ def _analyze_action(
                     else None
                 )
 
-                with cancel_jobs_on_failure(scheduler_obj, "chs-"):
-                    while not run_entry.get("is_boh_final", False):
-                        active_tier = run_entry.get("active_tier", 1)
-                        active_tier_tests_raw = (
-                            run_entry.get("active_tier_tests") or []
+                while not run_entry.get("is_boh_final", False):
+                    active_tier = run_entry.get("active_tier", 1)
+                    active_tier_tests_raw = (
+                        run_entry.get("active_tier_tests") or []
+                    )
+                    active_tier_tests = set(
+                        t.get("name") if isinstance(t, dict) else t
+                        for t in active_tier_tests_raw
+                    )
+
+                    if tier_manager:
+                        tier_manager.fast_forward_to_tier(active_tier)
+
+                    logger.debug("Waiting for tier %s jobs...", active_tier)
+                    ramble_manager.wait_for_jobs(
+                        app_data=app_data,
+                        tier=active_tier if is_tiered else None,
+                    )
+
+                    if is_tiered and active_tier == 1:
+                        spinner_msg = "Analyzing initial health checks..."
+                    elif is_tiered:
+                        spinner_msg = "Analyzing follow-up diagnostics..."
+                    else:
+                        spinner_msg = "Analyzing logs..."
+
+                    with theme.get_progress_spinner(spinner_msg):
+                        results_path = ramble_manager.analyze_experiments()
+                        boh_dir = ramble_manager.generate_boh(
+                            results_path,
                         )
-                        active_tier_tests = set(
-                            t.get("name") if isinstance(t, dict) else t
-                            for t in active_tier_tests_raw
+                    Console().print(
+                        f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
+                        f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
+                    )
+
+                    next_tests = None
+                    if tier_manager:
+                        boh_file = os.path.join(boh_dir, "bill_of_health.json")
+                        tier_results, hard_failures_present = (
+                            parse_tier_results_from_boh(
+                                boh_file, active_tier_tests
+                            )
                         )
-
-                        if tier_manager:
-                            tier_manager.fast_forward_to_tier(active_tier)
-
-                        logger.debug("Waiting for tier %s jobs...", active_tier)
-                        ramble_manager.wait_for_jobs(
-                            app_data=app_data,
-                            tier=active_tier if is_tiered else None,
-                        )
-
-                        if is_tiered and active_tier == 1:
-                            spinner_msg = "Analyzing initial health checks..."
-                        elif is_tiered:
-                            spinner_msg = "Analyzing follow-up diagnostics..."
-                        else:
-                            spinner_msg = "Analyzing logs..."
-
-                        with theme.get_progress_spinner(spinner_msg):
-                            results_path = ramble_manager.analyze_experiments()
-                            boh_dir = ramble_manager.generate_boh(
-                                results_path,
-                            )
-                        Console().print(
-                            f"[{theme.CHS_SUCCESS_STYLE}]Successfully "
-                            f"analyzed logs.[/{theme.CHS_SUCCESS_STYLE}]"
-                        )
-
-                        next_tests = None
-                        if tier_manager:
-                            boh_file = os.path.join(
-                                boh_dir, "bill_of_health.json"
-                            )
-                            tier_results, hard_failures_present = (
-                                parse_tier_results_from_boh(
-                                    boh_file, active_tier_tests
-                                )
-                            )
-                            if hard_failures_present:
-                                Console().print(
-                                    f"[{theme.CHS_WARNING_STYLE}]Hard failure "
-                                    "detected. Halting follow-up diagnostic "
-                                    "tiers."
-                                    f"[/{theme.CHS_WARNING_STYLE}]"
-                                )
-                                next_tests = None
-                            else:
-                                next_tests = tier_manager.get_next_tier_tests(
-                                    tier_results
-                                )
-
-                        if not next_tests:
-                            run_entry["is_boh_final"] = True
-                            app_data.update_run(
-                                workspace_name, {"is_boh_final": True}
-                            )
+                        if hard_failures_present:
                             Console().print(
-                                f"[{theme.CHS_SUCCESS_STYLE}]All checks "
-                                "completed. Bill of Health generated."
-                                f"[/{theme.CHS_SUCCESS_STYLE}]"
+                                f"[{theme.CHS_WARNING_STYLE}]Hard failure "
+                                "detected. Halting follow-up diagnostic "
+                                "tiers."
+                                f"[/{theme.CHS_WARNING_STYLE}]"
                             )
-                            break
+                            next_tests = None
+                        else:
+                            next_tests = tier_manager.get_next_tier_tests(
+                                tier_results
+                            )
 
-                        _submit_next_tier(
-                            app_data,
-                            ramble_manager,
-                            run_entry,
-                            workspace_name,
-                            active_tier + 1,
-                            list(next_tests),
-                            tier_results=tier_results,
+                    if not next_tests:
+                        run_entry["is_boh_final"] = True
+                        app_data.update_run(
+                            workspace_name, {"is_boh_final": True}
                         )
+                        Console().print(
+                            f"[{theme.CHS_SUCCESS_STYLE}]All checks "
+                            "completed. Bill of Health generated."
+                            f"[/{theme.CHS_SUCCESS_STYLE}]"
+                        )
+                        break
+
+                    _submit_next_tier(
+                        app_data,
+                        ramble_manager,
+                        run_entry,
+                        workspace_name,
+                        active_tier + 1,
+                        list(next_tests),
+                        tier_results=tier_results,
+                    )
 
                 background_cleanup.start(ramble_manager)
                 _show_results(app_data, run_id, suppress_boh_uri=True)
@@ -918,101 +916,108 @@ def _show_results(
     viewer.show_summary_and_details()
 
 
-def cancel_action(scheduler_name: str | None = None) -> None:
-    """Cancels all active jobs on the cluster and cleans up stale resources.
+def cancel_action(run_id: str) -> bool:
+    """Cancels a run's jobs and cleans up its resources on the cluster.
+
+    Returns:
+      Whether the run was active on the cluster.
 
     Raises:
-      click.ClickException: If an error occurs during CHS job cancellation.
+      ChsCancellationException: If an error occurs during cancellation.
     """
-    logger.debug("Cleaning all stale resources.")
-    scheduler_name = scheduler_name or detect_scheduler()
-    scheduler = get_scheduler(scheduler_name)
+    logger.debug("Canceling run %s.", run_id)
+    scheduler = get_scheduler(detect_scheduler())
     try:
-        scheduler.cancel_jobs_by_prefix("chs-")
-        scheduler.cleanup_scheduler_resources()
-    except (
-        subprocess.CalledProcessError,
-        KubeError,
-        ex.ChsSchedulerException,
-    ) as e:
+        return scheduler.cancel_run(run_id)
+    except _CANCELLATION_CLUSTER_ERRORS as e:
         raise ex.ChsCancellationException(
             f"CHS cancellation failed: {e!r}"
         ) from e
 
 
-def safe_cancel_action(
-    scheduler_name: str | None = None,
-    auto_approve: bool = False,
-    message: str | None = None,
-    action_type: str = "cancel",
-) -> None:
-    """Safely cancels jobs by prompting the user for confirmation first."""
-    if message:
-        logger.debug(message)
+def cancel_all_action() -> None:
+    """Cancels every CHS job on the cluster and deletes all CHS resources.
 
-    is_setup = action_type == "setup"
+    Raises:
+      ChsCancellationException: If an error occurs during cancellation.
+    """
+    logger.debug("Canceling all CHS runs on the cluster.")
+    scheduler = get_scheduler(detect_scheduler())
+    try:
+        scheduler.cancel_all_runs()
+    except _CANCELLATION_CLUSTER_ERRORS as e:
+        raise ex.ChsCancellationException(
+            f"CHS cancellation failed: {e!r}"
+        ) from e
 
+
+def _confirm_cancellation(prompt_msg: str, auto_approve: bool) -> None:
+    """Asks the user to confirm a cancellation unless it is auto-approved.
+
+    Raises:
+      click.ClickException: If confirmation is needed in non-interactive mode.
+      click.Abort: If the user declines.
+    """
     if utils.is_in_cluster():
         logger.debug("Running in-cluster. Assuming auto-approve.")
         auto_approve = True
 
-    if not auto_approve:
-        if is_setup:
-            prompt_msg = (
-                "This will set up the cluster for a new run, which involves "
-                "removing any existing CHS resources.\n"
-                "Are you sure you want to proceed?"
-            )
-        else:
-            prompt_msg = (
-                "This will cancel ALL running CHS tests and delete ALL "
-                "CHS resources on the cluster.\n"
-                "Are you sure you want to proceed?"
-            )
+    if auto_approve:
+        logger.debug("Auto-approve is enabled. Proceeding with cancellation...")
+        return
 
-        if not sys.stdin.isatty():
-            logger.warning(prompt_msg)
-            raise click.ClickException(
-                "Running in non-interactive mode.\n"
-                "Please pass --auto-approve to proceed."
-            )
-        if not click.confirm(prompt_msg, default=False):
-            logger.debug(
-                f"{'Setup' if is_setup else 'Cancellation'} aborted by user. "
-                "Exiting."
-            )
-            raise click.Abort()
-    else:
-        action_name = "setup" if is_setup else "cancellation"
-        logger.debug(
-            f"Auto-approve is enabled. Proceeding with {action_name}..."
+    if not sys.stdin.isatty():
+        logger.warning(prompt_msg)
+        raise click.ClickException(
+            "Running in non-interactive mode.\n"
+            "Please pass --auto-approve to proceed."
         )
+    if not click.confirm(prompt_msg, default=False):
+        logger.debug("Cancellation aborted by user. Exiting.")
+        raise click.Abort()
 
-    console = Console()
 
-    spinner_text = (
-        "[bold blue]Checking for and cleaning up stale "
-        "CHS resources...[/bold blue]"
-        if is_setup
-        else (
-            "[bold red]Canceling all active CHS tests and "
-            "cleaning up resources...[/bold red]"
+def safe_cancel_action(run_id: str, auto_approve: bool = False) -> None:
+    """Cancels a run after prompting the user for confirmation."""
+    _confirm_cancellation(
+        f"This will cancel CHS run '{run_id}' and delete its resources on "
+        "the cluster.\nAre you sure you want to proceed?",
+        auto_approve,
+    )
+    with theme.get_progress_spinner(
+        f"[bold red]Canceling CHS run '{run_id}' and cleaning up its "
+        "resources...[/bold red]"
+    ):
+        found = cancel_action(run_id)
+    if not found:
+        Console().print(
+            f"[{theme.CHS_WARNING_STYLE}]No active CHS run '{run_id}' was "
+            f"found on the cluster.[/{theme.CHS_WARNING_STYLE}]"
         )
+        return
+    Console().print(
+        f"[{theme.CHS_SUCCESS_STYLE}]Successfully canceled CHS run "
+        f"'{run_id}'.[/{theme.CHS_SUCCESS_STYLE}]"
     )
 
-    success_text = (
-        f"[{theme.CHS_SUCCESS_STYLE}]Stale CHS resources cleaned "
-        f"up.[/{theme.CHS_SUCCESS_STYLE}]"
-        if is_setup
-        else f"[{theme.CHS_SUCCESS_STYLE}]Successfully canceled all "
-        f"active CHS resources.[/{theme.CHS_SUCCESS_STYLE}]"
-    )
 
-    with theme.get_progress_spinner(spinner_text):
-        logger.debug("Initiating global cleanup...")
-        cancel_action(scheduler_name)
-        logger.debug("Successfully canceled all active CHS resources.")
-    console.print(success_text)
+def safe_cancel_all_action(auto_approve: bool = False) -> None:
+    """Cancels every CHS run after prompting the user for confirmation."""
+    _confirm_cancellation(
+        "This will cancel ALL CHS runs on the cluster, including runs "
+        "started by other users, and delete ALL CHS resources on the "
+        "cluster.\nAre you sure you want to proceed?",
+        auto_approve,
+    )
+    with theme.get_progress_spinner(
+        "[bold red]Canceling all CHS runs and cleaning up resources..."
+        "[/bold red]"
+    ):
+        cancel_all_action()
+    Console().print(
+        f"[{theme.CHS_SUCCESS_STYLE}]Successfully canceled all CHS runs on "
+        f"the cluster.[/{theme.CHS_SUCCESS_STYLE}]"
+    )
 
 
 @click.group(
@@ -1061,7 +1066,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
       chs list
 
     \b
-      # Cancel an ongoing run and clean up resources
+      # Cancel your latest run and clean up its resources
       chs cancel
     """
     ctx.ensure_object(dict)
@@ -1252,75 +1257,6 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
         "tpu" if tpu else ("gpu" if gpu else ctx.obj.get("accelerator_type"))
     )
     return list_action(machine_types=True, accelerator_type=accel)
-
-
-def _check_for_foreign_runs(app_data: ChsAppData, scheduler: str) -> None:
-    """Checks if there are active jobs on the cluster by another user."""
-    scheduler_instance = get_scheduler(scheduler)
-    active_jobs = scheduler_instance.get_active_job_names()
-
-    chs_jobs = [j for j in active_jobs if j.startswith("chs-")]
-    if not chs_jobs:
-        return
-
-    recent_runs = app_data.get_latest_runs(1)
-    expected_prefixes = [
-        f"chs-{run.get('run_id', ws)}" for ws, run in recent_runs.items()
-    ]
-
-    foreign_jobs = []
-    for job in chs_jobs:
-        if not any(job.startswith(prefix) for prefix in expected_prefixes):
-            foreign_jobs.append(job)
-
-    if foreign_jobs:
-        raise click.ClickException(
-            "A CHS run is already in progress on this cluster by "
-            "another user. Please try again later.\n"
-            "If you believe this is stale, run `chs cancel` to "
-            "terminate it."
-        )
-
-
-def _handle_previous_run(
-    app_data: ChsAppData,
-    scheduler: str,
-    auto_approve: bool,
-) -> None:
-    """Checks for a previous run and cleans up leftover resources."""
-    _check_for_foreign_runs(app_data, scheduler)
-
-    msg = None
-    try:
-        latest_run_id = app_data.get_latest_run_id()
-        if latest_run_id:
-            workspace_name = app_data.resolve_run_id(latest_run_id)
-            run_entry = app_data.get_run(workspace_name)
-            if run_entry:
-                if run_entry.get("is_boh_final", False):
-                    msg = (
-                        "Previous run is already completed. "
-                        "Cleaning all stale resources"
-                    )
-                elif not run_entry.get("submission_complete", False):
-                    msg = (
-                        "Previous run died mid-submission. "
-                        "Cleaning all stale resources"
-                    )
-                else:
-                    msg = (
-                        "Previous run found with leftover resources. "
-                        "Cleaning all stale resources"
-                    )
-    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-        pass
-
-    safe_cancel_action(
-        scheduler,
-        auto_approve=auto_approve,
-        message=msg,
-        action_type="setup",
-    )
 
 
 @cli.command(epilog=help_command_text.generate_run_epilog())
@@ -1644,12 +1580,6 @@ def run(
         f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
 
-    _handle_previous_run(
-        app_data=app_data,
-        scheduler=scheduler,
-        auto_approve=auto_approve,
-    )
-
     with theme.get_progress_spinner(
         f"[{theme.CHS_HEADER_STYLE}]Identifying idle nodes for testing..."
     ):
@@ -1718,6 +1648,12 @@ def run(
     else:
         logger.debug("--auto-approve flag detected. Bypassing confirmation.")
 
+    runs_targeting_nodes = scheduler_obj.find_runs_targeting_nodes(
+        nodes_under_test
+    )
+    if runs_targeting_nodes:
+        raise ex.NodesTargetedByOtherRunsException(runs_targeting_nodes)
+
     short_hash = utils.generate_random_suffix()
     if not run_id:
         run_id = f"{cluster_name}-{suite}"
@@ -1784,7 +1720,8 @@ def run(
             f"[{theme.CHS_SUCCESS_STYLE}]Preparing execution environment "
             f"and submitting tests...[/{theme.CHS_SUCCESS_STYLE}]"
         )
-    with cancel_jobs_on_failure(scheduler_obj, "chs-", active=True):
+
+    with cancel_jobs_on_failure(scheduler_obj, run_id):
         with theme.get_progress_spinner(status_msg):
             job_ids = run_action(
                 suite=suite,
@@ -1805,35 +1742,31 @@ def run(
                 "Please check internal.log for details."
             )
 
-    result = RunExecutionResult(
-        suite=suite,
-        scheduler_name=scheduler_obj.name,
-        tests=parsed_tests,
-        workspace_name=workspace_name,
-        workspaces_base_dir=workspaces_base_dir,
-        job_ids=job_ids,
-    )
-
-    logger.debug("Run submitted successfully.")
-    logger.debug("Job IDs: %s", ", ".join(job_ids))
-
-    if is_tiered:
-        console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted "
-            f"initial health check tests.[/{theme.CHS_SUCCESS_STYLE}]"
-        )
-    else:
-        console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted tests."
-            f"[/{theme.CHS_SUCCESS_STYLE}]"
+        result = RunExecutionResult(
+            suite=suite,
+            scheduler_name=scheduler_obj.name,
+            tests=parsed_tests,
+            workspace_name=workspace_name,
+            workspaces_base_dir=workspaces_base_dir,
+            job_ids=job_ids,
         )
 
-    # Automatically trigger analysis
-    _analyze_action(
-        app_data,
-        run_id,
-        scheduler_obj,
-    )
+        logger.debug("Run submitted successfully.")
+        logger.debug("Job IDs: %s", ", ".join(job_ids))
+
+        if is_tiered:
+            console.print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted "
+                f"initial health check tests.[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+        else:
+            console.print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Successfully submitted tests."
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+
+        # Automatically trigger analysis
+        _analyze_action(app_data, run_id)
 
     return result
 
@@ -1894,6 +1827,18 @@ def _get_run_id_or_prompt(
 
 @cli.command()
 @handle_chs_exceptions
+@click.argument(
+    "run_id", required=False, callback=validators.validate_existing_run_id
+)
+@click.option(
+    "--all",
+    "cancel_all",
+    is_flag=True,
+    help=(
+        "Cancel EVERY CHS run on the cluster, including runs started by "
+        "other users, and delete all CHS resources."
+    ),
+)
 @click.option(
     "--auto-approve",
     "-y",
@@ -1901,38 +1846,46 @@ def _get_run_id_or_prompt(
     help="Automatically confirm cancellation without prompting.",
 )
 @click.pass_obj
-def cancel(obj, auto_approve: bool = False) -> None:
-    """Cancel all running CHS jobs and remove stale resources."""
+def cancel(
+    obj, run_id: str | None, cancel_all: bool, auto_approve: bool = False
+) -> None:
+    """Cancel a CHS run and clean up its resources.
+
+    Cancels the run's jobs and deletes its resources on the cluster, which
+    releases its nodes for other runs. Without RUN_ID, your latest run is
+    cancelled. RUN_ID can be any run on the cluster, including runs started
+    by other users.
+
+    \b
+    Examples:
+      # Cancel your latest run
+      chs cancel
+
+    \b
+      # Cancel a specific run
+      chs cancel my-cluster-lite-ab12
+
+    \b
+      # Cancel every CHS run on the cluster
+      chs cancel --all
+    """
     app_data = obj["app_data"]
-    safe_cancel_action(auto_approve=auto_approve)
-    try:
-        latest_run_id = app_data.get_latest_run_id()
-        if latest_run_id:
-            workspace_name = app_data.resolve_run_id(latest_run_id)
-            workspaces_base_dir = app_data.get_workspaces_dir()
-            ramble_manager = RambleManager(
-                workspaces_base_dir, workspace_name, run_id=latest_run_id
-            )
-            if (
-                ramble_manager.is_workspace_created
-                and not ramble_manager.is_archived()
-            ):
-                logger.debug(
-                    "Archiving the latest workspace after cancellation..."
-                )
-                _archive_and_log(
-                    ramble_manager,
-                    "[bold blue]Archiving cancelled "
-                    "run workspace...[/bold blue]",
-                )
-    except (ex.NoPreviousRunsFoundException, ex.WorkspaceNotFoundException):
-        pass
-    except (OSError, ex.ChsException) as e:
-        logger.debug(
-            "Failed to archive the workspace directory "
-            "after run cancellation. Error: %s",
-            e,
-        )
+    if run_id and cancel_all:
+        raise click.UsageError("RUN_ID and --all are mutually exclusive.")
+
+    if cancel_all:
+        safe_cancel_all_action(auto_approve=auto_approve)
+        return
+
+    if not run_id:
+        try:
+            run_id = app_data.get_latest_run_id()
+        except ex.NoPreviousRunsFoundException as e:
+            raise ex.NoPreviousRunsFoundException(
+                "No local CHS runs found. Pass a RUN_ID to cancel a specific "
+                "run, or --all to cancel every CHS run on the cluster."
+            ) from e
+    safe_cancel_action(run_id, auto_approve=auto_approve)
 
 
 @cli.command()

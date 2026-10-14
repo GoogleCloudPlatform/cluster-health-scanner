@@ -20,15 +20,23 @@ import tempfile
 import textwrap
 import uuid
 
+import yaml
 
 from ramble.wmkit import *
 from ramble.experiment_result import ExperimentStatus
+
+from chs.constants import (
+    COMPONENT_LABEL,
+    INSTANCE_LABEL,
+    MANAGED_BY_CHS,
+    MANAGED_BY_LABEL,
+    WORKER_COMPONENT,
+)
 
 _POD_SPEC_INDENT = 6
 _CONTAINER_INDENT = 8
 _CONTAINER_FIELD_INDENT = 10
 
-_WORKER_LABEL = "chs.gke.io/worker"
 _DNS_WAIT_TIMEOUT_SECONDS = 300
 
 
@@ -218,6 +226,28 @@ class KubernetesJobset(WorkflowManagerBase):
             return ""
         return textwrap.indent(val.strip(), " " * indent_spaces)
 
+    @staticmethod
+    def _labels_section(user_labels_yaml, chs_labels, indent_spaces):
+        """Returns a labels block of the user's labels and the CHS labels."""
+        labels = {**(yaml.safe_load(user_labels_yaml) or {}), **chs_labels}
+        block = yaml.safe_dump(labels, sort_keys=False).strip()
+        prefix = " " * indent_spaces
+        return f"{prefix}labels:\n{textwrap.indent(block, prefix + '  ')}"
+
+    @staticmethod
+    def _labeled_custom_resources(resources_yaml, chs_labels):
+        """Returns the custom resources YAML with the CHS labels added."""
+        resources = [r for r in yaml.safe_load_all(resources_yaml) if r]
+        if not resources:
+            return ""
+        for resource in resources:
+            metadata = resource.setdefault("metadata", {})
+            metadata["labels"] = {
+                **(metadata.get("labels") or {}),
+                **chs_labels,
+            }
+        return yaml.safe_dump_all(resources, sort_keys=False) + "---"
+
     def _generate_ssh_keys(self):
         priv_key = ""
         pub_key = ""
@@ -258,17 +288,6 @@ class KubernetesJobset(WorkflowManagerBase):
             )
         return dict(self._jobset_vars_by_experiment_run_dir[experiment_run_dir])
 
-    def _pod_labels_section(
-        self, raw_job_name: str, sanitized_job_name: str
-    ) -> str:
-        """Returns the pod labels block, always including the CHS worker label."""
-        user_labels = self._yaml_append(
-            "pod_labels_yaml", _CONTAINER_INDENT
-        ).replace(raw_job_name, sanitized_job_name)
-        chs_labels = f'{" " * _CONTAINER_INDENT}{_WORKER_LABEL}: "true"'
-        labels = "\n".join(s for s in [user_labels, chs_labels] if s)
-        return f"{' ' * _POD_SPEC_INDENT}labels:\n{labels}"
-
     def _compute_jobset_vars(self) -> dict[str, str]:
         expander = self.app_inst.expander
         raw_job_name = expander.expand_var_name("job_name")
@@ -302,16 +321,32 @@ class KubernetesJobset(WorkflowManagerBase):
             "\n", "\n" + (" " * _CONTAINER_FIELD_INDENT)
         )
 
+        run_labels = {
+            MANAGED_BY_LABEL: MANAGED_BY_CHS,
+            INSTANCE_LABEL: expander.expand_var_name("chs_run_id"),
+        }
+        worker_labels = {**run_labels, COMPONENT_LABEL: WORKER_COMPONENT}
+
         # Top-Level blocks
-        jl = self._yaml_block("jobset_labels_yaml", "labels", 2).replace(
-            raw_job_name, sanitized_job_name
+        jl = self._labels_section(
+            expander.expand_var_name("jobset_labels_yaml").replace(
+                raw_job_name, sanitized_job_name
+            ),
+            run_labels,
+            2,
         )
         ja = self._yaml_block(
             "jobset_annotations_yaml", "annotations", 2
         ).replace(raw_job_name, sanitized_job_name)
 
         # Pod Spec blocks
-        pl = self._pod_labels_section(raw_job_name, sanitized_job_name)
+        pl = self._labels_section(
+            expander.expand_var_name("pod_labels_yaml").replace(
+                raw_job_name, sanitized_job_name
+            ),
+            worker_labels,
+            _POD_SPEC_INDENT,
+        )
         base_pa = self._yaml_append("pod_annotations_yaml", _CONTAINER_INDENT)
         extra_pa = self._yaml_append(
             "extra_pod_annotations_yaml", _CONTAINER_INDENT
@@ -361,9 +396,12 @@ class KubernetesJobset(WorkflowManagerBase):
             "extra_volume_mounts_yaml", _CONTAINER_INDENT
         )
 
-        custom_res = self.app_inst.expander.expand_var_name(
-            "custom_resources_yaml"
-        ).replace(raw_job_name, sanitized_job_name)
+        custom_res = self._labeled_custom_resources(
+            expander.expand_var_name("custom_resources_yaml").replace(
+                raw_job_name, sanitized_job_name
+            ),
+            run_labels,
+        )
         pod_claims = self._yaml_block(
             "pod_resource_claims_yaml", "resourceClaims", _POD_SPEC_INDENT
         ).replace(raw_job_name, sanitized_job_name)

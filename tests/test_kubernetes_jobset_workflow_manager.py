@@ -55,6 +55,15 @@ from chs.repos.workflow_managers.kubernetes_jobset.workflow_manager import (  # 
     KubernetesJobset,
 )
 
+_WORKER_SERVICE_NAME = "chs-run1"
+_RUN_LABELS = {
+    "app.kubernetes.io/managed-by": "chs",
+    "app.kubernetes.io/instance": "run1",
+}
+_WORKER_LABELS = {**_RUN_LABELS, "app.kubernetes.io/component": "worker"}
+_JOB_LABELS = {**_RUN_LABELS, "team": "infra"}
+_POD_LABELS = {**_WORKER_LABELS, "team": "infra"}
+
 
 _JOBSET_VARS_INPUTS = {
     "job_name": "chs-run1-nccl-tests-all-gather",
@@ -72,6 +81,10 @@ _JOBSET_VARS_INPUTS = {
     ),
     "container_resources_yaml": "limits:\n  nvidia.com/gpu: 8",
     "suspend_jobset": "true",
+    "chs_run_id": "run1",
+    "jobset_labels_yaml": "app.kubernetes.io/managed-by: chs\nteam: infra",
+    # CHS labels win over user labels with the same key.
+    "pod_labels_yaml": "app.kubernetes.io/instance: other\nteam: infra",
 }
 
 _TEMPLATE_PLACEHOLDER = re.compile(r"(?<![$\w])\{(\w+)\}")
@@ -227,6 +240,7 @@ class KubernetesJobsetTest(unittest.TestCase):
             "timeout": "3600",
             "ssh_port": "222",
             "processes_per_node": "8",
+            "worker_service_name": _WORKER_SERVICE_NAME,
             **extra_vars,
             **wm._jobset_vars(),
         }
@@ -246,6 +260,7 @@ class KubernetesJobsetTest(unittest.TestCase):
         self.assertEqual(job["kind"], "Job")
         self.assertEqual(job["metadata"]["name"], job_name)
         self.assertEqual(job["metadata"]["namespace"], "chs")
+        self.assertEqual(job["metadata"]["labels"], _JOB_LABELS)
         spec = job["spec"]
         self.assertEqual(
             {k: v for k, v in spec.items() if k != "template"},
@@ -270,14 +285,9 @@ class KubernetesJobsetTest(unittest.TestCase):
                 "ttlSecondsAfterFinished": 86400,
             },
         )
-        self.assertEqual(
-            spec["template"]["metadata"]["labels"],
-            {
-                "chs.gke.io/worker": "true",
-            },
-        )
+        self.assertEqual(spec["template"]["metadata"]["labels"], _POD_LABELS)
         pod_spec = spec["template"]["spec"]
-        self.assertEqual(pod_spec["subdomain"], "chs")
+        self.assertEqual(pod_spec["subdomain"], _WORKER_SERVICE_NAME)
         self.assertEqual(pod_spec["restartPolicy"], "Never")
         self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 5)
         return pod_spec
@@ -379,6 +389,7 @@ class KubernetesJobsetTest(unittest.TestCase):
         job_name = template_vars["sanitized_job_name"]
         self.assertEqual([d["kind"] for d in docs], ["Secret", "Job"])
         self.assertEqual(docs[0]["metadata"]["name"], f"{job_name}-ssh")
+        self.assertEqual(docs[0]["metadata"]["labels"], _JOB_LABELS)
         pod_spec = self._assert_job_spec(docs[1], job_name, 3)
         self.assertEqual(
             [c["name"] for c in pod_spec["initContainers"]], ["tcpxo-daemon"]
@@ -402,8 +413,12 @@ class KubernetesJobsetTest(unittest.TestCase):
             ],
         )
         script = container["command"][2]
-        self.assertIn(f'OTHER="{job_name}-${{i}}.chs"', script)
-        self.assertIn(f'HEAD_NODE="{job_name}-0.chs"', script)
+        self.assertIn(
+            f'OTHER="{job_name}-${{i}}.{_WORKER_SERVICE_NAME}"', script
+        )
+        self.assertIn(
+            f'HEAD_NODE="{job_name}-0.{_WORKER_SERVICE_NAME}"', script
+        )
         self.assertNotIn("getent", script)
         # The launcher's ssh discovery is bounded only by the Job's
         # activeDeadlineSeconds.
@@ -414,6 +429,54 @@ class KubernetesJobsetTest(unittest.TestCase):
         self.assertIn("$(seq 0 $(( 3 - 1 )))", script)
         self.assertNotIn("POD_NAME", script)
         self.assertIn("\n  mpirun -n 16 \\\n    all_gather_perf\n", script)
+
+    def test_custom_resources_get_run_labels(self):
+        """Custom resources keep their labels and get the run's labels."""
+        raw_job_name = _JOBSET_VARS_INPUTS["job_name"]
+        var_map = {
+            **_JOBSET_VARS_INPUTS,
+            "custom_resources_yaml": (
+                "apiVersion: resource.nvidia.com/v1beta1\n"
+                "kind: ComputeDomain\n"
+                "metadata:\n"
+                f"  name: {raw_job_name}-cd\n"
+                "  namespace: chs\n"
+                "  labels:\n"
+                f"    chs-run: {raw_job_name}\n"
+                "spec:\n"
+                "  numNodes: 2\n"
+                "---\n"
+            ),
+        }
+
+        template_vars, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+
+        job_name = template_vars["sanitized_job_name"]
+        self.assertEqual(
+            [d["kind"] for d in docs], ["ComputeDomain", "Secret", "Job"]
+        )
+        self.assertEqual(docs[0]["metadata"]["name"], f"{job_name}-cd")
+        self.assertEqual(
+            docs[0]["metadata"]["labels"], {"chs-run": job_name, **_RUN_LABELS}
+        )
+        self.assertEqual(docs[0]["spec"], {"numNodes": 2})
+
+    def test_labels_without_user_labels(self):
+        """Without user labels, the objects carry only the CHS labels."""
+        var_map = {
+            **_JOBSET_VARS_INPUTS,
+            "jobset_labels_yaml": "",
+            "pod_labels_yaml": "",
+        }
+
+        _, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+
+        secret, job = docs
+        self.assertEqual(secret["metadata"]["labels"], _RUN_LABELS)
+        self.assertEqual(job["metadata"]["labels"], _RUN_LABELS)
+        self.assertEqual(
+            job["spec"]["template"]["metadata"]["labels"], _WORKER_LABELS
+        )
 
     def test_tpu_worker_env_is_left_to_gke(self):
         """CHS sets no TPU worker variables; GKE's TPU webhook injects them."""
@@ -426,19 +489,6 @@ class KubernetesJobsetTest(unittest.TestCase):
             for e in docs[0]["spec"]["template"]["spec"]["containers"][0]["env"]
         ]
         self.assertEqual(env_names, ["MY_NODE_NAME"])
-
-    def test_user_pod_labels_are_kept_next_to_chs_labels(self):
-        var_map = {**_JOBSET_VARS_INPUTS, "pod_labels_yaml": "team: chs"}
-
-        _, docs = self._render("jobset_standard.yaml.tpl", var_map)
-
-        self.assertEqual(
-            docs[0]["spec"]["template"]["metadata"]["labels"],
-            {
-                "team": "chs",
-                "chs.gke.io/worker": "true",
-            },
-        )
 
 
 if __name__ == "__main__":

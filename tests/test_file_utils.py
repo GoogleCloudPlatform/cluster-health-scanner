@@ -14,6 +14,7 @@
 
 """Unit tests for the file_utils module."""
 
+import fcntl
 import os
 import pathlib
 import tempfile
@@ -82,6 +83,45 @@ class TestFileUtils(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires a write mode"):
             with file_utils.atomic_open(self.test_file, "r"):
                 pass
+
+    def _try_lock(self, lock_path: pathlib.Path) -> bool:
+        fd = os.open(lock_path, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+        finally:
+            os.close(fd)
+
+    def test_exclusive_lock_excludes_other_holders(self):
+        """Test the lock is held for the block and released afterwards."""
+        lock_path = pathlib.Path(self.temp_dir) / "app.lock"
+
+        with file_utils.exclusive_lock(lock_path):
+            self.assertFalse(self._try_lock(lock_path))
+
+        self.assertTrue(self._try_lock(lock_path))
+
+    def test_exclusive_lock_is_released_on_error(self):
+        """Test an exception inside the block still releases the lock."""
+        lock_path = pathlib.Path(self.temp_dir) / "app.lock"
+
+        with self.assertRaisesRegex(ValueError, "boom"):
+            with file_utils.exclusive_lock(lock_path):
+                raise ValueError("boom")
+
+        self.assertTrue(self._try_lock(lock_path))
+
+    def test_exclusive_lock_on_read_only_lock_file(self):
+        """Test a lock file created read-only by another user still locks."""
+        lock_path = pathlib.Path(self.temp_dir) / "app.lock"
+        lock_path.touch(mode=0o444)
+
+        with file_utils.exclusive_lock(lock_path):
+            self.assertFalse(self._try_lock(lock_path))
+
+        self.assertTrue(self._try_lock(lock_path))
 
 
 if __name__ == "__main__":

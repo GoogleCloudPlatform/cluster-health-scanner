@@ -95,8 +95,23 @@ class ChsCancellationException(ChsException):
     """Raised for errors during job cancellation."""
 
 
-class ChsRunInProgressException(ChsException):
-    """Raised when a new run is initiated while another is still active."""
+class NodesTargetedByOtherRunsException(ChsException):
+    """Raised when other active CHS runs target the requested nodes."""
+
+    def __init__(self, conflicts: dict[str, list[str]]):
+        """Initializes the exception.
+
+        Args:
+          conflicts: Mapping of run ID to the requested nodes it targets.
+        """
+        self.conflicts = conflicts
+        super().__init__(
+            "Requested nodes are targeted by other active CHS runs: "
+            f"{', '.join(sorted(conflicts))}.\n"
+            "Target a disjoint set of nodes, or wait for those runs to "
+            "finish. If a run is stale, terminate it with "
+            "`chs cancel <run_id>`."
+        )
 
 
 class NoNodesProvidedException(ChsException):

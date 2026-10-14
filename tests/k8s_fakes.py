@@ -138,12 +138,14 @@ RECORDED_METHODS = frozenset(
         "delete_secret",
         "apply_secret",
         "apply_service",
+        "delete_service",
         "list_jobs",
         "apply_job",
         "patch_job",
         "delete_jobs",
         "list_custom_objects",
         "delete_custom_objects",
+        "create_custom_object",
         "apply_custom_object",
     }
 )
@@ -334,6 +336,16 @@ class FakeKubeClient:
         self._apply_namespaced("", "services", body)
 
     @_recorded()
+    def delete_service(
+        self, *, name: str, namespace: str, **query: Any
+    ) -> None:
+        del query
+        rtype = self._served("", "services")
+        key = self._key(rtype, name, namespace)
+        if key in self.objects:
+            self._remove(key)
+
+    @_recorded()
     def list_jobs(
         self, *, namespace: str | None = None, **query: Any
     ) -> list[dict[str, Any]]:
@@ -402,11 +414,35 @@ class FakeKubeClient:
         **query: Any,
     ) -> None:
         del version, wait_timeout_seconds, query
+        if not object_names:
+            return
         rtype = self._served(group, plural)
         for name in object_names:
             key = self._key(rtype, name, namespace)
             if key in self.objects:
                 self._remove(key)
+
+    @_recorded()
+    def create_custom_object(
+        self, *, plural: str, body: dict[str, Any], **query: Any
+    ) -> None:
+        del query
+        group = body["apiVersion"].split("/")[0]
+        rtype = self._served(group, plural)
+        stored = copy.deepcopy(body)
+        name = stored["metadata"]["name"]
+        object_namespace = stored["metadata"].get("namespace")
+        if not rtype.namespaced:
+            object_namespace = None
+            stored["metadata"].pop("namespace", None)
+        key = self._key(rtype, name, object_namespace)
+        if key in self.objects:
+            raise KubeError(
+                f"Error from server (AlreadyExists): {rtype.plural}."
+                f'{rtype.group} "{name}" already exists',
+                status=409,
+            )
+        self._store(key, stored, rtype)
 
     @_recorded()
     def apply_custom_object(

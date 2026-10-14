@@ -48,6 +48,12 @@ MOCK_WORKSPACE_NAME = "20230101-120000_mockcluster-suite1-mockhash"
 MOCK_CUSTOM_WORKSPACE_NAME = "20230101-120000_mockcluster-custom-mockhash"
 
 
+def _analyze_in_guard(app_data, run_id, scheduler):
+    """Runs `_analyze_action` under the teardown guard, as `chs run` does."""
+    with cli.cancel_jobs_on_failure(scheduler, run_id):
+        return cli._analyze_action(app_data, run_id)
+
+
 @dataclasses.dataclass
 class _ListActionKwargs:
     suites: bool = False
@@ -145,7 +151,8 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.nodes_arg = None
         self.mock_scheduler.nodelists_arg = None
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
-        self.mock_scheduler.get_active_job_names.return_value = []
+        self.mock_scheduler.find_runs_targeting_nodes.return_value = {}
+        self.mock_scheduler.cancel_run.return_value = True
         self.mock_scheduler.detect_nodes_hardware.return_value = [
             "a3-megagpu-8g"
         ]
@@ -180,7 +187,11 @@ class TestCli(unittest.TestCase):
             "/mocked/workspaces"
         )
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
+        self.mock_app_data.get_all_runs.return_value = {
+            "latest_run": {"run_id": "latest_run"}
+        }
         self.mock_app_data.resolve_run_id.side_effect = lambda x: x
+        self.mock_app_data.get_run.return_value = None
         self.mock_app_data.get_storage_config.return_value = {
             "type": "gcs",
             "gcs": {"bucket_name": "test_bucket"},
@@ -504,7 +515,7 @@ class TestCli(unittest.TestCase):
             s.nodes_arg = None
             s.nodelists_arg = None
             s.get_nodes_under_test.return_value = ["node1"]
-            s.get_active_job_names.return_value = []
+            s.find_runs_targeting_nodes.return_value = {}
             s.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
             s.run_preflight_checks.side_effect = (
                 lambda tests=None, *args, **kwargs: tests
@@ -750,7 +761,6 @@ class TestCli(unittest.TestCase):
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data,
                     f"mockcluster-{case.expected_return.suite}-mockhash",
-                    args[0],
                 )
                 mock_manager.reset_mock()
 
@@ -1079,175 +1089,20 @@ class TestCli(unittest.TestCase):
             mock_default_dir, expected_workspace_name, run_id=expected_run_id
         )
         mock_analyze_action.assert_called_once_with(
-            self.mock_app_data,
-            expected_run_id,
-            self.mock_scheduler,
+            self.mock_app_data, expected_run_id
         )
 
-    @mock.patch("chs.cli.cancel_action")
-    @mock.patch("chs.cli._analyze_action")
-    def test_run_command_previous_run_leftover_resources(
-        self, mock_analyze_action, mock_cancel_action
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_rechecks_targeted_nodes_before_submitting(
+        self, mock_analyze_action
     ):
-        """Test 'run' cleans up previous run with leftover resources."""
-        self.mock_app_data.get_latest_run_id.side_effect = None
-        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
-        self.mock_app_data.get_run.return_value = {
-            "submission_complete": True,
-            "is_boh_final": False,
-        }
-        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["-v", "run", "--suite", "suite1", "--auto-approve"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-
-        mock_cancel_action.assert_called_once_with("slurm")
-        self.mock_rm_instance.execute_experiments.assert_called_once()
-
-    @mock.patch("chs.cli.cancel_action")
-    @mock.patch("chs.cli._analyze_action")
-    def test_run_command_previous_run_died_mid_submission(
-        self, mock_analyze_action, mock_cancel_action
-    ):
-        """Test 'run' command auto-cancels and restarts if incomplete."""
-        self.mock_app_data.get_latest_run_id.side_effect = None
-        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
-        self.mock_app_data.get_run.return_value = {"submission_complete": False}
-        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["-v", "run", "--suite", "suite1", "--auto-approve"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-
-        mock_cancel_action.assert_called_once_with("slurm")
-        self.mock_rm_instance.execute_experiments.assert_called_once()
-        self.mock_scheduler.get_nodes_under_test.assert_called_once()
-
-    @mock.patch("chs.cli.cancel_action")
-    @mock.patch("chs.cli._analyze_action")
-    def test_run_command_previous_run_completed(
-        self, mock_analyze_action, mock_cancel_action
-    ):
-        """Test 'run' auto-cancels and restarts if previous run is completed."""
-        self.mock_app_data.get_latest_run_id.side_effect = None
-        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
-        self.mock_app_data.get_run.return_value = {
-            "submission_complete": True,
-            "is_boh_final": True,
-        }
-        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["-v", "run", "--suite", "suite1", "--auto-approve"],
-            standalone_mode=False,
-        )
-        self.assertEqual(result.exit_code, 0)
-
-        mock_cancel_action.assert_called_once_with("slurm")
-        self.mock_rm_instance.execute_experiments.assert_called_once()
-
-    @mock.patch("chs.cli._handle_previous_run")
-    @mock.patch("chs.cli._analyze_action")
-    def test_run_command_keyboard_interrupt_analysis_exits_130(
-        self, mock_analyze_action, mock_handle_previous_run
-    ):
-        """Test Ctrl+C during analysis exits 130 without another cleanup."""
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
-        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
-        self.mock_scheduler.name = "slurm"
-        mock_analyze_action.side_effect = KeyboardInterrupt()
-
-        result = self.runner.invoke(
-            cli.cli,
-            ["-v", "run", "--suite", "suite1", "--auto-approve"],
-        )
-        self.assertEqual(result.exit_code, 130)
-        self.mock_scheduler.cancel_jobs_by_prefix.assert_not_called()
-        self.mock_scheduler.cleanup_scheduler_resources.assert_not_called()
-
-    @mock.patch("chs.cli.safe_cancel_action")
-    @mock.patch("chs.cli._analyze_action")
-    def test_handle_previous_run_active_jobs_cleans_up_without_analysis(
-        self, mock_analyze_action, mock_safe_cancel_action
-    ):
-        """Test active previous run calls safe_cancel_action not analysis."""
-        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
-        self.mock_app_data.resolve_run_id.return_value = "ws_latest_run"
-        self.mock_app_data.get_run.return_value = {
-            "submission_complete": True,
-            "is_boh_final": False,
-            "scheduler": "slurm",
-        }
-        self.mock_app_data.get_latest_runs.return_value = {
-            "ws_latest_run": {"run_id": "latest_run"}
-        }
-        self.mock_scheduler.get_active_job_names.return_value = []
-
-        cli._handle_previous_run(
-            app_data=self.mock_app_data,
-            scheduler="slurm",
-            auto_approve=True,
-        )
-
-        mock_safe_cancel_action.assert_called_once_with(
-            "slurm",
-            auto_approve=True,
-            message=(
-                "Previous run found with leftover resources. "
-                "Cleaning all stale resources"
-            ),
-            action_type="setup",
-        )
-        mock_analyze_action.assert_not_called()
-
-    @mock.patch("chs.cli.safe_cancel_action")
-    def test_handle_previous_run_cleans_up_with_current_scheduler(
-        self, mock_safe_cancel_action
-    ):
-        """Test leftovers are cleaned up with the current scheduler."""
-        self.mock_app_data.get_latest_run_id.return_value = "latest_run"
-        self.mock_app_data.get_run.return_value = {
-            "submission_complete": True,
-            "scheduler": "slurm",
-        }
-        self.mock_scheduler.get_active_job_names.return_value = []
-
-        cli._handle_previous_run(
-            app_data=self.mock_app_data,
-            scheduler="kubernetes",
-            auto_approve=True,
-        )
-
-        self.assertEqual(
-            mock_safe_cancel_action.call_args.args, ("kubernetes",)
-        )
-
-    def test_run_command_aborts_on_foreign_active_jobs(self):
-        """Test 'run' aborts if foreign jobs are detected."""
-        self.mock_app_data.get_latest_runs.return_value = {
-            "ws1": {"run_id": "my-old-run-1"},
-            "ws2": {"run_id": "my-old-run-2"},
-        }
-
-        self.mock_scheduler.get_active_job_names.return_value = [
-            "chs-someone-elses-run-job-1",
-            "chs-someone-elses-run-job-2",
+        """Test 'run' fails if a confirmed node got targeted by another run."""
+        targeting = {"other-run-ab12": ["node2"]}
+        self.mock_scheduler.get_nodes_under_test.return_value = [
+            "node1",
+            "node2",
         ]
+        self.mock_scheduler.find_runs_targeting_nodes.return_value = targeting
 
         result = self.runner.invoke(
             cli.cli,
@@ -1255,18 +1110,166 @@ class TestCli(unittest.TestCase):
             standalone_mode=False,
         )
 
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIsInstance(result.exception, click.ClickException)
-        self.assertIn(
-            "A CHS run is already in progress on this cluster by another user",
-            str(result.exception),
+        self.assertIsInstance(
+            result.exception, exceptions.NodesTargetedByOtherRunsException
         )
-        self.mock_app_data.get_latest_run_id.assert_not_called()
+        self.assertEqual(result.exception.conflicts, targeting)
+        self.mock_scheduler.find_runs_targeting_nodes.assert_called_once_with(
+            ["node1", "node2"]
+        )
+        self.mock_app_data.update_run.assert_not_called()
+        self.mock_rm_instance.execute_experiments.assert_not_called()
+        mock_analyze_action.assert_not_called()
+
+    def test_nodes_targeted_by_other_runs_message_lists_only_run_ids(self):
+        """Test the conflict message names the runs but not their nodes."""
+        error = exceptions.NodesTargetedByOtherRunsException(
+            {"run-b": ["node3", "node4"], "run-a": ["node1"]}
+        )
+
+        self.assertEqual(
+            str(error),
+            "Requested nodes are targeted by other active CHS runs: "
+            "run-a, run-b.\n"
+            "Target a disjoint set of nodes, or wait for those runs to "
+            "finish. If a run is stale, terminate it with "
+            "`chs cancel <run_id>`.",
+        )
+        self.assertEqual(
+            error.conflicts, {"run-b": ["node3", "node4"], "run-a": ["node1"]}
+        )
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_registers_submits_and_analyzes_under_guard(
+        self, mock_analyze_action
+    ):
+        """Test the run is registered, submitted and analyzed in order."""
+        run_id = "mockcluster-suite1-mockhash"
+        calls = []
+        self.mock_app_data.update_run.side_effect = lambda *args, **kwargs: (
+            calls.append("register_run")
+        )
+        self.mock_rm_instance.execute_experiments.side_effect = (
+            lambda **kwargs: calls.append("submit") or ["job1"]
+        )
+        mock_analyze_action.side_effect = lambda *args: calls.append("analyze")
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(calls, ["register_run", "submit", "analyze"])
+        self.assertEqual(
+            self.mock_scheduler.setup_scheduler_resources.call_args.kwargs[
+                "run_id"
+            ],
+            run_id,
+        )
+        mock_analyze_action.assert_called_once_with(self.mock_app_data, run_id)
+
+    def test_run_command_failure_tears_down_only_its_own_run(self):
+        """Test a failed submission tears down nothing but its own run."""
+        run_id = "mockcluster-suite1-mockhash"
+        self.mock_rm_instance.setup_workspace.side_effect = OSError(
+            "Permission denied"
+        )
+        manager = mock.Mock()
+        for name in ("cancel_run", "cancel_all_runs"):
+            manager.attach_mock(getattr(self.mock_scheduler, name), name)
+
+        result = self.runner.invoke(
+            cli.cli, ["run", "--suite", "suite1", "--auto-approve"]
+        )
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(
+            manager.mock_calls,
+            [
+                mock.call.cancel_run(run_id),
+            ],
+        )
+
+    def _attach_run_teardown_calls(self) -> mock.Mock:
+        manager = mock.Mock()
+        for name in ("cancel_run", "cancel_all_runs"):
+            manager.attach_mock(getattr(self.mock_scheduler, name), name)
+        return manager
+
+    def _assert_torn_down_once(self, manager: mock.Mock, run_id: str) -> None:
+        self.assertEqual(
+            manager.mock_calls,
+            [
+                mock.call.cancel_run(run_id),
+            ],
+        )
+
+    def test_run_command_early_analysis_failure_tears_down_once(self):
+        """Test a failure before analysis starts waiting still tears down."""
+        run_id = "mockcluster-suite1-mockhash"
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_app_data.resolve_run_id.side_effect = (
+            exceptions.WorkspaceNotFoundException("gone")
+        )
+        manager = self._attach_run_teardown_calls()
+
+        with mock.patch("chs.cli.theme.get_progress_spinner") as spinner:
+            result = self.runner.invoke(
+                cli.cli, ["run", "--suite", "suite1", "--auto-approve"]
+            )
+
+        self.assertEqual(result.exit_code, 1)
+        self._assert_torn_down_once(manager, run_id)
+        teardown_spinners = [
+            c
+            for c in spinner.call_args_list
+            if "Cleaning up CHS resources" in c.args[0]
+        ]
+        self.assertEqual(len(teardown_spinners), 1)
+
+    def test_run_command_failure_while_waiting_tears_down_once(self):
+        """Test a failure while waiting for jobs tears the run down once."""
+        run_id = "mockcluster-suite1-mockhash"
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_app_data.get_run.return_value = {}
+        self.mock_rm_instance.wait_for_jobs.side_effect = KeyboardInterrupt()
+        manager = self._attach_run_teardown_calls()
+        workspace = self.enterContext(tempfile.TemporaryDirectory())
+        self.mock_rm_instance.path = workspace
+
+        result = self.runner.invoke(
+            cli.cli, ["run", "--suite", "suite1", "--auto-approve"]
+        )
+
+        self.assertEqual(result.exit_code, 130)
+        self._assert_torn_down_once(manager, run_id)
+        self.mock_rm_instance.cancel_experiments.assert_not_called()
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_keyboard_interrupt_analysis_exits_130(
+        self, mock_analyze_action
+    ):
+        """Test Ctrl+C during analysis exits 130 after one teardown."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "slurm"
+        mock_analyze_action.side_effect = KeyboardInterrupt()
+        manager = self._attach_run_teardown_calls()
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["-v", "run", "--suite", "suite1", "--auto-approve"],
+        )
+        self.assertEqual(result.exit_code, 130)
+        self._assert_torn_down_once(manager, "mockcluster-suite1-mockhash")
 
     def test_cancel_action_exception_handling(self):
         """Test that cancel_action wraps exceptions in ClickException."""
-        self.mock_app_data.get_latest_run_id.return_value = "some_run_id"
-        self.mock_scheduler.cancel_jobs_by_prefix.side_effect = (
+        self.mock_app_data.get_latest_run_id.return_value = "some-run-id"
+        self.mock_scheduler.cancel_run.side_effect = (
             exceptions.ChsSchedulerException("Cancellation failed")
         )
         result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
@@ -1274,12 +1277,15 @@ class TestCli(unittest.TestCase):
         self.assertIn("Cancellation failed", result.output)
 
     def test_cancel_action_kube_error_raises_cancellation_exception(self):
-        """Test cancel_action wraps a Kubernetes API error of either step."""
+        """Test cancel_action wraps a Kubernetes API error of any step."""
         err = KubeError(
             "Error from server (Forbidden): jobs.batch is " "forbidden",
             status=403,
         )
-        for step in ("cancel_jobs_by_prefix", "cleanup_scheduler_resources"):
+        for cancel, step in (
+            (lambda: cli.cancel_action("run1"), "cancel_run"),
+            (cli.cancel_all_action, "cancel_all_runs"),
+        ):
             with self.subTest(step=step):
                 scheduler = mock.Mock()
                 getattr(scheduler, step).side_effect = err
@@ -1288,7 +1294,7 @@ class TestCli(unittest.TestCase):
                 with self.assertRaises(
                     exceptions.ChsCancellationException
                 ) as ctx:
-                    cli.cancel_action("kubernetes")
+                    cancel()
 
                 self.assertEqual(
                     str(ctx.exception),
@@ -1296,32 +1302,205 @@ class TestCli(unittest.TestCase):
                     "(Forbidden): jobs.batch is forbidden')",
                 )
                 self.assertIs(ctx.exception.__cause__, err)
-                self.mock_get_scheduler.assert_called_with("kubernetes")
+                self.mock_get_scheduler.assert_called_with("slurm")
+
+    def _attach_teardown_calls(self) -> mock.Mock:
+        manager = mock.Mock()
+        for name in ("cancel_run", "cancel_all_runs"):
+            manager.attach_mock(getattr(self.mock_scheduler, name), name)
+        return manager
+
+    def test_cancel_without_run_id_cancels_latest_local_run(self):
+        """Test 'cancel' without arguments tears down the latest local run."""
+        self.mock_app_data.get_latest_run_id.return_value = "latest-run-ab12"
+        manager = self._attach_teardown_calls()
+
+        result = self.runner.invoke(cli.cli, ["cancel", "-y"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(
+            manager.mock_calls,
+            [
+                mock.call.cancel_run("latest-run-ab12"),
+            ],
+        )
+
+    def test_cancel_run_id_not_known_locally_cancels_on_cluster(self):
+        """Test 'cancel RUN_ID' works for another user's run."""
+        self.mock_app_data.resolve_run_id.side_effect = (
+            exceptions.WorkspaceNotFoundException("not found")
+        )
+        manager = self._attach_teardown_calls()
+
+        result = self.runner.invoke(cli.cli, ["cancel", "other-run-cd34", "-y"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(
+            manager.mock_calls,
+            [
+                mock.call.cancel_run("other-run-cd34"),
+            ],
+        )
+        self.mock_app_data.get_latest_run_id.assert_not_called()
+        self.mock_rm_cls.assert_not_called()
+
+    def test_cancel_all_wipes_every_chs_run_on_the_cluster(self):
+        """Test 'cancel --all' keeps the cluster-wide teardown."""
+        manager = self._attach_teardown_calls()
+
+        result = self.runner.invoke(cli.cli, ["cancel", "--all", "-y"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(
+            manager.mock_calls,
+            [
+                mock.call.cancel_all_runs(),
+            ],
+        )
+
+    def test_cancel_run_id_and_all_are_mutually_exclusive(self):
+        """Test 'cancel' rejects RUN_ID combined with --all."""
+        result = self.runner.invoke(
+            cli.cli, ["cancel", "other-run-cd34", "--all", "-y"]
+        )
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("mutually exclusive", result.output)
+        self.mock_get_scheduler.assert_not_called()
+
+    def test_cancel_without_local_runs_suggests_run_id_or_all(self):
+        """Test 'cancel' without arguments or local runs explains options."""
+        no_runs = exceptions.NoPreviousRunsFoundException("No previous runs")
+        self.mock_app_data.get_latest_run_id.side_effect = no_runs
+
+        result = self.runner.invoke(
+            cli.cli, ["cancel", "-y"], standalone_mode=False
+        )
+
+        self.assertIsInstance(
+            result.exception, exceptions.NoPreviousRunsFoundException
+        )
+        self.assertIn("Pass a RUN_ID", str(result.exception))
+        self.assertIn("--all", str(result.exception))
+        self.assertIs(result.exception.__cause__, no_runs)
+        self.mock_app_data.get_all_runs.assert_not_called()
+        self.mock_get_scheduler.assert_not_called()
+
+    def test_cancel_rejects_invalid_run_id_before_touching_cluster(self):
+        """Test 'cancel' rejects run IDs that cannot be CHS run IDs."""
+        for run_id in (
+            "Upper-Case",
+            "under_score",
+            "-leading-dash",
+            "trailing-dash-",
+            "20261014-084121_cluster-lite-ab12",
+            "a" * 64,
+        ):
+            with self.subTest(run_id=run_id):
+                result = self.runner.invoke(
+                    cli.cli, ["cancel", "-y", "--", run_id]
+                )
+
+                self.assertEqual(result.exit_code, 2, result.output)
+                self.assertIn("not a valid CHS run ID", result.output)
+                self.mock_app_data.get_run.assert_not_called()
+                self.mock_get_scheduler.assert_not_called()
+
+    def test_cancel_accepts_longest_valid_run_id(self):
+        """Test 'cancel' accepts a 63-character run ID."""
+        run_id = "a" * 63
+
+        result = self.runner.invoke(cli.cli, ["cancel", run_id, "-y"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_scheduler.cancel_run.assert_called_once_with(run_id)
+
+    def test_cancel_of_run_absent_from_cluster_warns(self):
+        """Test cancel warns instead of reporting success for unknown runs."""
+        self.mock_scheduler.cancel_run.return_value = False
+        self.mock_app_data.get_latest_run_id.return_value = "latest-run-ab12"
+        for args, run_id in (
+            (["cancel", "typo-run", "-y"], "typo-run"),
+            (["cancel", "-y"], "latest-run-ab12"),
+        ):
+            with self.subTest(args=args):
+                result = self.runner.invoke(cli.cli, args)
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn(
+                    f"No active CHS run '{run_id}' was found on the cluster.",
+                    " ".join(result.output.split()),
+                )
+                self.assertNotIn("Successfully canceled", result.output)
+
+    def test_cancel_reports_failed_deletions_as_failure(self):
+        """Test cancel fails without success if some objects survived."""
+        cases = [
+            (
+                ["cancel", "run-ab12", "-y"],
+                "cancel_run",
+                "Failed to delete the Jobs of CHS run 'run-ab12'. Run "
+                "`chs cancel run-ab12` again to retry.",
+            ),
+            (
+                ["cancel", "--all", "-y"],
+                "cancel_all_runs",
+                "Failed to delete the CHS chs namespace. Run "
+                "`chs cancel --all` again to retry.",
+            ),
+        ]
+        for args, step, message in cases:
+            with self.subTest(step=step):
+                error = exceptions.ChsCancellationException(message)
+                getattr(self.mock_scheduler, step).side_effect = error
+
+                result = self.runner.invoke(cli.cli, args)
+
+                self.assertNotEqual(result.exit_code, 0, result.output)
+                self.assertIn(message, " ".join(result.output.split()))
+                self.assertNotIn("Successfully canceled", result.output)
+
+    def test_cancel_prompts_state_their_blast_radius(self):
+        """Test cancel prompts distinguish one run from the whole cluster."""
+        cases = [
+            (lambda: cli.safe_cancel_action("run1"), ["run 'run1'"]),
+            (
+                cli.safe_cancel_all_action,
+                ["ALL CHS runs on the cluster", "other users"],
+            ),
+        ]
+        for cancel, expected_fragments in cases:
+            with self.subTest(expected_fragments=expected_fragments):
+                with (
+                    mock.patch("chs.cli.sys.stdin") as mock_stdin,
+                    mock.patch(
+                        "chs.cli.click.confirm", return_value=False
+                    ) as mock_confirm,
+                    mock.patch(
+                        "chs.cli.utils.is_in_cluster", return_value=False
+                    ),
+                ):
+                    mock_stdin.isatty.return_value = True
+                    with self.assertRaises(click.Abort):
+                        cancel()
+
+                prompt = mock_confirm.call_args.args[0]
+                for fragment in expected_fragments:
+                    self.assertIn(fragment, prompt)
+                self.mock_get_scheduler.assert_not_called()
 
     @mock.patch("chs.cli._archive_and_log", autospec=True)
-    def test_cancel_archives_latest_run_only_if_workspace_created(
-        self, mock_archive_and_log
-    ):
-        """Test cancel archives the latest run only if its workspace exists."""
-        self.mock_rm_instance.path = self.enterContext(
-            tempfile.TemporaryDirectory()
-        )
-        self.mock_rm_instance.is_archived.return_value = False
-        for is_workspace_created in (False, True):
-            with self.subTest(is_workspace_created=is_workspace_created):
-                mock_archive_and_log.reset_mock()
-                self.mock_rm_instance.is_workspace_created = (
-                    is_workspace_created
-                )
+    def test_cancel_only_cleans_up_the_cluster(self, mock_archive_and_log):
+        """Test 'cancel' neither archives nor changes the local registry."""
+        self.mock_app_data.get_latest_run_id.return_value = "latest-run-ab12"
+        for args in (["cancel"], ["cancel", "run-cd34"], ["cancel", "--all"]):
+            with self.subTest(args=args):
+                result = self.runner.invoke(cli.cli, [*args, "-y"])
 
-                result = self.runner.invoke(
-                    cli.cli, ["cancel", "--auto-approve"]
-                )
-
-                self.assertEqual(result.exit_code, 0)
-                self.assertEqual(
-                    mock_archive_and_log.called, is_workspace_created
-                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.mock_app_data.update_run.assert_not_called()
+                self.mock_rm_cls.assert_not_called()
+                mock_archive_and_log.assert_not_called()
 
     @mock.patch("chs.cli.RambleManager")
     @mock.patch("chs.cli._show_results")
@@ -1350,7 +1529,7 @@ class TestCli(unittest.TestCase):
             mock_get_provider.return_value = None
             mock_rm.is_archived.return_value = True
 
-            cli._analyze_action(self.mock_app_data, "run1", self.mock_scheduler)
+            _analyze_in_guard(self.mock_app_data, "run1", self.mock_scheduler)
             mock_show_results.assert_called_once_with(
                 self.mock_app_data, "run1"
             )
@@ -1364,7 +1543,7 @@ class TestCli(unittest.TestCase):
             mock_get_provider.return_value = mock_provider
             mock_rm.is_archived.return_value = True
 
-            cli._analyze_action(self.mock_app_data, "run1", self.mock_scheduler)
+            _analyze_in_guard(self.mock_app_data, "run1", self.mock_scheduler)
             mock_show_results.assert_called_once_with(
                 self.mock_app_data, "run1"
             )
@@ -1383,7 +1562,7 @@ class TestCli(unittest.TestCase):
                 True,
             )
 
-            cli._analyze_action(self.mock_app_data, "run1", self.mock_scheduler)
+            _analyze_in_guard(self.mock_app_data, "run1", self.mock_scheduler)
             mock_rm.archive.assert_called_once()
 
     def test_analyze_action_kube_error_raises_analysis_exception(self):
@@ -1398,7 +1577,7 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as ws_dir:
             self.mock_rm_instance.path = ws_dir
             with self.assertRaises(exceptions.ChsAnalysisException) as ctx:
-                cli._analyze_action(
+                _analyze_in_guard(
                     self.mock_app_data, "run1", self.mock_scheduler
                 )
 
@@ -1407,9 +1586,7 @@ class TestCli(unittest.TestCase):
         )
         self.assertIs(ctx.exception.__cause__, err)
         self.mock_rm_instance.analyze_experiments.assert_not_called()
-        self.mock_scheduler.cancel_jobs_by_prefix.assert_called_once_with(
-            "chs-"
-        )
+        self.mock_scheduler.cancel_run.assert_called_once_with("run1")
 
     def test_analyze_action_keyboard_interrupt_while_waiting_cancels_run(self):
         """Test Ctrl+C while waiting for jobs cancels the run."""
@@ -1419,34 +1596,31 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as ws_dir:
             self.mock_rm_instance.path = ws_dir
             with self.assertRaises(KeyboardInterrupt):
-                cli._analyze_action(
+                _analyze_in_guard(
                     self.mock_app_data, "run1", self.mock_scheduler
                 )
 
-        self.mock_scheduler.cancel_jobs_by_prefix.assert_called_once_with(
-            "chs-"
-        )
-        self.mock_scheduler.cleanup_scheduler_resources.assert_called_once()
+        self.mock_scheduler.cancel_run.assert_called_once_with("run1")
 
     @mock.patch("chs.cli._archive_and_log", side_effect=KeyboardInterrupt())
     @mock.patch("chs.cli._show_results")
-    def test_analyze_action_keyboard_interrupt_after_results_keeps_run(
+    def test_analyze_action_keyboard_interrupt_after_cleanup_tears_down_again(
         self, mock_show_results, mock_archive_and_log
     ):
-        """Test Ctrl+C after results are shown does not cancel the run."""
+        """Test Ctrl+C after the cleanup repeats the idempotent teardown."""
         self.mock_app_data.get_run.return_value = {}
 
         with tempfile.TemporaryDirectory() as ws_dir:
             self.mock_rm_instance.path = ws_dir
             with self.assertRaises(KeyboardInterrupt):
-                cli._analyze_action(
+                _analyze_in_guard(
                     self.mock_app_data, "run1", self.mock_scheduler
                 )
 
         mock_show_results.assert_called_once()
         mock_archive_and_log.assert_called_once()
-        self.mock_scheduler.cancel_jobs_by_prefix.assert_not_called()
-        self.mock_scheduler.cleanup_scheduler_resources.assert_not_called()
+        self.mock_rm_instance.cancel_experiments.assert_called_once()
+        self.mock_scheduler.cancel_run.assert_called_once_with("run1")
 
     def test_analyze_action_interrupt_after_final_boh_cleans_up_once(self):
         """Test Ctrl+C after the final BoH doesn't start a second cleanup."""
@@ -1456,13 +1630,11 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as ws_dir:
             self.mock_rm_instance.path = ws_dir
             with self.assertRaises(KeyboardInterrupt):
-                cli._analyze_action(
+                _analyze_in_guard(
                     self.mock_app_data, "run1", self.mock_scheduler
                 )
 
-        self.mock_scheduler.cancel_jobs_by_prefix.assert_called_once_with(
-            "chs-"
-        )
+        self.mock_scheduler.cancel_run.assert_called_once_with("run1")
         self.mock_rm_instance.cancel_experiments.assert_not_called()
 
     def test_background_cleanup_logs_kube_error_as_warning(self):
@@ -1481,7 +1653,10 @@ class TestCli(unittest.TestCase):
                 cleanup.start(ramble_manager)
 
         mock_logger.warning.assert_called_once_with(
-            "Failed to clean CHS resources. Error: %s", err
+            "Failed to clean CHS resources. Run 'chs cancel %s' to finish "
+            "cleaning up. Error: %s",
+            "run1",
+            err,
         )
         ramble_manager.cancel_experiments.assert_called_once_with(
             scheduler_name="kubernetes"
@@ -1588,17 +1763,15 @@ class TestCli(unittest.TestCase):
         """Test Ctrl+C during cleanup prints warning and propagates."""
         mock_console = mock_console_cls.return_value
         mock_scheduler = mock.Mock()
-        mock_scheduler.cancel_jobs_by_prefix.side_effect = KeyboardInterrupt()
+        mock_scheduler.cancel_run.side_effect = KeyboardInterrupt()
 
         with self.assertRaises(KeyboardInterrupt):
-            with cli.cancel_jobs_on_failure(
-                mock_scheduler, "chs-", active=True
-            ):
+            with cli.cancel_jobs_on_failure(mock_scheduler, "run1"):
                 raise RuntimeError("original failure")
 
         mock_console.print.assert_called_with(
             "[bold red]WARNING: Cleanup interrupted. "
-            "Please run `chs cancel` to finish cleaning up."
+            "Please run `chs cancel run1` to finish cleaning up."
             "[/bold red]"
         )
 
@@ -1611,16 +1784,16 @@ class TestCli(unittest.TestCase):
         mock_console = mock_console_cls.return_value
         mock_scheduler = mock.Mock()
         cleanup_err = RuntimeError("cleanup failed")
-        mock_scheduler.cancel_jobs_by_prefix.side_effect = cleanup_err
+        mock_scheduler.cancel_run.side_effect = cleanup_err
 
         with self.assertRaises(ValueError):
-            with cli.cancel_jobs_on_failure(
-                mock_scheduler, "chs-", active=True
-            ):
+            with cli.cancel_jobs_on_failure(mock_scheduler, "run1"):
                 raise ValueError("original failure")
 
         mock_logger.error.assert_called_with(
-            "Failed to clean CHS resources. Please run `chs cancel`. Error: %s",
+            "Failed to clean CHS resources. Please run "
+            "`chs cancel %s`. Error: %s",
+            "run1",
             cleanup_err,
         )
         mock_console.print.assert_called_once()
@@ -1634,8 +1807,7 @@ class TestCli(unittest.TestCase):
         mock_console = mock_console_cls.return_value
         cases = [
             (None, "CHS cleanup finished."),
-            ("cancel_jobs_by_prefix", "Automatic cleanup failed."),
-            ("cleanup_scheduler_resources", "Automatic cleanup failed."),
+            ("cancel_run", "Automatic cleanup failed."),
         ]
         for failing_step, expected_message in cases:
             with self.subTest(failing_step=failing_step):
@@ -1646,9 +1818,7 @@ class TestCli(unittest.TestCase):
                     failing_method.side_effect = RuntimeError("cleanup failed")
 
                 with self.assertRaises(KeyboardInterrupt):
-                    with cli.cancel_jobs_on_failure(
-                        mock_scheduler, "chs-", active=True
-                    ):
+                    with cli.cancel_jobs_on_failure(mock_scheduler, "run1"):
                         raise KeyboardInterrupt()
 
                 mock_console.print.assert_called_once()
@@ -1712,7 +1882,7 @@ class TestCli(unittest.TestCase):
         mock_scheduler.name = "kubernetes"
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
-        mock_scheduler.get_active_job_names.return_value = []
+        mock_scheduler.find_runs_targeting_nodes.return_value = {}
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
         mock_scheduler.run_preflight_checks.side_effect = (
             lambda tests=None, *args, **kwargs: tests
@@ -1737,13 +1907,10 @@ class TestCli(unittest.TestCase):
             0,
             f"Command failed: {result.output}\nException: {result.exception}",
         )
-        self.assertEqual(mock_get_scheduler.call_count, 3)
-        calls_with_nodepool = [
-            c
-            for c in mock_get_scheduler.call_args_list
-            if c[1].get("nodepools") == "pool1"
-        ]
-        self.assertEqual(len(calls_with_nodepool), 1)
+        mock_get_scheduler.assert_called_once()
+        self.assertEqual(
+            mock_get_scheduler.call_args.kwargs["nodepools"], "pool1"
+        )
 
     def test_run_command_heterogeneous_cluster_raises(self):
         """Test `run` command when a heterogeneous cluster is detected."""
@@ -1757,12 +1924,8 @@ class TestCli(unittest.TestCase):
         self.assertIn("Heterogeneous cluster detected", result.output)
         self.assertIn("--partitions", result.output)
 
-    @mock.patch("chs.cli._handle_previous_run")
-    def test_validations_occur_before_preparing_cluster(
-        self, mock_handle_previous_run
-    ):
+    def test_validations_occur_before_preparing_cluster(self):
         """Test validation failures prevent cluster preparation for execution"""
-        mock_handle_previous_run.return_value = None
         self.mock_scheduler.name = "slurm"
         self.mock_scheduler.get_nodes_under_test.return_value = [
             "node1",
@@ -1775,6 +1938,7 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Heterogeneous cluster detected", result.output)
+        self.mock_scheduler.setup_scheduler_resources.assert_not_called()
 
     @mock.patch("chs.cli._analyze_action", autospec=True)
     @mock.patch("chs.cli.get_scheduler")
@@ -1790,7 +1954,7 @@ class TestCli(unittest.TestCase):
         mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         mock_scheduler.filter_partial_tpu_slices.return_value = ["node1"]
         mock_scheduler.detect_nodes_hardware.return_value = ["a3-megagpu-8g"]
-        mock_scheduler.get_active_job_names.return_value = []
+        mock_scheduler.find_runs_targeting_nodes.return_value = {}
         mock_scheduler.run_preflight_checks.return_value = [{"name": "test1"}]
         mock_scheduler.setup_scheduler_resources.return_value = [
             {"name": "test1"}
@@ -2239,30 +2403,27 @@ class TestInterruptOnTerminationSignals(unittest.TestCase):
     def test_sigterm_cleans_up_like_ctrl_c(self, _mock_console_cls):
         """Test SIGTERM runs the cleanup and a second SIGTERM can't stop it."""
         mock_scheduler = mock.Mock()
-        mock_scheduler.cancel_jobs_by_prefix.side_effect = lambda prefix: (
+        mock_scheduler.cancel_run.side_effect = lambda run_id: (
             os.kill(os.getpid(), signal.SIGTERM)
         )
 
         with self.assertRaises(KeyboardInterrupt):
             with cli._handle_termination_signals(cli._interrupt_run):
-                with cli.cancel_jobs_on_failure(mock_scheduler, "chs-"):
+                with cli.cancel_jobs_on_failure(mock_scheduler, "run1"):
                     os.kill(os.getpid(), signal.SIGTERM)
 
-        mock_scheduler.cancel_jobs_by_prefix.assert_called_once_with("chs-")
-        mock_scheduler.cleanup_scheduler_resources.assert_called_once_with()
+        mock_scheduler.cancel_run.assert_called_once_with("run1")
 
     @mock.patch("chs.cli.Console")
     def test_signals_after_ctrl_c_do_not_stop_cleanup(self, _mock_console_cls):
         """Test SIGTERM and SIGHUP during a Ctrl+C cleanup let it finish."""
         mock_scheduler = mock.Mock()
 
-        def send_termination_signals(prefix):
+        def send_termination_signals(run_id):
             os.kill(os.getpid(), signal.SIGTERM)
             os.kill(os.getpid(), signal.SIGHUP)
 
-        mock_scheduler.cancel_jobs_by_prefix.side_effect = (
-            send_termination_signals
-        )
+        mock_scheduler.cancel_run.side_effect = send_termination_signals
 
         with (
             mock.patch.object(
@@ -2271,10 +2432,8 @@ class TestInterruptOnTerminationSignals(unittest.TestCase):
             self.assertRaises(KeyboardInterrupt),
         ):
             with cli._handle_termination_signals(cli._interrupt_run):
-                with cli.cancel_jobs_on_failure(mock_scheduler, "chs-"):
+                with cli.cancel_jobs_on_failure(mock_scheduler, "run1"):
                     raise KeyboardInterrupt
-
-        mock_scheduler.cleanup_scheduler_resources.assert_called_once_with()
         mock_discard_output.assert_called_once_with()
 
     def test_previous_handlers_are_restored(self):

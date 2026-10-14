@@ -25,6 +25,8 @@ from chs.utils import gcp
 
 logger = logging.getLogger(__name__)
 
+CHS_JOB_PREFIX = "chs-"
+
 
 class BaseScheduler(abc.ABC):
     """Base class for cluster schedulers."""
@@ -120,6 +122,7 @@ class BaseScheduler(abc.ABC):
         tests: list[dict[str, Any]] | None = None,
         machine_type: str = "",
         workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Sets up scheduler-specific infrastructure resources.
 
@@ -134,8 +137,37 @@ class BaseScheduler(abc.ABC):
         """
         pass
 
-    def cleanup_scheduler_resources(self) -> None:
-        """Cleans up scheduler-specific resources. Optional to implement."""
+    @abc.abstractmethod
+    def cancel_run(self, run_id: str) -> bool:
+        """Cancels the run's jobs and deletes every resource it created.
+
+        Selects the run's jobs and resources by its exact run ID, so other
+        runs are never touched.
+
+        Returns:
+          Whether the run was active, i.e. had jobs or slices on the cluster.
+        """
+        pass
+
+    @abc.abstractmethod
+    def cancel_all_runs(self) -> None:
+        """Cancels every CHS job and deletes every CHS resource."""
+        pass
+
+    @abc.abstractmethod
+    def find_runs_targeting_nodes(
+        self, nodes: list[str]
+    ) -> dict[str, list[str]]:
+        """Finds CHS runs whose jobs target the given nodes.
+
+        A job targets the nodes it is pinned to while the scheduler still
+        lists it: pending, suspended, running, and on Kubernetes also
+        finished until the run's teardown deletes it.
+
+        Returns:
+          Mapping of run ID to the sorted subset of `nodes` its jobs target.
+          Empty when no run targets any of the nodes.
+        """
         pass
 
     @property
@@ -175,7 +207,11 @@ class BaseScheduler(abc.ABC):
 
     @abc.abstractmethod
     def get_nodes_under_test(self) -> list[str]:
-        """Determine which nodes to test based on provided parameters."""
+        """Determine which nodes to test based on provided parameters.
+
+        Busy and not-ready nodes are excluded, and so are nodes targeted by
+        other CHS runs, which are logged with the runs targeting them.
+        """
         pass
 
     @abc.abstractmethod
@@ -202,16 +238,6 @@ class BaseScheduler(abc.ABC):
     @abc.abstractmethod
     def cancel_jobs(self, job_ids: list[str]) -> None:
         """Cancels specific jobs by their IDs."""
-        pass
-
-    @abc.abstractmethod
-    def cancel_jobs_by_prefix(self, prefix: str) -> None:
-        """Cancels all jobs matching the specified prefix."""
-        pass
-
-    @abc.abstractmethod
-    def get_active_job_names(self) -> list[str]:
-        """Returns a list of active job names on the cluster."""
         pass
 
     @abc.abstractmethod

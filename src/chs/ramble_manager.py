@@ -474,13 +474,13 @@ class RambleManager:
     def cancel_experiments(self, scheduler_name: str | None = None) -> None:
         """Cancels running experiments in the Ramble workspace.
 
-        This calls the scheduler to cancel all jobs matching the workspace's
-        unique prefix, guaranteeing stateless cleanup even if jobs weren't
-        registered.
+        This calls the scheduler to cancel all jobs and resources of the run,
+        selected by its run ID, guaranteeing stateless cleanup even if jobs
+        weren't registered.
         Args:
           scheduler_name: Name of the scheduler that runs the jobs.
         Raises:
-          click.ClickException: If the experiment cancellation command fails.
+          ChsCancellationException: If the jobs cannot be cancelled.
         """
         if scheduler_name is None:
             registry_entry = self._app_data.get_run(self._workspace_name)
@@ -490,16 +490,8 @@ class RambleManager:
                 else "slurm"
             )
         logger.debug("Using scheduler '%s' for canceling jobs.", scheduler_name)
-        scheduler = get_scheduler(scheduler_name)
-
-        prefix = "chs-"
-        logger.debug(
-            "Canceling experiments with prefix %s in %s...", prefix, self.path
-        )
-
-        # Delete jobs statelessly by prefix to guarantee cleanup.
-        scheduler.cancel_jobs_by_prefix(prefix)
-        scheduler.cleanup_scheduler_resources()
+        logger.debug("Canceling run %s in %s...", self._run_id, self.path)
+        get_scheduler(scheduler_name).cancel_run(self._run_id)
 
     def _update_registry(
         self, job_to_dir: dict[str, str], tier: int = 1
