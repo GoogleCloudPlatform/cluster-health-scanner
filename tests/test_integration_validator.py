@@ -17,8 +17,14 @@
 import glob
 import os
 import unittest
+from unittest import mock
 import yaml
 
+import chs.exceptions as ex
+from tests.integration.test_utils.integration_test_util import (
+    get_latest_boh,
+    validate_integration_run,
+)
 from tests.integration.test_utils.validator import (
     IntegrationValidator,
     ValidationContext,
@@ -635,6 +641,99 @@ class TestIntegrationValidator(unittest.TestCase):
         )
         self.assertIn("efficiency", ctx.metrics)
         self.assertAlmostEqual(ctx.metrics["efficiency"], 0.8)
+
+
+class TestIntegrationTestUtil(unittest.TestCase):
+    """Tests for integration test utility functions."""
+
+    def test_get_latest_boh_empty_registry(self):
+        """Ensures get_latest_boh safely handles empty registry."""
+        with mock.patch(
+            "chs.utils.app_data.ChsAppData.get_latest_run_id"
+        ) as mock_get:
+            mock_get.side_effect = ex.NoPreviousRunsFoundException("No runs")
+            boh, path = get_latest_boh()
+            self.assertIsNone(boh)
+            self.assertIsNone(path)
+
+    def test_get_latest_boh_explicit_run_id(self):
+        """Ensures get_latest_boh resolves specific run_id."""
+        with (
+            mock.patch(
+                "chs.utils.app_data.ChsAppData.resolve_run_id"
+            ) as mock_resolve,
+            mock.patch(
+                "chs.utils.app_data.ChsAppData.get_workspaces_dir"
+            ) as mock_dir,
+            mock.patch("os.path.exists") as mock_exists,
+            mock.patch(
+                "builtins.open",
+                mock.mock_open(read_data='{"status": "PASSED"}'),
+            ),
+        ):
+            mock_resolve.return_value = "ws-run-1"
+            mock_dir.return_value = "/tmp/workspaces"
+            mock_exists.return_value = True
+
+            boh, path = get_latest_boh(run_id="run-1")
+            self.assertEqual(boh, {"status": "PASSED"})
+            self.assertEqual(
+                path, "/tmp/workspaces/ws-run-1/bill_of_health.json"
+            )
+            mock_resolve.assert_called_once_with("run-1")
+
+    def test_validate_integration_run_unusable_pools_without_boh(self):
+        """Ensures validate_integration_run passes when all pools are unusable
+        and no run or BOH was generated.
+        """
+        blueprint_config = {
+            "nodepools": [
+                {
+                    "name": "tpu-v6e-pool-01",
+                    "count": 2,
+                    "health": {
+                        "ready_count": 1,
+                        "unschedulable_count": 1,
+                        "busy_count": 0,
+                    },
+                },
+                {
+                    "name": "tpu-v6e-pool-02",
+                    "count": 2,
+                    "health": {
+                        "ready_count": 2,
+                        "unschedulable_count": 0,
+                        "busy_count": 1,
+                    },
+                },
+            ]
+        }
+        stdout = ""
+        stderr = (
+            "WARNING chs.schedulers.kubernetes:kubernetes.py:1023 "
+            "Skipping TPU slice 'tpu-v6e-pool-01': "
+            "TPU tests require the entire slice to be available and idle, "
+            "but the following node(s) are currently busy or unavailable: "
+            "node-2\n"
+            "WARNING chs.schedulers.kubernetes:kubernetes.py:1023 "
+            "Skipping TPU slice 'tpu-v6e-pool-02': "
+            "TPU tests require the entire slice to be available and idle, "
+            "but the following node(s) are currently busy or unavailable: "
+            "node-3\n"
+            "No valid nodes remain available for testing."
+        )
+
+        with mock.patch(
+            "chs.utils.app_data.ChsAppData.get_latest_run_id"
+        ) as mock_get:
+            mock_get.side_effect = ex.NoPreviousRunsFoundException("No runs")
+            report = validate_integration_run(
+                blueprint_config, exit_code=1, stdout=stdout, stderr=stderr
+            )
+            self.assertTrue(report.passed)
+            self.assertEqual(
+                report.results[0].check_name, "execution_failure_expected"
+            )
 
 
 if __name__ == "__main__":

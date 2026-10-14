@@ -16,10 +16,12 @@ import contextlib
 import io
 import json
 import os
+import re
 from typing import Any, Dict, Optional, Tuple
 import pytest
 
 from chs.cli import cli
+import chs.exceptions as ex
 from chs.utils.app_data import ChsAppData
 from tests.integration.mocks.gcp_mock import mock_gce_instances, mock_gcs_bucket
 from tests.integration.mocks.ramble_mock import mock_ramble_workloads
@@ -86,14 +88,25 @@ def run_suite_and_capture(
     return exit_code, stdout_io.getvalue(), stderr_io.getvalue()
 
 
-def get_latest_boh() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_latest_boh(
+    run_id: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Retrieves the Bill of Health dict and file path for the latest run."""
     app_data = ChsAppData()
-    latest_run_id = app_data.get_latest_run_id()
-    if not latest_run_id:
+    if not run_id:
+        try:
+            run_id = app_data.get_latest_run_id()
+        except ex.NoPreviousRunsFoundException:
+            return None, None
+
+    if not run_id:
         return None, None
 
-    workspace_name = app_data.resolve_run_id(latest_run_id)
+    try:
+        workspace_name = app_data.resolve_run_id(run_id)
+    except ex.WorkspaceNotFoundException:
+        return None, None
+
     workspace_path = os.path.join(app_data.get_workspaces_dir(), workspace_name)
     boh_file = os.path.join(workspace_path, "bill_of_health.json")
 
@@ -110,7 +123,16 @@ def validate_integration_run(
     stderr: str = "",
 ) -> ValidationReport:
     """Evaluates the integration test run using IntegrationValidator."""
-    boh, _ = get_latest_boh()
+    combined_output = f"{stdout}\n{stderr}"
+    run_id_match = re.search(r"Run ID:\s*([a-zA-Z0-9_\-]+)", combined_output)
+    run_id = run_id_match.group(1) if run_id_match else None
+
+    boh = None
+    if run_id:
+        boh, _ = get_latest_boh(run_id)
+    elif exit_code == 0:
+        boh, _ = get_latest_boh()
+
     validator = IntegrationValidator()
     return validator.validate_boh_and_output(
         blueprint_config=blueprint_config,

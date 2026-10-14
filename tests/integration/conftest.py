@@ -31,14 +31,14 @@ def get_tpu_configs():
     """Finds all TPU yaml configurations."""
     pattern = os.path.join(CONFIGS_DIR, "tpu", "**", "*.yaml")
     files = glob.glob(pattern, recursive=True)
-    return [os.path.relpath(f, start=CONFIGS_DIR) for f in files]
+    return sorted(os.path.relpath(f, start=CONFIGS_DIR) for f in files)
 
 
 def get_gpu_configs():
     """Finds all GPU yaml configurations."""
     pattern = os.path.join(CONFIGS_DIR, "gpu", "**", "*.yaml")
     files = glob.glob(pattern, recursive=True)
-    return [os.path.relpath(f, start=CONFIGS_DIR) for f in files]
+    return sorted(os.path.relpath(f, start=CONFIGS_DIR) for f in files)
 
 
 def pytest_generate_tests(metafunc):
