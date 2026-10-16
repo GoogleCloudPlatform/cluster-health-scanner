@@ -19,7 +19,9 @@ import json
 import os
 from typing import Any
 import logging
-from chs.utils.gcp import query_gce_instances_info
+from google.auth.exceptions import GoogleAuthError
+from chs.exceptions import ChsSchedulerException
+from chs.utils import gcp
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +36,37 @@ class BaseScheduler(abc.ABC):
         self.node_to_instance_id: dict[
             str, str
         ] = {}  # Store node -> GCE instance_id
+        self._instances_info: dict[str, dict[str, Any]] | None = None
 
-    @abc.abstractmethod
-    def _resolve_project_id(self, node: str) -> str:
-        """Resolves the GCP project ID for the cluster/nodes."""
-        pass
+    def _resolve_project_id(self, _node: str | None = None) -> str:
+        """Resolves the GCP project ID from Application Default Credentials."""
+        try:
+            _, project = gcp.get_default_credentials()
+            if not project:
+                raise ChsSchedulerException(
+                    "Could not determine GCP project from credentials. Please"
+                    " set it using 'gcloud auth application-default login"
+                    " --project <PROJECT>' or the GOOGLE_CLOUD_PROJECT"
+                    " environment variable."
+                )
+            return project
+        except GoogleAuthError as e:
+            raise ChsSchedulerException("Failed to get GCP credentials.") from e
+
+    def _get_instances_info(
+        self, nodes: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Returns GCE instance metadata for the given nodes."""
+        try:
+            if self._instances_info is None:
+                project = self._resolve_project_id(nodes[0])
+                self._instances_info = gcp.query_gce_instances_info(
+                    project, nodes
+                )
+            return self._instances_info
+        except Exception as e:
+            logger.debug("Could not retrieve GCE metadata for nodes: %s", e)
+            return {}
 
     def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
         """Detects machine types and maps instance IDs for the given nodes.
@@ -49,12 +77,7 @@ class BaseScheduler(abc.ABC):
         if not nodes:
             return []
 
-        project = self._resolve_project_id(nodes[0])
-        try:
-            instances_info = query_gce_instances_info(project, nodes)
-        except Exception as e:
-            logger.warning("Could not retrieve GCE metadata for nodes: %s", e)
-            instances_info = {}
+        instances_info = self._get_instances_info(nodes)
 
         unique_types = set()
         for node in nodes:

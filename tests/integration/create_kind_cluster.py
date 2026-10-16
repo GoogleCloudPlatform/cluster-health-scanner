@@ -557,12 +557,41 @@ def configure_nodes(
 
         labels = _build_node_labels(pool, default_zone, cluster_name)
         labels_args = [f"{k}={v}" for k, v in labels.items()]
+        is_tpu = "tpu" in str(pool.get("accelerator", "")).lower()
+        accel_res = "google.com/tpu" if is_tpu else "nvidia.com/gpu"
+        status_patch = json.dumps(
+            {
+                "status": {
+                    "capacity": {
+                        "google.com/tpu": "4" if is_tpu else None,
+                        "nvidia.com/gpu": None if is_tpu else "8",
+                    },
+                    "allocatable": {
+                        "google.com/tpu": "4" if is_tpu else None,
+                        "nvidia.com/gpu": None if is_tpu else "8",
+                    },
+                }
+            }
+        )
 
         pool_nodes = []
         for i in range(count):
             node_name = worker_nodes[worker_idx]
             worker_idx += 1
             pool_nodes.append(node_name)
+            run(
+                [
+                    "kubectl",
+                    "patch",
+                    "node",
+                    node_name,
+                    "--subresource=status",
+                    "--type=merge",
+                    "-p",
+                    status_patch,
+                ],
+                check=True,
+            )
 
             is_unsched = (i >= ready_cnt) or (i >= (count - unsched_cnt))
             if is_unsched:
@@ -586,7 +615,25 @@ def configure_nodes(
                     f"[INFO] Launching busy pod '{pod_name}' on"
                     f" '{node_name}'..."
                 )
-                overrides = json.dumps({"spec": {"nodeName": node_name}})
+                overrides = json.dumps(
+                    {
+                        "spec": {
+                            "nodeName": node_name,
+                            "containers": [
+                                {
+                                    "name": pod_name,
+                                    "image": "alpine",
+                                    "imagePullPolicy": "IfNotPresent",
+                                    "command": ["sleep", "3600"],
+                                    "resources": {
+                                        "requests": {accel_res: "1"},
+                                        "limits": {accel_res: "1"},
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                )
                 run(
                     [
                         "kubectl",

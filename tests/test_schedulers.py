@@ -36,6 +36,7 @@ from chs.schedulers.kubernetes import (
 )
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import _get_kubectl_context, detect_scheduler
+from google.auth.exceptions import GoogleAuthError
 from chs.exceptions import ChsSchedulerException
 from chs.utils import k8s_client
 import click
@@ -351,7 +352,7 @@ class TestSlurmScheduler(unittest.TestCase):
                 "Detected network interfaces: %r", []
             )
 
-    @mock.patch("google.auth.default")
+    @mock.patch("chs.utils.gcp.get_default_credentials")
     def test_resolve_project_id_slurm_success(
         self, mock_auth_default, mock_logger
     ):
@@ -360,7 +361,7 @@ class TestSlurmScheduler(unittest.TestCase):
         project_id = scheduler._resolve_project_id("node1")
         self.assertEqual(project_id, "my-project-id")
 
-    @mock.patch("google.auth.default")
+    @mock.patch("chs.utils.gcp.get_default_credentials")
     def test_resolve_project_id_slurm_no_project(
         self, mock_auth_default, mock_logger
     ):
@@ -371,12 +372,12 @@ class TestSlurmScheduler(unittest.TestCase):
         ):
             scheduler._resolve_project_id("node1")
 
-    @mock.patch("google.auth.default")
+    @mock.patch("chs.utils.gcp.get_default_credentials")
     def test_resolve_project_id_slurm_error(
         self, mock_auth_default, mock_logger
     ):
         scheduler = SlurmScheduler()
-        mock_auth_default.side_effect = Exception("auth error")
+        mock_auth_default.side_effect = GoogleAuthError("auth error")
         with self.assertRaisesRegex(
             ex.ChsSchedulerException, "Failed to get GCP credentials"
         ):
@@ -400,6 +401,12 @@ class TestKubernetesScheduler(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.kube = install_fake_client(self)
+        self.mock_adc = self.enterContext(
+            mock.patch(
+                "chs.utils.gcp.get_default_credentials",
+                return_value=(None, None),
+            )
+        )
         self.tmp_dir_obj = tempfile.TemporaryDirectory()
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
@@ -628,28 +635,39 @@ class TestKubernetesScheduler(unittest.TestCase):
         for node in [
             {
                 "metadata": {"name": "ready-node"},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
             {
                 "metadata": {"name": "not-ready-node"},
                 "status": {
-                    "conditions": [{"type": "Ready", "status": "False"}]
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "False"}],
                 },
             },
             {
                 "metadata": {"name": "unknown-node"},
                 "status": {
-                    "conditions": [{"type": "Ready", "status": "Unknown"}]
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "Unknown"}],
                 },
             },
             {
                 "metadata": {"name": "cordoned-node"},
                 "spec": {"unschedulable": True},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
             {
                 "metadata": {"name": "empty-conditions-node"},
-                "status": {"conditions": []},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [],
+                },
             },
             {
                 "metadata": {"name": "null-status-node"},
@@ -668,7 +686,6 @@ class TestKubernetesScheduler(unittest.TestCase):
                 "unknown-node",
                 "cordoned-node",
                 "empty-conditions-node",
-                "null-status-node",
             },
         )
 
@@ -683,7 +700,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                     "metadata": {
                         "name": name,
                         "labels": {"cloud.google.com/gke-nodepool": pool},
-                    }
+                    },
+                    "status": {"allocatable": {"nvidia.com/gpu": "8"}},
                 },
             )
 
@@ -715,7 +733,12 @@ class TestKubernetesScheduler(unittest.TestCase):
         """Test _fetch_raw_node_resources lists non-system nodes."""
         scheduler = KubernetesScheduler()
         stored = self.kube.add_object(
-            "", "nodes", {"metadata": {"name": "node1"}}
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1"},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
         )
 
         resources = scheduler._fetch_raw_node_resources()
@@ -741,7 +764,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                 "metadata": {
                     "name": "node1",
                     "labels": {"cloud.google.com/gke-nodepool": "pool-a"},
-                }
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
             },
         )
 
@@ -830,7 +854,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                     "metadata": {
                         "name": name,
                         "labels": {"cloud.google.com/gke-nodepool": "pool-1"},
-                    }
+                    },
+                    "status": {"allocatable": {"nvidia.com/gpu": "8"}},
                 },
             )
 
@@ -1240,7 +1265,8 @@ ramble:
                         },
                     },
                     "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
+                        "allocatable": {"nvidia.com/gpu": "8"},
+                        "conditions": [{"type": "Ready", "status": "True"}],
                     },
                 },
             )
@@ -1261,7 +1287,10 @@ ramble:
             "nodes",
             {
                 "metadata": {"name": "node1", "labels": {}},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
         )
         self.kube.add_object(
@@ -1272,7 +1301,10 @@ ramble:
                     "name": "node2",
                     "labels": {"cloud.google.com/gce-topology-block": "block2"},
                 },
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
         )
 
@@ -1283,6 +1315,129 @@ ramble:
             topology["default-block"]["default-subblock"], ["node1"]
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
+
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
+    def test_get_topology_falls_back_to_gce_physical_host_topology(
+        self, mock_query_info, mock_logger
+    ):
+        """Test get_topology queries GCE topology when labels are missing."""
+        scheduler = KubernetesScheduler(nodes="node1,node2")
+        self.mock_adc.return_value = (mock.Mock(), "adc-project")
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1", "labels": {}},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node2", "labels": {}},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            },
+        )
+        mock_query_info.return_value = {
+            "node1": {
+                "machine_type": "a3-megagpu-8g",
+                "instance_id": "111",
+                "block": "gce-block-1",
+                "subblock": "gce-subblock-1",
+            },
+            "node2": {
+                "machine_type": "a3-megagpu-8g",
+                "instance_id": "222",
+            },
+        }
+
+        machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+        topology = scheduler.get_topology()
+
+        self.assertEqual(machine_types, ["a3-megagpu-8g"])
+        mock_query_info.assert_called_once_with(
+            "adc-project", ["node1", "node2"]
+        )
+        self.assertEqual(
+            topology,
+            {
+                "gce-block-1": {"gce-subblock-1": ["node1"]},
+                "default-block": {"default-subblock": ["node2"]},
+            },
+        )
+
+    def test_resolve_raw_nodes_skips_non_accelerator_nodes(self, mock_logger):
+        """Test resolve_raw_nodes skips 0-accelerator nodes."""
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "cp-cpu-node",
+                    "labels": {"node-role.kubernetes.io/control-plane": ""},
+                },
+                "status": {"allocatable": {"cpu": "16"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "cp-tpu-node",
+                    "labels": {"node-role.kubernetes.io/control-plane": "true"},
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "no-status-node", "labels": {}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "cpu-node", "labels": {}},
+                "status": {
+                    "allocatable": {
+                        "cpu": "32",
+                        "memory": "128Gi",
+                        "nvidia.com/gpu": "0",
+                    }
+                },
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "gpu-node", "labels": {}},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "tpu-node", "labels": {}},
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+
+        scheduler = KubernetesScheduler()
+        nodes = scheduler.resolve_raw_nodes()
+        self.assertEqual(nodes, ["cp-tpu-node", "gpu-node", "tpu-node"])
 
     def test_cleanup_scheduler_resources(self, mock_logger):
         """Test cleanup_scheduler_resources cleans up slices and namespace."""
@@ -1501,7 +1656,16 @@ ramble:
                 scheduler._resolve_project_id("node1")
             self.assertIs(cm.exception.__cause__, error)
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    def test_resolve_project_id_kubernetes_falls_back_to_adc(self, mock_logger):
+        """Test _resolve_project_id falls back to ADC without providerID."""
+        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        self.mock_adc.return_value = (mock.Mock(), "adc-fallback-project")
+        scheduler = KubernetesScheduler()
+        self.assertEqual(
+            scheduler._resolve_project_id("node1"), "adc-fallback-project"
+        )
+
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_success(self, mock_query_info, mock_logger):
         scheduler = KubernetesScheduler()
         # Node objects without GKE's instance-type label and instance_id
@@ -1530,7 +1694,7 @@ ramble:
                 {"node1": "12345", "node2": "67890"},
             )
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_heterogeneous(
         self, mock_query_info, mock_logger
     ):
@@ -1557,7 +1721,7 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "a3-ultragpu-8g"])
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_unknown(self, mock_query_info, mock_logger):
         scheduler = KubernetesScheduler()
         # Node objects without GKE's instance-type label and instance_id
@@ -1579,12 +1743,19 @@ ramble:
             self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
             self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_fallback_to_labels(
         self, mock_query_info, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1"},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        )
         self.kube.add_object(
             "",
             "nodes",
@@ -1596,7 +1767,8 @@ ramble:
                             "a5x-highgpu-4g-metal"
                         ),
                     },
-                }
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "4"}},
             },
         )
         with mock.patch.object(
@@ -2185,6 +2357,41 @@ ramble:
         self.assertEqual(res.dynamic_slice_partitions["pool1"], "partition1")
         self.assertEqual(res.pool_to_accelerator["pool1"], "tpu-v4")
         mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_missing_gke_tpu_accelerator_label(
+        self, mock_fetch, mock_logger
+    ):
+        """Test _get_tpu_slices falls back to allocatable TPU resources."""
+        mock_fetch.return_value = [
+            {
+                "metadata": {
+                    "name": "tpu-node",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "pool-tpu",
+                        "cloud.google.com/gke-tpu-topology": "2x2",
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+            {
+                "metadata": {
+                    "name": "gpu-node",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "pool-gpu",
+                    },
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        ]
+
+        scheduler = KubernetesScheduler()
+        res = scheduler._get_tpu_slices()
+
+        self.assertEqual(res.pools, {"pool-tpu": ["tpu-node"]})
+        self.assertEqual(res.all_tpu_nodes, {"tpu-node"})
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"

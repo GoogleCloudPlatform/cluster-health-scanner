@@ -71,6 +71,7 @@ def _node(name, labels=None, annotations=None, provider_id=None):
             "labels": dict(labels or {}),
             "annotations": dict(annotations or {}),
         },
+        "status": {"allocatable": {"nvidia.com/gpu": "8"}},
     }
     if provider_id is not None:
         node["spec"] = {"providerID": provider_id}
@@ -89,6 +90,18 @@ class _KubernetesTestBase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.kube = install_fake_client(self)
+        self.mock_adc = self._patch(
+            mock.patch(
+                "chs.utils.gcp.get_default_credentials",
+                return_value=(None, None),
+            )
+        )
+        self._patch(
+            mock.patch(
+                "chs.utils.gcp.query_gce_instances_info",
+                return_value={},
+            )
+        )
         self.mock_logger = self._patch(mock.patch.object(kubernetes, "logger"))
         tmp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(tmp_dir.cleanup)
@@ -486,9 +499,21 @@ class TestNodeObjectCache(_KubernetesTestBase):
 
     def test_cached_nodes_need_no_kubectl_and_preserve_order(self):
         """Nodes in the cached list are never fetched again and keep order."""
-        node_0 = _node("node0", {_NODEPOOL: "pool-a"})
-        node_1 = _node("node1", {_NODEPOOL: "pool-b"})
-        node_2 = _node("node2", {_NODEPOOL: "pool-a"})
+        node_0 = _node(
+            "node0",
+            {_NODEPOOL: "pool-a"},
+            provider_id="gce://proj/zone/node0",
+        )
+        node_1 = _node(
+            "node1",
+            {_NODEPOOL: "pool-b"},
+            provider_id="gce://proj/zone/node1",
+        )
+        node_2 = _node(
+            "node2",
+            {_NODEPOOL: "pool-a"},
+            provider_id="gce://proj/zone/node2",
+        )
         self.scheduler._resolved_node_resources = [node_0, node_1, node_2]
 
         self.assertEqual(
@@ -689,7 +714,7 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
         super().setUp()
         self.scheduler = KubernetesScheduler()
         self.mock_query_gce = self._patch(
-            mock.patch("chs.schedulers.base.query_gce_instances_info")
+            mock.patch("chs.utils.gcp.query_gce_instances_info")
         )
         self._patch(mock.patch("chs.schedulers.base.logger"))
 

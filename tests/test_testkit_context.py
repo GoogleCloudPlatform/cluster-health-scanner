@@ -461,6 +461,27 @@ class SliceContextTest(StubbedConfigTestCase):
         self.assertEqual(contexts[0][1]["variables"]["tpu_topology"], "2x2x1")
         self.assertEqual(contexts[1][1]["variables"]["tpu_topology"], "2x2x2")
 
+    def test_clears_node_selector_without_slice_topology(self):
+        self.resolve_test.return_value = {
+            "variables": {
+                "node_selector_yaml": (
+                    'cloud.google.com/gke-tpu-topology: "{tpu_topology}"'
+                )
+            }
+        }
+        contexts = self.build(
+            variables(
+                tpu_slices={"a": ["node-1"], "b": ["node-2"]},
+                tpu_slice_topologies={"a": "2x2x1"},
+            )
+        )
+
+        self.assertEqual(
+            contexts[0][1]["variables"]["node_selector_yaml"],
+            'cloud.google.com/gke-tpu-topology: "{tpu_topology}"',
+        )
+        self.assertEqual(contexts[1][1]["variables"]["node_selector_yaml"], "")
+
     def test_a_dynamic_slice_asks_for_exclusive_hardware(self):
         contexts = self.build(
             variables(

@@ -98,22 +98,6 @@ class SlurmScheduler(BaseScheduler):
         self._resolved_nodes: list[str] | None = None
         self._resolved_raw_nodes: list[str] | None = None
 
-    def _resolve_project_id(self, node: str) -> str:
-        """Resolves GCP project ID from GCP application default credentials."""
-        try:
-            _, project = google.auth.default()
-        except Exception as e:
-            raise ex.ChsSchedulerException(
-                "Failed to get GCP credentials."
-            ) from e
-        if not project:
-            raise ex.ChsSchedulerException(
-                "Could not determine GCP project from credentials. Please set"
-                " it using 'gcloud auth application-default login --project"
-                " <PROJECT>' or the GOOGLE_CLOUD_PROJECT environment variable."
-            )
-        return project
-
     @property
     def name(self) -> str:
         return "slurm"

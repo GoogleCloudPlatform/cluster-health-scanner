@@ -44,8 +44,9 @@ def query_gce_instances_info(
         nodes: List of GCE instance names.
 
     Returns:
-        A dict mapping instance name to a dict containing 'machine_type'
-        and 'instance_id' (string representation of numeric ID).
+        A dict mapping instance name to a dict containing 'machine_type',
+        'instance_id' (string representation of numeric ID), and optional
+        'block' and 'subblock' fields when present.
     """
     # Lazy import to avoid heavy compute_v1 import overhead on CLI startup.
     from google.api_core.exceptions import GoogleAPICallError
@@ -78,10 +79,22 @@ def query_gce_instances_info(
                         normalized_machine_type = normalize_machine_type(
                             instance.machine_type
                         )
-                        info_map[instance.name] = {
+                        instance_info = {
                             "machine_type": normalized_machine_type,
                             "instance_id": str(instance.id),
                         }
+                        if instance.resource_status:
+                            topo = (
+                                instance.resource_status.physical_host_topology
+                            )
+                            if topo:
+                                if topo.block and isinstance(topo.block, str):
+                                    instance_info["block"] = topo.block
+                                if topo.subblock and isinstance(
+                                    topo.subblock, str
+                                ):
+                                    instance_info["subblock"] = topo.subblock
+                        info_map[instance.name] = instance_info
         except (GoogleAPICallError, GoogleAuthError) as e:
             raise ChsSchedulerException(f"Failed to query GCE API: {e}") from e
 

@@ -386,6 +386,8 @@ def build_slice_contexts(
             benchmark_config=benchmark_config,
             benchmarks_dir=benchmarks_dir,
         )
+        if not slice_topology:
+            context_dict["variables"]["node_selector_yaml"] = ""
         contexts.append((slice_experiment_name, context_dict))
 
     return contexts

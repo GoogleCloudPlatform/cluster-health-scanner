@@ -164,6 +164,22 @@ def _job_condition(job: dict, condition_type: str) -> dict | None:
     return None
 
 
+def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
+    """Returns True if resources has non-zero quantity for accelerator_type."""
+    return any(
+        accelerator_type in key.lower() and quantity not in (0, "0", None, "")
+        for key, quantity in (resources_map or {}).items()
+    )
+
+
+def _is_accelerator_node(node: dict) -> bool:
+    """Returns True if the node has allocatable GPU or TPU resources."""
+    allocatable = (node.get("status") or {}).get("allocatable")
+    return _has_accelerator(allocatable, "gpu") or _has_accelerator(
+        allocatable, "tpu"
+    )
+
+
 def _requests_accelerator(pod: dict) -> bool:
     """Returns True if a container of the pod asks for GPUs or TPUs."""
     spec = pod.get("spec") or {}
@@ -172,14 +188,9 @@ def _requests_accelerator(pod: dict) -> bool:
     ):
         container_resources = container.get("resources") or {}
         for section in ("requests", "limits"):
-            for resource, quantity in (
-                container_resources.get(section) or {}
-            ).items():
-                resource_lower = resource.lower()
-                if (
-                    "gpu" in resource_lower or "tpu" in resource_lower
-                ) and quantity not in (0, "0", None, ""):
-                    return True
+            res = container_resources.get(section)
+            if _has_accelerator(res, "gpu") or _has_accelerator(res, "tpu"):
+                return True
     return False
 
 
@@ -258,7 +269,7 @@ class KubernetesScheduler(BaseScheduler):
         self.workspace_config_dir: str | None = None
 
     def _resolve_project_id(self, node: str) -> str:
-        """Resolves GCP project ID from Kubernetes node providerID."""
+        """Resolves GCP project ID from Kubernetes node providerID or ADC."""
         try:
             cached_node = next(
                 (
@@ -279,9 +290,13 @@ class KubernetesScheduler(BaseScheduler):
                 raise ValueError(f"Unexpected providerID format: {provider_id}")
             return match.group(1)
         except Exception as e:
-            raise ChsSchedulerException(
-                f"Failed to resolve project ID from node '{node}': {e}"
-            ) from e
+            try:
+                return super()._resolve_project_id()
+            except Exception as fallback_err:
+                raise ChsSchedulerException(
+                    f"Failed to resolve project ID from node '{node}': {e}. "
+                    f"{fallback_err}"
+                ) from e
 
     def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
         """Detects machine types and maps instance IDs for the given nodes."""
@@ -683,7 +698,9 @@ class KubernetesScheduler(BaseScheduler):
             ) from e
 
         resolved_resources = [
-            node for node in node_resources if isinstance(node, dict)
+            node
+            for node in node_resources
+            if isinstance(node, dict) and _is_accelerator_node(node)
         ]
 
         if self.nodepools_arg:
@@ -764,7 +781,6 @@ class KubernetesScheduler(BaseScheduler):
 
         try:
             nodes = self._fetch_raw_node_resources()
-            node_data = {"items": nodes}
         except Exception as e:
             raise ChsSchedulerException(
                 f"Failed to get node labels for TPU topology: {e}"
@@ -779,14 +795,15 @@ class KubernetesScheduler(BaseScheduler):
 
         unhealthy_pools = set()
 
-        for node in node_data.get("items", []):
+        for node in nodes:
             node_name = node.get("metadata", {}).get("name")
             if not node_name:
                 continue
 
             labels = node.get("metadata", {}).get("labels", {})
             tpu_type = labels.get("cloud.google.com/gke-tpu-accelerator")
-            if not tpu_type:
+            allocatable = (node.get("status") or {}).get("allocatable")
+            if not tpu_type and not _has_accelerator(allocatable, "tpu"):
                 continue
 
             all_tpu_nodes.add(node_name)
@@ -1016,22 +1033,24 @@ class KubernetesScheduler(BaseScheduler):
 
         try:
             items = self._get_node_objects(nodes)
-
             topology = defaultdict(lambda: defaultdict(list))
             for item in items:
                 metadata = item.get("metadata", {})
                 name = metadata.get("name")
                 labels = metadata.get("labels", {})
-
-                block = labels.get(
-                    "cloud.google.com/gce-topology-block", "default-block"
-                )
-                subblock = labels.get(
-                    "cloud.google.com/gce-topology-subblock", "default-subblock"
-                )
+                block = labels.get("cloud.google.com/gce-topology-block")
+                subblock = labels.get("cloud.google.com/gce-topology-subblock")
+                if not (block and subblock):
+                    instance_info = self._get_instances_info(nodes).get(
+                        name, {}
+                    )
+                    block = block or instance_info.get("block")
+                    subblock = subblock or instance_info.get("subblock")
 
                 if name:
-                    topology[block][subblock].append(name)
+                    topology[block or "default-block"][
+                        subblock or "default-subblock"
+                    ].append(name)
 
             return {b: dict(s) for b, s in topology.items()}
 
