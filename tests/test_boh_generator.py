@@ -1084,6 +1084,9 @@ class TestBOHGenerator(unittest.TestCase):
                 "chs run --scheduler slurm --machine-type a3-high "
                 "--dry-run --tests t1,t2"
             ),
+            "machine_type": "a3-highgpu-8g",
+            "tests": [{"name": "t1"}, {"name": "t2"}],
+            "storage": {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}},
         }
 
         data = {"workspace_name": "test_workspace", "experiments": []}
@@ -1101,6 +1104,18 @@ class TestBOHGenerator(unittest.TestCase):
                 "chs run --scheduler slurm --machine-type a3-high "
                 "--dry-run --tests t1,t2"
             ),
+        )
+        self.assertEqual(
+            report.system_info.metadata.fields["machine_type"].string_value,
+            "a3-highgpu-8g",
+        )
+        self.assertEqual(
+            report.system_info.metadata.fields["tests"].string_value,
+            "t1, t2",
+        )
+        self.assertEqual(
+            report.system_info.metadata.fields["storage"].string_value,
+            "gs://my-bucket",
         )
         # Verify that other fields are NOT there
         self.assertNotIn("scheduler", report.system_info.metadata.fields)

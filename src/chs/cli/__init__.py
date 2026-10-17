@@ -1758,6 +1758,7 @@ def run(
                 datetime.timezone.utc
             ).isoformat(),
             "scheduler": scheduler_obj.name,
+            "machine_type": machine_type,
             "command_statement": command_statement,
             "storage": app_data.get_storage_config(),
             "node_to_instance_id": scheduler_obj.node_to_instance_id,

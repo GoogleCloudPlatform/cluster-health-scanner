@@ -29,7 +29,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 from google.protobuf import json_format
 from chs.testkit import build_thresholds
 from chs.utils.app_data import ChsAppData
-from chs.utils import lifecycle
+from chs.utils import formatting, lifecycle
 from chs.version import get_version
 
 
@@ -477,6 +477,21 @@ class BOHGenerator:
                     self.report.system_info.metadata.fields[
                         "command_statement"
                     ].string_value = command_statement
+                machine_type = run_data.get("machine_type", "")
+                if machine_type:
+                    self.report.system_info.metadata.fields[
+                        "machine_type"
+                    ].string_value = machine_type
+                tests = run_data.get("tests", [])
+                if tests:
+                    self.report.system_info.metadata.fields[
+                        "tests"
+                    ].string_value = ", ".join(t["name"] for t in tests)
+                storage = run_data.get("storage")
+                if storage:
+                    self.report.system_info.metadata.fields[
+                        "storage"
+                    ].string_value = formatting.format_storage_path(storage)
         except Exception as e:
             logger.debug(
                 "Failed to retrieve system information from "
