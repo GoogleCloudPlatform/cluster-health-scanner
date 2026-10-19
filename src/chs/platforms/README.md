@@ -15,6 +15,7 @@ Run `chs list machine-types` to view supported machine types in the terminal, an
 
 | Machine type | Accelerator | Kubernetes | Slurm | Standalone |
 | --- | --- | --- | --- | --- |
+| `a3-highgpu-8g` | NVIDIA H100 80GB | Yes | No | No |
 | `a3-megagpu-8g` | NVIDIA H100 80GB | Yes | Yes | Yes |
 | `a3-ultragpu-8g` | NVIDIA H200 141GB | Yes | Yes | Yes |
 | `a4-highgpu-8g` | NVIDIA B200 | Yes | Yes | Yes |

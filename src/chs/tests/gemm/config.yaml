@@ -17,6 +17,7 @@ platforms:
 - a3-ultragpu-8g
 - a4-highgpu-8g
 - a3-megagpu-8g
+- a3-highgpu-8g
 - a4x-highgpu-4g
 - a4x-maxgpu-4g-metal
 defaults:
