@@ -211,7 +211,7 @@ machines:
           NCCL_NET: gIB
           NCCL_TESTS_SPLIT_MASK: '0x0'
       variables:
-        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.4
         mpi_command: |
           mpirun -n {n_ranks} -N {processes_per_node} \
             --hostfile /tmp/hostfile --bind-to none \
@@ -231,8 +231,8 @@ machines:
           NCCL_TESTS_SPLIT_MASK: '0x0'
           OMPI_MCA_btl_tcp_if_include: '{tcp_interfaces}'
       variables:
-        container_name: nccl-gib-a4x-max-arm64-v1.1.1
-        container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+        container_name: nccl-plugin-gib-diagnostic-arm64-v1.1.4
+        container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.4
         mnnvl_enable: 2
         nvls_enable: 2
         srun_args: --mpi=pmix --container-workdir {nccl-tests_path} --container-env {container_env_vars} --container-image {container_path} --container-mounts "/usr/local/gib,/var/tmp" --container-writable --wait=60 --kill-on-bad-exit=1
