@@ -15,6 +15,7 @@
 """Cluster-wide NCCL collective bandwidth check."""
 
 from chs.testkit import MultiNodePlugin
+from chs.utils.topology import build_node_to_location, load_topology
 
 
 class Plugin(MultiNodePlugin):
@@ -28,3 +29,29 @@ class Plugin(MultiNodePlugin):
     application = "nccl-tests"
     default_workloads = ("all-gather", "all-reduce")
     min_nodes_to_run = 3
+
+    def prepare_variables(self, variables, workload, request):
+        # Label only, for threshold conditions. Returning it from
+        # group_domain_type would also merge the per-domain config blocks,
+        # which nccl-cluster must not pick up.
+        topology = load_topology(request.workspace_root, warn_on_error=True)
+        variables["domain_type"] = cluster_domain_type(request.nodes, topology)
+
+
+def cluster_domain_type(nodes: list[str], topology: dict) -> str:
+    """Returns whether all nodes share one NVLink domain (subblock).
+
+    Returns 'intradomain' if every node is in the same block/subblock,
+    'interdomain' if they span more than one, and 'unknown' if any node
+    has no topology information.
+    """
+    node_to_loc = build_node_to_location(topology)
+    if not node_to_loc:
+        return "unknown"
+    domains = set()
+    for node in nodes:
+        loc = node_to_loc.get(node) or {}
+        if not loc.get("block") or not loc.get("subblock"):
+            return "unknown"
+        domains.add((loc["block"], loc["subblock"]))
+    return "intradomain" if len(domains) == 1 else "interdomain"

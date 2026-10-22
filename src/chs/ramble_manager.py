@@ -296,35 +296,8 @@ class RambleManager:
             error_context="Failed to create workspace",
         )
 
-    def copy_thresholds(self, thresholds_path: str | None = None) -> None:
-        """Copies the thresholds configuration file into the workspace."""
-        dest_thresholds = os.path.join(self.path, "thresholds.yaml")
-        if thresholds_path:
-            shutil.copyfile(thresholds_path, dest_thresholds)
-            logger.debug(
-                "Copied user thresholds from %s to %s",
-                thresholds_path,
-                dest_thresholds,
-            )
-        else:
-            internal_thresholds = os.path.join(
-                os.path.dirname(__file__), "configs", "thresholds.yaml"
-            )
-            if os.path.exists(internal_thresholds):
-                shutil.copyfile(internal_thresholds, dest_thresholds)
-                logger.debug("Copied default thresholds to %s", dest_thresholds)
-            else:
-                logger.debug(
-                    "Default thresholds file not found at %s",
-                    internal_thresholds,
-                )
-                logger.warning(
-                    "Unable to find thresholds. The final report will only "
-                    "display raw metrics without pass/fail evaluation."
-                )
-
     def add_custom_repository(self) -> None:
-        """Adds the internal custom CHS repository to the Ramble workspace.
+        """Adds the CHS repositories to the Ramble workspace.
 
         Raises:
           click.ClickException: If the repository addition command fails.
@@ -337,6 +310,16 @@ class RambleManager:
                 args=["add", str(p)],
                 capture_output=True,
                 error_context="Failed to add custom repository",
+            )
+
+        logger.debug("Adding CHS test catalog repository to workspace...")
+        tests_path = pkg_resources.files(chs).joinpath("tests")
+        with pkg_resources.as_file(tests_path) as p:
+            self._execute_ramble_command(
+                subcommand="repo",
+                args=["add", "-t", "applications", str(p)],
+                capture_output=True,
+                error_context="Failed to add test catalog repository",
             )
 
     def configure_workspace(

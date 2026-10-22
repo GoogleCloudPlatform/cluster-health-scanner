@@ -14,15 +14,18 @@
 
 """Consistency checks on the shipped platform, config and threshold files."""
 
+import collections
 import pathlib
 import unittest
 
 from chs.testkit import build_catalog, build_thresholds
 from chs.testkit import config as chs_config
 from chs.testkit import loader
+from chs.testkit import spec
 from chs.testkit import thresholds as chs_thresholds
 
 PLATFORMS_DIR = pathlib.Path(chs_config.PLATFORMS_ROOT)
+TESTS_DIR = pathlib.Path(chs_config.TESTS_ROOT)
 
 SCHEDULER_ONLY_MODIFIERS = {
     "gpu-persistence-mode": "kubernetes",
@@ -47,6 +50,37 @@ def _supported_combinations():
             )
         )
     ]
+
+
+def _benchmarks_named_in(config):
+    if isinstance(config, dict):
+        names = set()
+        for key, value in config.items():
+            if key == "benchmarks_yaml_file" and isinstance(value, str):
+                names.add(value)
+            else:
+                names |= _benchmarks_named_in(value)
+        return names
+    if isinstance(config, list):
+        return set().union(*(_benchmarks_named_in(item) for item in config))
+    return set()
+
+
+def _benchmarks_chosen_by(plugin):
+    names = {plugin.benchmark_config} if plugin.benchmark_config else set()
+    request = spec.TestRequest(variables={}, base_prefix="chs-test")
+    for workload in plugin.default_workloads:
+        variables = {}
+        plugin.prepare_variables(variables, workload, request)
+        if variables.get("benchmarks_yaml_file"):
+            names.add(variables["benchmarks_yaml_file"])
+    return names
+
+
+def _benchmarks_used_by(test_name):
+    return _benchmarks_chosen_by(
+        loader.load_plugin(test_name)
+    ) | _benchmarks_named_in(chs_config.load_test_config(test_name))
 
 
 class PlatformFilesTest(unittest.TestCase):
@@ -127,6 +161,27 @@ class ResolveShippedFilesTest(unittest.TestCase):
                     if scheduler != only_on:
                         self.assertNotIn(name, names)
 
+    def test_a4x_nccl_tests_get_a_compute_domain(self):
+        """NCCL on A4X needs a ComputeDomain for IMEX.
+
+        Without it, cross-node MNNVL/NVLS setup fails with CUDA error 801.
+        """
+        for test_name in (
+            "nccl-single-node",
+            "nccl-cluster",
+            "nccl-pairwise",
+            "nccl-domain",
+        ):
+            for domain_type in (None, *chs_config.DOMAIN_TYPES):
+                resolved = chs_config.resolve_test(
+                    test_name, "a4x-highgpu-4g", "kubernetes", domain_type
+                )
+                with self.subTest(test=test_name, domain=domain_type):
+                    self.assertIn(
+                        "kind: ComputeDomain",
+                        resolved["variables"]["custom_resources_yaml"],
+                    )
+
 
 class KnownKeysTest(unittest.TestCase):
     """Catches typos such as 'varaibles:' that resolve would ignore."""
@@ -193,6 +248,35 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(
             enabled, {entry["name"] for entry in build_catalog()["tests"]}
         )
+
+
+class BenchmarkInputTest(unittest.TestCase):
+    def test_every_benchmark_input_a_test_uses_exists(self):
+        for test_name in loader.available_tests():
+            benchmarks_dir = loader.load_plugin(test_name).benchmarks_dir
+            for name in _benchmarks_used_by(test_name):
+                with self.subTest(test=test_name, input=name):
+                    self.assertTrue(
+                        pathlib.Path(benchmarks_dir, name).is_file()
+                    )
+
+    def test_every_shipped_benchmark_input_is_used(self):
+        used = collections.defaultdict(set)
+        for test_name in loader.available_tests():
+            benchmarks_dir = loader.load_plugin(test_name).benchmarks_dir
+            used[pathlib.Path(benchmarks_dir).resolve()] |= _benchmarks_used_by(
+                test_name
+            )
+
+        benchmark_dirs = sorted(TESTS_DIR.glob("*/benchmarks"))
+        self.assertTrue(benchmark_dirs)
+        for benchmarks in benchmark_dirs:
+            on_disk = {
+                str(path.relative_to(benchmarks))
+                for path in benchmarks.rglob("*.yaml")
+            }
+            with self.subTest(directory=benchmarks.parent.name):
+                self.assertEqual(set(), on_disk - used[benchmarks.resolve()])
 
 
 class ThresholdsTest(unittest.TestCase):

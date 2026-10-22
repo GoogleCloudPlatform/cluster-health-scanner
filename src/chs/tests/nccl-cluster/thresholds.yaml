@@ -41,20 +41,29 @@ a4-highgpu-8g:
       conditions:
         workload_name: all-gather
 a4x-highgpu-4g:
+  # Intradomain only. Interdomain nccl-cluster runs have no threshold and
+  # report UNKNOWN.
   bandwidth:
     - value: 800.0
       conditions:
+        domain_type: intradomain
         workload_name: all-reduce
     - value: 600.0
       conditions:
+        domain_type: intradomain
         workload_name: all-gather
 a4x-maxgpu-4g-metal:
+  # Intradomain only. Interdomain nccl-cluster runs have no threshold and
+  # report UNKNOWN.
+  # TODO: Recalibrate for single-domain runs (~890 GB/s all-reduce seen).
   bandwidth:
     - value: 330.0
       conditions:
+        domain_type: intradomain
         workload_name: all-reduce
     - value: 340.0
       conditions:
+        domain_type: intradomain
         workload_name: all-gather
 a5x-highgpu-4g-metal:
   bandwidth:

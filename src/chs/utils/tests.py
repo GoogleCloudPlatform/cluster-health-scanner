@@ -13,11 +13,12 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+import functools
 import logging
 from typing import Any, TypedDict
 
 from chs import resources
-from chs.utils.config import load_yaml_config
+from chs.testkit import build_catalog
 
 
 class TestPlatform(TypedDict, total=False):
@@ -37,19 +38,20 @@ class TestDetails(TypedDict, total=False):
 logger = logging.getLogger(__name__)
 
 
+@functools.cache
 def _load_tests() -> dict[str, Any]:
-    """Loads the full tests configuration from tests.yaml."""
-    return load_yaml_config("tests.yaml")
+    """Loads the full tests catalog."""
+    return build_catalog()
 
 
 def get_all_supported_tests() -> list[str]:
-    """Derives list of all supported tests from tests.yaml."""
+    """Derives list of all supported tests."""
     data = _load_tests()
     return [test.get("name") for test in data.get("tests", [])]
 
 
 def get_all_supported_tests_details() -> list[TestDetails]:
-    """Derives list of all supported test details from tests.yaml."""
+    """Derives list of all supported test details."""
     data = _load_tests()
     return data.get("tests", [])
 
@@ -57,7 +59,7 @@ def get_all_supported_tests_details() -> list[TestDetails]:
 def get_all_supported_machine_types(
     accelerator_type: str | None = None,
 ) -> list[str]:
-    """Derives list of all supported machine types from tests.yaml."""
+    """Derives list of all supported machine types."""
     tests_map = get_tests_map()
     machine_types = set()
     for scheduler in tests_map.data:
@@ -77,7 +79,7 @@ def get_all_supported_machine_types(
 
 
 def get_all_supported_schedulers() -> list[str]:
-    """Derives list of all supported schedulers from tests.yaml."""
+    """Derives list of all supported schedulers."""
     data = _load_tests()
     schedulers = set()
     for test in data.get("tests", []):

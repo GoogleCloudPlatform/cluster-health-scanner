@@ -25,15 +25,6 @@ from chs.testkit import (
 )
 
 
-def machine_configs(**app_config):
-    return {
-        "machine-x": {
-            "variables": {"machine_wide": "yes"},
-            "demo": app_config,
-        }
-    }
-
-
 class SuiteEntry:
     """Stands in for the suite entry the engine parses out of the workspace."""
 
@@ -109,21 +100,6 @@ class BuildTestRequestTest(unittest.TestCase):
         )
 
         self.assertEqual((), request.workloads)
-
-    def test_no_configuration_is_carried_unless_one_is_given(self):
-        request = build_test_request(
-            self.base_vars(), SuiteEntry("demo"), "chs-run"
-        )
-
-        self.assertIsNone(request.configs)
-
-    def test_a_supplied_configuration_is_carried_through(self):
-        configs = machine_configs(variables={"threads": 8})
-        request = build_test_request(
-            self.base_vars(), SuiteEntry("demo"), "chs-run", configs=configs
-        )
-
-        self.assertIs(configs, request.configs)
 
     def test_the_workspace_directory_is_carried_through(self):
         request = build_test_request(

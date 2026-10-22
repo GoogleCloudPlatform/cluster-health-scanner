@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from chs.protos import bill_of_health_pb2 as pb
 from chs.core.plugin_manager import PluginManager
 from chs.utils.app_data import ChsAppData
-from chs.plugins.utils.validation_analyzer import parse_threshold
+from chs.core.utils.validation_analyzer import parse_threshold
 
 
 @dataclass

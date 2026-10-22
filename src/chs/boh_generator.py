@@ -27,6 +27,7 @@ from chs.protos import bill_of_health_pb2 as pb
 from chs.tier_manager import TestStatus
 from google.protobuf.timestamp_pb2 import Timestamp
 from google.protobuf import json_format
+from chs.testkit import build_thresholds
 from chs.utils.app_data import ChsAppData
 from chs.utils import lifecycle
 from chs.version import get_version
@@ -95,25 +96,7 @@ class BOHGenerator:
                         f"Explicit thresholds file not found at {path}"
                     )
 
-        internal_path = os.path.join(
-            os.path.dirname(__file__), "configs", "thresholds.yaml"
-        )
-        if os.path.exists(internal_path):
-            try:
-                with open(internal_path, "r") as f:
-                    logger.debug(
-                        "Loading default internal thresholds from %s",
-                        internal_path,
-                    )
-                    data = yaml.safe_load(f) or {}
-                    return data
-            except (yaml.YAMLError, OSError) as e:
-                logger.debug("Failed to load internal thresholds: %s", e)
-                logger.warning(
-                    "Unable to find thresholds. The final report will only "
-                    "display raw metrics without pass/fail evaluation."
-                )
-        return {}
+        return build_thresholds()
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()

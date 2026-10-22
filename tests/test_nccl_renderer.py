@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from chs.plugins.nccl_cluster.renderer import NcclClusterRenderer
-from chs.plugins.nccl_domain.renderer import NcclDomainRenderer
-from chs.plugins.nccl_pairwise.renderer import NcclPairwiseRenderer
+from chs.tests.nccl_cluster.renderer import NcclClusterRenderer
+from chs.tests.nccl_domain.renderer import NcclDomainRenderer
+from chs.tests.nccl_pairwise.renderer import NcclPairwiseRenderer
 from chs.protos import bill_of_health_pb2 as pb
 from rich.console import Console
 

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chs"
-version = "0.3.0"
+version = "0.3.1"
 description = "CHS provides a comprehensive suite of tools for validating the health and performance of Accelerators."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.0,<9.0.0",
-    "ramble @ git+https://github.com/Ramble-Project/ramble.git@fbe8ae277e411ffc3e87b8069529a223e62c6a9e",  # May 13, 2026
+    "ramble @ git+https://github.com/Ramble-Project/ramble.git@c4f7213432ff78e7e8f40d9742c44ea199c8f7f7",  # Oct 07, 2026
     "platformdirs>=3.0.0,<5.0.0",
     "protobuf>=4.21.0",
     "rich>=13.0.0",
@@ -94,6 +94,9 @@ unfixable = []
 # Ramble repos use star imports and special DSLs that Ruff doesn't fully understand.
 # We only want basic lint checks like trailing whitespace here.
 "src/chs/repos/**" = ["E402", "F403", "F405", "E501"]
+"src/chs/tests/*/application.py" = ["E402", "F403", "F405", "E501"]
+"src/chs/tests/tpu-*/tpu_*.py" = ["E402", "E501"]
+"tests/test_tpu_*_stress.py" = ["E402", "E501"]
 
 [tool.ruff.format]
 # Like Black, use double quotes for strings.

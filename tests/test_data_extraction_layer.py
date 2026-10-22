@@ -15,13 +15,13 @@
 """Unit tests for UI-decoupled Data Extraction and Analysis layer."""
 
 from chs.core.summary_aggregator import aggregate_boh_summary
-from chs.plugins.utils.validation_analyzer import (
+from chs.core.utils.validation_analyzer import (
     extract_validation_data,
     has_validation_criteria,
 )
 from chs.protos import bill_of_health_pb2 as pb
-from chs.plugins.stream import StreamPlugin
-from chs.plugins.dcgm import DcgmPlugin
+from chs.tests.stream import StreamPlugin
+from chs.tests.dcgm import DcgmPlugin
 from unittest.mock import MagicMock
 
 

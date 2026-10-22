@@ -125,13 +125,12 @@ machines:
               - name: aperture-devices
                 mountPath: /dev/aperture_devices
         mpi_command: |
-          BINARY=$(basename $(dirname $(pwd)) | tr '-' '_')_perf
           mpirun --mca btl tcp,self --mca btl_tcp_if_include eth0 \
             --mca orte_keep_fqdn_hostnames 1 --mca plm_rsh_args "-p {ssh_port}" \
             -np $(( {n_nodes} * {processes_per_node} )) \
             --hostfile /tmp/hostfile \
             -x {mpi_env_vars} \
-            taskset -c 32-63 /scripts/demo_mpi_entry_with_config_profile.sh $BINARY -b 8 -e 8G -f 2 -g 1 -w 5 --iters 20
+            taskset -c 32-63 /scripts/demo_mpi_entry_with_config_profile.sh
         ssh_port: 222
     slurm:
       env_vars:
@@ -159,6 +158,29 @@ machines:
         set:
           LD_LIBRARY_PATH: /usr/local/nvidia/lib64:/usr/local/gib/lib64:/usr/local/gib/lib
       variables:
+        custom_resources_yaml: |
+          apiVersion: resource.nvidia.com/v1beta1
+          kind: ComputeDomain
+          metadata:
+            name: {job_name}-cd
+            namespace: "{kubernetes_namespace}"
+            labels:
+              chs-run: {job_name}
+          spec:
+            numNodes: {n_nodes}
+            channel:
+              resourceClaimTemplate:
+                name: {job_name}-cdc
+          ---
+        extra_container_resources_yaml: |
+          claims:
+          - name: compute-domain-channel
+        extra_pod_annotations_yaml: |
+          compute-domain.nvidia.com/channel-claim-template: {job_name}-cdc
+          compute-domain.nvidia.com/domain-name: {job_name}-cd
+        pod_resource_claims_yaml: |
+          - name: compute-domain-channel
+            resourceClaimTemplateName: {job_name}-cdc
         container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
         mpi_command: |
           mpirun -n {n_ranks} -N {processes_per_node} \

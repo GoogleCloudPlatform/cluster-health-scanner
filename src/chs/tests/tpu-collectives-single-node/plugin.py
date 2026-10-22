@@ -28,7 +28,6 @@ class Plugin(SlicePlugin):
         "host from a bad link between hosts."
     )
     application = "tpu-collectives"
-    config_key = "tpu-collectives-single-node"
     experiment_label = "tpu-collectives-single-node"
     default_workloads = ("all_gather", "psum", "all_to_all")
     benchmark_config = "collectives_all_gather.yaml"

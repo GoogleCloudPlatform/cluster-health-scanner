@@ -31,7 +31,7 @@ class Plugin(SingleNodePlugin):
         "Measures sustainable GPU memory bandwidth (GB/s) using the STREAM "
         "benchmark to verify memory subsystem throughput."
     )
-    application = "nvidia-stream"
+    application = "stream"
     default_workloads = ("standard",)
     workload_in_experiment_name = False
     # Slurm needs to be told to give each rank its own GPU; Kubernetes gets the

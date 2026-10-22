@@ -17,8 +17,10 @@
 import abc
 import copy
 import logging
+import os
 from typing import Any, ClassVar, Iterable
 
+from chs.testkit import config as chs_config
 from chs.testkit.context import (
     build_cluster_context,
     build_node_context,
@@ -32,7 +34,6 @@ logger = logging.getLogger(__name__)
 class BaseTestPlugin(abc.ABC):
     name: ClassVar[str] = ""
     application: ClassVar[str] = ""
-    config_key: ClassVar[str] = ""
     default_workloads: ClassVar[tuple[str, ...]] = ()
     experiment_label: ClassVar[str] = ""
     experiment_suffix: ClassVar[str] = ""
@@ -62,8 +63,10 @@ class BaseTestPlugin(abc.ABC):
         return f"<{type(self).__name__} {self.name}>"
 
     @property
-    def config_name(self) -> str:
-        return self.config_key or self.application
+    def benchmarks_dir(self) -> str:
+        return os.path.join(
+            chs_config.TESTS_ROOT, self.application, "benchmarks"
+        )
 
     @property
     def label(self) -> str:
@@ -83,9 +86,6 @@ class BaseTestPlugin(abc.ABC):
         if self.workload_in_experiment_name:
             name = f"{name}-{workload}"
         return f"{name}{self.experiment_suffix}"
-
-    def machine_configs(self, request: TestRequest) -> dict[str, Any] | None:
-        return copy.deepcopy(request.configs)
 
     def build(self, request: TestRequest) -> list[ExperimentSpec]:
         if not self._has_enough_nodes(request):
@@ -160,11 +160,10 @@ class SingleNodePlugin(BaseTestPlugin):
     def build_contexts(self, variables, experiment_name, request):
         context = build_node_context(
             variables,
-            self.machine_configs(request),
-            self.config_name,
             extra_context=self.extra_context,
             extra_sbatch_headers=self.extra_sbatch_headers,
             benchmark_config=self.benchmark_config,
+            benchmarks_dir=self.benchmarks_dir,
         )
         return [(f"{experiment_name}-{{node}}", context)]
 
@@ -194,12 +193,11 @@ class MultiNodePlugin(BaseTestPlugin):
         for nodes in grouping.groups:
             context = build_cluster_context(
                 variables,
-                self.machine_configs(request),
-                self.config_name,
                 nodes_list=nodes,
                 extra_context=self.extra_context,
                 extra_sbatch_headers=self.extra_sbatch_headers,
                 benchmark_config=self.benchmark_config,
+                benchmarks_dir=self.benchmarks_dir,
                 domain_type=self.group_domain_type(nodes, grouping),
             )
             contexts.append(
@@ -222,9 +220,8 @@ class SlicePlugin(BaseTestPlugin):
         return build_slice_contexts(
             variables,
             experiment_name,
-            self.machine_configs(request),
-            self.config_name,
             extra_context=self.extra_context,
             extra_sbatch_headers=self.extra_sbatch_headers,
             benchmark_config=self.benchmark_config,
+            benchmarks_dir=self.benchmarks_dir,
         )

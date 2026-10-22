@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import logging
-import pkgutil
 from typing import Type
 
 from chs.core.plugin_base import TestPlugin
 from chs.core.default_plugin import DefaultPlugin
+from chs.tests import TEST_PACKAGES
 
 logger = logging.getLogger(__name__)
 
@@ -33,35 +32,10 @@ class PluginManager:
         self._discover_plugins()
 
     def _discover_plugins(self) -> None:
-        """Iterates through chs.plugins to register plugins."""
-        # 1. Discover internal plugins
-        try:
-            import chs.plugins
-
-            package = chs.plugins
-            if hasattr(package, "__path__"):
-                prefix = package.__name__ + "."
-                for _, modname, ispkg in pkgutil.iter_modules(
-                    package.__path__, prefix
-                ):
-                    try:
-                        module = importlib.import_module(modname)
-                        plugin_type = "package" if ispkg else "module"
-                        logger.debug(
-                            "Discovered %s plugin: %s", plugin_type, modname
-                        )
-                        self._register_plugin_from_module(module, modname)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to load the Cluster Health Scanner "
-                            "(CHS) visualization plugin "
-                            "'%s'. Some UI features may be "
-                            "unavailable. Error: %s",
-                            modname,
-                            e,
-                        )
-        except ImportError:
-            logger.debug("No chs.plugins package found")
+        """Iterates through chs.tests to register plugins."""
+        for package in TEST_PACKAGES:
+            logger.debug("Discovered package plugin: %s", package.__name__)
+            self._register_plugin_from_module(package, package.__name__)
 
     def _register_plugin_from_module(self, module, modname: str) -> None:
         """Helper to register a plugin from a loaded module."""

@@ -12,224 +12,157 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Tests for the catalog readers in ``chs.utils.tests``."""
+
 import logging
 import unittest
 from unittest import mock
-import os
-import tempfile
-import yaml
-from chs.utils.config import load_yaml_config
+
 from chs.utils.tests import (
     _load_tests,
-    get_all_supported_tests,
     get_all_supported_machine_types,
     get_all_supported_schedulers,
+    get_all_supported_tests,
+    get_tests_by_machine_type,
     get_tests_map,
     TestsMap as _TestsMap,
-    get_tests_by_machine_type,
     get_tests_by_machine_type_and_scheduler,
 )
 
 
+def catalog(*tests) -> dict:
+    """Builds a catalog of the shape ``build_catalog`` returns."""
+    return {"tests": list(tests)}
+
+
+def entry(name: str, *platforms) -> dict:
+    """Builds one catalog entry from ``(scheduler, machine)`` pairs."""
+    return {
+        "name": name,
+        "platforms": [
+            {"scheduler": scheduler, "machine_type": machine}
+            for scheduler, machine in platforms
+        ],
+    }
+
+
 class TestTests(unittest.TestCase):
+    """Each reader gets a catalog and is checked on what it makes of it."""
+
     def setUp(self):
-        load_yaml_config.cache_clear()
         logging.disable(logging.CRITICAL)
-        self.test_dir = tempfile.TemporaryDirectory()
-        self.tests_path = os.path.join(self.test_dir.name, "tests.yaml")
+        self.addCleanup(logging.disable, logging.NOTSET)
+        _load_tests.cache_clear()
+        self.addCleanup(_load_tests.cache_clear)
 
-    def tearDown(self):
-        load_yaml_config.cache_clear()
-        self.test_dir.cleanup()
-
-    def test__load_tests_success(self):
-        """Test loading tests.yaml."""
-        data = {
-            "tests": [
-                {
-                    "name": "t1",
-                    "platforms": [{"scheduler": "s1", "machine_type": "m1"}],
-                }
-            ]
-        }
-        with open(self.tests_path, "w") as f:
-            yaml.dump(data, f)
-
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            tests_data = _load_tests()
-        self.assertEqual(tests_data, data)
-
-    def test__load_tests_missing_file(self):
-        """Test load_tests with missing file."""
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            with self.assertRaisesRegex(
-                FileNotFoundError, "tests.yaml not found"
-            ):
-                _load_tests()
+    def use(self, data: dict):
+        """Makes ``data`` the catalog for the duration of the test."""
+        patcher = mock.patch("chs.utils.tests._load_tests", return_value=data)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_get_all_supported_tests(self):
-        """Test deriving all supported tests."""
-        data = {
-            "tests": [
-                {"name": "t1"},
-                {"name": "t2"},
-                {"name": "t3"},
-            ]
-        }
-        with open(self.tests_path, "w") as f:
-            yaml.dump(data, f)
-
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            tests = get_all_supported_tests()
-        self.assertEqual(tests, ["t1", "t2", "t3"])
+        """Every test in the catalog is offered, in catalog order."""
+        self.use(catalog(entry("t1"), entry("t2"), entry("t3")))
+        self.assertEqual(get_all_supported_tests(), ["t1", "t2", "t3"])
 
     def test_get_all_supported_machine_types(self):
-        """Test deriving all supported machine types."""
-        data = {
-            "tests": [
-                {
-                    "name": "t1",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m1"},
-                        {"scheduler": "s2", "machine_type": "m2"},
-                    ],
-                },
-                {
-                    "name": "t2",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m2"},
-                        {"scheduler": "s2", "machine_type": "m3"},
-                    ],
-                },
-            ]
-        }
-        with open(self.tests_path, "w") as f:
-            yaml.dump(data, f)
-
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            mts = get_all_supported_machine_types()
-        self.assertEqual(mts, ["m1", "m2", "m3"])
+        """A machine named by any test counts, listed once and sorted."""
+        self.use(
+            catalog(
+                entry("t1", ("s1", "m1"), ("s2", "m2")),
+                entry("t2", ("s1", "m2"), ("s2", "m3")),
+            )
+        )
+        self.assertEqual(get_all_supported_machine_types(), ["m1", "m2", "m3"])
 
     def test_get_all_supported_schedulers(self):
-        """Test deriving all supported schedulers."""
-        data = {
-            "tests": [
-                {
-                    "name": "t1",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m1"},
-                        {"scheduler": "s2", "machine_type": "m2"},
-                    ],
-                },
-                {
-                    "name": "t2",
-                    "platforms": [
-                        {"scheduler": "s2", "machine_type": "m2"},
-                        {"scheduler": "s3", "machine_type": "m3"},
-                    ],
-                },
-            ]
-        }
-        with open(self.tests_path, "w") as f:
-            yaml.dump(data, f)
-
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            schedulers = get_all_supported_schedulers()
-        self.assertEqual(schedulers, ["s1", "s2", "s3"])
+        """Likewise for schedulers."""
+        self.use(
+            catalog(
+                entry("t1", ("s1", "m1"), ("s2", "m2")),
+                entry("t2", ("s2", "m2"), ("s3", "m3")),
+            )
+        )
+        self.assertEqual(get_all_supported_schedulers(), ["s1", "s2", "s3"])
 
     def test_get_tests_map(self):
-        """Test deriving tests map."""
-        data = {
-            "tests": [
-                {
-                    "name": "t1",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m1"},
-                        {"scheduler": "s2", "machine_type": "m1"},
-                        {"scheduler": "s1", "machine_type": "m2"},
-                        {"scheduler": "s2", "machine_type": "m2"},
-                    ],
-                },
-                {
-                    "name": "t2",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m2"},
-                    ],
-                },
-            ]
-        }
-        with open(self.tests_path, "w") as f:
-            yaml.dump(data, f)
-
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            tests_map = get_tests_map()
+        """The catalog is inverted into scheduler -> machine -> tests."""
+        self.use(
+            catalog(
+                entry(
+                    "t1",
+                    ("s1", "m1"),
+                    ("s2", "m1"),
+                    ("s1", "m2"),
+                    ("s2", "m2"),
+                ),
+                entry("t2", ("s1", "m2")),
+            )
+        )
         expected = {
             "s1": {"m1": ["t1"], "m2": ["t1", "t2"]},
             "s2": {"m1": ["t1"], "m2": ["t1"]},
         }
+        tests_map = get_tests_map()
         self.assertEqual(tests_map, _TestsMap(data=expected))
         self.assertEqual(tests_map.get("s1"), expected["s1"])
         self.assertEqual(tests_map.get("s2"), expected["s2"])
         self.assertIsNone(tests_map.get("unknown_scheduler"))
 
-    def test_load_tests_malformed_yaml(self):
-        """Test malformed yaml."""
-        with open(self.tests_path, "w") as f:
-            f.write("tests: [ unclosed_list")
-
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            with self.assertRaises(Exception):  # Yaml parser generic exception
-                _load_tests()
-
     def test_get_tests_by_machine_type(self):
-        """Test deriving tests by machine type."""
-        data = {
-            "tests": [
-                {
-                    "name": "t1",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m1"},
-                        {"scheduler": "s2", "machine_type": "m2"},
-                    ],
-                },
-                {
-                    "name": "t2",
-                    "platforms": [
-                        {"scheduler": "s1", "machine_type": "m2"},
-                        {"scheduler": "s2", "machine_type": "m3"},
-                    ],
-                },
-            ]
+        """A machine gets the tests that name it, on any scheduler."""
+        self.use(
+            catalog(
+                entry("t1", ("s1", "m1"), ("s2", "m2")),
+                entry("t2", ("s1", "m2"), ("s2", "m3")),
+            )
+        )
+        self.assertEqual(get_tests_by_machine_type("m1"), ["t1"])
+        self.assertEqual(get_tests_by_machine_type("m2"), ["t1", "t2"])
+        self.assertEqual(get_tests_by_machine_type("m3"), ["t2"])
+        self.assertEqual(get_tests_by_machine_type("m4"), [])
+
+    def test_readers_empty_catalog(self):
+        """No tests on disk is an empty answer, not a crash."""
+        self.use(catalog())
+        self.assertEqual(get_all_supported_tests(), [])
+        self.assertEqual(get_all_supported_machine_types(), [])
+        self.assertEqual(get_all_supported_schedulers(), [])
+        self.assertEqual(get_tests_map(), _TestsMap(data={}))
+
+
+class TestTestsOnDisk(unittest.TestCase):
+    """Runs the readers against the tests that are actually on disk."""
+
+    def setUp(self):
+        _load_tests.cache_clear()
+        self.addCleanup(_load_tests.cache_clear)
+
+    def test_get_all_supported_tests_not_empty(self):
+        """CHS ships tests, so deriving the catalog must find some."""
+        self.assertTrue(get_all_supported_tests())
+
+    def test__load_tests_cached(self):
+        """Deriving the catalog walks the whole tests tree, so it is cached."""
+        self.assertIs(_load_tests(), _load_tests())
+
+    def test_get_all_supported_machine_types_matches_catalog(self):
+        """The flat list and the inverted map agree on the machines."""
+        from_map = set(get_all_supported_machine_types())
+        from_catalog = {
+            platform["machine_type"]
+            for test in _load_tests()["tests"]
+            for platform in test["platforms"]
         }
-        with open(self.tests_path, "w") as f:
-            yaml.dump(data, f)
+        self.assertEqual(from_map, from_catalog)
 
-        with mock.patch.dict(
-            os.environ, {"CHS_CONFIGS_DIR": self.test_dir.name}
-        ):
-            tests_m1 = get_tests_by_machine_type("m1")
-            tests_m2 = get_tests_by_machine_type("m2")
-            tests_m3 = get_tests_by_machine_type("m3")
-            tests_m4 = get_tests_by_machine_type("m4")
-
-        self.assertEqual(tests_m1, ["t1"])
-        self.assertEqual(tests_m2, ["t1", "t2"])
-        self.assertEqual(tests_m3, ["t2"])
-        self.assertEqual(tests_m4, [])
+    def test_get_tests_by_machine_type_covers_all_tests(self):
+        """No test is listed yet unreachable, which would make it dead."""
+        reachable = set()
+        for machine in get_all_supported_machine_types():
+            reachable.update(get_tests_by_machine_type(machine))
+        self.assertEqual(reachable, set(get_all_supported_tests()))
 
     def test_a4x_max_slurm_supported_tests(self):
         """Test that a4x-maxgpu-4g-metal supports expected tests on slurm

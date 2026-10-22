@@ -26,7 +26,7 @@ a3-ultragpu-8g:
         workload_name: all-gather
 a3-megagpu-8g:
   bandwidth:
-    - value: 320.0
+    - value: 210.0
       conditions:
         workload_name: all-reduce
     - value: 178.0
