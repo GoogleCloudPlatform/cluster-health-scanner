@@ -39,6 +39,8 @@ class BaseScheduler(abc.ABC):
             str, str
         ] = {}  # Store node -> GCE instance_id
         self._instances_info: dict[str, dict[str, Any]] | None = None
+        self.node_to_zone: dict[str, str] = {}  # Store node -> GCE zone
+        self.project_id: str | None = None  # Set by detect_nodes_hardware
 
     def _resolve_project_id(self, _node: str | None = None) -> str:
         """Resolves the GCP project ID from Application Default Credentials."""
@@ -62,6 +64,7 @@ class BaseScheduler(abc.ABC):
         try:
             if self._instances_info is None:
                 project = self._resolve_project_id(nodes[0])
+                self.project_id = project
                 self._instances_info = gcp.query_gce_instances_info(
                     project, nodes
                 )
@@ -73,7 +76,7 @@ class BaseScheduler(abc.ABC):
     def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
         """Detects machine types and maps instance IDs for the given nodes.
 
-        Stores mapping node_to_instance_id for future use.
+        Stores mappings node_to_instance_id and node_to_zone for future use.
         Returns a list of unique detected machine types (GCE names).
         """
         if not nodes:
@@ -88,6 +91,8 @@ class BaseScheduler(abc.ABC):
                 machine_type = instance_info["machine_type"]
                 unique_types.add(machine_type)
                 self.node_to_instance_id[node] = instance_info["instance_id"]
+                if instance_info.get("zone"):
+                    self.node_to_zone[node] = instance_info["zone"]
             else:
                 logger.warning(
                     "Could not retrieve GCE metadata for node '%s'. Machine"

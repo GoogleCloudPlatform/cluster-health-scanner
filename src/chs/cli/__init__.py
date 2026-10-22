@@ -52,6 +52,7 @@ from chs import (
     load_suite,
     preflights,
     resources,
+    telemetry,
     utils,
     validators,
 )
@@ -60,6 +61,7 @@ from chs.cli import help_command_text
 from chs.cli import list_formatting
 from chs.cli.background_cleanup import BackgroundCleanup
 from chs.storage import StorageProviderFactory
+from chs.telemetry import reporting as telemetry_reporting
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
 from chs.utils.k8s_client import KubeError
@@ -684,6 +686,7 @@ def _analyze_action(
     workspaces_base_dir = app_data.get_workspaces_dir()
     logger.debug("Using workspaces_base_dir: %s", workspaces_base_dir)
     workspace_name = app_data.resolve_run_id(run_id)
+    telemetry.set_telemetry_run_id(workspace_name)
     ramble_manager = RambleManager(
         workspaces_base_dir, workspace_name, run_id=run_id
     )
@@ -812,6 +815,9 @@ def _analyze_action(
                         app_data.update_run(
                             workspace_name, {"is_boh_final": True}
                         )
+                        telemetry_reporting.record_test_duration(
+                            run_entry.get("submission_time")
+                        )
                         Console().print(
                             f"[{theme.CHS_SUCCESS_STYLE}]All checks "
                             "completed. Bill of Health generated."
@@ -859,6 +865,8 @@ def _show_results(
     except ex.WorkspaceNotFoundException:
         # Fallback to run_id if not found in local registry
         workspace_name = run_id
+    else:
+        telemetry.set_telemetry_run_id(workspace_name)
 
     boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
@@ -913,6 +921,7 @@ def _show_results(
     else:
         viewer = ResultsViewer(boh_path, boh_uri=boh_uri)
 
+    telemetry_reporting.record_test_results(viewer.boh)
     viewer.show_summary_and_details()
 
 
@@ -1021,6 +1030,7 @@ def safe_cancel_all_action(auto_approve: bool = False) -> None:
 
 
 @click.group(
+    cls=telemetry_reporting.TelemetryGroup,
     context_settings={"help_option_names": ["-h", "--help"]},
     epilog=(
         "Tip: You can append --help to any specific subcommand to see its "
@@ -1598,10 +1608,8 @@ def run(
             "No valid tests can be scheduled on this cluster."
         )
 
-    test_names = ", ".join(
-        t.get("name") if isinstance(t, dict) else str(t)
-        for t in scheduled_tests
-    )
+    scheduled_test_names = [_get_test_name(t) for t in scheduled_tests]
+    test_names = ", ".join(scheduled_test_names)
     preview_title = "CHS Execution Preview:"
     console = Console()
     console.print(f"[bold]{preview_title}[/bold]")
@@ -1663,6 +1671,15 @@ def run(
         "%Y%m%d-%H%M%S"
     )
     workspace_name = f"{timestamp}_{run_id}"
+    telemetry.set_telemetry_run_id(workspace_name)
+    telemetry_reporting.record_run(
+        scheduler_obj,
+        app_data.get_storage_config(),
+        machine_type,
+        nodes_under_test,
+        suite,
+        scheduled_test_names,
+    )
     workspaces_base_dir = app_data.get_workspaces_dir()
 
     logger.debug("run_action: Parsed tests: %r", parsed_tests)
@@ -1885,6 +1902,12 @@ def cancel(
                 "No local CHS runs found. Pass a RUN_ID to cancel a specific "
                 "run, or --all to cancel every CHS run on the cluster."
             ) from e
+    try:
+        workspace_name = app_data.resolve_run_id(run_id)
+    except ex.WorkspaceNotFoundException:
+        pass
+    else:
+        telemetry.set_telemetry_run_id(workspace_name)
     safe_cancel_action(run_id, auto_approve=auto_approve)
 
 
@@ -2059,6 +2082,49 @@ def remove_storage(ctx: click.Context) -> None:
     app_data = ctx.obj["app_data"]
     app_data.remove_storage_config()
     click.echo("Storage configuration removed.")
+
+
+@configure.group("telemetry")
+def configure_telemetry() -> None:
+    """Configure usage telemetry."""
+    pass
+
+
+@configure_telemetry.command("enable")
+@click.pass_context
+def enable_telemetry(ctx: click.Context) -> None:
+    """Enable telemetry."""
+    app_data = ctx.obj["app_data"]
+    app_data.set_telemetry_enabled(True)
+    env_override = app_data.telemetry_env_override()
+    if env_override:
+        click.echo(
+            f"Telemetry enabled, but it stays off while {env_override} is set."
+        )
+    else:
+        click.echo("Telemetry enabled.")
+
+
+@configure_telemetry.command("disable")
+@click.pass_context
+def disable_telemetry(ctx: click.Context) -> None:
+    """Disable telemetry."""
+    ctx.obj["app_data"].set_telemetry_enabled(False)
+    click.echo("Telemetry disabled.")
+
+
+@configure_telemetry.command("status")
+@click.pass_context
+def telemetry_status(ctx: click.Context) -> None:
+    """Show whether telemetry is enabled."""
+    app_data = ctx.obj["app_data"]
+    env_override = app_data.telemetry_env_override()
+    if env_override:
+        click.echo(f"Telemetry is disabled because {env_override} is set.")
+    elif app_data.is_telemetry_enabled():
+        click.echo("Telemetry is enabled.")
+    else:
+        click.echo("Telemetry is disabled.")
 
 
 def main(args: list[str] | None = None) -> None:

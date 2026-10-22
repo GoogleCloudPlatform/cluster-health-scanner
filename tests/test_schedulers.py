@@ -1911,10 +1911,12 @@ ramble:
                 "node1": {
                     "machine_type": "a3-megagpu-8g",
                     "instance_id": "12345",
+                    "zone": "us-central1-a",
                 },
                 "node2": {
                     "machine_type": "a3-megagpu-8g",
                     "instance_id": "67890",
+                    "zone": "us-central1-b",
                 },
             }
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
@@ -1923,6 +1925,59 @@ ramble:
                 scheduler.node_to_instance_id,
                 {"node1": "12345", "node2": "67890"},
             )
+            self.assertEqual(
+                scheduler.node_to_zone,
+                {"node1": "us-central1-a", "node2": "us-central1-b"},
+            )
+            self.assertEqual(scheduler.project_id, "my-project")
+
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
+    def test_detect_nodes_hardware_reads_zone_and_project_on_gke(
+        self, mock_query_info, mock_logger
+    ):
+        """GKE nodes skip the GCE API, so the providerID gives zone and
+        project."""
+        scheduler = KubernetesScheduler()
+        for name, zone, instance_id in (
+            ("node1", "us-central1-a", "111"),
+            ("node2", "us-central1-b", "222"),
+        ):
+            self.kube.add_object(
+                "",
+                "nodes",
+                {
+                    "metadata": {
+                        "name": name,
+                        "labels": {
+                            "node.kubernetes.io/instance-type": (
+                                "a3-megagpu-8g"
+                            ),
+                        },
+                        "annotations": {
+                            "container.googleapis.com/instance_id": (
+                                instance_id
+                            ),
+                        },
+                    },
+                    "spec": {
+                        "providerID": f"gce://hpc-toolkit-dev/{zone}/{name}"
+                    },
+                    "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+                },
+            )
+
+        machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+
+        self.assertEqual(machine_types, ["a3-megagpu-8g"])
+        self.assertEqual(
+            scheduler.node_to_instance_id, {"node1": "111", "node2": "222"}
+        )
+        self.assertEqual(
+            scheduler.node_to_zone,
+            {"node1": "us-central1-a", "node2": "us-central1-b"},
+        )
+        self.assertEqual(scheduler.project_id, "hpc-toolkit-dev")
+        mock_query_info.assert_not_called()
 
     @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_heterogeneous(

@@ -48,6 +48,7 @@ class TestGcpUtils(unittest.TestCase):
         self.assertIn("node1", result)
         self.assertEqual(result["node1"]["machine_type"], "a3-megagpu-8g")
         self.assertEqual(result["node1"]["instance_id"], "12345")
+        self.assertEqual(result["node1"]["zone"], "us-central1-a")
 
         # Verify batching (filter string)
         mock_client.aggregated_list.assert_called_once()
@@ -106,6 +107,7 @@ class TestGcpUtils(unittest.TestCase):
             {
                 "machine_type": "ct6e-standard-4t",
                 "instance_id": "99999",
+                "zone": "us-central1-a",
                 "block": "block-a",
                 "subblock": "subblock-b",
             },
@@ -115,6 +117,7 @@ class TestGcpUtils(unittest.TestCase):
             {
                 "machine_type": "ct6e-standard-4t",
                 "instance_id": "88888",
+                "zone": "us-central1-a",
             },
         )
         self.assertEqual(
@@ -122,6 +125,7 @@ class TestGcpUtils(unittest.TestCase):
             {
                 "machine_type": "ct6e-standard-4t",
                 "instance_id": "77777",
+                "zone": "us-central1-a",
             },
         )
 

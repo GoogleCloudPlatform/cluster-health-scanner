@@ -13,8 +13,12 @@
 # limitations under the License.
 
 import unittest
+from unittest import mock
+
 import click
 
+from chs import main as chs_main
+from chs import telemetry
 from chs.main import _normalize_argv
 from chs.validators.utils import validate_non_empty_string
 
@@ -83,6 +87,55 @@ class TestMain(unittest.TestCase):
         argv = ["chs", "results", "run-id-1234", "other-positional"]
         expected = ["chs", "results", "run-id-1234", "other-positional"]
         self.assertEqual(_normalize_argv(argv), expected)
+
+
+class TestMainEntryPoint(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(
+            mock.patch.object(telemetry, "_state", telemetry._State())
+        )
+        self.enterContext(mock.patch.object(chs_main.logging, "basicConfig"))
+        self.mock_app_data = self.enterContext(
+            mock.patch.object(chs_main, "ChsAppData")
+        ).return_value
+        self.mock_app_data.is_telemetry_enabled.return_value = True
+
+    def _run_main(self, args: list[str]) -> list[bool]:
+        enabled_when_cli_ran = []
+        with (
+            mock.patch.object(chs_main.sys, "argv", ["chs", *args]),
+            mock.patch.object(
+                chs_main.cli,
+                "main",
+                side_effect=lambda **_: enabled_when_cli_ran.append(
+                    telemetry._state.enabled
+                ),
+            ) as mock_cli_main,
+        ):
+            chs_main.main()
+
+        mock_cli_main.assert_called_once_with(args=args)
+        return enabled_when_cli_ran
+
+    def test_main_enables_telemetry_before_running_cli(self):
+        self.assertEqual(self._run_main(["list"]), [True])
+
+    def test_main_leaves_telemetry_off_when_user_opted_out(self):
+        self.mock_app_data.is_telemetry_enabled.return_value = False
+
+        self.assertEqual(self._run_main(["list"]), [False])
+
+    def test_main_leaves_telemetry_off_for_unsupported_commands(self):
+        for args in (
+            ["--help"],
+            ["--version"],
+            ["configure", "storage", "show"],
+            ["configure", "telemetry", "--help"],
+            ["configure", "telemetry", "status"],
+        ):
+            with self.subTest(args=args):
+                self.assertEqual(self._run_main(args), [False])
 
 
 class TestValidatorsUtils(unittest.TestCase):

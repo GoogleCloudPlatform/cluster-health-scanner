@@ -35,8 +35,10 @@ from click import testing
 
 from chs import cli
 from chs import exceptions
+from chs import telemetry
 from chs.cli import background_cleanup
 from chs.cli import list_formatting
+from chs.protos import bill_of_health_pb2 as pb
 from chs.utils.k8s_client import KubeError
 from chs.utils.tests import TestsMap as _TestsMap
 
@@ -46,6 +48,9 @@ CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
 MOCK_WORKSPACE_NAME = "20230101-120000_mockcluster-suite1-mockhash"
 MOCK_CUSTOM_WORKSPACE_NAME = "20230101-120000_mockcluster-custom-mockhash"
+# A workspace name with a real 4-char suffix, and its telemetry run ID.
+MOCK_TELEMETRY_WORKSPACE_NAME = "20230101-120000_mockcluster-lite-a3f9"
+MOCK_TELEMETRY_RUN_ID = "20230101-120000-a3f9"
 
 
 def _analyze_in_guard(app_data, run_id, scheduler):
@@ -207,6 +212,10 @@ class TestCli(unittest.TestCase):
             mock.patch(
                 "chs.cli.utils.generate_random_suffix", return_value="mockhash"
             )
+        )
+        # Keep telemetry run tagging from leaking between tests.
+        self.enterContext(
+            mock.patch.object(telemetry, "_state", telemetry._State())
         )
 
         # Mock suites utilities to return test dummy values
@@ -1688,6 +1697,7 @@ class TestCli(unittest.TestCase):
         self, mock_viewer, mock_get_provider_for_run
     ):
         """Test results command downloads BoH from storage if missing."""
+        mock_viewer.return_value.boh = pb.BillOfHealth()
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
 
@@ -1704,6 +1714,228 @@ class TestCli(unittest.TestCase):
             args, _ = mock_provider.download_file.call_args
             self.assertEqual(args[0], "bills_of_health/latest_run.json")
             mock_viewer.assert_called_once()
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_sets_telemetry_run(self, mock_analyze_action):
+        """Test 'run' tags telemetry with the new run."""
+        self.enterContext(
+            mock.patch(
+                "chs.cli.utils.generate_random_suffix", return_value="a3f9"
+            )
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_analyze_action.assert_called_once()
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_sends_run_metrics(self, mock_analyze_action):
+        """Test 'run' reports the command, cluster and scheduled tests."""
+        send = self.enterContext(
+            mock.patch.object(telemetry, "send_metric", autospec=True)
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.get_nodes_under_test.return_value = ["n1", "n2"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.project_id = "my-project"
+        self.mock_scheduler.node_to_zone = {
+            "n1": "us-central1-a",
+            "n2": "us-central1-a",
+        }
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_analyze_action.assert_called_once()
+        sent = {c.args[0]: c.args[1] for c in send.call_args_list}
+        M = telemetry.MetricName
+        self.assertEqual(sent[M.PARENT_COMMAND], "run")
+        self.assertEqual(sent[M.COMMAND_FLAGS], "auto-approve,suite")
+        self.assertEqual(sent[M.CLUSTER_TYPE], "GKE")
+        self.assertEqual(sent[M.STORAGE_TYPE], "GCS")
+        self.assertEqual(sent[M.MACHINE_TYPE], "a3-megagpu-8g")
+        self.assertEqual(sent[M.NODE_COUNT], 2)
+        self.assertEqual(sent[M.ZONE], "us-central1-a")
+        self.assertEqual(sent[M.IS_TEST_DATA], "false")
+        self.assertEqual(sent[M.TEST_SUITE], "suite1")
+        test_names = sent[M.TEST_NAME].split(",")
+        self.assertTrue(test_names)
+        self.assertEqual(test_names, sorted(test_names))
+        self.assertEqual(telemetry._state.project_id, "my-project")
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_records_run_after_run_id_is_set(
+        self, mock_analyze_action
+    ):
+        """Test 'run' reports its metrics only once the run has an ID."""
+        run_ids_when_recorded = []
+        self.enterContext(
+            mock.patch.object(
+                cli.telemetry_reporting,
+                "record_run",
+                side_effect=lambda *_: run_ids_when_recorded.append(
+                    telemetry._state.run_id
+                ),
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.cli.utils.generate_random_suffix", return_value="a3f9"
+            )
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(run_ids_when_recorded, [MOCK_TELEMETRY_RUN_ID])
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_declined_at_prompt_sends_no_run_metrics(
+        self, mock_analyze_action
+    ):
+        """Test a run the user declines at the prompt reports no run."""
+        record_run = self.enterContext(
+            mock.patch.object(cli.telemetry_reporting, "record_run")
+        )
+        # A mock sys makes stdin look like a terminal, so the prompts show.
+        self.enterContext(mock.patch.object(cli, "sys"))
+        self.enterContext(
+            mock.patch.object(
+                cli.click,
+                "confirm",
+                side_effect=lambda prompt, **_: (
+                    prompt != "Proceed with execution?"
+                ),
+            )
+        )
+
+        result = self.runner.invoke(cli.cli, ["run", "--suite", "suite1"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_analyze_action.assert_not_called()
+        record_run.assert_not_called()
+        self.assertIsNone(telemetry._state.run_id)
+
+    def test_run_command_reports_ctrl_c(self):
+        """Test Ctrl+C in 'run' is reported as an interrupt, exit code 130."""
+        send = self.enterContext(
+            mock.patch.object(telemetry, "send_metric", autospec=True)
+        )
+        self.mock_detect_scheduler.side_effect = KeyboardInterrupt
+
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
+
+        self.assertEqual(result.exit_code, 130)
+        send.assert_any_call(
+            telemetry.MetricName.ERROR_CATEGORY, "KeyboardInterrupt"
+        )
+        send.assert_called_with(telemetry.MetricName.EXIT_CODE, 130)
+
+    def test_run_command_reports_scheduler_error(self):
+        """Test 'run' reports the error when scheduler detection fails."""
+        send = self.enterContext(
+            mock.patch.object(telemetry, "send_metric", autospec=True)
+        )
+        self.mock_detect_scheduler.side_effect = (
+            exceptions.ChsSchedulerException("no scheduler")
+        )
+
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        send.assert_any_call(
+            telemetry.MetricName.ERROR_CATEGORY, "ChsSchedulerException"
+        )
+
+    def test_analyze_action_sets_telemetry_run(self):
+        """Test _analyze_action tags telemetry, even if analysis fails."""
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = (
+            MOCK_TELEMETRY_WORKSPACE_NAME
+        )
+
+        # The mocked workspace is not on disk, so analysis fails after tagging.
+        with self.assertRaises(exceptions.WorkspaceNotFoundException):
+            cli._analyze_action(self.mock_app_data, "mockcluster-lite-a3f9")
+
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    def test_show_results_sets_telemetry_run(self):
+        """Test _show_results tags telemetry with a registered run."""
+        self.enterContext(
+            mock.patch("chs.cli.StorageProviderFactory", autospec=True)
+        )
+        mock_viewer = self.enterContext(
+            mock.patch("chs.cli.ResultsViewer", autospec=True)
+        )
+        mock_viewer.return_value.boh = pb.BillOfHealth()
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = (
+            MOCK_TELEMETRY_WORKSPACE_NAME
+        )
+
+        cli._show_results(self.mock_app_data, "mockcluster-lite-a3f9")
+
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    def test_show_results_skips_telemetry_run_for_unregistered_run(self):
+        """Test _show_results skips runs missing from the local registry."""
+        self.enterContext(
+            mock.patch("chs.cli.StorageProviderFactory", autospec=True)
+        )
+        mock_viewer = self.enterContext(
+            mock.patch("chs.cli.ResultsViewer", autospec=True)
+        )
+        mock_viewer.return_value.boh = pb.BillOfHealth()
+        self.mock_app_data.resolve_run_id.side_effect = (
+            exceptions.WorkspaceNotFoundException("not found")
+        )
+
+        # Not tagged even when the raw run_id looks like a workspace name.
+        cli._show_results(self.mock_app_data, MOCK_TELEMETRY_WORKSPACE_NAME)
+
+        self.assertIsNone(telemetry._state.run_id)
+
+    def test_cancel_command_sets_telemetry_run(self):
+        """Test 'cancel' tags telemetry with the latest run."""
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = (
+            MOCK_TELEMETRY_WORKSPACE_NAME
+        )
+
+        result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    def test_cancel_command_skips_telemetry_run_for_unregistered_run(self):
+        """Test 'cancel' of a run not in the local registry sets no run."""
+        self.mock_app_data.resolve_run_id.side_effect = (
+            exceptions.WorkspaceNotFoundException("not found")
+        )
+
+        result = self.runner.invoke(
+            cli.cli, ["cancel", "other-user-run-ab12", "--auto-approve"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(telemetry._state.run_id)
 
     def test_archive_workspace_context_manager_success(self):
         """Test archive_workspace calling archival on success."""
@@ -2052,6 +2284,7 @@ class TestCli(unittest.TestCase):
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_results_command(self, mock_results_viewer):
         """Test 'results' command."""
+        mock_results_viewer.return_value.boh = pb.BillOfHealth()
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
@@ -2307,6 +2540,66 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.set_storage_config.assert_called_once_with(
             {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
         )
+
+    def test_configure_telemetry_enable(self):
+        self.mock_app_data.telemetry_env_override.return_value = None
+
+        result = self.runner.invoke(
+            cli.cli, ["configure", "telemetry", "enable"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.set_telemetry_enabled.assert_called_once_with(True)
+        self.assertEqual(result.output, "Telemetry enabled.\n")
+
+    def test_configure_telemetry_enable_says_env_var_keeps_it_off(self):
+        self.mock_app_data.telemetry_env_override.return_value = (
+            "CHS_TELEMETRY=0"
+        )
+
+        result = self.runner.invoke(
+            cli.cli, ["configure", "telemetry", "enable"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.set_telemetry_enabled.assert_called_once_with(True)
+        self.assertEqual(
+            result.output,
+            "Telemetry enabled, but it stays off while CHS_TELEMETRY=0 is "
+            "set.\n",
+        )
+
+    def test_configure_telemetry_disable(self):
+        result = self.runner.invoke(
+            cli.cli, ["configure", "telemetry", "disable"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.set_telemetry_enabled.assert_called_once_with(False)
+        self.assertEqual(result.output, "Telemetry disabled.\n")
+
+    def test_configure_telemetry_status(self):
+        for env_override, enabled, expected in (
+            (None, True, "Telemetry is enabled."),
+            (None, False, "Telemetry is disabled."),
+            (
+                "DO_NOT_TRACK=1",
+                False,
+                "Telemetry is disabled because DO_NOT_TRACK=1 is set.",
+            ),
+        ):
+            with self.subTest(env_override=env_override, enabled=enabled):
+                self.mock_app_data.telemetry_env_override.return_value = (
+                    env_override
+                )
+                self.mock_app_data.is_telemetry_enabled.return_value = enabled
+
+                result = self.runner.invoke(
+                    cli.cli, ["configure", "telemetry", "status"]
+                )
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertEqual(result.output, f"{expected}\n")
 
 
 class TestCliHistory(unittest.TestCase):

@@ -76,6 +76,8 @@ _PARTITION_ID_LABEL = (
 _COMPUTE_DOMAIN_GROUP = "resource.nvidia.com"
 _COMPUTE_DOMAIN_VERSION = "v1beta1"
 
+_GCE_PROVIDER_ID_RE = re.compile(r"^gce://([^/]+)/([^/]+)/([^/]+)$")
+
 _API_MAX_CONCURRENCY = 32
 _APPLY_ATTEMPTS = 5
 _CUSTOM_RESOURCE_PLURALS = {
@@ -328,7 +330,7 @@ class KubernetesScheduler(BaseScheduler):
                 provider_id = node_obj.get("spec", {}).get("providerID", "")
             provider_id = provider_id.strip()
             # providerID format: gce://project-id/zone/instance-name
-            match = re.match(r"^gce://([^/]+)/([^/]+)/([^/]+)$", provider_id)
+            match = _GCE_PROVIDER_ID_RE.match(provider_id)
             if not match:
                 raise ValueError(f"Unexpected providerID format: {provider_id}")
             return match.group(1)
@@ -366,7 +368,13 @@ class KubernetesScheduler(BaseScheduler):
         label_types = {}
         gce_nodes = []
         for node in nodes:
-            metadata = objects_by_name.get(node, {}).get("metadata", {})
+            node_object = objects_by_name.get(node, {})
+            provider_id = node_object.get("spec", {}).get("providerID", "")
+            gce_instance = _GCE_PROVIDER_ID_RE.match(provider_id.strip())
+            if gce_instance:
+                self.project_id = gce_instance.group(1)
+                self.node_to_zone[node] = gce_instance.group(2)
+            metadata = node_object.get("metadata", {})
             labels = metadata.get("labels", {})
             annotations = metadata.get("annotations", {})
             machine_type = labels.get(

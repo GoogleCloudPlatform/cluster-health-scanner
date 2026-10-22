@@ -35,6 +35,7 @@ import chs
 from chs import cli
 from chs import exceptions as ex
 from chs.cli.background_cleanup import BackgroundCleanup
+from chs.protos import bill_of_health_pb2 as pb
 from chs.ramble_manager import RambleManager
 from chs.utils import k8s_client
 from chs.utils.app_data import ChsAppData
@@ -915,6 +916,8 @@ class ShowResultsCachedUriTest(unittest.TestCase):
         self.viewer_cls = _start_patch(
             self, mock.patch("chs.cli.ResultsViewer", autospec=True)
         )
+        # autospec omits attributes set in __init__; telemetry reads boh.
+        self.viewer_cls.return_value.boh = pb.BillOfHealth()
 
     def test_cached_boh_html_uri_skips_provider_exists(self):
         """Cached boh_html_uri in runs.json skips storage exists() calls."""

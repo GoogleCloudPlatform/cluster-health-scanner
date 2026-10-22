@@ -132,6 +132,7 @@ Configure persistent storage settings for CHS reports and workspace archives. Du
 - `chs configure storage gcs <BUCKET_NAME>`: Set a pre-existing GCS bucket as the upload destination.
 - `chs configure storage show`: Display the currently configured storage target.
 - `chs configure storage remove`: Remove the saved storage configuration.
+- `chs configure telemetry enable|disable|status`: Turn usage telemetry on or off, or show whether it is on. See [Telemetry](#7-telemetry).
 
 ```bash
 # Configure GCS bucket
@@ -300,6 +301,18 @@ TPU benchmarks require an entire slice, so individual node or nodelist targeting
 
 ### GCS Bucket Creation
 `chs configure storage gcs <bucket-name>` requires an existing GCS bucket with write permissions; CHS does not create new GCS buckets automatically.
+
+---
+
+## 7. Telemetry
+
+CHS sends usage metrics to Google (`play.googleapis.com`) to help improve the tool. Telemetry is on by default. Metrics are sent in the background: at exit, CHS waits at most two seconds for the last request, and if a request fails with a network error, CHS stops sending for the rest of the command.
+
+**Opting out:**
+- `chs configure telemetry disable` turns telemetry off and saves the setting; `enable` turns it back on, and `status` shows whether it's on.
+- Setting `CHS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns telemetry off irrespective of the saved setting. Use this for CI and containers, e.g. `docker run -e CHS_TELEMETRY=0 ...`.
+
+**Seeing what is sent:** Put `-v` before the command, for example `chs -v run`, and CHS prints all the telemetry data it sends.
 
 ---
 

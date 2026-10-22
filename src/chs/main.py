@@ -24,6 +24,9 @@ import sys
 from rich.logging import RichHandler
 
 from chs import cli
+from chs import telemetry
+from chs.telemetry import reporting as telemetry_reporting
+from chs.utils.app_data import ChsAppData
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
@@ -53,7 +56,12 @@ def main():
         datefmt="[%X]",
         handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
     )
-    cli.main(args=normalized_argv[1:])
+    args = normalized_argv[1:]
+    if telemetry_reporting.is_command_supported(args) and (
+        ChsAppData().is_telemetry_enabled()
+    ):
+        telemetry.enable()
+    cli.main(args=args)
 
 
 if __name__ == "__main__":

@@ -82,6 +82,7 @@ def query_gce_instances_info(
                         instance_info = {
                             "machine_type": normalized_machine_type,
                             "instance_id": str(instance.id),
+                            "zone": zone.removeprefix("zones/"),
                         }
                         if instance.resource_status:
                             topo = (
