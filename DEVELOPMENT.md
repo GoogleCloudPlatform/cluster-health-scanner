@@ -82,7 +82,7 @@ The Docker image installs third-party Python packages only from hash-pinned lock
 | Lockfile | Generated from | Installed into |
 | --- | --- | --- |
 | `requirements.txt` | `pyproject.toml` + `requirements-build.in` | The CHS virtualenv (`/opt/venv`) |
-| `requirements-system.txt` | `requirements-system.in` | The base image's system Python |
+| `requirements-system.txt` | `requirements-system.in` | The base image's system Python (`/usr/local/bin/python3`) |
 
 Ramble is the exception: pip cannot hash-check git dependencies, so the image builds Ramble from a checkout of the commit pinned in `pyproject.toml`. Always pin it to a full commit SHA.
 
