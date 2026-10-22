@@ -14,6 +14,7 @@
 
 benchmarks:
 - benchmark_name: gemm_multiple_run
+  single_host_tpu_init: True
   trace_dir: "../microbenchmarks/gemm_multiple_run_bf16"
   csv_path: "../microbenchmarks/gemm_multiple_run_bf16"
   xlml_metrics_dir: "../microbenchmarks/gemm_multiple_run_bf16"

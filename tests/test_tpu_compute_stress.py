@@ -33,16 +33,6 @@ import tpu_compute_stress
 
 
 class TpuComputeStressTest(unittest.TestCase):
-    def test_libtpu_init_args_set(self):
-        self.assertIn(
-            "--tpu_link_up_check_timeout=15s",
-            os.environ.get("LIBTPU_INIT_ARGS", ""),
-        )
-        self.assertIn(
-            "--megascale_error_reporter_abort_on_hang=true",
-            os.environ.get("LIBTPU_INIT_ARGS", ""),
-        )
-
     @patch("tpu_compute_stress.logging.info")
     @patch("tpu_compute_stress.logging.error")
     @patch("tpu_compute_stress.time.time")

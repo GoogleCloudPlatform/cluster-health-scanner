@@ -20,9 +20,10 @@ defaults:
   modifiers:
   - name: generic-error-detector
   - name: tpu-error-detector
+  - name: tpu-node-local-init
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.0-latest
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.0
       jobset_template: jobset_standard.yaml.tpl
       mpi_command: ''
   slurm:

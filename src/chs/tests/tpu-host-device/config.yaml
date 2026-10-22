@@ -24,7 +24,7 @@ defaults:
     benchmarks_yaml_file: tpuv6e/host_device.yaml
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.0-latest
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.0
       jobset_template: jobset_standard.yaml.tpl
       mpi_command: ''
   slurm:

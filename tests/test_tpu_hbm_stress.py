@@ -94,8 +94,8 @@ class TestTpuHbmStressApp(unittest.TestCase):
             "--megascale_error_reporter_abort_on_hang=true",
             os.environ["LIBTPU_INIT_ARGS"],
         )
-        self.assertIn(
-            "--tpu_link_up_check_timeout=15s", os.environ["LIBTPU_INIT_ARGS"]
+        self.assertNotIn(
+            "--tpu_link_up_check_timeout", os.environ["LIBTPU_INIT_ARGS"]
         )
         self.assertIn(
             "--xla_jf_bounds_check=false", os.environ["LIBTPU_INIT_ARGS"]

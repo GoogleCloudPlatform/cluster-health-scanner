@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import jax
-import importlib.metadata as meta
 import os
 import socket
 import warnings
@@ -21,6 +19,9 @@ import warnings
 for k in list(os.environ.keys()):
     if "MPI" in k or "RANK" in k or "WORLD" in k or "JAX_COORDINATOR" in k:
         os.environ.pop(k)
+
+import jax
+import importlib.metadata as meta
 
 warnings.filterwarnings("ignore")
 

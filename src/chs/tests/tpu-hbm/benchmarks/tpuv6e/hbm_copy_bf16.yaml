@@ -14,6 +14,7 @@
 
 benchmarks:
 - benchmark_name: "single_device_hbm_copy"
+  single_host_tpu_init: True
   benchmark_sweep_params:
   - {num_elements_range: {start: 1048576, end: 2147483648, multiplier: 2}, dtype: "bfloat16", num_runs: 20}
   trace_dir: "../microbenchmarks/hbm_bfloat16"
