@@ -1,17 +1,22 @@
 FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine
 
+ARG TARGETARCH
+
 # Install system dependencies, latest security patches, and standalone kubectl
 RUN apk update && apk upgrade --no-cache && apk add --no-cache \
     build-base \
     git \
     python3 \
+    python3-dev \
+    pkgconf \
     curl \
-    && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && kubectl_arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}" \
+    && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${kubectl_arch}/kubectl" \
     && chmod +x /usr/local/bin/kubectl \
     && gcloud components install gke-gcloud-auth-plugin --quiet
 
 COPY requirements-system.txt /tmp/requirements-system.txt
-RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements-system.txt \
+RUN /google-cloud-sdk/platform/bundledpythonunixmusl/bin/python3 -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-system.txt \
     && rm /tmp/requirements-system.txt
 
 WORKDIR /workspace

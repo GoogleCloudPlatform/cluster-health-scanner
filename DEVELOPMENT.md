@@ -65,6 +65,18 @@ To build and test the CHS container image locally from source:
 docker build -t chs:dev .
 ```
 
+The image supports both `linux/amd64` and `linux/arm64`. To cross-compile for a different target architecture using Docker Buildx:
+
+```bash
+docker buildx build --platform linux/arm64 -t chs:dev-arm64 --load .
+```
+
+To build and publish a single multi-architecture manifest list covering both platforms:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/chs:dev --push .
+```
+
 The Docker image installs third-party Python packages only from hash-pinned lockfiles. Every `pip install` in the `Dockerfile` must either use `--require-hashes` or install a local source tree with `--no-deps --no-index`.
 
 | Lockfile | Generated from | Installed into |
