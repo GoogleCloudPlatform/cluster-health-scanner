@@ -21,6 +21,7 @@ from chs.testkit import SlicePlugin
 class Plugin(SlicePlugin):
     name = "tpu-collectives"
     category = "Network & Collectives"
+    requires_whole_slice = True
     description = "Cluster collectives testing"
     long_description = (
         "Times distributed cross-chip operations (like All-Reduce and "

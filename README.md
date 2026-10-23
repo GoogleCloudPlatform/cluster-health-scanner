@@ -175,8 +175,8 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 **Options:**
 - `--suite`, `-s <SUITE_NAME>`: Pre-configured test suite to run (`lite` or `standard`). Defaults to `lite` when `--tests` is not specified.
 - `--tests`, `-t <TEST_LIST>`: Comma-separated list of individual benchmarks to run instead of a full suite (e.g., `--tests nccl-cluster,gemm`).
-- `--nodepools <NODEPOOL_LIST>`: Comma-separated list of Kubernetes node pools to target (required when targeting TPUs on Kubernetes).
-- `--nodes <NODE_LIST>`: Comma-separated list of individual GPU nodes to target (not supported for TPUs; use `--nodepools` on Kubernetes or `--partitions` on Slurm).
+- `--nodepools <NODEPOOL_LIST>`: Comma-separated list of Kubernetes node pools to target (can target single-host benchmarks across entire pools, and required for multi-host TPU benchmarks on Kubernetes).
+- `--nodes <NODE_LIST>`: Comma-separated list of individual nodes to target (on Kubernetes, single-host TPU benchmarks support targeting static pool nodes, while multi-host benchmarks require whole-slice targeting via `--nodepools`; on Slurm, all TPU benchmarks require `--partitions`).
 - `--partitions <PARTITION_LIST>`: Comma-separated list of Slurm partitions to target (required when targeting TPUs on Slurm).
 - `--nodelists <NODE_PATTERN_LIST>`: Slurm nodelist pattern to target, e.g., `node-[1-4]` (not supported for TPUs; use `--partitions`).
 - `--auto-approve`, `-y`: Automatically confirm the execution preview without interactive prompting (useful for CI and scripts).
@@ -297,7 +297,7 @@ Local workspaces are also stored on the host (or inside the `chs-local-state` Do
   ```
 
 ### Targeting TPUs (`--nodepools` / `--partitions`)
-TPU benchmarks require an entire slice, so individual node or nodelist targeting (`--nodes`, `--nodelists`) is not supported for TPUs. Always target TPU resources using `--nodepools <nodepool_name>` on Kubernetes or `--partitions <partition_name>` on Slurm. Additionally, all nodes targeted within a single `chs run` invocation must belong to the same machine type.
+Multi-host TPU benchmarks (such as `tpu-collectives` and `tpu-network-stress`) require an entire slice, so individual node or nodelist targeting (`--nodes`, `--nodelists`) is not supported for them. On Slurm, all TPU benchmarks require whole-partition targeting via `--partitions`. On Kubernetes, single-host TPU benchmarks (such as `tpu-info`, `tpu-gemm`, and `tpu-hbm`) support targeting individual nodes with `--nodes` on static TPU pools. Dynamic TPU pools on GKE require whole-partition provisioning via `--nodepools`. When running suites or mixed benchmarks with `--nodes` on Kubernetes, multi-host benchmarks requiring a full slice are automatically skipped with an informative warning. Additionally, all nodes targeted within a single `chs run` invocation must belong to the same machine type.
 
 ### GCS Bucket Creation
 `chs configure storage gcs <bucket-name>` requires an existing GCS bucket with write permissions; CHS does not create new GCS buckets automatically.

@@ -41,6 +41,8 @@ class BaseScheduler(abc.ABC):
         self._instances_info: dict[str, dict[str, Any]] | None = None
         self.node_to_zone: dict[str, str] = {}  # Store node -> GCE zone
         self.project_id: str | None = None  # Set by detect_nodes_hardware
+        self.partially_busy_slices: dict[str, list[str]] = {}
+        self.require_whole_slices: bool = False
 
     def _resolve_project_id(self, _node: str | None = None) -> str:
         """Resolves the GCP project ID from Application Default Credentials."""

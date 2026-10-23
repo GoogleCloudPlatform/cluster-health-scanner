@@ -35,6 +35,7 @@ TPU_CONFIG = "tpu/tpu7x/multi_pool_2x2x2_2x2x4.yaml"
 TPU_DYNAMIC_SLICE_CONFIG = "concurrency/tpu7x_dynamic_slices.yaml"
 GPU_TEST = "nvidia-smi"
 TPU_TEST = "tpu-info"
+TPU_MULTI_HOST_TEST = "tpu-collectives"
 OTHER_RUN_ID = "other-run"
 UNKNOWN_RUN_ID = "never-ran"
 UNKNOWN_RUN_WARNING = (
@@ -518,7 +519,7 @@ class TestTpuNodepoolConflicts:
 
         exit_code, output = _run_test(
             tpu_cluster,
-            TPU_TEST,
+            TPU_MULTI_HOST_TEST,
             ["--nodepools", "tpu-v7-pool-01"],
             "tpu-overlap",
         )
@@ -535,7 +536,7 @@ class TestTpuNodepoolConflicts:
 
         exit_code, output = _run_test(
             tpu_cluster,
-            TPU_TEST,
+            TPU_MULTI_HOST_TEST,
             ["--nodepools", "tpu-v7-pool-01,tpu-v7-pool-02"],
             "tpu-partial",
         )
@@ -567,6 +568,42 @@ class TestTpuNodepoolConflicts:
             resolve_node_mapping()["tpu-v7-pool-01"]
         )
         assert not _skip_counts_by_run(caplog.text)
+        assert job_name in cluster_state.job_names()
+
+    def test_single_host_test_targets_one_tpu_node(self, tpu_cluster, caplog):
+        """A single-host TPU test runs on one node of a slice via --nodes."""
+        pool_nodes = resolve_node_mapping()["tpu-v7-pool-01"]
+        target_node = pool_nodes[0]
+
+        exit_code, output = _run_test(
+            tpu_cluster,
+            TPU_TEST,
+            ["--nodes", target_node],
+            "tpu-one-node",
+        )
+
+        boh = _assert_succeeded(exit_code, output, "tpu-one-node")
+        assert _tested_nodes(boh) == {target_node}
+        assert not _skip_counts_by_run(caplog.text)
+
+    def test_single_host_test_runs_on_idle_nodes_of_busy_pool(
+        self, tpu_cluster, caplog
+    ):
+        """A single-host TPU test skips only the busy node of a slice."""
+        pool_nodes = resolve_node_mapping()["tpu-v7-pool-01"]
+        busy_nodes = pool_nodes[:1]
+        job_name = cluster_state.create_suspended_job(OTHER_RUN_ID, busy_nodes)
+
+        exit_code, output = _run_test(
+            tpu_cluster,
+            TPU_TEST,
+            ["--nodepools", "tpu-v7-pool-01"],
+            "tpu-idle-nodes",
+        )
+
+        boh = _assert_succeeded(exit_code, output, "tpu-idle-nodes")
+        assert _tested_nodes(boh) == set(pool_nodes[1:])
+        _assert_skipped_for_other_run(caplog.text, set(busy_nodes))
         assert job_name in cluster_state.job_names()
 
 

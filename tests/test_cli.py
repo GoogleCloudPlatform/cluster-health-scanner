@@ -155,6 +155,10 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.nodes_arg = None
         self.mock_scheduler.nodelists_arg = None
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.partitions_arg = None
+        self.mock_scheduler.require_whole_slices = False
+        self.mock_scheduler.partially_busy_slices = {}
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         self.mock_scheduler.find_runs_targeting_nodes.return_value = {}
         self.mock_scheduler.cancel_run.return_value = True
@@ -884,6 +888,563 @@ class TestCli(unittest.TestCase):
                 "No supported initial health checks found in suite",
                 result.output,
             )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_skips_multi_host_when_no_nodepool(
+        self, mock_analyze_action
+    ):
+        """Test multi-host TPU tests are skipped when no nodepool is passed."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.logger.warning") as mock_warning,
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            mock_warning.assert_any_call(
+                "Multi-host TPU test(s) %s need entire slice, skipping "
+                "them (please use --nodepools flag to run them).",
+                "tpu-collectives",
+            )
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertNotIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_full_cluster_runs_multi_host(self, mock_analyze_action):
+        """Test full-cluster TPU run schedules multi-host tests w/o flags."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_fails_when_no_partition_slurm(self, mock_analyze_action):
+        """Test TPU run on Slurm fails when no partition is provided."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "slurm"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.partitions_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="slurm"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "slurm": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIsInstance(
+                result.exception, exceptions.ChsValidationError
+            )
+            self.assertIn(
+                "TPU tests need entire slice, please use --partitions.",
+                str(result.exception),
+            )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_fails_when_only_multi_host_and_no_nodepool(
+        self, mock_analyze_action
+    ):
+        """Test error raised when only multi-host TPU tests without nodepool."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-collectives",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIsInstance(
+                result.exception, exceptions.ChsValidationError
+            )
+            self.assertIn(
+                "TPU multi-host test(s) 'tpu-collectives' require an entire "
+                "slice (use --nodepools).",
+                str(result.exception),
+            )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_skips_multi_host_when_slice_partially_busy(
+        self, mock_analyze_action
+    ):
+        """Test multi-host tests skipped on partially busy mixed run."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = "pool1"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        def mock_get_nodes():
+            self.mock_scheduler.partially_busy_slices = {"pool1": ["node2"]}
+            if self.mock_scheduler.require_whole_slices:
+                return []
+            return ["node1"]
+
+        self.mock_scheduler.get_nodes_under_test.side_effect = mock_get_nodes
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+            mock.patch("chs.cli.logger") as mock_cli_logger,
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodepools",
+                    "pool1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.mock_scheduler.get_nodes_under_test.assert_called_once_with()
+            mock_cli_logger.warning.assert_any_call(
+                "Slice '%s' is partially busy. Multi-host test(s) %s "
+                "require full slices and were omitted from this run.",
+                "pool1",
+                "'tpu-collectives'",
+            )
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertNotIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_skips_multi_host_in_tiered_suite_when_slice_partially_busy(
+        self, mock_analyze_action
+    ):
+        """Test later-tier multi-host tests skipped on partially busy slice."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = "pool1"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        def mock_get_nodes():
+            self.mock_scheduler.partially_busy_slices = {"pool1": ["node2"]}
+            if self.mock_scheduler.require_whole_slices:
+                return []
+            return ["node1"]
+
+        self.mock_scheduler.get_nodes_under_test.side_effect = mock_get_nodes
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.cli.load_suite",
+                return_value={
+                    "name": "tiered-tpu-suite",
+                    "tests": [
+                        {"name": "tpu-info"},
+                        {
+                            "name": "tpu-collectives",
+                            "trigger_condition": {"HEALTHY": ["tpu-info"]},
+                        },
+                    ],
+                },
+            ),
+            mock.patch(
+                "chs.utils.suites.get_all_suites",
+                return_value=["tiered-tpu-suite"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+            mock.patch("chs.cli.logger") as mock_cli_logger,
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "tiered-tpu-suite",
+                    "--nodepools",
+                    "pool1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            mock_cli_logger.warning.assert_any_call(
+                "Slice '%s' is partially busy. Multi-host test(s) %s "
+                "require full slices and were omitted from this run.",
+                "pool1",
+                "'tpu-collectives'",
+            )
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertNotIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_tiered_suite_multi_host_first_tier_rejects_nodes(
+        self, mock_analyze_action
+    ):
+        """Test --nodes fails fast when the initial tier is multi-host only.
+
+        Without the guard, pruning empties active_tier_tests and Ramble
+        would treat `[]` as "no filter", running every tier at once.
+        """
+        self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.cli.load_suite",
+                return_value={
+                    "name": "tiered-multi-host-first",
+                    "tests": [
+                        {"name": "tpu-collectives"},
+                        {
+                            "name": "tpu-info",
+                            "trigger_condition": {
+                                "UNHEALTHY": ["tpu-collectives"]
+                            },
+                        },
+                    ],
+                },
+            ),
+            mock.patch(
+                "chs.utils.suites.get_all_suites",
+                return_value=["tiered-multi-host-first"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "tiered-multi-host-first",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+
+        self.assertIsInstance(result.exception, exceptions.ChsValidationError)
+        self.assertIn("Initial tier", str(result.exception))
+        self.assertIn("--nodepools", str(result.exception))
+        self.mock_rm_instance.configure_workspace.assert_not_called()
+        self.mock_rm_instance.execute_experiments.assert_not_called()
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_does_not_log_multi_host_skip_on_dynamic_pool(
+        self, mock_analyze_action
+    ):
+        """Test no multi-host fallback log for partially busy dynamic pool."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = "dynpool"
+        self.mock_scheduler.partially_busy_slices = {"dynpool": ["node2"]}
+        self.mock_scheduler.get_nodes_under_test.return_value = []
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+            mock.patch("chs.cli.logger") as mock_cli_logger,
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodepools",
+                    "dynpool",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIsInstance(
+                result.exception, exceptions.NoNodesProvidedException
+            )
+            for call in mock_cli_logger.warning.call_args_list:
+                self.assertNotIn(
+                    "require full slices and were omitted from this run",
+                    str(call),
+                )
 
     def test_run_action_called_process_error_includes_stderr(self):
         """Test run_action formats CalledProcessError with stderr."""

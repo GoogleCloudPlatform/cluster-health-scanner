@@ -20,6 +20,7 @@ from chs.testkit import SlicePlugin
 class Plugin(SlicePlugin):
     name = "tpu-network-stress"
     category = "Network & Collectives"
+    requires_whole_slice = True
     description = (
         "Intense point-to-point network stress test for TPU interconnects"
     )

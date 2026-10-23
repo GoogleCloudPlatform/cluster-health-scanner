@@ -261,6 +261,19 @@ class TestSlurmScheduler(unittest.TestCase):
         mock_run.return_value.stdout = "node1\nnode2"
         self.assertEqual(scheduler.get_nodes_under_test(), ["node1", "node2"])
 
+    @mock.patch("subprocess.run")
+    def test_get_nodes_under_test_accepts_require_whole_slices_attribute(
+        self, mock_run, mock_logger
+    ):
+        """Slurm must accept require_whole_slices without error."""
+        scheduler = SlurmScheduler(nodes="node1,node2")
+        scheduler.require_whole_slices = True
+        mock_run.return_value.stdout = "node1\nnode2"
+        self.assertEqual(
+            scheduler.get_nodes_under_test(),
+            ["node1", "node2"],
+        )
+
     def test_get_nodes_under_test_multiple_args_error(self, mock_logger):
         scheduler = SlurmScheduler(
             nodes="n1",
@@ -847,19 +860,234 @@ class TestKubernetesScheduler(unittest.TestCase):
         mock_not_ready,
         mock_logger,
     ):
-        """Test TPU slice is dropped if any node in slice is NotReady."""
-        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        """Test multi-host tests fall back to single-host on unready slice."""
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "node1",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "pool1",
+                        "cloud.google.com/gke-tpu-accelerator": (
+                            "tpu-v4-podslice"
+                        ),
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "node2",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "pool1",
+                        "cloud.google.com/gke-tpu-accelerator": (
+                            "tpu-v4-podslice"
+                        ),
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
         mock_tpu_slices.return_value = TpuSliceData(
             pools={"pool1": ["node1", "node2"]},
             node_to_pool={"node1": "pool1", "node2": "pool1"},
             pool_to_topology={"pool1": "2x2"},
         )
-        scheduler = KubernetesScheduler(nodes="node1")
+        scheduler = KubernetesScheduler(nodepools="pool1")
+        scheduler.require_whole_slices = True
 
         valid_nodes = scheduler.get_nodes_under_test()
 
         self.assertEqual(valid_nodes, [])
+        self.assertEqual(scheduler.partially_busy_slices, {"pool1": ["node2"]})
         mock_logger.warning.assert_called_once()
+        self.assertIn(
+            "Cannot run multi-host test(s)",
+            mock_logger.warning.call_args[0][0],
+        )
+
+        single_host_scheduler = KubernetesScheduler(nodepools="pool1")
+        valid_single_host = single_host_scheduler.get_nodes_under_test()
+        self.assertEqual(valid_single_host, ["node1"])
+
+        node_scheduler = KubernetesScheduler(nodes="node1")
+        self.assertEqual(node_scheduler.get_nodes_under_test(), ["node1"])
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value={"node2"},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_dynamic_tpu_slice(
+        self,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
+    ):
+        """Test dynamic TPU pools need a whole slice for single-host tests."""
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "node1",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "dynpool",
+                        "cloud.google.com/gke-tpu-accelerator": "tpu7x",
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "node2",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "dynpool",
+                        "cloud.google.com/gke-tpu-accelerator": "tpu7x",
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={"dynpool": ["node1", "node2"]},
+            node_to_pool={"node1": "dynpool", "node2": "dynpool"},
+            pool_to_topology={"dynpool": "4x4x4"},
+            dynamic_slice_partitions={"dynpool": "dyn-part-1"},
+            pool_to_accelerator={"dynpool": "tpu7x"},
+        )
+        scheduler = KubernetesScheduler(nodepools="dynpool")
+        scheduler.require_whole_slices = False
+
+        valid_nodes = scheduler.get_nodes_under_test()
+        self.assertEqual(valid_nodes, [])
+        self.assertEqual(scheduler.partially_busy_slices, {})
+        mock_logger.warning.assert_any_call(
+            "Cannot run tests on dynamic TPU pool '%s': dynamic slicing "
+            "requires the entire pool to be available to provision the "
+            "Slice CR, but the following node(s) are busy or unavailable: %s",
+            "dynpool",
+            "node2",
+        )
+
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={"dynpool": ["node1"], "staticpool": ["node2"]},
+            node_to_pool={"node1": "dynpool", "node2": "staticpool"},
+            pool_to_topology={"dynpool": "4x4x4", "staticpool": "2x2"},
+            dynamic_slice_partitions={"dynpool": "dyn-part-1"},
+            pool_to_accelerator={"dynpool": "tpu7x", "staticpool": "tpu7x"},
+        )
+        mixed_scheduler = KubernetesScheduler(nodes="node1,node2")
+        mock_not_ready.return_value = set()
+        self.assertEqual(mixed_scheduler.get_nodes_under_test(), ["node2"])
+        mock_logger.warning.assert_any_call(
+            "Excluded node(s) %s because individual node targeting "
+            "(--nodes) is not supported on dynamic TPU pool '%s'. "
+            "Dynamic TPU pools require --nodepools.",
+            "node1",
+            "dynpool",
+        )
+
+        only_dynamic_scheduler = KubernetesScheduler(nodes="node1")
+        self.assertEqual(only_dynamic_scheduler.get_nodes_under_test(), [])
+        for call_args in mock_logger.info.call_args_list:
+            self.assertNotIn("existing workloads", call_args[0][0])
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_excludes_unhealthy_slice_nodes(
+        self,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
+    ):
+        """Test unhealthy-slice nodes are excluded when no pool is healthy."""
+        for name in ("cube-a-0", "cube-a-1", "cube-a-2"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                {
+                    "metadata": {
+                        "name": name,
+                        "labels": {
+                            "cloud.google.com/gke-nodepool": "cube-a",
+                            "cloud.google.com/gke-tpu-accelerator": "tpu7x",
+                        },
+                    },
+                    "status": {"allocatable": {"google.com/tpu": "4"}},
+                },
+            )
+        # An unhealthy pool is purged from pools/node_to_pool but its nodes
+        # remain in all_tpu_nodes.
+        unhealthy_only = TpuSliceData(
+            all_tpu_nodes={"cube-a-0", "cube-a-1", "cube-a-2"},
+        )
+        expected_warning = (
+            "Excluded TPU node '%s' from testing because "
+            "its parent slice is unhealthy."
+        )
+
+        for require_whole_slices in (False, True):
+            for scheduler in (
+                KubernetesScheduler(nodepools="cube-a"),
+                KubernetesScheduler(nodes="cube-a-0,cube-a-1"),
+                KubernetesScheduler(),
+            ):
+                mock_tpu_slices.return_value = unhealthy_only
+                mock_logger.reset_mock()
+                scheduler.require_whole_slices = require_whole_slices
+                self.assertEqual(scheduler.get_nodes_under_test(), [])
+                self.assertEqual(scheduler.partially_busy_slices, {})
+                mock_logger.warning.assert_any_call(
+                    expected_warning, "cube-a-0"
+                )
+
+        # With a healthy pool also in scope, only the healthy pool survives.
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={"cube-b": ["cube-b-0"]},
+            node_to_pool={"cube-b-0": "cube-b"},
+            pool_to_topology={"cube-b": "4x4x4"},
+            all_tpu_nodes={"cube-a-0", "cube-a-1", "cube-a-2", "cube-b-0"},
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "cube-b-0",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "cube-b",
+                        "cloud.google.com/gke-tpu-accelerator": "tpu7x",
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+        scheduler = KubernetesScheduler(nodepools="cube-a,cube-b")
+        scheduler.require_whole_slices = True
+        self.assertEqual(scheduler.get_nodes_under_test(), ["cube-b-0"])
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
@@ -912,9 +1140,40 @@ class TestKubernetesScheduler(unittest.TestCase):
         mock_not_ready,
         mock_logger,
     ):
-        for name in ("t1", "t2", "t3", "t4"):
-            self.kube.add_object("", "nodes", {"metadata": {"name": name}})
-        # Only t1 is requested, but another run targets t2 in its slice.
+        for name in ("t1", "t2"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                {
+                    "metadata": {
+                        "name": name,
+                        "labels": {
+                            "cloud.google.com/gke-nodepool": "pool1",
+                            "cloud.google.com/gke-tpu-accelerator": (
+                                "tpu-v4-podslice"
+                            ),
+                        },
+                    },
+                    "status": {"allocatable": {"google.com/tpu": "4"}},
+                },
+            )
+        for name in ("t3", "t4"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                {
+                    "metadata": {
+                        "name": name,
+                        "labels": {
+                            "cloud.google.com/gke-nodepool": "pool2",
+                            "cloud.google.com/gke-tpu-accelerator": (
+                                "tpu-v4-podslice"
+                            ),
+                        },
+                    },
+                    "status": {"allocatable": {"google.com/tpu": "4"}},
+                },
+            )
         self.kube.add_object(
             "batch",
             "jobs",
@@ -923,12 +1182,20 @@ class TestKubernetesScheduler(unittest.TestCase):
         )
         mock_tpu_slices.return_value = TpuSliceData(
             pools={"pool1": ["t1", "t2"], "pool2": ["t3", "t4"]},
-            node_to_pool={"t1": "pool1", "t2": "pool1", "t3": "pool2"},
+            node_to_pool={
+                "t1": "pool1",
+                "t2": "pool1",
+                "t3": "pool2",
+                "t4": "pool2",
+            },
             pool_to_topology={"pool1": "2x2", "pool2": "2x2"},
         )
-        scheduler = KubernetesScheduler(nodes="t1,t3")
-
-        self.assertCountEqual(scheduler.get_nodes_under_test(), ["t3", "t4"])
+        scheduler = KubernetesScheduler(nodepools="pool1,pool2")
+        scheduler.require_whole_slices = True
+        self.assertCountEqual(
+            scheduler.get_nodes_under_test(),
+            ["t3", "t4"],
+        )
         self.assertEqual(
             mock_logger.warning.call_args_list[0],
             mock.call(
@@ -936,6 +1203,11 @@ class TestKubernetesScheduler(unittest.TestCase):
             ),
         )
         self.assertIn("pool1", mock_logger.warning.call_args_list[1][0])
+
+        node_scheduler = KubernetesScheduler(nodes="t1,t3")
+        self.assertCountEqual(
+            node_scheduler.get_nodes_under_test(), ["t1", "t3"]
+        )
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",

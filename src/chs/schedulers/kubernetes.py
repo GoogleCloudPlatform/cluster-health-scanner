@@ -175,6 +175,13 @@ def _job_condition(job: dict, condition_type: str) -> dict | None:
     return None
 
 
+def _format_node_list(nodes: list[str], max_display: int = 3) -> str:
+    """Formats a list of node names, truncating with a count if long."""
+    shown = ", ".join(nodes[:max_display])
+    hidden = len(nodes) - max_display
+    return f"{shown} and {hidden} others" if hidden > 0 else shown
+
+
 def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
     """Returns True if resources has non-zero quantity for accelerator_type."""
     return any(
@@ -1051,33 +1058,10 @@ class KubernetesScheduler(BaseScheduler):
             self._resolved_nodes = []
             return []
 
-        topology = self._get_tpu_slices()
         busy_nodes = self._get_busy_nodes(target_nodes=raw_nodes)
-        not_ready_nodes = self._get_not_ready_nodes()
-        excluded_nodes = busy_nodes.union(not_ready_nodes)
-
-        gpu_nodes = set()
-        requested_tpu_slices = defaultdict(set)
-
-        for node in raw_nodes:
-            pool = topology.node_to_pool.get(node)
-            if pool:
-                requested_tpu_slices[pool].add(node)
-            elif node in topology.all_tpu_nodes:
-                logger.warning(
-                    "Excluded TPU node '%s' from testing because "
-                    "its parent slice is unhealthy.",
-                    node,
-                )
-                continue
-            else:
-                gpu_nodes.add(node)
-
-        candidate_nodes = set(gpu_nodes)
-        for pool_name in requested_tpu_slices:
-            candidate_nodes.update(topology.pools[pool_name])
+        excluded_nodes = busy_nodes | self._get_not_ready_nodes()
         for run_id, run_nodes in sorted(
-            self.find_runs_targeting_nodes(sorted(candidate_nodes)).items()
+            self.find_runs_targeting_nodes(raw_nodes).items()
         ):
             excluded_nodes.update(run_nodes)
             logger.warning(
@@ -1086,50 +1070,80 @@ class KubernetesScheduler(BaseScheduler):
                 run_id,
             )
 
-        valid_nodes = []
-        if gpu_nodes:
-            excluded_gpus = gpu_nodes.intersection(excluded_nodes)
-            if excluded_gpus:
-                logger.info(
-                    "Identified %d active GPU node(s) with "
-                    "existing workloads. These nodes "
-                    "will be skipped to avoid disrupting running tasks.",
-                    len(excluded_gpus),
-                )
+        topology = self._get_tpu_slices()
+        dynamic_pools = set(topology.dynamic_slice_partitions)
+        requested_pools: list[str] = []
+        dynamic_excluded = defaultdict(list)
+        self.partially_busy_slices = {}
 
-            valid_nodes.extend(
-                [
-                    node
-                    for node in raw_nodes
-                    if node in gpu_nodes and node not in excluded_nodes
-                ]
-            )
-
-        for pool_name, requested_slice_nodes in requested_tpu_slices.items():
-            expected_slice_nodes = set(topology.pools[pool_name])
-
-            excluded_in_slice = list(
-                expected_slice_nodes.intersection(excluded_nodes)
-            )
-
-            if excluded_in_slice:
-                if len(excluded_in_slice) > 3:
-                    formatted_nodes = (
-                        f"{', '.join(excluded_in_slice[:3])} and "
-                        f"{len(excluded_in_slice) - 3} others"
-                    )
-                else:
-                    formatted_nodes = ", ".join(excluded_in_slice)
-
+        for node in raw_nodes:
+            pool = topology.node_to_pool.get(node)
+            if pool and self.nodes_arg and pool in dynamic_pools:
+                excluded_nodes.add(node)
+                dynamic_excluded[pool].append(node)
+            elif pool:
+                if pool not in requested_pools:
+                    requested_pools.append(pool)
+            elif node in topology.all_tpu_nodes:
+                excluded_nodes.add(node)
                 logger.warning(
-                    "Skipping TPU slice '%s': TPU tests require the entire "
-                    "slice to be available and idle, but the following node(s) "
-                    "are currently busy or unavailable: %s",
-                    pool_name,
-                    formatted_nodes,
+                    "Excluded TPU node '%s' from testing because "
+                    "its parent slice is unhealthy.",
+                    node,
                 )
-            else:
-                valid_nodes.extend(expected_slice_nodes)
+
+        for pool, nodes in dynamic_excluded.items():
+            logger.warning(
+                "Excluded node(s) %s because individual node targeting "
+                "(--nodes) is not supported on dynamic TPU pool '%s'. "
+                "Dynamic TPU pools require --nodepools.",
+                _format_node_list(nodes),
+                pool,
+            )
+
+        for pool in requested_pools:
+            busy = sorted(set(topology.pools[pool]) & excluded_nodes)
+            if busy:
+                self.partially_busy_slices[pool] = busy
+
+        if self.require_whole_slices:
+            for pool, busy in self.partially_busy_slices.items():
+                logger.warning(
+                    "Cannot run multi-host test(s) on slice '%s': the "
+                    "following node(s) are busy or unavailable: %s",
+                    pool,
+                    _format_node_list(busy),
+                )
+            valid_nodes = [
+                n
+                for n in raw_nodes
+                if n not in excluded_nodes
+                and topology.node_to_pool.get(n)
+                not in self.partially_busy_slices
+            ]
+        else:
+            if busy_nodes:
+                logger.info(
+                    "Identified %d active node(s) with existing workloads. "
+                    "These nodes will be skipped to avoid disrupting running "
+                    "tasks.",
+                    len(busy_nodes),
+                )
+            busy_dynamic_pools = [
+                p for p in self.partially_busy_slices if p in dynamic_pools
+            ]
+            for pool in busy_dynamic_pools:
+                busy = self.partially_busy_slices.pop(pool)
+                logger.warning(
+                    "Cannot run tests on dynamic TPU pool '%s': dynamic "
+                    "slicing requires the entire pool to be available to "
+                    "provision the Slice CR, but the following node(s) "
+                    "are busy or unavailable: %s",
+                    pool,
+                    _format_node_list(busy),
+                )
+                excluded_nodes.update(topology.pools[pool])
+            valid_nodes = [n for n in raw_nodes if n not in excluded_nodes]
 
         self._resolved_nodes = valid_nodes
         return self._resolved_nodes

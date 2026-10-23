@@ -392,7 +392,54 @@ class TestValidators(unittest.TestCase):
         self.assertIn("Heterogeneous cluster detected", errors[0])
         self.assertIn("--partitions", errors[0])
 
-    def test_tpu_topology_validator_valid(self):
+    def test_tpu_topology_validator_invalid_kubernetes_multi_host(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "kubernetes",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg="node1", nodelists_arg=None, nodepools_arg=None
+                ),
+                "tests": ["tpu-collectives"],
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn(
+            "TPU multi-host test(s) 'tpu-collectives' require an entire "
+            "slice (use --nodepools).",
+            errors[0],
+        )
+
+    def test_tpu_topology_validator_valid_kubernetes_single_host(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "kubernetes",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg="node1", nodelists_arg=None, nodepools_arg=None
+                ),
+                "tests": ["tpu-info"],
+            }
+        )
+        self.assertEqual(errors, [])
+
+    def test_tpu_topology_validator_valid_kubernetes_mixed_tests(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "tpu7x-standard-4t",
+                "scheduler": "kubernetes",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg="node1", nodelists_arg=None, nodepools_arg=None
+                ),
+                "tests": ["tpu-info", "tpu-collectives"],
+            }
+        )
+        self.assertEqual(errors, [])
+
+    def test_tpu_topology_validator_valid_kubernetes_nodepools(self):
         v = validators.topology.TpuTopologyValidator()
         errors = v.validate(
             {
@@ -401,31 +448,29 @@ class TestValidators(unittest.TestCase):
                 "scheduler_obj": mock.Mock(
                     nodes_arg=None, nodelists_arg=None, nodepools_arg="pool1"
                 ),
+                "tests": ["tpu-collectives"],
             }
         )
         self.assertEqual(errors, [])
 
-    def test_tpu_topology_validator_invalid_kubernetes(self):
+    def test_tpu_topology_validator_valid_slurm(self):
         v = validators.topology.TpuTopologyValidator()
         errors = v.validate(
             {
-                "machine_type": "tpu7x-standard-4t",
-                "scheduler": "kubernetes",
+                "machine_type": "ct6e-standard-4t",
+                "scheduler": "slurm",
                 "scheduler_obj": mock.Mock(
-                    nodes_arg="node1", nodelists_arg=None, nodepools_arg="pool1"
+                    nodes_arg=None, nodelists_arg=None, partitions_arg="part1"
                 ),
             }
         )
-        self.assertEqual(len(errors), 1)
-        self.assertIn(
-            "TPU tests need entire slice, please use --nodepools.", errors[0]
-        )
+        self.assertEqual(errors, [])
 
     def test_tpu_topology_validator_invalid_slurm(self):
         v = validators.topology.TpuTopologyValidator()
         errors = v.validate(
             {
-                "machine_type": "ct5l-hightpu-4t",
+                "machine_type": "ct6e-standard-4t",
                 "scheduler": "slurm",
                 "scheduler_obj": mock.Mock(
                     nodes_arg=None,
@@ -437,24 +482,6 @@ class TestValidators(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn(
             "TPU tests need entire slice, please use --partitions.", errors[0]
-        )
-
-    def test_tpu_topology_validator_missing_nodepool(self):
-        v = validators.topology.TpuTopologyValidator()
-        errors = v.validate(
-            {
-                "machine_type": "tpu7x-standard-4t",
-                "scheduler": "kubernetes",
-                "scheduler_obj": mock.Mock(
-                    nodes_arg=None, nodelists_arg=None, nodepools_arg=None
-                ),
-            }
-        )
-        self.assertEqual(len(errors), 1)
-        self.assertIn(
-            "TPU tests need entire slice, please use --nodepools to target "
-            "specific nodepools.",
-            errors[0],
         )
 
     def test_tpu_topology_validator_missing_partitions(self):
@@ -472,6 +499,23 @@ class TestValidators(unittest.TestCase):
         self.assertIn(
             "TPU tests need entire slice, please use --partitions to target "
             "specific partitions.",
+            errors[0],
+        )
+
+    def test_tpu_topology_validator_slurm_with_tests_enforces_partitions(self):
+        v = validators.topology.TpuTopologyValidator()
+        errors = v.validate(
+            {
+                "machine_type": "ct6e-standard-4t",
+                "scheduler": "slurm",
+                "scheduler_obj": mock.Mock(
+                    nodes_arg="node1", nodelists_arg=None, partitions_arg=None
+                ),
+            }
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn(
+            "TPU tests need entire slice, please use --partitions.",
             errors[0],
         )
 

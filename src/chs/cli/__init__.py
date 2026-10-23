@@ -53,6 +53,7 @@ from chs import (
     preflights,
     resources,
     telemetry,
+    testkit,
     utils,
     validators,
 )
@@ -485,6 +486,13 @@ def _get_test_name(test: dict[str, Any] | str) -> str:
     return test.get("name") if isinstance(test, dict) else str(test)
 
 
+def _drop_multi_host_tests(tests: list[Any] | None) -> list[Any] | None:
+    """Removes multi-host TPU tests from the given list."""
+    if not tests:
+        return tests
+    return [t for t in tests if not testkit.requires_whole_slice(t)]
+
+
 def _validate_cli_args(
     suite: str | None,
     tests: str | None,
@@ -809,6 +817,16 @@ def _analyze_action(
                             next_tests = tier_manager.get_next_tier_tests(
                                 tier_results
                             )
+                            configured = {
+                                _get_test_name(t)
+                                for t in run_entry.get("tests") or []
+                            }
+                            if configured:
+                                next_tests = [
+                                    t
+                                    for t in next_tests or []
+                                    if t in configured
+                                ]
 
                     if not next_tests:
                         run_entry["is_boh_final"] = True
@@ -1294,8 +1312,9 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     help=(
         "Comma-separated list (or multiple flags) of individual nodes to run "
         "the tests on (e.g., --nodes=node1,node2, -n node1 -n node2).\n\n"
-        f"{click.style('Note:', fg='yellow', bold=True)} Individual nodes are "
-        "NOT supported for TPUs. Please use --nodepools instead."
+        f"{click.style('Note:', fg='yellow', bold=True)} For TPUs, individual "
+        "nodes are supported for single-host tests on static pools. Multi-host "
+        "tests and dynamic TPU pools require --nodepools."
         "\n\n "
     ),
     callback=validators.validate_non_empty_string,
@@ -1319,7 +1338,8 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     help=(
         "Comma-separated list (or multiple flags) of Kubernetes node pools to "
         "target.\n\n"
-        "This is the recommended and required way to target TPU resources."
+        "Required when targeting multi-host TPU benchmarks on Kubernetes. Can "
+        "also target single-host benchmarks across entire pools."
         "\n\n "
     ),
     callback=validators.validate_non_empty_string,
@@ -1577,6 +1597,27 @@ def run(
                 except (ValueError, TypeError, ex.SuiteNotFoundException):
                     pass
 
+        if resources.is_tpu(machine_type) and scheduler_obj.nodes_arg:
+            skipped_tests = [
+                _get_test_name(t)
+                for t in parsed_tests or []
+                if testkit.requires_whole_slice(t)
+            ]
+            if skipped_tests:
+                logger.warning(
+                    "Multi-host TPU test(s) %s need entire slice, skipping "
+                    "them (please use --nodepools flag to run them).",
+                    ", ".join(skipped_tests),
+                )
+            parsed_tests = _drop_multi_host_tests(parsed_tests or [])
+            active_tier_tests = _drop_multi_host_tests(active_tier_tests)
+            if is_tiered and not active_tier_tests:
+                raise ex.ChsValidationError(
+                    f"Initial tier of suite '{suite}' has only multi-host "
+                    "TPU tests and cannot run with --nodes. Please use "
+                    "--nodepools."
+                )
+
         logger.debug("Running preflight checks")
         parsed_tests = scheduler_obj.run_preflight_checks(parsed_tests)
         if active_tier_tests and parsed_tests is not None:
@@ -1590,10 +1631,50 @@ def run(
         f"completed.[/{theme.CHS_SUCCESS_STYLE}]"
     )
 
+    scheduled_tests = active_tier_tests or parsed_tests
+    if not scheduled_tests:
+        raise ex.ChsValidationError(
+            "No valid tests can be scheduled on this cluster."
+        )
+
     with theme.get_progress_spinner(
         f"[{theme.CHS_HEADER_STYLE}]Identifying idle nodes for testing..."
     ):
+        tpu_tests = (
+            (parsed_tests or []) if resources.is_tpu(machine_type) else []
+        )
+        multi_host_tests = [
+            t for t in tpu_tests if testkit.requires_whole_slice(t)
+        ]
+        single_host_tests = [
+            t for t in tpu_tests if not testkit.requires_whole_slice(t)
+        ]
+
+        scheduler_obj.require_whole_slices = (
+            bool(multi_host_tests) and not single_host_tests
+        )
         nodes_under_test = scheduler_obj.get_nodes_under_test()
+
+        if (
+            nodes_under_test
+            and multi_host_tests
+            and single_host_tests
+            and scheduler_obj.partially_busy_slices
+        ):
+            parsed_tests = _drop_multi_host_tests(parsed_tests)
+            active_tier_tests = _drop_multi_host_tests(active_tier_tests)
+            scheduled_tests = active_tier_tests or parsed_tests
+            skipped_test_names = ", ".join(
+                f"'{_get_test_name(t)}'" for t in multi_host_tests
+            )
+            for pool_name in scheduler_obj.partially_busy_slices:
+                logger.warning(
+                    "Slice '%s' is partially busy. Multi-host test(s) %s "
+                    "require full slices and were omitted from this run.",
+                    pool_name,
+                    skipped_test_names,
+                )
+
     if not nodes_under_test:
         raise ex.NoNodesProvidedException(
             "No valid nodes remain available for testing."
@@ -1601,12 +1682,6 @@ def run(
 
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)
     full_cluster_name = scheduler_obj.get_cluster_name()
-
-    scheduled_tests = active_tier_tests if active_tier_tests else parsed_tests
-    if not scheduled_tests:
-        raise ex.ChsValidationError(
-            "No valid tests can be scheduled on this cluster."
-        )
 
     scheduled_test_names = [_get_test_name(t) for t in scheduled_tests]
     test_names = ", ".join(scheduled_test_names)
