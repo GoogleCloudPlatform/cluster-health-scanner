@@ -38,16 +38,18 @@ from chs.schedulers.kubernetes import (
     SliceSpec,
     TpuSliceData,
     _gke_version,
+    _is_accelerator_node,
     _partition_ids,
     _record_pool_node,
     _record_subslice_node,
+    _requests_accelerator,
     _slice_name,
     _with_retries,
 )
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import _get_kubectl_context, detect_scheduler
 from google.auth.exceptions import GoogleAuthError
-from chs.exceptions import ChsSchedulerException
+from chs.exceptions import ChsSchedulerException, ChsValidationError
 from chs.utils import k8s_client
 import click
 from chs import exceptions as ex
@@ -60,6 +62,57 @@ from tests.k8s_fakes import (
 _MANAGED_BY = "app.kubernetes.io/managed-by"
 _INSTANCE = "app.kubernetes.io/instance"
 _WORKER_LABELS = {_MANAGED_BY: "chs", "app.kubernetes.io/component": "worker"}
+_GPU_DRA_DRIVER = "gpu.nvidia.com"
+
+
+def _gpu_node(name: str, allocatable_gpus: int | None = None) -> dict:
+    """Returns an A4 Node, advertising nvidia.com/gpu if allocatable_gpus."""
+    allocatable = {"cpu": "224"}
+    if allocatable_gpus is not None:
+        allocatable["nvidia.com/gpu"] = str(allocatable_gpus)
+    return {
+        "metadata": {
+            "name": name,
+            "labels": {"node.kubernetes.io/instance-type": "a4-highgpu-8g"},
+        },
+        "status": {"allocatable": allocatable},
+    }
+
+
+def _gpu_resource_slice(node: str, pool: str | None = None) -> dict:
+    """Returns a ResourceSlice of the NVIDIA DRA driver on the node."""
+    return {
+        "metadata": {"name": f"{node}-{_GPU_DRA_DRIVER}"},
+        "spec": {
+            "driver": _GPU_DRA_DRIVER,
+            "nodeName": node,
+            "pool": {"name": pool or node},
+        },
+    }
+
+
+def _gpu_resource_claim(
+    name: str,
+    pool: str,
+    namespace: str = "default",
+    reserved: bool = True,
+    driver: str = _GPU_DRA_DRIVER,
+) -> dict:
+    """Returns a ResourceClaim allocated a GPU of the pool."""
+    status = {
+        "allocation": {
+            "devices": {
+                "results": [{"driver": driver, "pool": pool, "device": "gpu-0"}]
+            }
+        }
+    }
+    if reserved:
+        status["reservedFor"] = [{"resource": "pods", "name": "p", "uid": "1"}]
+    return {
+        "metadata": {"name": name, "namespace": namespace},
+        "status": status,
+    }
+
 
 _LIST_CHS_SLICES = Call(
     "list_custom_objects",
@@ -798,6 +851,354 @@ class TestKubernetesScheduler(unittest.TestCase):
         busy_nodes = scheduler._get_busy_nodes(target_nodes)
         self.assertEqual(busy_nodes, {"node2"})
         self.assertEqual(mock_is_node_busy.call_count, 3)
+
+    def test_is_accelerator_node(self, mock_logger):
+        """Nodes offer accelerators as allocatable or DRA ResourceSlices."""
+        self.assertTrue(_is_accelerator_node(_gpu_node("n1", 8)))
+        self.assertTrue(
+            _is_accelerator_node(
+                {"status": {"allocatable": {"google.com/tpu": "4"}}}
+            )
+        )
+        self.assertTrue(
+            _is_accelerator_node(_gpu_node("n1"), frozenset({"n1"}))
+        )
+        # A GPU machine without GPU capacity, e.g. with a crashed device
+        # plugin, cannot run GPU workloads whatever its labels say.
+        self.assertFalse(_is_accelerator_node(_gpu_node("n1", 0)))
+        self.assertFalse(
+            _is_accelerator_node(_gpu_node("n1"), frozenset({"n2"}))
+        )
+        # Other allocatable keys containing "gpu" (e.g. a network name) do not
+        # masquerade as device-plugin GPUs.
+        gpu_net_node = _gpu_node("n1")
+        gpu_net_node["status"]["allocatable"][
+            "networking.gke.io.networks/gpu-net-1"
+        ] = "1"
+        self.assertFalse(_is_accelerator_node(gpu_net_node))
+        self.assertTrue(_is_accelerator_node(gpu_net_node, frozenset({"n1"})))
+
+    def test_fetch_raw_node_resources_includes_dra_gpu_nodes(self, mock_logger):
+        """GPU nodes without allocatable GPUs count if they publish slices."""
+        self.kube.add_object("", "nodes", _gpu_node("plugin-node", 8))
+        self.kube.add_object("", "nodes", _gpu_node("dra-node"))
+        self.kube.add_object("", "nodes", _gpu_node("broken-node", 0))
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("dra-node")
+        )
+
+        nodes = KubernetesScheduler()._fetch_raw_node_resources()
+
+        self.assertEqual(
+            sorted(n["metadata"]["name"] for n in nodes),
+            ["dra-node", "plugin-node"],
+        )
+        mock_logger.warning.assert_called_once()
+        self.assertEqual(mock_logger.warning.call_args.args[1], "broken-node")
+
+    def test_fetch_raw_node_resources_skips_dra_lookup_if_not_needed(
+        self, mock_logger
+    ):
+        """Clusters whose GPU nodes all advertise GPUs skip the DRA API."""
+        self.kube.add_object("", "nodes", _gpu_node("plugin-node", 8))
+
+        KubernetesScheduler()._fetch_raw_node_resources()
+
+        self.assertEqual(self.kube.calls_to("list_custom_objects"), [])
+        mock_logger.warning.assert_not_called()
+
+    def test_get_dra_gpu_pool_nodes_warns_on_non_404_error(self, mock_logger):
+        """Non-404 errors (e.g. 403 Forbidden) log a warning."""
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("list_custom_objects", error)
+
+        self.assertEqual(KubernetesScheduler()._get_dra_gpu_pool_nodes(), {})
+        mock_logger.warning.assert_called_once_with(
+            "Failed to list DRA ResourceSlices. Error: %s", error
+        )
+
+    def test_get_dra_gpu_pool_nodes_debug_on_404(self, mock_logger):
+        """404 (no DRA API on cluster) logs at debug without warning."""
+        error = k8s_client.KubeError("not found", status=404)
+        self.kube.fail_next("list_custom_objects", error)
+
+        self.assertEqual(KubernetesScheduler()._get_dra_gpu_pool_nodes(), {})
+        mock_logger.warning.assert_not_called()
+        mock_logger.debug.assert_called_with(
+            "Failed to list DRA ResourceSlices. Error: %s", error
+        )
+
+    def test_requests_accelerator(self, mock_logger):
+        """Test _requests_accelerator recognizes accelerator requests."""
+        # Container limits
+        self.assertTrue(
+            _requests_accelerator(
+                {
+                    "spec": {
+                        "containers": [
+                            {"resources": {"limits": {"nvidia.com/gpu": 8}}}
+                        ]
+                    }
+                }
+            )
+        )
+        # DRA claims are judged by their allocations, not by their names.
+        self.assertFalse(
+            _requests_accelerator(
+                {
+                    "spec": {
+                        "containers": [
+                            {"resources": {"claims": [{"name": "gpu-claim"}]}}
+                        ]
+                    }
+                }
+            )
+        )
+        self.assertFalse(
+            _requests_accelerator(
+                {
+                    "spec": {
+                        "containers": [{"resources": {}}],
+                        "resourceClaims": [
+                            {
+                                "name": "claim",
+                                "resourceClaimTemplateName": "a4-gpu-template",
+                            }
+                        ],
+                    }
+                }
+            )
+        )
+        # Standard CPU pod
+        self.assertFalse(
+            _requests_accelerator(
+                {
+                    "spec": {
+                        "containers": [
+                            {"resources": {"requests": {"cpu": "4"}}}
+                        ]
+                    }
+                }
+            )
+        )
+
+    def test_get_busy_nodes_from_claims(self, mock_logger):
+        """Only GPUs reserved for pods outside CHS make a node busy."""
+        for node, pool in (
+            ("node1", "pool-1"),
+            ("node2", "pool-2"),
+            ("node3", "pool-3"),
+            ("node4", "pool-4"),
+            ("node5", "pool-5"),
+        ):
+            self.kube.add_object(
+                "resource.k8s.io",
+                "resourceslices",
+                _gpu_resource_slice(node, pool),
+            )
+        for claim in (
+            _gpu_resource_claim("in-use", "pool-1"),
+            _gpu_resource_claim("chs", "pool-2", namespace=CHS_NAMESPACE),
+            _gpu_resource_claim("other-driver", "pool-3", driver="other.io"),
+            _gpu_resource_claim("not-reserved", "pool-4", reserved=False),
+            _gpu_resource_claim("not-targeted", "pool-5"),
+        ):
+            self.kube.add_object("resource.k8s.io", "resourceclaims", claim)
+
+        busy = KubernetesScheduler()._get_busy_nodes_from_claims(
+            {"node1", "node2", "node3", "node4"}
+        )
+
+        self.assertEqual(busy, {"node1"})
+
+    def test_get_busy_nodes_from_claims_without_dra(self, mock_logger):
+        """Clusters without NVIDIA GPU ResourceSlices skip the claims."""
+        busy = KubernetesScheduler()._get_busy_nodes_from_claims({"node1"})
+
+        self.assertEqual(busy, set())
+        self.assertEqual(
+            [
+                c.kwargs["plural"]
+                for c in self.kube.calls_to("list_custom_objects")
+            ],
+            ["resourceslices"],
+        )
+
+    def test_get_busy_nodes_from_claims_warns_if_listing_fails(
+        self, mock_logger
+    ):
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("node1")
+        )
+        self.kube.fail_next(
+            "list_custom_objects",
+            None,
+            k8s_client.KubeError("forbidden", status=403),
+        )
+
+        busy = KubernetesScheduler()._get_busy_nodes_from_claims({"node1"})
+
+        self.assertEqual(busy, set())
+        mock_logger.warning.assert_called_once()
+
+    def test_get_dra_gpu_holders_names_the_pod(self, mock_logger):
+        """Holders map each busy node to the pod its claim is reserved for."""
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("node1")
+        )
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaims",
+            _gpu_resource_claim("gke-rdma-claim-0", "node1", namespace="ml"),
+        )
+
+        self.assertEqual(
+            KubernetesScheduler()._get_dra_gpu_holders({"node1"}),
+            {"node1": "ml/p"},
+        )
+
+    def test_get_dra_gpu_holders_warns_once(self, mock_logger):
+        """Unreadable claims warn once, not on every poll."""
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("node1")
+        )
+        self.kube.fail_always(
+            "list_custom_objects", k8s_client.KubeError("forbidden", status=403)
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._dra_gpu_pool_nodes = {"node1": "node1"}
+
+        scheduler._get_dra_gpu_holders({"node1"})
+        scheduler._get_dra_gpu_holders({"node1"})
+
+        mock_logger.warning.assert_called_once()
+
+    def test_get_dra_gpu_holders_skips_when_no_target_node_is_dra(
+        self, mock_logger
+    ):
+        """Listing claims is skipped when none of the target nodes use DRA."""
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("dra-node")
+        )
+        scheduler = KubernetesScheduler()
+        holders = scheduler._get_dra_gpu_holders({"non-dra-node"})
+        self.assertEqual(holders, {})
+        self.assertNotIn(
+            "resourceclaims",
+            [
+                c.kwargs.get("plural")
+                for c in self.kube.calls_to("list_custom_objects")
+            ],
+        )
+
+    def _resource_claim_listings(self) -> int:
+        return sum(
+            1
+            for c in self.kube.calls_to("list_custom_objects")
+            if c.kwargs.get("plural") == "resourceclaims"
+        )
+
+    def test_get_dra_gpu_holders_lists_claims_once_per_pass(self, mock_logger):
+        """Claims are listed once inside a pass and afresh outside of one."""
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("node1")
+        )
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaims",
+            _gpu_resource_claim("gke-rdma-claim-0", "node1", namespace="ml"),
+        )
+        scheduler = KubernetesScheduler()
+
+        with scheduler._caching_dra_gpu_holders():
+            for _ in range(2):
+                self.assertEqual(
+                    scheduler._get_dra_gpu_holders({"node1"}),
+                    {"node1": "ml/p"},
+                )
+        self.assertEqual(self._resource_claim_listings(), 1)
+
+        del self.kube.objects[
+            ("resource.k8s.io", "resourceclaims", "ml", "gke-rdma-claim-0")
+        ]
+        self.assertEqual(scheduler._get_dra_gpu_holders({"node1"}), {})
+        self.assertEqual(self._resource_claim_listings(), 2)
+
+    def test_poll_jobs_lists_dra_claims_once_per_pass(self, mock_logger):
+        """One admission pass lists the ResourceClaims at most once."""
+        for node in ("node1", "node2"):
+            self.kube.add_object(
+                "resource.k8s.io", "resourceslices", _gpu_resource_slice(node)
+            )
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaims",
+            _gpu_resource_claim("claim-0", "node1", namespace="team-a"),
+        )
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("job1", ["node1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _job_object("pair", ["node1", "node2"]),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        statuses = scheduler.poll_jobs(["job1", "pair"])
+
+        self.assertEqual(statuses, {"job1": "DEADLINE", "pair": "DEADLINE"})
+        self.assertEqual(self._resource_claim_listings(), 1)
+        self.assertFalse(scheduler._caching_dra_holders)
+        self.assertIsNone(scheduler._dra_holders_cache)
+
+    def test_find_taken_nodes_detects_dra_gpu_holders(self, mock_logger):
+        """A DRA claim on a node's GPUs marks it taken, whatever its name."""
+        for node in ("node1", "node2"):
+            self.kube.add_object(
+                "resource.k8s.io", "resourceslices", _gpu_resource_slice(node)
+            )
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaims",
+            _gpu_resource_claim("claim-0", "node1", namespace="team-a"),
+        )
+
+        taken = KubernetesScheduler()._find_taken_nodes({"node1", "node2"})
+
+        self.assertEqual(taken, {"node1": "team-a/p"})
+        self.assertEqual(
+            [
+                c.kwargs["field_selector"]
+                for c in self.kube.calls_to("list_pods")
+            ],
+            [
+                "spec.nodeName=node2,"
+                "status.phase!=Succeeded,status.phase!=Failed"
+            ],
+        )
+
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._is_node_busy")
+    def test_get_busy_nodes_includes_nodes_busy_from_claims(
+        self, mock_is_node_busy, mock_logger
+    ):
+        mock_is_node_busy.side_effect = lambda n: n == "node2"
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("node1")
+        )
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaims",
+            _gpu_resource_claim("in-use", "node1"),
+        )
+
+        busy = KubernetesScheduler()._get_busy_nodes(["node1", "node2", "n3"])
+
+        self.assertEqual(busy, {"node1", "node2"})
 
     def test_get_not_ready_nodes(self, mock_logger):
         """Test _get_not_ready_nodes identifies NotReady and Cordoned nodes."""
@@ -2180,6 +2581,7 @@ ramble:
         self.assertEqual(variables["chs_run_id"], "run-a")
         self.assertEqual(variables["worker_service_name"], "chs-run-a")
         self.assertNotIn("chs_image", variables)
+        self.assertEqual(variables["use_gpu_dra"], "false")
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
@@ -2205,6 +2607,305 @@ ramble:
             variables["chs_image"],
             "us-docker.pkg.dev/gce-ai-infra/chs/chs:0.4.0",
         )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
+        return_value=["node1"],
+    )
+    def test_write_ramble_config_sets_use_gpu_dra_true(
+        self, mock_filter, mock_logger
+    ):
+        """Test write_ramble_config sets use_gpu_dra when DRA is enabled."""
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+
+        with (
+            mock.patch.object(
+                KubernetesScheduler,
+                "_discover_networks",
+                return_value=(["default"], ["rdma-0"]),
+            ),
+            mock.patch.object(
+                KubernetesScheduler,
+                "_is_gpu_dra_enabled",
+                return_value=True,
+            ),
+        ):
+            KubernetesScheduler(nodes="node1").write_ramble_config(
+                workspace_config_dir,
+                [{"name": "test1"}],
+                "a4-highgpu-8g",
+                run_id="run-dra",
+            )
+
+        with open(os.path.join(workspace_config_dir, "ramble.yaml")) as f:
+            variables = yaml.safe_load(f)["ramble"]["variables"]
+        self.assertEqual(variables["chs_run_id"], "run-dra")
+        self.assertEqual(variables["worker_service_name"], "chs-run-dra")
+        self.assertEqual(variables["use_gpu_dra"], "true")
+
+    def _add_dra_gpu_nodes(self, *names: str) -> None:
+        for name in names:
+            self.kube.add_object("", "nodes", _gpu_node(name))
+            self.kube.add_object(
+                "resource.k8s.io", "resourceslices", _gpu_resource_slice(name)
+            )
+
+    def _add_gpu_device_class(self) -> None:
+        self.kube.add_object(
+            "resource.k8s.io",
+            "deviceclasses",
+            {"metadata": {"name": "gpu.nvidia.com"}},
+        )
+
+    def test_is_gpu_dra_enabled(self, mock_logger):
+        """Nodes publishing NVIDIA GPU slices use DRA."""
+        self._add_dra_gpu_nodes("n1", "n2")
+
+        self.assertTrue(
+            KubernetesScheduler()._is_gpu_dra_enabled(
+                "a4-highgpu-8g", ["n1", "n2"]
+            )
+        )
+        mock_logger.warning.assert_not_called()
+        self.assertNotIn(
+            "deviceclasses",
+            [
+                c.kwargs["plural"]
+                for c in self.kube.calls_to("list_custom_objects")
+            ],
+        )
+
+    def test_is_gpu_dra_enabled_false_for_tpus_and_no_nodes(self, mock_logger):
+        self._add_dra_gpu_nodes("n1")
+
+        self.assertFalse(
+            KubernetesScheduler()._is_gpu_dra_enabled(
+                "tpu7x-standard-4t", ["n1"]
+            )
+        )
+        self.assertFalse(
+            KubernetesScheduler()._is_gpu_dra_enabled("a4-highgpu-8g", [])
+        )
+
+    def test_is_gpu_dra_enabled_false_for_device_plugin_nodes(
+        self, mock_logger
+    ):
+        """Only the nodes under test decide, so mixed clusters work."""
+        self._add_dra_gpu_nodes("dra-node")
+        self.kube.add_object("", "nodes", _gpu_node("plugin-node", 8))
+
+        self.assertFalse(
+            KubernetesScheduler()._is_gpu_dra_enabled(
+                "a4-highgpu-8g", ["plugin-node"]
+            )
+        )
+        self.assertFalse(
+            KubernetesScheduler()._is_gpu_dra_enabled(
+                "a4-highgpu-8g", ["dra-node", "plugin-node"]
+            )
+        )
+        self.assertTrue(
+            KubernetesScheduler()._is_gpu_dra_enabled(
+                "a4-highgpu-8g", ["dra-node"]
+            )
+        )
+
+    def test_is_gpu_dra_enabled_prefers_device_plugin(self, mock_logger):
+        """A node advertising nvidia.com/gpu keeps using the device plugin."""
+        self.kube.add_object("", "nodes", _gpu_node("n1", 8))
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("n1")
+        )
+
+        self.assertFalse(
+            KubernetesScheduler()._is_gpu_dra_enabled("a4-highgpu-8g", ["n1"])
+        )
+
+    def test_is_gpu_dra_enabled_with_gpu_named_network_interface(
+        self, mock_logger
+    ):
+        """A DRA node with network interfaces containing 'gpu' is still DRA."""
+        node = _gpu_node("n1")
+        node["status"]["allocatable"][
+            "networking.gke.io.networks/gpu-net-1"
+        ] = "1"
+        self.kube.add_object("", "nodes", node)
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("n1")
+        )
+
+        self.assertTrue(
+            KubernetesScheduler()._is_gpu_dra_enabled("a4-highgpu-8g", ["n1"])
+        )
+
+    def test_is_gpu_dra_enabled_reuses_mode_from_validation(self, mock_logger):
+        """The mode validated for the nodes is reused without API calls."""
+        node = _gpu_node("n1")
+        node["status"]["allocatable"][
+            "networking.gke.io.networks/gpu-net-1"
+        ] = "1"
+        self.kube.add_object("", "nodes", node)
+        self.kube.add_object(
+            "resource.k8s.io", "resourceslices", _gpu_resource_slice("n1")
+        )
+        self.kube.add_object("", "nodes", _gpu_node("plugin-node", 8))
+        self._add_gpu_device_class()
+        scheduler = KubernetesScheduler()
+
+        scheduler._validate_gpu_allocation_mode(["n1"])
+        calls_after_validation = len(self.kube.calls)
+
+        self.assertTrue(scheduler._is_gpu_dra_enabled("a4-highgpu-8g", ["n1"]))
+        self.assertEqual(len(self.kube.calls), calls_after_validation)
+        # Other nodes than the validated ones are not answered from it.
+        self.assertFalse(
+            scheduler._is_gpu_dra_enabled("a4-highgpu-8g", ["plugin-node"])
+        )
+
+    def test_validate_gpu_allocation_mode_fails_without_device_class(
+        self, mock_logger
+    ):
+        """DRA nodes without the NVIDIA DeviceClass cannot be tested."""
+        self._add_dra_gpu_nodes("n1")
+
+        with self.assertRaisesRegex(
+            ChsValidationError, "DeviceClass 'gpu.nvidia.com' does not exist"
+        ):
+            KubernetesScheduler()._validate_gpu_allocation_mode(["n1"])
+
+    def test_validate_gpu_allocation_mode_fails_if_device_classes_unreadable(
+        self, mock_logger
+    ):
+        """Unreadable DeviceClasses fail the run instead of hanging it."""
+        self._add_dra_gpu_nodes("n1")
+        scheduler = KubernetesScheduler()
+        scheduler._dra_gpu_pool_nodes = {"n1": "n1"}
+        self.kube.fail_next(
+            "list_custom_objects",
+            k8s_client.KubeError("forbidden", status=403),
+        )
+
+        with self.assertRaisesRegex(
+            ChsValidationError, "DeviceClasses cannot be read"
+        ):
+            scheduler._validate_gpu_allocation_mode(["n1"])
+
+    def test_is_gpu_dra_enabled_without_dra_api(self, mock_logger):
+        """Clusters that do not serve the DRA API use the device plugin."""
+        self.kube.unregister_type("resource.k8s.io", "resourceslices")
+        self.kube.add_object("", "nodes", _gpu_node("n1", 8))
+
+        self.assertFalse(
+            KubernetesScheduler()._is_gpu_dra_enabled("a4-highgpu-8g", ["n1"])
+        )
+        mock_logger.warning.assert_not_called()
+
+    def _add_pool_gpu_node(
+        self, name: str, pool: str, allocatable_gpus: int | None = None
+    ) -> None:
+        node = _gpu_node(name, allocatable_gpus)
+        node["metadata"]["labels"]["cloud.google.com/gke-nodepool"] = pool
+        self.kube.add_object("", "nodes", node)
+        if allocatable_gpus is None:
+            self.kube.add_object(
+                "resource.k8s.io", "resourceslices", _gpu_resource_slice(name)
+            )
+
+    def test_validate_gpu_allocation_mode_rejects_mixed_nodes(
+        self, mock_logger
+    ):
+        """Mixing device plugin and DRA nodes fails with the node pools."""
+        self._add_pool_gpu_node("plugin-1", "plugin-pool", 8)
+        self._add_pool_gpu_node("dra-1", "dra-pool")
+        self._add_pool_gpu_node("dra-2", "dra-pool")
+
+        with self.assertRaises(ChsValidationError) as cm:
+            KubernetesScheduler()._validate_gpu_allocation_mode(
+                ["plugin-1", "dra-1", "dra-2"]
+            )
+
+        message = str(cm.exception)
+        self.assertIn(
+            "1 node(s) use the NVIDIA device plugin (node pools: plugin-pool)",
+            message,
+        )
+        self.assertIn("2 node(s) use DRA (node pools: dra-pool)", message)
+        self.assertIn("--nodepools", message)
+
+    def test_validate_gpu_allocation_mode_accepts_one_mode(self, mock_logger):
+        """Nodes that all use the same allocation method are accepted."""
+        self._add_pool_gpu_node("plugin-1", "plugin-pool", 8)
+        self._add_pool_gpu_node("plugin-2", "plugin-pool", 8)
+        self._add_pool_gpu_node("dra-1", "dra-pool")
+        self._add_pool_gpu_node("dra-2", "dra-pool")
+        self._add_gpu_device_class()
+        scheduler = KubernetesScheduler()
+
+        scheduler._validate_gpu_allocation_mode(["plugin-1", "plugin-2"])
+        scheduler._validate_gpu_allocation_mode(["dra-1", "dra-2"])
+        scheduler._validate_gpu_allocation_mode([])
+
+    def test_validate_gpu_allocation_mode_skips_dra_lookup_for_plugin_nodes(
+        self, mock_logger
+    ):
+        """Device plugin only runs do not list ResourceSlices."""
+        self._add_pool_gpu_node("plugin-1", "plugin-pool", 8)
+
+        KubernetesScheduler()._validate_gpu_allocation_mode(["plugin-1"])
+
+        self.assertFalse(
+            [
+                call
+                for call in self.kube.calls_to("list_custom_objects")
+                if call.kwargs.get("plural") == "resourceslices"
+            ]
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_rejects_mixed_gpu_allocation(
+        self, mock_tpu_slices, mock_busy, mock_not_ready, mock_logger
+    ):
+        """Mixed device plugin and DRA nodes fail before the run preview."""
+        self._add_pool_gpu_node("plugin-1", "plugin-pool", 8)
+        self._add_pool_gpu_node("dra-1", "dra-pool")
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={}, node_to_pool={}, pool_to_topology={}
+        )
+
+        with self.assertRaisesRegex(
+            ChsValidationError, "mix GPU allocation methods"
+        ):
+            KubernetesScheduler(nodes="plugin-1,dra-1").get_nodes_under_test()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_rejects_dra_without_device_class(
+        self, mock_tpu_slices, mock_busy, mock_not_ready, mock_logger
+    ):
+        """A missing NVIDIA DeviceClass fails before the run preview."""
+        self._add_pool_gpu_node("dra-1", "dra-pool")
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={}, node_to_pool={}, pool_to_topology={}
+        )
+
+        with self.assertRaisesRegex(ChsValidationError, "DeviceClass"):
+            KubernetesScheduler(nodes="dra-1").get_nodes_under_test()
 
     def test_discover_networks_success(self, mock_logger):
         """Test _discover_networks with success and grouping."""
@@ -5780,6 +6481,12 @@ class TestKubernetesRunScopedCleanup(unittest.TestCase):
             {"metadata": {"name": f"{job}-cd", "labels": labels}},
             namespace=CHS_NAMESPACE,
         )
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaimtemplates",
+            {"metadata": {"name": f"{job}-gpu-template", "labels": labels}},
+            namespace=CHS_NAMESPACE,
+        )
 
     def test_cancel_run_deletes_only_objects_of_that_exact_run(
         self, mock_logger
@@ -5809,6 +6516,10 @@ class TestKubernetesRunScopedCleanup(unittest.TestCase):
         self.assertEqual(
             self.kube.stored_names("resource.nvidia.com", "computedomains"),
             [f"{other}-cd"],
+        )
+        self.assertEqual(
+            self.kube.stored_names("resource.k8s.io", "resourceclaimtemplates"),
+            [f"{other}-gpu-template"],
         )
         self.assertEqual(
             self._slices(), ["chs-slice-pool-b", "chs-slice-pool-unlabeled"]
@@ -5947,6 +6658,71 @@ class TestKubernetesRunScopedCleanup(unittest.TestCase):
 
         mock_logger.warning.assert_not_called()
 
+    def test_cancel_run_without_resource_claim_template_crd(self, mock_logger):
+        self.kube.unregister_type("resource.k8s.io", "resourceclaimtemplates")
+
+        self.scheduler.cancel_run("run-a")
+
+        mock_logger.warning.assert_not_called()
+
+    def test_delete_resource_claim_templates(self, mock_logger):
+        """Test _delete_resource_claim_templates deletes matching templates."""
+        labels = {_MANAGED_BY: "chs", _INSTANCE: "run-a"}
+        self.kube.add_object(
+            "resource.k8s.io",
+            "resourceclaimtemplates",
+            {"metadata": {"name": "tmpl-1", "labels": labels}},
+            namespace=CHS_NAMESPACE,
+        )
+        self.assertTrue(
+            self.scheduler._delete_resource_claim_templates(
+                f"{_INSTANCE}=run-a"
+            )
+        )
+        self.assertEqual(
+            self.kube.stored_names("resource.k8s.io", "resourceclaimtemplates"),
+            [],
+        )
+
+    def test_delete_resource_claim_templates_concurrent_batching(
+        self, mock_logger
+    ):
+        """Deletes large batches of ResourceClaimTemplates concurrently."""
+        labels = {_MANAGED_BY: "chs", _INSTANCE: "run-big"}
+        for i in range(50):
+            self.kube.add_object(
+                "resource.k8s.io",
+                "resourceclaimtemplates",
+                {"metadata": {"name": f"tmpl-{i}", "labels": labels}},
+                namespace=CHS_NAMESPACE,
+            )
+        self.assertTrue(
+            self.scheduler._delete_resource_claim_templates(
+                f"{_INSTANCE}=run-big"
+            )
+        )
+        self.assertEqual(
+            self.kube.stored_names("resource.k8s.io", "resourceclaimtemplates"),
+            [],
+        )
+
+    def test_delete_resource_claim_templates_warns_once_on_failure(
+        self, mock_logger
+    ):
+        """A failure of every batch is reported once, not per batch."""
+        self.kube.fail_always(
+            "delete_custom_objects",
+            k8s_client.KubeError("forbidden", status=403),
+        )
+
+        self.assertFalse(
+            self.scheduler._delete_resource_claim_templates_by_name(
+                [f"tmpl-{i}" for i in range(50)]
+            )
+        )
+        self.assertGreater(len(self.kube.calls_to("delete_custom_objects")), 1)
+        mock_logger.warning.assert_called_once()
+
     def test_cancel_run_skips_objects_without_name(self, mock_logger):
         self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
         self._add_run_objects("nameless", "run-a")
@@ -5957,6 +6733,12 @@ class TestKubernetesRunScopedCleanup(unittest.TestCase):
                 "computedomains",
                 CHS_NAMESPACE,
                 "nameless-cd",
+            ),
+            (
+                "resource.k8s.io",
+                "resourceclaimtemplates",
+                CHS_NAMESPACE,
+                "nameless-gpu-template",
             ),
         ):
             del self.kube.objects[key]["metadata"]["name"]
@@ -5977,6 +6759,14 @@ class TestKubernetesRunScopedCleanup(unittest.TestCase):
                 if call.kwargs["plural"] == "computedomains"
             ],
             [["chs-run-a-nccl-a1b2c3-cd"]],
+        )
+        self.assertEqual(
+            [
+                call.kwargs["object_names"]
+                for call in self.kube.calls_to("delete_custom_objects")
+                if call.kwargs["plural"] == "resourceclaimtemplates"
+            ],
+            [["chs-run-a-nccl-a1b2c3-gpu-template"]],
         )
 
     def test_cancel_run_deletes_secrets_independently(self, mock_logger):
@@ -6011,12 +6801,16 @@ class TestKubernetesRunScopedCleanup(unittest.TestCase):
         self.scheduler.cancel_jobs(["chs-run-a-x-a1b2c3", "chs-run-a-y-b2c3d4"])
 
         # The first Secret fails, but the second Secret and both
-        # ComputeDomains are still deleted.
+        # ComputeDomains and GPU ResourceClaimTemplates are still deleted.
         self.assertEqual(
             self.kube.stored_names("", "secrets"), ["chs-run-a-x-a1b2c3-ssh"]
         )
         self.assertEqual(
             self.kube.stored_names("resource.nvidia.com", "computedomains"), []
+        )
+        self.assertEqual(
+            self.kube.stored_names("resource.k8s.io", "resourceclaimtemplates"),
+            [],
         )
         mock_logger.warning.assert_called_once_with(
             "Failed to delete Kubernetes secret '%s'. Error: %s",

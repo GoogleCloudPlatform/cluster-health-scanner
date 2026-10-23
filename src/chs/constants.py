@@ -27,6 +27,15 @@ SLURM_CMD_TIMEOUT_SEC = 60
 
 DEFAULT_OUTPUT_DIR = "chs-output"
 
+# Dynamic Resource Allocation (DRA) of NVIDIA GPUs.
+DRA_API_GROUP = "resource.k8s.io"
+DRA_API_VERSION = "v1"
+NVIDIA_GPU_RESOURCE = "nvidia.com/gpu"
+NVIDIA_GPU_DRA_DRIVER = "gpu.nvidia.com"
+NVIDIA_GPU_DEVICE_CLASS = "gpu.nvidia.com"
+GPU_CLAIM_NAME = "gpu-claim"
+GPU_CLAIM_TEMPLATE_SUFFIX = "-gpu-template"
+
 SUPPORTED_DYNAMIC_SLICE_TOPOLOGY = "4x4x4"
 DYNAMIC_SINGLE_HOST_TOPOLOGY = "2x2x1"
 

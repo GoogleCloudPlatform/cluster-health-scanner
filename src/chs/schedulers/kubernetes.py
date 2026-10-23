@@ -14,6 +14,7 @@
 
 """Kubernetes scheduler implementation for Cluster Health Scanner."""
 
+import contextlib
 import datetime
 import hashlib
 import importlib.resources as pkg_resources
@@ -30,7 +31,7 @@ import yaml
 import random
 
 
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
@@ -58,11 +59,17 @@ from chs.constants import (
     CHS_NAMESPACE,
     COMPONENT_LABEL,
     DELETE_WAIT_TIMEOUT_SEC,
+    DRA_API_GROUP,
+    DRA_API_VERSION,
     DYNAMIC_SINGLE_HOST_TOPOLOGY,
+    GPU_CLAIM_TEMPLATE_SUFFIX,
     INSTANCE_LABEL,
     MANAGED_BY_CHS,
     MANAGED_BY_LABEL,
     NAMESPACE_DELETE_TIMEOUT_SEC,
+    NVIDIA_GPU_DEVICE_CLASS,
+    NVIDIA_GPU_DRA_DRIVER,
+    NVIDIA_GPU_RESOURCE,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
     WORKER_COMPONENT,
 )
@@ -116,6 +123,7 @@ _API_MAX_CONCURRENCY = 32
 _APPLY_ATTEMPTS = 5
 _CUSTOM_RESOURCE_PLURALS = {
     "ComputeDomain": "computedomains",
+    "ResourceClaimTemplate": "resourceclaimtemplates",
 }
 
 _LOG_FETCH_MAX_CONCURRENCY = 32
@@ -221,6 +229,22 @@ def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
     )
 
 
+def _has_nvidia_gpus(resources_map: dict | None) -> bool:
+    """Returns True if resources has non-zero nvidia.com/gpu.
+
+    Unlike _has_accelerator(resources_map, "gpu"), this ignores other keys
+    that contain "gpu", e.g. a GKE network named gpu-net-1, so that it tells
+    device plugin GPU nodes apart from DRA GPU nodes.
+    """
+    quantity = (resources_map or {}).get(NVIDIA_GPU_RESOURCE)
+    if quantity in (0, "0", None, ""):
+        return False
+    try:
+        return int(quantity) > 0
+    except (ValueError, TypeError):
+        return False
+
+
 def _is_single_host_slice(
     topology: str | None, allocatable: dict | None
 ) -> bool:
@@ -231,11 +255,39 @@ def _is_single_host_slice(
         return False
 
 
-def _is_accelerator_node(node: dict) -> bool:
-    """Returns True if the node has allocatable GPU or TPU resources."""
+def _node_name(node: dict) -> str | None:
+    return (node.get("metadata") or {}).get("name")
+
+
+def _is_gpu_machine_node(node: dict) -> bool:
+    """Returns True if the node's machine type is a supported GPU type."""
+    labels = (node.get("metadata") or {}).get("labels") or {}
+    instance_type = labels.get(
+        "node.kubernetes.io/instance-type"
+    ) or labels.get("beta.kubernetes.io/instance-type")
+    return bool(instance_type) and resources.is_gpu(
+        resources.normalize_machine_type(instance_type)
+    )
+
+
+def _is_accelerator_node(
+    node: dict, dra_gpu_nodes: frozenset[str] = frozenset()
+) -> bool:
+    """Returns True if the node can run GPU or TPU workloads.
+
+    A node offers accelerators either as allocatable extended resources of a
+    device plugin, or, for DRA, as devices in ResourceSlices it publishes.
+
+    Args:
+      node: The Kubernetes Node object.
+      dra_gpu_nodes: Names of the nodes that publish NVIDIA GPU
+        ResourceSlices.
+    """
     allocatable = (node.get("status") or {}).get("allocatable")
-    return _has_accelerator(allocatable, "gpu") or _has_accelerator(
-        allocatable, "tpu"
+    return (
+        _has_nvidia_gpus(allocatable)
+        or _has_accelerator(allocatable, "tpu")
+        or _node_name(node) in dra_gpu_nodes
     )
 
 
@@ -500,6 +552,11 @@ class KubernetesScheduler(BaseScheduler):
         self._resolved_nodes: list[str] | None = None
         self._resolved_raw_nodes: list[str] | None = None
         self._resolved_node_resources: list[dict] | None = None
+        self._dra_gpu_pool_nodes: dict[str, str] | None = None
+        self._warned_claims_unreadable = False
+        self._gpu_dra_mode: tuple[frozenset[str], bool] | None = None
+        self._caching_dra_holders = False
+        self._dra_holders_cache: dict[str, str] | None = None
         self._cluster_name: str | None = None
         self._tpu_slice_data: TpuSliceData | None = None
         self._subslice_nodes: set[str] = set()
@@ -711,11 +768,14 @@ class KubernetesScheduler(BaseScheduler):
         return True
 
     def _delete_job_dependents(self, job_ids: list[str]) -> None:
-        """Deletes the SSH Secrets and ComputeDomains of the given Jobs."""
+        """Deletes SSH Secrets, ComputeDomains, and ResourceClaimTemplates."""
         for job_id in job_ids:
             self._delete_secret(f"{job_id}-ssh")
         self._delete_compute_domains_by_name(
             [f"{job_id}-cd" for job_id in job_ids]
+        )
+        self._delete_resource_claim_templates_by_name(
+            [f"{job_id}{GPU_CLAIM_TEMPLATE_SUFFIX}" for job_id in job_ids]
         )
 
     def _delete_secret(self, name: str) -> bool:
@@ -790,6 +850,75 @@ class KubernetesScheduler(BaseScheduler):
             )
             return False
         return self._delete_compute_domains_by_name(_object_names(domains))
+
+    def _delete_resource_claim_templates_by_name(
+        self, names: list[str]
+    ) -> bool:
+        """Deletes ResourceClaimTemplates; returns whether it succeeded.
+
+        Single-node tests create one template per Job, so a large run leaves
+        thousands of them. They are deleted in concurrent batches instead of
+        one at a time.
+        """
+        if not names:
+            return True
+
+        def delete_batch(batch: list[str]) -> k8s_client.KubeError | None:
+            try:
+                k8s_client.delete_custom_objects(
+                    group=DRA_API_GROUP,
+                    version=DRA_API_VERSION,
+                    plural=_CUSTOM_RESOURCE_PLURALS["ResourceClaimTemplate"],
+                    namespace=CHS_NAMESPACE,
+                    object_names=batch,
+                    wait_timeout_seconds=DELETE_WAIT_TIMEOUT_SEC,
+                )
+            except k8s_client.KubeError as e:
+                if e.status != 404:
+                    return e
+            return None
+
+        max_workers = min(len(names), _API_MAX_CONCURRENCY)
+        batch_size = math.ceil(len(names) / max_workers)
+        batches = [
+            names[i : i + batch_size] for i in range(0, len(names), batch_size)
+        ]
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            errors = [e for e in executor.map(delete_batch, batches) if e]
+        if errors:
+            logger.warning(
+                "Failed to delete Kubernetes ResourceClaimTemplates. Error: %s",
+                errors[0],
+            )
+            return False
+        return True
+
+    def _delete_resource_claim_templates(self, label_selector: str) -> bool:
+        """Deletes the ResourceClaimTemplates that match label_selector.
+
+        Returns:
+          Whether every matching ResourceClaimTemplate was deleted.
+        """
+        try:
+            templates = k8s_client.list_custom_objects(
+                group=DRA_API_GROUP,
+                version=DRA_API_VERSION,
+                plural=_CUSTOM_RESOURCE_PLURALS["ResourceClaimTemplate"],
+                namespace=CHS_NAMESPACE,
+                label_selector=label_selector,
+            )
+        except k8s_client.KubeError as e:
+            if e.status == 404:
+                return True
+            logger.warning(
+                "Failed to list Kubernetes ResourceClaimTemplates. Error: %s",
+                e,
+            )
+            return False
+        names = _object_names(templates)
+        if not names:
+            return True
+        return self._delete_resource_claim_templates_by_name(names)
 
     def _get_node_objects(self, node_names: list[str]) -> list[dict]:
         """Returns the node objects of node_names, in node_names order."""
@@ -912,6 +1041,138 @@ class KubernetesScheduler(BaseScheduler):
 
         return pods
 
+    def _get_dra_gpu_pool_nodes(self) -> dict[str, str]:
+        """Maps each NVIDIA GPU ResourceSlice pool to the node it is on.
+
+        Nodes that allocate GPUs through DRA publish their GPUs in
+        ResourceSlices of the NVIDIA DRA driver instead of advertising
+        nvidia.com/gpu as allocatable. Clusters that do not serve the DRA
+        API, or that the user cannot read it on, have no such nodes.
+        """
+        if self._dra_gpu_pool_nodes is not None:
+            return self._dra_gpu_pool_nodes
+        try:
+            slices = k8s_client.list_custom_objects(
+                group=DRA_API_GROUP,
+                version=DRA_API_VERSION,
+                plural="resourceslices",
+            )
+        except k8s_client.KubeError as e:
+            if e.status == 404:
+                logger.debug("Failed to list DRA ResourceSlices. Error: %s", e)
+            else:
+                logger.warning(
+                    "Failed to list DRA ResourceSlices. Error: %s", e
+                )
+            slices = []
+        pool_nodes = {}
+        for resource_slice in slices:
+            spec = resource_slice.get("spec") or {}
+            node = spec.get("nodeName")
+            if spec.get("driver") != NVIDIA_GPU_DRA_DRIVER or not node:
+                continue
+            pool = (spec.get("pool") or {}).get("name") or node
+            pool_nodes[pool] = node
+        self._dra_gpu_pool_nodes = pool_nodes
+        return pool_nodes
+
+    def _get_busy_nodes_from_claims(self, target_nodes: set[str]) -> set[str]:
+        """Returns the target nodes whose DRA GPUs are in use outside CHS."""
+        return set(self._get_dra_gpu_holders(target_nodes))
+
+    def _get_dra_gpu_holders(self, target_nodes: set[str]) -> dict[str, str]:
+        """Maps target nodes whose DRA GPUs are in use outside CHS to a pod.
+
+        A GPU is in use while a ResourceClaim allocating it is reserved for a
+        pod. CHS's own claims are left to the run conflict checks.
+        ResourceClaims are only listed if a target node allocates its GPUs
+        through DRA, and at most once inside _caching_dra_gpu_holders().
+
+        Returns:
+          A mapping from node name to "namespace/pod" of a pod holding its
+          GPUs.
+        """
+        if not target_nodes:
+            return {}
+        pool_nodes = self._get_dra_gpu_pool_nodes()
+        target_dra_nodes = target_nodes.intersection(pool_nodes.values())
+        if not target_dra_nodes:
+            return {}
+        all_holders = self._dra_holders_cache
+        if all_holders is None:
+            all_holders = self._list_dra_gpu_holders(pool_nodes)
+            if all_holders is None:
+                return {}
+            if self._caching_dra_holders:
+                self._dra_holders_cache = all_holders
+        return {
+            node: all_holders[node]
+            for node in target_dra_nodes
+            if node in all_holders
+        }
+
+    @contextlib.contextmanager
+    def _caching_dra_gpu_holders(self) -> Iterator[None]:
+        """Lists the DRA ResourceClaims at most once inside the block."""
+        self._caching_dra_holders = True
+        self._dra_holders_cache = None
+        try:
+            yield
+        finally:
+            self._caching_dra_holders = False
+            self._dra_holders_cache = None
+
+    def _list_dra_gpu_holders(
+        self, pool_nodes: dict[str, str]
+    ) -> dict[str, str] | None:
+        """Maps every node whose DRA GPUs are in use outside CHS to a pod.
+
+        Returns:
+          The mapping, or None if the ResourceClaims cannot be listed.
+        """
+        try:
+            claims = k8s_client.list_custom_objects(
+                group=DRA_API_GROUP,
+                version=DRA_API_VERSION,
+                plural="resourceclaims",
+            )
+        except k8s_client.KubeError as e:
+            if self._warned_claims_unreadable:
+                log = logger.debug
+            else:
+                log = logger.warning
+                self._warned_claims_unreadable = True
+            log(
+                "Failed to list DRA ResourceClaims, so GPUs allocated "
+                "through DRA outside of CHS are not detected. Error: %s",
+                e,
+            )
+            return None
+        holders = {}
+        for claim in claims:
+            metadata = claim.get("metadata") or {}
+            namespace = metadata.get("namespace")
+            if namespace == CHS_NAMESPACE:
+                continue
+            status = claim.get("status") or {}
+            reserved_for = status.get("reservedFor") or []
+            if not reserved_for:
+                continue
+            holder = next(
+                (r.get("name") for r in reserved_for if r.get("name")),
+                metadata.get("name"),
+            )
+            allocation = status.get("allocation") or {}
+            for result in (allocation.get("devices") or {}).get(
+                "results"
+            ) or []:
+                if result.get("driver") != NVIDIA_GPU_DRA_DRIVER:
+                    continue
+                node = pool_nodes.get(result.get("pool"))
+                if node:
+                    holders.setdefault(node, f"{namespace}/{holder}")
+        return holders
+
     def _get_busy_nodes(self, target_nodes: list[str]) -> set[str]:
         """Returns a set of nodes running pods that request accelerators."""
         if not target_nodes:
@@ -927,7 +1188,7 @@ class KubernetesScheduler(BaseScheduler):
                 f"{_MAX_NODES_UNDER_TEST} nodes at a time."
             )
 
-        busy_nodes = set()
+        busy_nodes = set(self._get_busy_nodes_from_claims(set(target_nodes)))
         with ThreadPoolExecutor(max_workers=_BUSY_NODES_BATCH_SIZE) as executor:
             node_status_futures = {
                 executor.submit(
@@ -963,13 +1224,16 @@ class KubernetesScheduler(BaseScheduler):
         """Maps each node that another workload now uses to one of its pods."""
         if not nodes:
             return {}
-        taken = {}
+        taken = self._get_dra_gpu_holders(nodes)
+        remaining = nodes - taken.keys()
+        if not remaining:
+            return taken
         with ThreadPoolExecutor(
-            max_workers=min(len(nodes), _BUSY_NODES_BATCH_SIZE)
+            max_workers=min(len(remaining), _BUSY_NODES_BATCH_SIZE)
         ) as executor:
             futures = {
                 executor.submit(self._other_workload_on_node, node): node
-                for node in nodes
+                for node in remaining
             }
             for future in as_completed(futures):
                 node = futures[future]
@@ -1022,11 +1286,25 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to get nodes to determine availability: {e}"
             ) from e
 
-        resolved_resources = [
-            node
-            for node in node_resources
-            if isinstance(node, dict) and _is_accelerator_node(node)
-        ]
+        nodes = [node for node in node_resources if isinstance(node, dict)]
+        dra_gpu_nodes = frozenset()
+        if any(
+            _is_gpu_machine_node(node) and not _is_accelerator_node(node)
+            for node in nodes
+        ):
+            dra_gpu_nodes = frozenset(self._get_dra_gpu_pool_nodes().values())
+        resolved_resources = []
+        for node in nodes:
+            if _is_accelerator_node(node, dra_gpu_nodes):
+                resolved_resources.append(node)
+            elif _is_gpu_machine_node(node):
+                logger.warning(
+                    "Skipping GPU node '%s': it neither advertises allocatable "
+                    "nvidia.com/gpu nor publishes %s ResourceSlices. Check "
+                    "the NVIDIA device plugin or DRA driver on the node.",
+                    _node_name(node),
+                    NVIDIA_GPU_DRA_DRIVER,
+                )
 
         if self.nodepools_arg:
             requested_pools = {
@@ -1277,6 +1555,12 @@ class KubernetesScheduler(BaseScheduler):
                 excluded_nodes.update(topology.pools[pool])
             valid_nodes = [n for n in raw_nodes if n not in excluded_nodes]
 
+        valid_gpu_nodes = [
+            n for n in valid_nodes if n not in topology.all_tpu_nodes
+        ]
+        if valid_gpu_nodes:
+            self._validate_gpu_allocation_mode(valid_gpu_nodes)
+
         self._resolved_nodes = valid_nodes
         return self._resolved_nodes
 
@@ -1378,6 +1662,109 @@ class KubernetesScheduler(BaseScheduler):
             )
             return {}
 
+    def _validate_gpu_allocation_mode(self, nodes: list[str]) -> None:
+        """Rejects GPU nodes whose GPUs one CHS run cannot request.
+
+        All pods of a Job share one pod template, so they request their GPUs
+        either through the device plugin or through DRA, never both. DRA also
+        needs the NVIDIA GPU DeviceClass. Checking both before the run preview
+        fails fast instead of leaving the pods Pending until the deadline.
+
+        Raises:
+          ChsValidationError: If some nodes advertise nvidia.com/gpu and
+            others only publish NVIDIA GPU ResourceSlices, or if the nodes use
+            DRA but the NVIDIA GPU DeviceClass is missing or cannot be read.
+        """
+        node_objects = self._get_node_objects(nodes)
+        plugin_nodes = {
+            _node_name(node)
+            for node in node_objects
+            if _has_nvidia_gpus((node.get("status") or {}).get("allocatable"))
+        }
+        if plugin_nodes.issuperset(nodes):
+            self._gpu_dra_mode = (frozenset(nodes), False)
+            return
+        dra_nodes = set(self._get_dra_gpu_pool_nodes().values()).intersection(
+            set(nodes) - plugin_nodes
+        )
+        if not dra_nodes:
+            self._gpu_dra_mode = (frozenset(nodes), False)
+            return
+        if not plugin_nodes:
+            self._check_gpu_device_class()
+            # DRA is used only if every node publishes NVIDIA GPU slices.
+            self._gpu_dra_mode = (frozenset(nodes), dra_nodes == set(nodes))
+            return
+
+        def pools(names: set[str]) -> str:
+            return ", ".join(
+                sorted(
+                    {
+                        ((node.get("metadata") or {}).get("labels") or {}).get(
+                            "cloud.google.com/gke-nodepool", "unknown"
+                        )
+                        for node in node_objects
+                        if _node_name(node) in names
+                    }
+                )
+            )
+
+        raise ChsValidationError(
+            "The nodes under test mix GPU allocation methods, which a single "
+            "CHS run does not support: "
+            f"{len(plugin_nodes)} node(s) use the NVIDIA device plugin "
+            f"(node pools: {pools(plugin_nodes)}) and {len(dra_nodes)} "
+            f"node(s) use DRA (node pools: {pools(dra_nodes)}).\n"
+            "Target nodes of a single type using: "
+            "--nodepools <pool_names> or --nodes <node_names>"
+        )
+
+    @staticmethod
+    def _check_gpu_device_class() -> None:
+        """Raises ChsValidationError unless the NVIDIA DeviceClass exists."""
+        try:
+            device_classes = k8s_client.list_custom_objects(
+                group=DRA_API_GROUP,
+                version=DRA_API_VERSION,
+                plural="deviceclasses",
+            )
+        except k8s_client.KubeError as e:
+            raise ChsValidationError(
+                "The nodes under test allocate GPUs through DRA, but the DRA "
+                f"DeviceClasses cannot be read. Error: {e}"
+            ) from e
+        if NVIDIA_GPU_DEVICE_CLASS not in _object_names(device_classes):
+            raise ChsValidationError(
+                "The nodes under test allocate GPUs through DRA, but the "
+                f"DeviceClass '{NVIDIA_GPU_DEVICE_CLASS}' does not exist. "
+                "Check the NVIDIA DRA driver installation."
+            )
+
+    def _is_gpu_dra_enabled(self, machine_type: str, nodes: list[str]) -> bool:
+        """Returns whether the nodes under test allocate their GPUs via DRA.
+
+        That is the case when every node publishes NVIDIA GPU ResourceSlices
+        and none advertises nvidia.com/gpu through the device plugin, which
+        CHS keeps using whenever it is available. The NVIDIA GPU DeviceClass
+        was already checked when the nodes under test were resolved, and the
+        result of that check is reused for the same nodes.
+        """
+        if not nodes or not resources.is_gpu(machine_type):
+            return False
+        if self._gpu_dra_mode and self._gpu_dra_mode[0] == frozenset(nodes):
+            return self._gpu_dra_mode[1]
+        if not set(self._get_dra_gpu_pool_nodes().values()).issuperset(nodes):
+            return False
+        try:
+            node_objects = self._get_node_objects(nodes)
+        except ChsSchedulerException as e:
+            logger.debug("Failed to get the nodes under test. Error: %s", e)
+            node_objects = []
+        return not any(
+            _has_nvidia_gpus((node.get("status") or {}).get("allocatable"))
+            for node in node_objects
+        )
+
     def write_ramble_config(
         self,
         workspace_config_dir: str,
@@ -1425,6 +1812,11 @@ class KubernetesScheduler(BaseScheduler):
         variables["default_interface_name"] = default_interface_name
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
         variables["chs_run_id"] = run_id
+        variables["use_gpu_dra"] = (
+            "true"
+            if self._is_gpu_dra_enabled(machine_type, nodes or [])
+            else "false"
+        )
         variables["worker_service_name"] = worker_service_name(run_id)
         if deadline is not None:
             variables["deadline"] = deadline
@@ -1501,6 +1893,12 @@ class KubernetesScheduler(BaseScheduler):
 
     def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
         """Starts waiting Jobs with free nodes and returns job statuses."""
+        # One admission pass checks nodes for other workloads repeatedly, so
+        # it reuses one listing of the DRA ResourceClaims.
+        with self._caching_dra_gpu_holders():
+            return self._poll_jobs(job_ids)
+
+    def _poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
         if not job_ids:
             return {}
         try:
@@ -2277,6 +2675,9 @@ class KubernetesScheduler(BaseScheduler):
             "Jobs": self._delete_jobs(job_names),
             "Secrets": self._delete_secrets(selector),
             "ComputeDomains": self._delete_compute_domains(selector),
+            "ResourceClaimTemplates": self._delete_resource_claim_templates(
+                selector
+            ),
             "dynamic slices": (
                 slice_names is not None and self._delete_slices(slice_names)
             ),
@@ -2309,6 +2710,7 @@ class KubernetesScheduler(BaseScheduler):
         if not deletions["chs namespace"]:
             self._delete_secrets(_CHS_SELECTOR)
             self._delete_compute_domains(_CHS_SELECTOR)
+            self._delete_resource_claim_templates(_CHS_SELECTOR)
         failed = [kind for kind, deleted in deletions.items() if not deleted]
         if failed:
             raise ChsCancellationException(

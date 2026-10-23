@@ -105,6 +105,34 @@ DEFAULT_TYPES = (
         True,
         ("v1beta1",),
     ),
+    FakeResourceType(
+        "resource.k8s.io",
+        "resourceclaimtemplates",
+        "ResourceClaimTemplate",
+        True,
+        ("v1", "v1beta1"),
+    ),
+    FakeResourceType(
+        "resource.k8s.io",
+        "deviceclasses",
+        "DeviceClass",
+        False,
+        ("v1", "v1beta1"),
+    ),
+    FakeResourceType(
+        "resource.k8s.io",
+        "resourceclaims",
+        "ResourceClaim",
+        True,
+        ("v1", "v1beta1"),
+    ),
+    FakeResourceType(
+        "resource.k8s.io",
+        "resourceslices",
+        "ResourceSlice",
+        False,
+        ("v1", "v1beta1"),
+    ),
 )
 
 
