@@ -20,7 +20,14 @@ from .renderer import TpuHostDeviceRenderer
 class TpuHostDevicePlugin(
     TpuHostDeviceRenderer, TpuHostDeviceExtractor, TestPlugin
 ):
-    pass
+    def get_fom_aliases(self) -> dict[str, str]:
+        return {
+            "h2d_bandwidth": "H2D Bandwidth",
+            "d2h_bandwidth": "D2H Bandwidth",
+        }
+
+    def creates_per_node_results(self) -> bool:
+        return True
 
 
 __chs_plugin__ = {

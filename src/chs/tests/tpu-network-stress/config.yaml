@@ -21,6 +21,6 @@ defaults:
   - name: generic-error-detector
   - name: tpu-error-detector
   variables:
-    container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.0
+    container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
     jobset_template: jobset_standard.yaml.tpl
     mpi_command: ''

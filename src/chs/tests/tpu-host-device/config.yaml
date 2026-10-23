@@ -24,7 +24,7 @@ defaults:
     benchmarks_yaml_file: tpuv6e/host_device.yaml
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.0
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
       jobset_template: jobset_standard.yaml.tpl
       mpi_command: ''
   slurm:
@@ -35,8 +35,8 @@ defaults:
     modifiers:
     - name: pyxis-enroot
     variables:
-      container_name: accelerator-microbenchmarks:1.0-latest
-      container_uri: docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:1.0-latest
+      container_name: accelerator-microbenchmarks:1.1.1
+      container_uri: docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
       srun_args: --cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60
 machines:
   tpu7x-standard-4t:

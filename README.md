@@ -207,8 +207,8 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 ##### Suite Composition
 | Suite | Est. Duration | Description | Included GPU Tests | Included TPU Tests |
 | --- | --- | --- | --- | --- |
-| `lite` (default) | ~5 mins | Quick health verification | `nvidia-smi`, `dcgm` (level 2), `gemm`, `nccl-single-node` | `tpu-info`, `tpu-gemm`, `tpu-hbm`, `tpu-collectives` |
-| `standard` | ~30 mins | Thorough hardware, memory & collective validation | `nvidia-smi`, `dcgm` (level 3), `stream`, `nccl-cluster`, `nccl-pairwise`, `gemm` | `tpu-info`, `tpu-hbm`, `tpu-gemm`, `tpu-collectives`, `tpu-compute-stress`, `tpu-hbm-stress`, `tpu-network-stress` |
+| `lite` (default) | ~5 mins | Quick health verification | `nvidia-smi`, `dcgm` (level 2), `gemm`, `nccl-single-node` | `tpu-info`, `tpu-gemm`, `tpu-hbm`, `tpu-host-device`, `tpu-collectives` |
+| `standard` | ~30 mins | Thorough hardware, memory & collective validation | `nvidia-smi`, `dcgm` (level 3), `stream`, `nccl-cluster`, `nccl-pairwise`, `gemm` | `tpu-info`, `tpu-hbm`, `tpu-gemm`, `tpu-host-device`, `tpu-collectives`, `tpu-compute-stress`, `tpu-hbm-stress`, `tpu-network-stress` |
 
 #### Examples
 

@@ -45,6 +45,9 @@ suites:
   - name: tpu-hbm
     variables:
       timeout: 300
+  - name: tpu-host-device
+    variables:
+      timeout: 240
   - name: tpu-collectives
     workloads: [psum]
     variables:
@@ -89,6 +92,9 @@ suites:
   - name: tpu-gemm
     variables:
       timeout: 300
+  - name: tpu-host-device
+    variables:
+      timeout: 240
   - name: tpu-collectives
     workloads: [psum]
     variables:
