@@ -126,6 +126,10 @@ class ChsSchedulerException(ChsException):
     """Raised for general scheduler-specific issues like argument errors."""
 
 
+class HostCheckException(ChsSchedulerException):
+    """Raised when the local host cannot run tests; the message says why."""
+
+
 class SuiteNotFoundException(ChsException):
     """Raised when a specific test suite is not found."""
 
