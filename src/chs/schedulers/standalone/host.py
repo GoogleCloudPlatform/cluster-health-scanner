@@ -135,6 +135,11 @@ def tpu_devices() -> list[str]:
     return sorted(glob.glob(host_path("/dev/vfio/[0-9]*")))
 
 
+def has_gpus() -> bool:
+    """Returns whether the VM has NVIDIA GPU devices (/dev/nvidia<n>)."""
+    return bool(glob.glob(host_path("/dev/nvidia[0-9]*")))
+
+
 def check_tpu_access() -> None:
     """Checks that native TPU tests can lock memory and open the TPUs."""
     _, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)

@@ -49,6 +49,11 @@ class Standalone(WorkflowManagerBase):
         description="Whether the test's container is privileged (true/false)",
     )
     workflow_manager_variable(
+        name="app_workdir",
+        default="",
+        description="Working directory of the test; defaults to experiment dir",
+    )
+    workflow_manager_variable(
         name="runtime",
         default="",
         description="Native runtime of the test; empty runs a container",
@@ -83,6 +88,7 @@ class Standalone(WorkflowManagerBase):
         return {
             "job_spec_yaml": yaml.safe_dump(spec, sort_keys=False),
             "standalone_command": command,
+            "workdir": expander.expand_var_name("app_workdir") or run_dir,
         }
 
     register_template(

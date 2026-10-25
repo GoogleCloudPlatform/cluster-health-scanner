@@ -375,6 +375,21 @@ class CheckIdleTest(FakeHostTestCase):
                 host.check_tpus_idle()
 
 
+class GpuDevicesTest(FakeHostTestCase):
+    def test_has_gpus(self):
+        self.assertFalse(host.has_gpus())
+        for path in (
+            "/dev/nvidiactl",
+            "/dev/nvidia-uvm",
+            "/dev/nvidia-modeset",
+            "/dev/nvidia-caps/nvidia-cap1",
+        ):
+            self.write(path)
+        self.assertFalse(host.has_gpus())
+        self.write("/dev/nvidia0")
+        self.assertTrue(host.has_gpus())
+
+
 class TpuHostTest(FakeHostTestCase):
     def setUp(self):
         super().setUp()

@@ -33,7 +33,7 @@ List supported machine types, suites, tests, and schedulers.
 
 ## chs run
 
-Run tests or a suite on your cluster or TPU VM. All nodes targeted in a single run must be the **same accelerator (machine type)**. See [Tests and suites](../src/chs/tests/README.md) and [Machine types and thresholds](../src/chs/platforms/README.md) for the supported suites, tests, and machine types.
+Run tests or a suite on your cluster, TPU VM, or GPU VM. All nodes targeted in a single run must be the **same accelerator (machine type)**. See [Tests and suites](../src/chs/tests/README.md) and [Machine types and thresholds](../src/chs/platforms/README.md) for the supported suites, tests, and machine types.
 
 **Options:**
 
@@ -65,7 +65,7 @@ chs run --suite standard --nodepools tpu-pool-1
 # Run the default 'lite' suite on a Slurm partition
 chs run --partitions gpu-partition
 
-# Run the default 'lite' suite on a standalone TPU VM
+# Run the default 'lite' suite on a standalone TPU or GPU VM
 chs run
 ```
 

@@ -22,11 +22,23 @@ On Kubernetes, the `chs` process must stay running for the duration of a run. If
 
 ## CHS runs in a container without access to the host
 
-In standalone mode on a TPU VM, the CHS container must share the VM's PID namespace and see its filesystem. Start it with `--privileged --pid=host -v /:/host`. See [Option 2: Container image](../README.md#option-2-container-image).
+In standalone mode, the CHS container must share the VM's PID namespace and see its filesystem. Start it with `--privileged --pid=host -v /:/host`. See [Option 2: Container image](../README.md#option-2-container-image).
 
-## TPUs are busy: ...
+## TPUs are busy: ... / GPUs are busy: ...
 
-In standalone mode, another process on the VM is using the TPUs. Wait for it to finish or stop it, then rerun `chs`.
+In standalone mode, another process on the VM is using the TPUs or GPUs. Wait for it to finish or stop it, then rerun `chs`.
+
+## No valid nodes remain available for testing. Skipped node ...: Docker is unusable: ...
+
+In standalone mode on a GPU VM, CHS could not reach the VM's Docker daemon. Install Docker on the VM and start it. Without the CHS container, run `chs` as a user in the `docker` group, as root, or as a user with passwordless `sudo`. The message lists each command CHS tried and why it failed.
+
+## No valid nodes remain available for testing. Skipped node ...: NVIDIA driver is unusable: ...
+
+In standalone mode on a GPU VM, `nvidia-smi` failed or CHS could not give containers the NVIDIA driver. Check that `nvidia-smi` works on the VM; if it doesn't, the driver is not installed or not loaded. If the message names a staging error, CHS could not copy the driver's libraries into `/var/lib/chs` (or `~/.cache/chs` when not root); check that directory is writable and has free space.
+
+## Could not pull image ...
+
+In standalone mode on a GPU VM, CHS pulls each test's image before the first test starts. Tests whose image could not be pulled fail with the pull error; the other tests still run. Check that the VM can reach the registry in the error (Docker Hub or `nvcr.io`), or pull the image on the VM with `docker pull` and rerun `chs`.
 
 ## The memlock limit is ... bytes; native TPU tests need root or an unlimited memlock limit
 

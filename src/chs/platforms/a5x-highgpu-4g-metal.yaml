@@ -15,6 +15,7 @@
 
 schedulers:
 - kubernetes
+- standalone
 variables:
   cpu_affinity: 0-87:0-87:88-175:88-175
   gpus_per_node: 4
@@ -70,3 +71,6 @@ kubernetes:
         operator: Equal
         value: arm64
         effect: NoSchedule
+standalone:
+  variables:
+    privileged: 'true'

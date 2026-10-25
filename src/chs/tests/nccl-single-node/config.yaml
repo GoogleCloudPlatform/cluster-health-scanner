@@ -13,13 +13,25 @@
 # limitations under the License.
 
 
+# Not standalone yet: containers lack gIB/RDMA host networking and tcpxo.
 platforms:
-- a3-ultragpu-8g
-- a4-highgpu-8g
-- a3-megagpu-8g
-- a4x-highgpu-4g
-- a4x-maxgpu-4g-metal
-- a5x-highgpu-4g-metal
+- a3-ultragpu-8g:
+  - kubernetes
+  - slurm
+- a4-highgpu-8g:
+  - kubernetes
+  - slurm
+- a3-megagpu-8g:
+  - kubernetes
+  - slurm
+- a4x-highgpu-4g:
+  - kubernetes
+  - slurm
+- a4x-maxgpu-4g-metal:
+  - kubernetes
+  - slurm
+- a5x-highgpu-4g-metal:
+  - kubernetes
 defaults:
   env_vars:
     set:

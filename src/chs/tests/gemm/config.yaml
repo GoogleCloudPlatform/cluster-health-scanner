@@ -44,6 +44,13 @@ defaults:
       container_name: hpc-benchmarks:25.09
       container_uri: docker://nvcr.io#nvidia/hpc-benchmarks:25.09
       srun_args: --cpu-bind=none --mpi=pmix --container-workdir /workspace/microbenchmarks --container-image {container_path} --container-writable --container-mounts {experiment_run_dir}:{experiment_run_dir} --wait=60
+  standalone:
+    modifiers:
+    - name: gpu-persistence-mode
+    variables:
+      app_workdir: /workspace/microbenchmarks
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      mpi_command: mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES
 machines:
   a4-highgpu-8g:
     variables:
@@ -61,6 +68,9 @@ machines:
     variables:
       gpu_affinity: 0:1:2:3
     kubernetes:
+      variables:
+        container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+    standalone:
       variables:
         container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
     slurm:

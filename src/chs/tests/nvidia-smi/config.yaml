@@ -30,16 +30,30 @@ defaults:
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
       job_template: job_standard.yaml.tpl
       mpi_command: ''
+  standalone:
+    modifiers:
+    - name: gpu-persistence-mode
+    variables:
+      container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
 machines:
   a4x-highgpu-4g:
     kubernetes:
+      variables:
+        container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+    standalone:
       variables:
         container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   a4x-maxgpu-4g-metal:
     kubernetes:
       variables:
         container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+    standalone:
+      variables:
+        container_image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   a5x-highgpu-4g-metal:
     kubernetes:
+      variables:
+        container_image: nvcr.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04
+    standalone:
       variables:
         container_image: nvcr.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04

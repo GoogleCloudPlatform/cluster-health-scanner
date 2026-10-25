@@ -51,6 +51,8 @@ class BaseScheduler(abc.ABC):
         self.project_id: str | None = None  # Set by detect_nodes_hardware
         self.partially_busy_slices: dict[str, list[str]] = {}
         self.require_whole_slices: bool = False
+        # Node -> skip reason, for the error when no node remains.
+        self.node_skip_reasons: dict[str, str] = {}
 
     def _resolve_project_id(self, _node: str | None = None) -> str:
         """Resolves the GCP project ID from Application Default Credentials."""

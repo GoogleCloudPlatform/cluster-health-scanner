@@ -1699,7 +1699,7 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     type=click.Choice(SCHEDULERS),
     help=(
         "Scheduler to use instead of auto-detection. 'standalone' tests the "
-        "TPU VM CHS runs on; --nodes, --nodelists, --nodepools and "
+        "TPU or GPU VM CHS runs on; --nodes, --nodelists, --nodepools and "
         "--partitions don't apply to it."
         "\n\n "
     ),
@@ -1723,8 +1723,8 @@ def run(
     """Run tests or a suite on the specified cluster hardware.
 
     Submits a set of diagnostic or benchmark tests (or a predefined suite)
-    to run across your selected Kubernetes or Slurm nodes, or on the TPU VM
-    CHS runs on (--scheduler standalone). It creates
+    to run across your selected Kubernetes or Slurm nodes, or on the TPU or
+    GPU VM CHS runs on (--scheduler standalone). It creates
     isolated workspaces, executes the jobs, generates a unified
     interactive health report summary, and provides a path or link to it.
 
@@ -1752,7 +1752,7 @@ def run(
       chs run --suite=standard --nodepools=tpu-pool-1
 
     \b
-      # Test the TPU VM CHS runs on
+      # Test the TPU or GPU VM CHS runs on
       chs run --scheduler standalone
     """
     app_data = obj["app_data"]
@@ -2013,8 +2013,12 @@ def run(
                 )
 
     if not nodes_under_test:
+        reasons = "".join(
+            f" Skipped node '{node}': {reason}"
+            for node, reason in scheduler_obj.node_skip_reasons.items()
+        )
         raise ex.NoNodesProvidedException(
-            "No valid nodes remain available for testing."
+            f"No valid nodes remain available for testing.{reasons}"
         )
 
     cluster_name = utils.get_sanitized_cluster_name(scheduler_obj)

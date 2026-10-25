@@ -1397,6 +1397,7 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.nodepools_arg = "dynpool"
         self.mock_scheduler.partially_busy_slices = {"dynpool": ["node2"]}
         self.mock_scheduler.get_nodes_under_test.return_value = []
+        self.mock_scheduler.node_skip_reasons = {"node1": "TPUs are busy."}
         self.mock_scheduler.detect_nodes_hardware.return_value = [
             "tpu7x-standard-4t"
         ]
@@ -1441,6 +1442,11 @@ class TestCli(unittest.TestCase):
             self.assertEqual(result.exit_code, 1)
             self.assertIsInstance(
                 result.exception, exceptions.NoNodesProvidedException
+            )
+            self.assertEqual(
+                str(result.exception),
+                "No valid nodes remain available for testing. Skipped node"
+                " 'node1': TPUs are busy.",
             )
             for call in mock_cli_logger.warning.call_args_list:
                 self.assertNotIn(
