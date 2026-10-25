@@ -48,7 +48,7 @@ class TpuComputeStress(ExecutableApplication):
 
     figure_of_merit_context(
         "node",
-        regex=r"(?i).*NODE:(?P<node>[a-zA-Z0-9_-]+) EVENT:MEASURE_END.*",
+        regex=r"(?i).*NODE:(?P<node>[\w.-]+) EVENT:MEASURE_END.*",
         output_format="{node}",
     )
 

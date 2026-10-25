@@ -105,6 +105,8 @@ class GceInstanceTest(unittest.TestCase):
                     name="my-vm",
                     instance_id="1234",
                     machine_type="ct6e-standard-4t",
+                    zone="asia-northeast1-b",
+                    project_id="my-project",
                 ),
             )
         request = urlopen.call_args.args[0]
@@ -161,6 +163,51 @@ class CheckTpusIdleTest(FakeHostTestCase):
                 r"TPUs are busy: used by process 300 \(python3\)",
             ):
                 host.check_tpus_idle()
+
+
+class TpuHostTest(FakeHostTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write("/dev/vfio/vfio")
+        self.write("/dev/vfio/0")
+        self.write("/dev/vfio/1")
+
+    def test_tpu_devices(self):
+        self.assertEqual(
+            host.tpu_devices(),
+            [self.root + "/dev/vfio/0", self.root + "/dev/vfio/1"],
+        )
+
+    def test_check_tpu_access(self):
+        infinity = host.resource.RLIM_INFINITY
+        for uid, hard in ((0, 65536), (1000, infinity)):
+            with (
+                mock.patch.object(host.os, "geteuid", return_value=uid),
+                mock.patch.object(
+                    host.resource, "getrlimit", return_value=(65536, hard)
+                ),
+            ):
+                host.check_tpu_access()
+
+        with (
+            mock.patch.object(host.os, "geteuid", return_value=1000),
+            mock.patch.object(
+                host.resource, "getrlimit", return_value=(65536, 65536)
+            ),
+        ):
+            with self.assertRaisesRegex(HostCheckException, "memlock"):
+                host.check_tpu_access()
+
+        with (
+            mock.patch.object(host.os, "geteuid", return_value=0),
+            mock.patch.object(
+                host.os,
+                "access",
+                side_effect=lambda p, m: not p.endswith("/1"),
+            ),
+        ):
+            with self.assertRaisesRegex(HostCheckException, "/dev/vfio/1"):
+                host.check_tpu_access()
 
 
 if __name__ == "__main__":

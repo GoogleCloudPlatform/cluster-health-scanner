@@ -14,6 +14,7 @@
 
 """Module for managing cluster schedulers."""
 
+import logging
 import os
 import shutil
 
@@ -21,7 +22,12 @@ from chs import exceptions as ex
 from chs.schedulers.base import BaseScheduler
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers.kubernetes import KubernetesScheduler
+from chs.schedulers.standalone import StandaloneScheduler
 from chs.utils import k8s_client
+
+logger = logging.getLogger(__name__)
+
+SCHEDULERS = ("kubernetes", "slurm", "standalone")
 
 
 def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
@@ -40,6 +46,15 @@ def get_scheduler(scheduler: str, **kwargs) -> BaseScheduler:
             nodelists=kwargs.get("nodelists"),
             partitions=kwargs.get("partitions"),
         )
+    if scheduler == "standalone":
+        if any(kwargs.values()):
+            raise ex.ChsValidationError(
+                "The standalone scheduler tests the local VM; --nodes, "
+                "--nodelists, --nodepools and --partitions don't apply."
+            )
+        if not kwargs and StandaloneScheduler._active is not None:
+            return StandaloneScheduler._active
+        return StandaloneScheduler()
     raise ex.UnsupportedSchedulerException(
         f"Unsupported scheduler: {scheduler}"
     )
@@ -58,7 +73,6 @@ def _get_kubectl_context() -> str | None:
 
 def detect_scheduler() -> str:
     """Detects the active scheduler by verifying connectivity."""
-
     if shutil.which("sinfo") and shutil.which("squeue"):
         return "slurm"
 
@@ -82,7 +96,8 @@ def detect_scheduler() -> str:
             )
         return "kubernetes"
 
-    raise ex.ChsSchedulerException(
-        "Auto-detection failed: No active Slurm or Kubernetes "
-        "environment detected."
+    logger.info(
+        "No Slurm or Kubernetes environment detected; using the standalone "
+        "scheduler, which tests this VM. Pass --scheduler to choose another."
     )
+    return "standalone"

@@ -1634,6 +1634,34 @@ class TestCli(unittest.TestCase):
                 ],
             )
 
+    def test_run_command_uses_the_given_scheduler(self):
+        """Test 'run --scheduler' skips detection."""
+        self.mock_get_scheduler.side_effect = exceptions.ChsSchedulerException(
+            "stop here"
+        )
+        self.runner.invoke(
+            cli.cli,
+            [
+                "run",
+                "--suite",
+                "suite1",
+                "--auto-approve",
+                "--scheduler",
+                "standalone",
+            ],
+        )
+        self.assertEqual(
+            self.mock_get_scheduler.call_args.args, ("standalone",)
+        )
+        self.mock_detect_scheduler.assert_not_called()
+
+    def test_run_command_rejects_unknown_scheduler(self):
+        result = self.runner.invoke(
+            cli.cli, ["run", "--scheduler", "pbs", "--auto-approve"]
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.mock_get_scheduler.assert_not_called()
+
     @mock.patch("chs.cli._analyze_action")
     def test_run_command_custom_run_id(self, mock_analyze_action):
         """Test 'run' command with a custom run ID."""
@@ -1661,7 +1689,9 @@ class TestCli(unittest.TestCase):
         expected_workspace_name = f"20230101-120000_{expected_run_id}"
 
         self.mock_rm_cls.assert_any_call(
-            mock_default_dir, expected_workspace_name, run_id=expected_run_id
+            mock_default_dir,
+            expected_workspace_name,
+            run_id=expected_run_id,
         )
         mock_analyze_action.assert_called_once_with(
             self.mock_app_data, expected_run_id
@@ -2421,6 +2451,40 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
+
+    def test_cancel_uses_the_scheduler_the_run_ran_on(self):
+        """A local run is cancelled on its recorded scheduler."""
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = "ws-run1"
+        self.mock_app_data.get_run.return_value = {"scheduler": "standalone"}
+
+        result = self.runner.invoke(cli.cli, ["cancel", "run1", "-y"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.get_run.assert_called_once_with("ws-run1")
+        self.mock_get_scheduler.assert_called_once_with("standalone")
+        self.mock_detect_scheduler.assert_not_called()
+        self.mock_scheduler.cancel_run.assert_called_once_with("run1")
+
+    def test_cancel_auto_detects_without_a_recorded_scheduler(self):
+        """Unknown runs and runs without a recorded scheduler auto-detect."""
+        for resolve, entry in (
+            (exceptions.WorkspaceNotFoundException("missing"), None),
+            (None, {}),
+            (None, {"scheduler": "bogus"}),
+        ):
+            with self.subTest(entry=entry):
+                self.mock_get_scheduler.reset_mock()
+                self.mock_detect_scheduler.reset_mock()
+                self.mock_app_data.resolve_run_id.side_effect = resolve
+                self.mock_app_data.resolve_run_id.return_value = "ws-run1"
+                self.mock_app_data.get_run.return_value = entry
+
+                result = self.runner.invoke(cli.cli, ["cancel", "run1", "-y"])
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.mock_detect_scheduler.assert_called_once_with()
+                self.mock_get_scheduler.assert_called_once_with("slurm")
 
     def test_cancel_action_kube_error_raises_cancellation_exception(self):
         """Test cancel_action wraps a Kubernetes API error of any step."""

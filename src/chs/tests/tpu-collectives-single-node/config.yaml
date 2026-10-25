@@ -15,7 +15,7 @@
 
 enabled: false
 platforms:
-- tpu7x-standard-4t
+- tpu7x-standard-4t: [kubernetes]
 - ct6e-standard-4t: [kubernetes]
 defaults:
   modifiers:

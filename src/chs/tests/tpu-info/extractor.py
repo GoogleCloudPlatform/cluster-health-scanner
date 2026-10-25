@@ -22,7 +22,7 @@ class TpuInfoExtractor(DefaultExtractor):
 
     def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
         """Parses TPU Info context string into structured fields."""
-        node_match = re.search(r"Node ([a-zA-Z0-9-]+)", ctx_name)
+        node_match = re.search(r"Node ([\w.-]+)", ctx_name)
         if node_match:
             return {"node": node_match.group(1), "context": ctx_name}
         return {"context": ctx_name}

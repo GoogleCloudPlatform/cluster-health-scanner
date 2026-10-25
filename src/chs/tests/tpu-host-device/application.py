@@ -35,14 +35,9 @@ class TpuHostDevice(ExecutableApplication):
     tags("diagnostics", "tpu", "host-device")
 
     variable(
-        "container_app_dir",
-        default="/app/accelerator-microbenchmarks",
-        description="Directory of accelerator-microbenchmarks inside the container",
-    )
-    variable(
         "run_script",
         default="Ironwood/src/run_benchmark.py",
-        description="Path to run_benchmark.py relative to container_app_dir",
+        description="Path to run_benchmark.py relative to $CHS_AMB_DIR",
     )
     variable(
         "benchmarks_yaml_file",
@@ -75,7 +70,7 @@ class TpuHostDevice(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u $\\{CHS_AMB_DIR:-/app/accelerator-microbenchmarks\\}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )

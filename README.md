@@ -9,7 +9,7 @@ Cluster Health Scanner (CHS) is a command-line tool designed to validate the hea
 CHS helps site reliability engineers and cluster administrators verify that accelerator infrastructure is operating at peak performance before or between workloads:
 
 - **Run Diagnostics:** Execute curated validation suites (`lite`, `standard`) or individual hardware and network benchmarks across Kubernetes and Slurm clusters.
-- **Automatic Hardware & Scheduler Detection:** Automatically detects your active scheduler (`slurm` or `kubernetes`) and node machine types.
+- **Automatic Hardware & Scheduler Detection:** Automatically detects your active scheduler (`slurm`, `kubernetes`, or `standalone` on a single TPU VM) and node machine types.
 - **Evaluate Health & Thresholds:** Evaluates benchmark results against built-in platform thresholds and generates an interactive HTML health report and a structured `bill_of_health.json`.
 - **Discover Resources:** Query supported machine types, test suites, individual benchmarks, and schedulers for GPU and TPU platforms.
 
@@ -57,6 +57,17 @@ machine us-docker.pkg.dev login oauth2accesstoken password $(gcloud auth applica
 EOF
 ```
 
+#### Standalone (single TPU VM)
+Run CHS on the TPU VM itself (`ct6e-standard-4t` or `tpu7x-standard-4t`) to test that VM; no Slurm or Kubernetes is needed. CHS uses standalone when it detects neither, or when you pass `--scheduler standalone`.
+
+From the CHS Docker image, give the container access to the host:
+
+```bash
+docker run --rm -it --privileged --pid=host -v /:/host \
+  -v chs-local-state:/workspace/.local/share \
+  us-docker.pkg.dev/gce-ai-infra/chs/chs:latest run --scheduler standalone
+```
+
 ---
 
 ## 2. Installation & Setup
@@ -87,7 +98,7 @@ You can run CHS either via the pre-built **Docker container image** (recommended
 
    > **Tip:** To run `chs run` in the background without blocking your terminal, replace `--rm -it` with `-d` and pass `--auto-approve` (`-y`).
 
-### Option B: Python Virtual Environment (Slurm or Kubernetes)
+### Option B: Python Virtual Environment (Slurm, Kubernetes, or Standalone)
 
 ```bash
 # Create and activate a virtual environment
@@ -151,7 +162,7 @@ Query supported machine types, test suites, individual benchmarks, and scheduler
 - `chs list suites`: List pre-configured test suites (`lite`, `standard`).
 - `chs list tests`: List individual benchmarks (optionally filtered by `--suite <SUITE_NAME>` or `--machine-type <MACHINE_TYPE>`).
 - `chs list machine-types`: List supported accelerator machine types.
-- `chs list schedulers`: List supported cluster schedulers (`kubernetes`, `slurm`).
+- `chs list schedulers`: List supported schedulers (`kubernetes`, `slurm`, `standalone`).
 
 **Accelerator Filters:**
 Append `--tpu` or `--gpu` to any `chs list` command to filter results by accelerator family.
@@ -171,7 +182,7 @@ chs list tests --machine-type a3-ultragpu-8g
 ### `chs run`
 Execute a diagnostic suite or custom list of tests on your cluster.
 
-**Scheduler & Hardware Auto-detection:** CHS automatically detects the active scheduler (`slurm` via `sinfo`/`squeue`, falling back to `kubernetes` via `kubectl`/in-cluster config) and discovers the machine type of the target nodes.
+**Scheduler & Hardware Auto-detection:** CHS automatically detects the active scheduler (`slurm` via `sinfo`/`squeue`, then `kubernetes` via `kubectl`/in-cluster config, otherwise `standalone`, which tests the VM CHS runs on) and discovers the machine type of the target nodes. Pass `--scheduler` to skip auto-detection.
 
 **Options:**
 - `--suite`, `-s <SUITE_NAME>`: Pre-configured test suite to run (`lite` or `standard`). Defaults to `lite` when `--tests` is not specified.
@@ -182,6 +193,7 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 - `--nodelists <NODE_PATTERN_LIST>`: Slurm nodelist pattern to target, e.g., `node-[1-4]` (not supported for TPUs; use `--partitions`).
 - `--auto-approve`, `-y`: Automatically confirm the execution preview without interactive prompting (useful for CI and scripts).
 - `--run-id <RUN_ID>`: Custom identifier for the run.
+- `--scheduler {kubernetes,slurm,standalone}`: Scheduler to use instead of auto-detection. `standalone` tests the TPU VM CHS runs on; `--nodes`, `--nodelists`, `--nodepools` and `--partitions` don't apply to it.
 - `--output-dir <DIR>`: Directory where test logs, Bill of Health artifacts, and debug logs are saved, in a per-run `<DIR>/<workspace_name>/` subfolder. Overrides the default `./chs-output/` destination for this run. When running via Docker, use a path under `/workspace/chs-output` (or another bind-mounted directory); other paths exist only inside the container and are lost when it exits.
 - `--storage-path <bucket-or-path>`: GCS destination bucket or path (e.g., `my-bucket`, `gs://my-bucket`, or `gs://my-bucket/prefix`) to upload results for this run, overriding the global storage configuration.
 
@@ -240,7 +252,7 @@ chs run --tests nccl-pairwise,stream --nodelists node-[1-4]
 ```
 
 ### `chs cancel`
-Safely terminates a CHS run: cancels its jobs, cleans up its CHS resources, and releases its nodes so other runs can use them. Without `RUN_ID`, your latest run is cancelled. `RUN_ID` can be any run on the cluster, including one started by another user. `--all` cancels **every** CHS run on the cluster, including other users' runs, and deletes all CHS resources. Prompts for `[y/N]` confirmation unless `--auto-approve` (`-y`) is passed.
+Safely terminates a CHS run: cancels its jobs, cleans up its CHS resources, and releases its nodes so other runs can use them. Without `RUN_ID`, your latest run is cancelled. `RUN_ID` can be any run on the cluster, including one started by another user. `--all` cancels **every** CHS run on the cluster, including other users' runs, and deletes all CHS resources. A run you started is cancelled on the scheduler it ran on; otherwise CHS auto-detects the scheduler. Prompts for `[y/N]` confirmation unless `--auto-approve` (`-y`) is passed.
 
 ```bash
 # Cancel your latest run interactively

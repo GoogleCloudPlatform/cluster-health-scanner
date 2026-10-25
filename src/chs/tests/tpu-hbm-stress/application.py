@@ -48,7 +48,7 @@ class TpuHbmStress(ExecutableApplication):
 
     figure_of_merit_context(
         "node",
-        regex=r".*NODE:(?P<node>[a-zA-Z0-9_-]+) EVENT:MEASURE_END.*",
+        regex=r".*NODE:(?P<node>[\w.-]+) EVENT:MEASURE_END.*",
         output_format="{node}",
     )
 

@@ -49,7 +49,11 @@ _TEST_PROJECTS = {
     "supercomputer-testing",
 }
 
-_CLUSTER_TYPES = {"slurm": "SLURM", "kubernetes": "GKE"}
+_CLUSTER_TYPES = {
+    "slurm": "SLURM",
+    "kubernetes": "GKE",
+    "standalone": "STANDALONE",
+}
 
 _INTERRUPTED_EXIT_CODE = 130
 

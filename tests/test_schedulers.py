@@ -6316,18 +6316,22 @@ class TestSchedulerDetection(unittest.TestCase):
         mock_which.side_effect = lambda cmd: cmd == "kubectl"
         mock_exists.return_value = False
 
-        with self.assertRaises(ChsSchedulerException):
-            detect_scheduler()
+        self.assertEqual(detect_scheduler(), "standalone")
 
     @mock.patch("shutil.which")
     @mock.patch("os.path.exists")
-    def test_detect_scheduler_fail(self, mock_exists, mock_which):
-        """Test that ChsSchedulerException is raised if all checks fail."""
+    def test_detect_scheduler_fallback_to_standalone(
+        self, mock_exists, mock_which
+    ):
+        """Test that standalone is detected if Slurm and K8s checks fail."""
         mock_which.return_value = False
         mock_exists.return_value = False
 
-        with self.assertRaises(ChsSchedulerException):
-            detect_scheduler()
+        with self.assertLogs("chs.schedulers", "INFO") as logs:
+            self.assertEqual(detect_scheduler(), "standalone")
+        self.assertIn(
+            "No Slurm or Kubernetes environment detected", logs.output[0]
+        )
 
 
 class TestTpuSliceSummary(unittest.TestCase):

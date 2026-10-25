@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import re
+import resource
 import urllib.error
 import urllib.request
 
@@ -46,6 +47,8 @@ class GceInstance:
     name: str
     instance_id: str
     machine_type: str
+    zone: str = ""
+    project_id: str = ""
 
 
 def in_container() -> bool:
@@ -92,6 +95,8 @@ def gce_instance() -> GceInstance:
             machine_type=resources.normalize_machine_type(
                 instance["machineType"]
             ),
+            zone=instance.get("zone", "").rsplit("/", 1)[-1],
+            project_id=metadata.get("project", {}).get("projectId", ""),
         )
     except (OSError, urllib.error.URLError, ValueError, KeyError) as e:
         raise ChsSchedulerException(
@@ -103,6 +108,26 @@ def gce_instance() -> GceInstance:
 def tpu_devices() -> list[str]:
     """Returns the VM's TPU devices (/dev/vfio/<n>), as seen by CHS."""
     return sorted(glob.glob(host_path("/dev/vfio/[0-9]*")))
+
+
+def check_tpu_access() -> None:
+    """Checks that native TPU tests can lock memory and open the TPUs."""
+    _, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+    if os.geteuid() != 0 and hard != resource.RLIM_INFINITY:
+        raise HostCheckException(
+            f"The memlock limit is {hard} bytes; native TPU tests need root"
+            " or an unlimited memlock limit (e.g. `ulimit -l unlimited` via"
+            " /etc/security/limits.conf)."
+        )
+    denied = [
+        path
+        for path in [host_path("/dev/vfio/vfio"), *tpu_devices()]
+        if not os.access(path, os.R_OK | os.W_OK)
+    ]
+    if denied:
+        raise HostCheckException(
+            f"No read/write access to TPU devices {', '.join(denied)}."
+        )
 
 
 def _holds_tpu_device(fd_dir: str) -> bool:

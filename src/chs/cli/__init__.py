@@ -64,6 +64,7 @@ from chs.cli import help_command_text
 from chs.cli import list_formatting
 from chs.cli.background_cleanup import BackgroundCleanup
 from chs.core.utils import rendering
+from chs.schedulers import SCHEDULERS
 from chs.storage import StorageProviderFactory
 from chs.storage.base import StorageProvider
 from chs.telemetry import reporting as telemetry_reporting
@@ -1208,7 +1209,7 @@ def _show_results(
     viewer.show_summary_and_details()
 
 
-def cancel_action(run_id: str) -> bool:
+def cancel_action(run_id: str, scheduler: str | None = None) -> bool:
     """Cancels a run's jobs and cleans up its resources on the cluster.
 
     Returns:
@@ -1218,9 +1219,9 @@ def cancel_action(run_id: str) -> bool:
       ChsCancellationException: If an error occurs during cancellation.
     """
     logger.debug("Canceling run %s.", run_id)
-    scheduler = get_scheduler(detect_scheduler())
+    scheduler_obj = get_scheduler(scheduler or detect_scheduler())
     try:
-        return scheduler.cancel_run(run_id)
+        return scheduler_obj.cancel_run(run_id)
     except _CANCELLATION_CLUSTER_ERRORS as e:
         raise ex.ChsCancellationException(
             f"CHS cancellation failed: {e!r}"
@@ -1269,7 +1270,9 @@ def _confirm_cancellation(prompt_msg: str, auto_approve: bool) -> None:
         raise click.Abort()
 
 
-def safe_cancel_action(run_id: str, auto_approve: bool = False) -> None:
+def safe_cancel_action(
+    run_id: str, auto_approve: bool = False, scheduler: str | None = None
+) -> None:
     """Cancels a run after prompting the user for confirmation."""
     _confirm_cancellation(
         f"This will cancel CHS run '{run_id}' and delete its resources on "
@@ -1280,7 +1283,7 @@ def safe_cancel_action(run_id: str, auto_approve: bool = False) -> None:
         f"[bold red]Canceling CHS run '{run_id}' and cleaning up its "
         "resources...[/bold red]"
     ):
-        found = cancel_action(run_id)
+        found = cancel_action(run_id, scheduler)
     if not found:
         Console().print(
             f"[{theme.CHS_WARNING_STYLE}]No active CHS run '{run_id}' was "
@@ -1665,6 +1668,16 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
         "\n\n "
     ),
 )
+@click.option(
+    "--scheduler",
+    type=click.Choice(SCHEDULERS),
+    help=(
+        "Scheduler to use instead of auto-detection. 'standalone' tests the "
+        "TPU VM CHS runs on; --nodes, --nodelists, --nodepools and "
+        "--partitions don't apply to it."
+        "\n\n "
+    ),
+)
 @click.pass_obj
 @_handle_termination_signals(_interrupt_run)
 def run(
@@ -1680,11 +1693,13 @@ def run(
     run_id: str | None = None,
     output_dir: str | None = None,
     storage_path: str | None = None,
+    scheduler: str | None = None,
 ) -> RunExecutionResult:
     """Run tests or a suite on the specified cluster hardware.
 
     Submits a set of diagnostic or benchmark tests (or a predefined suite)
-    to run across your selected Kubernetes or Slurm nodes. It creates
+    to run across your selected Kubernetes or Slurm nodes, or on the TPU VM
+    CHS runs on (--scheduler standalone). It creates
     isolated workspaces, executes the jobs, generates a unified
     interactive health report summary, and provides a path or link to it.
 
@@ -1710,6 +1725,10 @@ def run(
     \b
       # Run full standard validation suite across TPU nodepools
       chs run --suite=standard --nodepools=tpu-pool-1
+
+    \b
+      # Test the TPU VM CHS runs on
+      chs run --scheduler standalone
     """
     app_data = obj["app_data"]
 
@@ -1732,7 +1751,7 @@ def run(
 
         preflights.run_platform_preflights()
 
-        scheduler = detect_scheduler()
+        scheduler = scheduler or detect_scheduler()
         scheduler_obj = get_scheduler(
             scheduler,
             nodes=nodes,
@@ -2286,13 +2305,17 @@ def cancel(
                 "No local CHS runs found. Pass a RUN_ID to cancel a specific "
                 "run, or --all to cancel every CHS run on the cluster."
             ) from e
+    scheduler = None
     try:
         workspace_name = app_data.resolve_run_id(run_id)
     except ex.WorkspaceNotFoundException:
         pass
     else:
         telemetry.set_telemetry_run_id(workspace_name)
-    safe_cancel_action(run_id, auto_approve=auto_approve)
+        recorded = (app_data.get_run(workspace_name) or {}).get("scheduler")
+        if recorded in SCHEDULERS:
+            scheduler = recorded
+    safe_cancel_action(run_id, auto_approve=auto_approve, scheduler=scheduler)
 
 
 @cli.command()

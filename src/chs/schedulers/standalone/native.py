@@ -34,13 +34,18 @@ _GROUP_EXIT_WAIT_SECONDS = 5
 _SCRUBBED_ENV_PREFIXES = ("PYTHON", "JAX_", "XLA_", "LIBTPU_", "TPU_")
 _SCRUBBED_ENV_VARS = ("VIRTUAL_ENV",)
 _CHIPS_PER_HOST_BOUNDS = {4: "2,2,1"}
+_LIBTPU_INIT_ARGS = (
+    "--deepsea_hal_test_skip_slicebuilder=true"
+    " --deepsea_hal_test_allow_multichip_skip_slicebuilder=true"
+    " --xla_tpu_use_enhanced_launch_barrier=false"
+    " --megascale_error_reporter_abort_on_hang=true"
+)
 
 
-def build_command(script: str, timeout_seconds: int) -> list[str]:
-    """Returns the argv to run `script` with unlimited memlock and a timeout.
-
-    Exits with 125 without running `script` if memlock cannot be raised.
-    """
+def build_command(
+    script: str, timeout_seconds: int, watch_fd: int
+) -> list[str]:
+    """Returns the argv to run `script` with memlock, timeout and watchdog."""
     if timeout_seconds <= 0:
         raise ChsValidationError(
             f"Native job timeout must be positive, got {timeout_seconds}."
@@ -48,6 +53,7 @@ def build_command(script: str, timeout_seconds: int) -> list[str]:
     return [
         "bash",
         "-c",
+        f"( read -r _ <&{watch_fd}; kill -TERM 0 ) & exec {watch_fd}<&-; "
         "ulimit -l unlimited || "
         '{ echo "chs: cannot raise RLIMIT_MEMLOCK" >&2; exit 125; }; '
         f"exec timeout -k {KILL_AFTER_SECONDS} "
@@ -93,6 +99,7 @@ def build_env(
             "ENABLE_TPUNETD_CLIENT": "false",
             "TPU_HOST_BOUNDS": "1,1,1",
             "TPU_CHIPS_PER_HOST_BOUNDS": _CHIPS_PER_HOST_BOUNDS[chip_count],
+            "LIBTPU_INIT_ARGS": _LIBTPU_INIT_ARGS,
         }
     )
     return env
@@ -127,6 +134,7 @@ class NativeJob:
         self.job_name = job_name
         self.pid = process.pid
         self.returncode: int | None = None
+        self._watch_fd: int | None = None
 
     @classmethod
     def start(
@@ -140,10 +148,11 @@ class NativeJob:
         chip_count: int,
         out_path: Path,
     ) -> "NativeJob":
-        """Starts a test in its own session."""
-        command = build_command(script, timeout_seconds)
+        """Starts a test in its own session that stops when CHS exits."""
         env = build_env(os.environ, runtime_dir, node, chip_count)
+        read_fd, write_fd = os.pipe()
         try:
+            command = build_command(script, timeout_seconds, read_fd)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with out_path.open("w", encoding="utf-8") as log:
                 process = subprocess.Popen(
@@ -153,13 +162,22 @@ class NativeJob:
                     stderr=subprocess.STDOUT,
                     env=env,
                     start_new_session=True,
+                    pass_fds=(read_fd,),
                 )
         except OSError as e:
+            os.close(write_fd)
             raise ChsExecutionException(
                 f"Cannot start native job {job_name}: {e}"
             ) from e
-        logger.info("Started native job %s (pid %d).", job_name, process.pid)
-        return cls(process, job_name)
+        except BaseException:
+            os.close(write_fd)
+            raise
+        finally:
+            os.close(read_fd)
+        logger.debug("Started native job %s (pid %d).", job_name, process.pid)
+        job = cls(process, job_name)
+        job._watch_fd = write_fd
+        return job
 
     def poll(self) -> int | None:
         """Returns the exit code (negative for signal), or None if running."""
@@ -184,9 +202,9 @@ class NativeJob:
         _kill_group(self._process.pid)
         self.returncode = self._process.wait()
         _wait_for_group_exit(self._process.pid)
-        logger.info(
-            "Native job %s exited with %d.",
-            self.job_name,
-            self.returncode,
-        )
+        if self._watch_fd is not None:
+            os.close(self._watch_fd)
+            self._watch_fd = None
+        log = logger.debug if self.returncode == 0 else logger.warning
+        log("Native job %s exited with %d.", self.job_name, self.returncode)
         return self.returncode

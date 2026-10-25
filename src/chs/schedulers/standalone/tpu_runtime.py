@@ -39,14 +39,25 @@ def _is_complete(path: pathlib.Path) -> bool:
     return marker.is_file() and marker.read_text().strip() == AMB_COMMIT
 
 
+def _user_root() -> pathlib.Path:
+    return pathlib.Path(platformdirs.user_data_dir(appname="chs")) / "runtimes"
+
+
+def find_runtime() -> pathlib.Path | None:
+    """Returns the built TPU runtime that ensure_runtime() uses, or None."""
+    for root in (IMAGE_ROOT, _user_root()):
+        if _is_complete(root / "tpu"):
+            return root / "tpu"
+    return None
+
+
 def ensure_runtime(root: pathlib.Path | None = None) -> pathlib.Path:
     """Returns the TPU runtime path, building it if missing or outdated."""
     if root is None:
-        if _is_complete(IMAGE_ROOT / "tpu"):
-            return IMAGE_ROOT / "tpu"
-        root = (
-            pathlib.Path(platformdirs.user_data_dir(appname="chs")) / "runtimes"
-        )
+        found = find_runtime()
+        if found is not None:
+            return found
+        root = _user_root()
     path = root / "tpu"
     if _is_complete(path):
         return path

@@ -331,6 +331,7 @@ class RecordRunTest(_ReportingTestCase):
         for name, expected in (
             ("slurm", "SLURM"),
             ("kubernetes", "GKE"),
+            ("standalone", "STANDALONE"),
             ("other", "UNKNOWN"),
         ):
             with self.subTest(name=name):

@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -55,10 +56,11 @@ def _has_exited(pid: int) -> bool:
 class BuildCommandTest(unittest.TestCase):
     def test_build_command(self):
         self.assertEqual(
-            native.build_command("echo 'a b'", 600),
+            native.build_command("echo 'a b'", 600, 7),
             [
                 "bash",
                 "-c",
+                "( read -r _ <&7; kill -TERM 0 ) & exec 7<&-; "
                 "ulimit -l unlimited || "
                 '{ echo "chs: cannot raise RLIMIT_MEMLOCK" >&2; exit 125; }; '
                 "exec timeout -k 30 600 bash -c "
@@ -66,7 +68,7 @@ class BuildCommandTest(unittest.TestCase):
             ],
         )
         with self.assertRaises(ChsValidationError):
-            native.build_command("true", 0)
+            native.build_command("true", 0, 7)
 
 
 class BuildEnvTest(unittest.TestCase):
@@ -108,6 +110,7 @@ class BuildEnvTest(unittest.TestCase):
                 "ENABLE_TPUNETD_CLIENT": "false",
                 "TPU_HOST_BOUNDS": "1,1,1",
                 "TPU_CHIPS_PER_HOST_BOUNDS": "2,2,1",
+                "LIBTPU_INIT_ARGS": native._LIBTPU_INIT_ARGS,
             },
         )
 
@@ -246,6 +249,41 @@ class NativeJobTest(unittest.TestCase):
         self.assertTrue(_has_exited(child))
         self._assert_reaped(job.pid)
         self.assertTrue(self.out.exists())
+
+    def test_job_stops_when_chs_is_killed(self):
+        pid_file = self.dir / "child.pid"
+        starter = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent(
+                    f"""
+                    import pathlib, time
+                    from chs.schedulers.standalone import native
+                    native.NativeJob.start(
+                        job_name="tpu-info",
+                        script="sleep 300 & echo $! > {pid_file}; wait",
+                        timeout_seconds=600,
+                        runtime_dir=pathlib.Path({str(self.dir / "runtime")!r}),
+                        node="vm-1",
+                        chip_count=4,
+                        out_path=pathlib.Path({str(self.out)!r}),
+                    )
+                    time.sleep(300)
+                    """
+                ),
+            ],
+        )
+        self.addCleanup(starter.kill)
+        _wait_for(
+            lambda: pid_file.exists() and bool(pid_file.read_text("utf-8")),
+            "the test's child pid",
+        )
+        child = int(pid_file.read_text("utf-8"))
+        self.assertFalse(_has_exited(child))
+        starter.kill()
+        starter.wait()
+        _wait_for(lambda: _has_exited(child), "the test to stop with CHS")
 
     def test_start_failure_raises_execution_exception(self):
         with mock.patch.object(

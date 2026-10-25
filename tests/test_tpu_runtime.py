@@ -140,6 +140,19 @@ class EnsureRuntimeTest(unittest.TestCase):
         self.assertEqual(tpu_runtime.ensure_runtime(), image_runtime)
         self.assertEqual(self.calls, [])
 
+    def test_find_runtime(self):
+        with mock.patch(
+            "platformdirs.user_data_dir", return_value=str(self.root)
+        ):
+            self.assertIsNone(tpu_runtime.find_runtime())
+            self.make_runtime(root=self.root / "runtimes", commit="old")
+            self.assertIsNone(tpu_runtime.find_runtime())
+            user = self.make_runtime(root=self.root / "runtimes")
+            self.assertEqual(tpu_runtime.find_runtime(), user)
+            image = self.make_runtime(root=tpu_runtime.IMAGE_ROOT)
+            self.assertEqual(tpu_runtime.find_runtime(), image)
+        self.assertEqual(self.calls, [])
+
     def test_builds_under_user_data_dir_when_image_root_missing(self):
         with mock.patch(
             "platformdirs.user_data_dir", return_value=str(self.root)

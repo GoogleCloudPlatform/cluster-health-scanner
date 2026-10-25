@@ -150,6 +150,43 @@ class ResolveShippedFilesTest(unittest.TestCase):
                         test_name, machine, scheduler, domain_type
                     )
 
+    def test_standalone_tests_run_natively_without_an_image(self):
+        for test_name, machine, scheduler in _supported_combinations():
+            if scheduler != "standalone":
+                continue
+            resolved = chs_config.resolve_test(test_name, machine, scheduler)
+            with self.subTest(test=test_name, machine=machine):
+                self.assertEqual(resolved["variables"].get("runtime"), "tpu")
+                self.assertIsNone(resolved["variables"].get("container_image"))
+
+    def test_standalone_gets_no_tpu_env_modifier(self):
+        """The native runner sets a standalone test's TPU environment."""
+        for test_name, machine, scheduler in _supported_combinations():
+            if scheduler != "standalone":
+                continue
+            resolved = chs_config.resolve_test(test_name, machine, scheduler)
+            with self.subTest(test=test_name, machine=machine):
+                self.assertNotIn(
+                    "tpu-node-local-init",
+                    {m["name"] for m in resolved.get("modifiers", [])},
+                )
+
+    def test_tpu_env_modifier_stays_on_cluster_schedulers(self):
+        for test_name, schedulers in (
+            ("tpu-info", ("kubernetes", "slurm")),
+            ("tpu-compute-stress", ("kubernetes",)),
+            ("tpu-hbm-stress", ("kubernetes",)),
+        ):
+            for scheduler in schedulers:
+                resolved = chs_config.resolve_test(
+                    test_name, "tpu7x-standard-4t", scheduler
+                )
+                with self.subTest(test=test_name, scheduler=scheduler):
+                    self.assertIn(
+                        "tpu-node-local-init",
+                        {m["name"] for m in resolved.get("modifiers", [])},
+                    )
+
     def test_scheduler_only_modifiers_stay_on_their_scheduler(self):
         for test_name, machine, scheduler in _supported_combinations():
             resolved = chs_config.resolve_test(test_name, machine, scheduler)
