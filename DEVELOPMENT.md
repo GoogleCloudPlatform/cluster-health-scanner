@@ -84,7 +84,7 @@ The Docker image installs third-party Python packages only from hash-pinned lock
 | `requirements.txt` | `pyproject.toml` + `requirements-build.in` | The CHS virtualenv (`/opt/venv`) |
 | `requirements-system.txt` | `requirements-system.in` | The base image's system Python (`/usr/local/bin/python3`) |
 
-Ramble is the exception: pip cannot hash-check git dependencies, so the image builds Ramble from a checkout of the commit pinned in `pyproject.toml`. Always pin it to a full commit SHA.
+There are two exceptions. pip cannot hash-check git dependencies, so the image builds Ramble from a checkout of the commit pinned in `pyproject.toml`; always pin it to a full commit SHA. The TPU runtime (amd64 only) installs the TPU benchmarks' requirements, which are not hash-pinned yet.
 
 The `pip-compile` pre-commit hooks keep the lockfiles in sync with their inputs. After changing dependencies, regenerate the lockfiles and commit them:
 

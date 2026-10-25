@@ -1,3 +1,31 @@
+# The hash-pinned click, platformdirs and uv entries of requirements.txt
+# (none has dependencies on Linux). A separate stage, so that other
+# requirement changes don't rebuild the TPU runtime.
+FROM python:3.12-slim-trixie AS tpu-runtime-requirements
+COPY requirements.txt /tmp/requirements.txt
+RUN awk '/^(click|platformdirs|uv)==/{p=1} p{print} p&&!/\\$/{p=0}' /tmp/requirements.txt > /tmp/requirements-tpu-runtime.txt
+
+FROM python:3.12-slim-trixie AS tpu-runtime
+ARG TARGETARCH
+COPY --from=tpu-runtime-requirements /tmp/requirements-tpu-runtime.txt /tmp/
+RUN arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}"; \
+    if [ "$arch" = "amd64" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends git \
+        && rm -rf /var/lib/apt/lists/* \
+        && pip install --no-cache-dir --no-deps --require-hashes -r /tmp/requirements-tpu-runtime.txt; \
+    fi
+COPY src/chs/exceptions.py /src/chs/exceptions.py
+COPY src/chs/schedulers/standalone/tpu_runtime.py /src/chs/schedulers/standalone/tpu_runtime.py
+ENV PYTHONPATH=/src
+# The venv must use this image's Python, which the final image also has.
+ENV UV_PYTHON_PREFERENCE=only-system
+RUN arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}"; \
+    if [ "$arch" = "amd64" ]; then \
+        python -c "from chs.schedulers.standalone.tpu_runtime import IMAGE_ROOT, ensure_runtime; ensure_runtime(IMAGE_ROOT)"; \
+    else \
+        mkdir -p /opt/chs/runtimes; \
+    fi
+
 FROM python:3.12-slim-trixie
 
 ARG TARGETARCH
@@ -21,6 +49,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && rm -rf /google-cloud-sdk/.install/.backup \
     && curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${arch}/kubectl" \
     && chmod +x /usr/local/bin/kubectl
+
+# The TPU runtime (empty on arm64). Before the CHS install so that CHS changes reuse this layer.
+COPY --from=tpu-runtime /opt/chs/runtimes /opt/chs/runtimes
 
 COPY requirements-system.txt /tmp/requirements-system.txt
 RUN python3 -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-system.txt \

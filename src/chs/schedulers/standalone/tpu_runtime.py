@@ -105,6 +105,7 @@ def ensure_runtime(root: pathlib.Path | None = None) -> pathlib.Path:
                 "pip",
                 "install",
                 "--no-cache",
+                "--compile-bytecode",
                 "--python",
                 venv,
                 "-r",

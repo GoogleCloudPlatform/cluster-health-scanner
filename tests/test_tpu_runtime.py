@@ -14,6 +14,7 @@
 
 """Tests for chs.schedulers.standalone.tpu_runtime."""
 
+import ast
 import pathlib
 import subprocess
 import sys
@@ -98,6 +99,7 @@ class EnsureRuntimeTest(unittest.TestCase):
                     "pip",
                     "install",
                     "--no-cache",
+                    "--compile-bytecode",
                     "--python",
                     venv,
                     "-r",
@@ -159,6 +161,24 @@ class EnsureRuntimeTest(unittest.TestCase):
         ):
             path = tpu_runtime.ensure_runtime()
         self.assertEqual(path, self.root / "runtimes" / "tpu")
+
+
+class ImageBuildTest(unittest.TestCase):
+    def test_imports_only_chs_files_the_dockerfile_copies(self):
+        # The Dockerfile's tpu-runtime stage copies only these two CHS files.
+        src = pathlib.Path(exceptions.__file__).parent
+        for path, allowed in [
+            ("schedulers/standalone/tpu_runtime.py", {"chs.exceptions"}),
+            ("exceptions.py", set()),
+        ]:
+            imported = set()
+            for node in ast.walk(ast.parse((src / path).read_text())):
+                if isinstance(node, ast.Import):
+                    imported |= {a.name for a in node.names}
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported |= {f"{node.module}.{a.name}" for a in node.names}
+            chs_imports = {m for m in imported if m.split(".")[0] == "chs"}
+            self.assertEqual(chs_imports, allowed, path)
 
 
 if __name__ == "__main__":
