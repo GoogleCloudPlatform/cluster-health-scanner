@@ -14,6 +14,7 @@
 
 """File utilities for the Cluster Health Scanner."""
 
+import fcntl
 import os
 import pathlib
 import shutil
@@ -24,6 +25,28 @@ from typing import Generator, IO
 # Cache umask at import time to avoid thread-safety issues with os.umask()
 _UMASK = os.umask(0)
 os.umask(_UMASK)
+
+
+@contextmanager
+def exclusive_lock(
+    lock_path: str | pathlib.Path,
+) -> Generator[None, None, None]:
+    """Holds an exclusive advisory lock on `lock_path` for the block.
+
+    The lock serializes processes and threads alike, since every entry opens
+    its own file description. It is released when the block exits, even on
+    error, and by the kernel if the process dies. Not reentrant: nesting it
+    on the same path from one thread deadlocks.
+
+    Args:
+        lock_path: Path of the lock file. Created if missing, never removed.
+    """
+    fd = os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 @contextmanager

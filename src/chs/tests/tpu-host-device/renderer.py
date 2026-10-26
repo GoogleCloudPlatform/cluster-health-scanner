@@ -39,8 +39,8 @@ class TpuHostDeviceRenderer(DefaultRenderer):
         return [
             ColumnDef("node", "Node", align="left"),
             ColumnDef("size_mib", "Size (MiB)", align="right"),
-            ColumnDef("h2d", "H2D Bandwidth (GB/s)", align="right"),
-            ColumnDef("d2h", "D2H Bandwidth (GB/s)", align="right"),
+            ColumnDef("h2d", "H2D Bandwidth (GiB/s)", align="right"),
+            ColumnDef("d2h", "D2H Bandwidth (GiB/s)", align="right"),
         ]
 
     def get_detail_data(
@@ -99,8 +99,8 @@ class TpuHostDeviceRenderer(DefaultRenderer):
             elements.append(Text(f"\n{table_model.title}", style="bold yellow"))
             table = create_styled_table(expand=False)
             table.add_column("Size (MiB)", justify="right")
-            table.add_column("H2D Bandwidth (GB/s)", justify="right")
-            table.add_column("D2H Bandwidth (GB/s)", justify="right")
+            table.add_column("H2D Bandwidth (GiB/s)", justify="right")
+            table.add_column("D2H Bandwidth (GiB/s)", justify="right")
 
             for r in table_model.rows:
                 table.add_row(r["size_mib"], r["h2d"], r["d2h"])

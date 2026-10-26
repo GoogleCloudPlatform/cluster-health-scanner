@@ -46,6 +46,14 @@ from tests import k8s_fakes  # noqa: F401
 # It is only reached when the behavior under test is broken.
 _EVENT_TIMEOUT_S = 5
 _CLEANUP_SPINNER = "Cleaning up CHS resources..."
+
+
+def _analyze_in_guard(app_data, run_id, scheduler):
+    """Runs `_analyze_action` under the teardown guard, as `chs run` does."""
+    with cli.cancel_jobs_on_failure(scheduler, run_id):
+        return cli._analyze_action(app_data, run_id)
+
+
 _CLEANUP_THREAD = "chs-cleanup"
 
 
@@ -438,9 +446,22 @@ class CancelExperimentsTest(_RambleManagerTestCase):
 
         self.app_data.get_run.assert_not_called()
         self.get_scheduler.assert_called_once_with("kubernetes")
+
+    def test_tears_down_only_its_run(self):
+        """Test only the run is cancelled, by its run ID."""
         scheduler = self.get_scheduler.return_value
-        scheduler.cancel_jobs_by_prefix.assert_called_once_with("chs-")
-        scheduler.cleanup_scheduler_resources.assert_called_once_with()
+        manager = mock.Mock()
+        for name in ("cancel_run", "cancel_all_runs"):
+            manager.attach_mock(getattr(scheduler, name), name)
+
+        self.manager.cancel_experiments(scheduler_name="kubernetes")
+
+        self.assertEqual(
+            manager.mock_calls,
+            [
+                mock.call.cancel_run("run1"),
+            ],
+        )
 
     def test_default_reads_the_scheduler_from_the_registry(self):
         """Test the scheduler comes from runs.json if no name is given."""
@@ -554,7 +575,7 @@ class BackgroundCleanupTest(unittest.TestCase):
         handle_outcome.assert_not_called()
         self.assertIn(
             "Interrupted while cleaning up CHS resources for run run1; "
-            "cleanup may be incomplete. Run 'chs cancel' to finish "
+            "cleanup may be incomplete. Run 'chs cancel run1' to finish "
             "cleaning up.",
             "\n".join(logs.output),
         )
@@ -648,7 +669,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         self.archive_and_log.side_effect = archive_and_log
 
         self.assertEqual(
-            cli._analyze_action(self.app_data, "run1", self.scheduler), "run1"
+            _analyze_in_guard(self.app_data, "run1", self.scheduler), "run1"
         )
 
         self.assertEqual(
@@ -683,7 +704,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         self.on_cleanup_spinner = release_cleanup.set
 
         self.assertEqual(
-            cli._analyze_action(self.app_data, "run1", self.scheduler), "run1"
+            _analyze_in_guard(self.app_data, "run1", self.scheduler), "run1"
         )
 
         self.assertEqual(
@@ -706,7 +727,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
         self.archive_and_log.side_effect = archive_and_log
 
-        cli._analyze_action(self.app_data, "run1", self.scheduler)
+        _analyze_in_guard(self.app_data, "run1", self.scheduler)
 
         self.assertEqual(
             self.steps, ["spinner: Analyzing logs...", "results", "archive"]
@@ -730,14 +751,15 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
                 with self.assertLogs("chs.cli", level="WARNING") as logs:
                     self.assertEqual(
-                        cli._analyze_action(
+                        _analyze_in_guard(
                             self.app_data, "run1", self.scheduler
                         ),
                         "run1",
                     )
 
                 self.assertIn(
-                    "Failed to clean CHS resources. Error:",
+                    "Failed to clean CHS resources. Run 'chs cancel run1' to "
+                    "finish cleaning up. Error:",
                     "\n".join(logs.output),
                 )
                 self.archive_and_log.assert_called_once_with(self.rm)
@@ -747,7 +769,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
         self.rm.cancel_experiments.side_effect = RuntimeError("kaboom")
 
         with self.assertRaisesRegex(RuntimeError, "kaboom"):
-            cli._analyze_action(self.app_data, "run1", self.scheduler)
+            _analyze_in_guard(self.app_data, "run1", self.scheduler)
 
         self.archive_and_log.assert_called_once_with(self.rm)
 
@@ -758,10 +780,11 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
         with self.assertLogs("chs.cli", level="WARNING") as logs:
             with self.assertRaisesRegex(ValueError, "results broke"):
-                cli._analyze_action(self.app_data, "run1", self.scheduler)
+                _analyze_in_guard(self.app_data, "run1", self.scheduler)
 
         self.assertIn(
-            "Failed to clean CHS resources. Error: cleanup broke",
+            "Failed to clean CHS resources. Run 'chs cancel run1' to finish "
+            "cleaning up. Error: cleanup broke",
             "\n".join(logs.output),
         )
         self.archive_and_log.assert_called_once_with(self.rm)
@@ -777,7 +800,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
 
         self.rm.get_scheduler_type.side_effect = get_scheduler_type
 
-        cli._analyze_action(self.app_data, "run1", self.scheduler)
+        _analyze_in_guard(self.app_data, "run1", self.scheduler)
 
         self.assertEqual(resolved_on, [threading.current_thread().name])
         self.rm.cancel_experiments.assert_called_once_with(
@@ -835,7 +858,7 @@ class AnalyzeBackgroundCleanupTest(unittest.TestCase):
             ),
         ):
             self.assertEqual(
-                cli._analyze_action(self.app_data, "run1", self.scheduler),
+                _analyze_in_guard(self.app_data, "run1", self.scheduler),
                 "run1",
             )
 

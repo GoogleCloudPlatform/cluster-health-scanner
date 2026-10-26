@@ -18,10 +18,7 @@ import logging
 import functools
 import collections
 
-init_args = (
-    " --tpu_link_up_check_timeout=15s"
-    " --megascale_error_reporter_abort_on_hang=true"
-)
+init_args = " --megascale_error_reporter_abort_on_hang=true"
 os.environ["LIBTPU_INIT_ARGS"] = (
     os.environ.get("LIBTPU_INIT_ARGS", "") + init_args
 )

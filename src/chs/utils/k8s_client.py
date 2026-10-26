@@ -208,14 +208,15 @@ def _delete_and_wait(
     if not object_names:
         return
     deadline = time.monotonic() + wait_timeout_seconds
+    pending = []
     for name in object_names:
         try:
             _request(delete, name=name, **query)
+            pending.append(name)
         except KubeError as e:
             if e.status != 404:
                 raise
 
-    pending = list(object_names)
     while True:
         remaining = []
         for name in pending:
@@ -392,6 +393,20 @@ def apply_service(*, body: dict, **query: Any) -> None:
     )
 
 
+def delete_service(*, name: str, namespace: str, **query: Any) -> None:
+    """Deletes the Service; a Service that does not exist is ignored."""
+    try:
+        _request(
+            _sdk().core.delete_namespaced_service,
+            name=name,
+            namespace=namespace,
+            **query,
+        )
+    except KubeError as e:
+        if e.status != 404:
+            raise
+
+
 def list_jobs(*, namespace: str | None = None, **query: Any) -> list[dict]:
     batch = _sdk().batch
     return _list(
@@ -500,6 +515,28 @@ def delete_custom_objects(
         **coords,
     )
     _delete_and_wait(delete, read, object_names, wait_timeout_seconds, **query)
+
+
+def create_custom_object(*, plural: str, body: dict, **query: Any) -> None:
+    """Creates the object.
+
+    Raises:
+      KubeError: With status 409 if the object already exists.
+    """
+    group, version = body["apiVersion"].split("/")
+    custom = _sdk().custom
+    _request(
+        _scoped(
+            custom.create_namespaced_custom_object,
+            custom.create_cluster_custom_object,
+            body["metadata"].get("namespace"),
+            group=group,
+            version=version,
+            plural=plural,
+        ),
+        body=body,
+        **query,
+    )
 
 
 def apply_custom_object(*, plural: str, body: dict, **query: Any) -> None:

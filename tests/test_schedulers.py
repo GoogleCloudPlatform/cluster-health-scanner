@@ -30,12 +30,12 @@ from chs.constants import (
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
 from chs.schedulers.kubernetes import (
-    WORKER_LABEL,
     KubernetesScheduler,
     TpuSliceData,
 )
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import _get_kubectl_context, detect_scheduler
+from google.auth.exceptions import GoogleAuthError
 from chs.exceptions import ChsSchedulerException
 from chs.utils import k8s_client
 import click
@@ -45,13 +45,37 @@ from tests.k8s_fakes import (
     install_fake_client,
 )
 
+_MANAGED_BY = "app.kubernetes.io/managed-by"
+_INSTANCE = "app.kubernetes.io/instance"
+_WORKER_LABELS = {_MANAGED_BY: "chs", "app.kubernetes.io/component": "worker"}
+
 _LIST_CHS_SLICES = Call(
     "list_custom_objects",
     {
         "group": "accelerator.gke.io",
         "version": "v1beta1",
         "plural": "slices",
-        "label_selector": "created-by=chs",
+        "label_selector": f"{_MANAGED_BY}=chs",
+    },
+)
+
+_LIST_RUN_A_SLICES = Call(
+    "list_custom_objects",
+    {
+        "group": "accelerator.gke.io",
+        "version": "v1beta1",
+        "plural": "slices",
+        "label_selector": f"{_MANAGED_BY}=chs,{_INSTANCE}=run-a",
+    },
+)
+
+_LIST_CHS_COMPUTE_DOMAINS = Call(
+    "list_custom_objects",
+    {
+        "group": "resource.nvidia.com",
+        "version": "v1beta1",
+        "plural": "computedomains",
+        "namespace": CHS_NAMESPACE,
     },
 )
 
@@ -64,12 +88,12 @@ _DELETE_CHS_NAMESPACE = Call(
 )
 
 
-def _chs_slice(pool_name: str, reason: str) -> dict:
+def _chs_slice(pool_name: str, reason: str, run_id: str = "run-a") -> dict:
     """Returns a GKE Slice object created by CHS with the given Ready reason."""
     return {
         "metadata": {
             "name": f"chs-slice-{pool_name}",
-            "labels": {"created-by": "chs", "chs-nodepool": pool_name},
+            "labels": {_MANAGED_BY: "chs", _INSTANCE: run_id},
         },
         "status": {
             "conditions": [{"type": "Ready", "reason": reason}],
@@ -255,8 +279,11 @@ class TestSlurmScheduler(unittest.TestCase):
         nodes = scheduler.get_nodes_under_test()
 
         self.assertEqual(nodes, ["node-1", "node-2"])
-        self.assertEqual(mock_run.call_count, 2)
+        # The nodes are resolved, filtered to idle ones and checked against
+        # the jobs of other CHS runs.
+        self.assertEqual(mock_run.call_count, 4)
         self.assertIn("scontrol", mock_run.call_args_list[0][0][0])
+        self.assertIn("squeue", mock_run.call_args_list[-1][0][0])
 
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_partition_arg(self, mock_run, mock_logger):
@@ -270,8 +297,9 @@ class TestSlurmScheduler(unittest.TestCase):
         nodes = scheduler.get_nodes_under_test()
 
         self.assertEqual(nodes, ["node-1", "node-2"])
-        self.assertEqual(mock_run.call_count, 2)
+        self.assertEqual(mock_run.call_count, 4)
         self.assertIn("sinfo", mock_run.call_args_list[0][0][0])
+        self.assertIn("squeue", mock_run.call_args_list[-1][0][0])
 
     @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="12345")
     def test_extract_job_id_success(self, mock_open, _mock_logger):
@@ -351,7 +379,7 @@ class TestSlurmScheduler(unittest.TestCase):
                 "Detected network interfaces: %r", []
             )
 
-    @mock.patch("google.auth.default")
+    @mock.patch("chs.utils.gcp.get_default_credentials")
     def test_resolve_project_id_slurm_success(
         self, mock_auth_default, mock_logger
     ):
@@ -360,7 +388,7 @@ class TestSlurmScheduler(unittest.TestCase):
         project_id = scheduler._resolve_project_id("node1")
         self.assertEqual(project_id, "my-project-id")
 
-    @mock.patch("google.auth.default")
+    @mock.patch("chs.utils.gcp.get_default_credentials")
     def test_resolve_project_id_slurm_no_project(
         self, mock_auth_default, mock_logger
     ):
@@ -371,12 +399,12 @@ class TestSlurmScheduler(unittest.TestCase):
         ):
             scheduler._resolve_project_id("node1")
 
-    @mock.patch("google.auth.default")
+    @mock.patch("chs.utils.gcp.get_default_credentials")
     def test_resolve_project_id_slurm_error(
         self, mock_auth_default, mock_logger
     ):
         scheduler = SlurmScheduler()
-        mock_auth_default.side_effect = Exception("auth error")
+        mock_auth_default.side_effect = GoogleAuthError("auth error")
         with self.assertRaisesRegex(
             ex.ChsSchedulerException, "Failed to get GCP credentials"
         ):
@@ -400,6 +428,12 @@ class TestKubernetesScheduler(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.kube = install_fake_client(self)
+        self.mock_adc = self.enterContext(
+            mock.patch(
+                "chs.utils.gcp.get_default_credentials",
+                return_value=(None, None),
+            )
+        )
         self.tmp_dir_obj = tempfile.TemporaryDirectory()
         self.tmp_dir = self.tmp_dir_obj.name
         self.addCleanup(self.tmp_dir_obj.cleanup)
@@ -628,28 +662,39 @@ class TestKubernetesScheduler(unittest.TestCase):
         for node in [
             {
                 "metadata": {"name": "ready-node"},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
             {
                 "metadata": {"name": "not-ready-node"},
                 "status": {
-                    "conditions": [{"type": "Ready", "status": "False"}]
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "False"}],
                 },
             },
             {
                 "metadata": {"name": "unknown-node"},
                 "status": {
-                    "conditions": [{"type": "Ready", "status": "Unknown"}]
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "Unknown"}],
                 },
             },
             {
                 "metadata": {"name": "cordoned-node"},
                 "spec": {"unschedulable": True},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
             {
                 "metadata": {"name": "empty-conditions-node"},
-                "status": {"conditions": []},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [],
+                },
             },
             {
                 "metadata": {"name": "null-status-node"},
@@ -668,7 +713,6 @@ class TestKubernetesScheduler(unittest.TestCase):
                 "unknown-node",
                 "cordoned-node",
                 "empty-conditions-node",
-                "null-status-node",
             },
         )
 
@@ -683,7 +727,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                     "metadata": {
                         "name": name,
                         "labels": {"cloud.google.com/gke-nodepool": pool},
-                    }
+                    },
+                    "status": {"allocatable": {"nvidia.com/gpu": "8"}},
                 },
             )
 
@@ -715,7 +760,12 @@ class TestKubernetesScheduler(unittest.TestCase):
         """Test _fetch_raw_node_resources lists non-system nodes."""
         scheduler = KubernetesScheduler()
         stored = self.kube.add_object(
-            "", "nodes", {"metadata": {"name": "node1"}}
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1"},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
         )
 
         resources = scheduler._fetch_raw_node_resources()
@@ -741,7 +791,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                 "metadata": {
                     "name": "node1",
                     "labels": {"cloud.google.com/gke-nodepool": "pool-a"},
-                }
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
             },
         )
 
@@ -810,6 +861,110 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(valid_nodes, [])
         mock_logger.warning.assert_called_once()
 
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_skips_gpu_nodes_targeted_by_other_runs(
+        self,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
+    ):
+        targeted = [f"node{i}" for i in range(2, 9)]
+        for name in ["node1", *targeted]:
+            self.kube.add_object("", "nodes", {"metadata": {"name": name}})
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _run_job("chs-run-b-x-a1b2c3", "run-b", targeted),
+            namespace=CHS_NAMESPACE,
+        )
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={}, node_to_pool={}, pool_to_topology={}
+        )
+        scheduler = KubernetesScheduler(nodes=",".join(["node1", *targeted]))
+
+        self.assertEqual(scheduler.get_nodes_under_test(), ["node1"])
+        mock_logger.warning.assert_called_once_with(
+            "Skipping %d node(s) targeted by CHS run '%s'.", 7, "run-b"
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_skips_tpu_slice_targeted_by_other_runs(
+        self,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
+    ):
+        for name in ("t1", "t2", "t3", "t4"):
+            self.kube.add_object("", "nodes", {"metadata": {"name": name}})
+        # Only t1 is requested, but another run targets t2 in its slice.
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _run_job("chs-run-b-x-a1b2c3", "run-b", ["t2"]),
+            namespace=CHS_NAMESPACE,
+        )
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={"pool1": ["t1", "t2"], "pool2": ["t3", "t4"]},
+            node_to_pool={"t1": "pool1", "t2": "pool1", "t3": "pool2"},
+            pool_to_topology={"pool1": "2x2", "pool2": "2x2"},
+        )
+        scheduler = KubernetesScheduler(nodes="t1,t3")
+
+        self.assertCountEqual(scheduler.get_nodes_under_test(), ["t3", "t4"])
+        self.assertEqual(
+            mock_logger.warning.call_args_list[0],
+            mock.call(
+                "Skipping %d node(s) targeted by CHS run '%s'.", 1, "run-b"
+            ),
+        )
+        self.assertIn("pool1", mock_logger.warning.call_args_list[1][0])
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_raises_if_runs_cannot_be_listed(
+        self,
+        mock_tpu_slices,
+        mock_busy,
+        mock_not_ready,
+        mock_logger,
+    ):
+        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        mock_tpu_slices.return_value = TpuSliceData(
+            pools={}, node_to_pool={}, pool_to_topology={}
+        )
+        self.kube.fail_next(
+            "list_jobs", k8s_client.KubeError("forbidden", status=403)
+        )
+        scheduler = KubernetesScheduler(nodes="node1")
+
+        with self.assertRaisesRegex(ChsSchedulerException, "cannot verify"):
+            scheduler.get_nodes_under_test()
+
     def test_resolve_raw_nodes_empty(self, mock_logger):
         """Test resolve_raw_nodes returns empty list if node discovery fails."""
         scheduler = KubernetesScheduler()
@@ -830,7 +985,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                     "metadata": {
                         "name": name,
                         "labels": {"cloud.google.com/gke-nodepool": "pool-1"},
-                    }
+                    },
+                    "status": {"allocatable": {"nvidia.com/gpu": "8"}},
                 },
             )
 
@@ -1075,6 +1231,7 @@ ramble:
                 workspace_config_dir,
                 [{"name": "test1"}],
                 "a3-megagpu-8g",
+                run_id="run-a",
             )
 
         output_path = os.path.join(workspace_config_dir, "ramble.yaml")
@@ -1083,10 +1240,34 @@ ramble:
             data = yaml.safe_load(f)
 
         variables = data["ramble"]["variables"]
-        self.assertEqual(
-            variables["jobset_labels_yaml"], "app.kubernetes.io/managed-by: chs"
-        )
         self.assertEqual(variables["suspend_jobset"], "true")
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
+        return_value=["node1"],
+    )
+    def test_write_ramble_config_sets_run_variables(
+        self, mock_filter, mock_logger
+    ):
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+
+        with mock.patch.object(
+            KubernetesScheduler,
+            "_discover_networks",
+            return_value=(["default"], ["rdma-0"]),
+        ):
+            KubernetesScheduler(nodes="node1").write_ramble_config(
+                workspace_config_dir,
+                [{"name": "test1"}],
+                "a3-megagpu-8g",
+                run_id="run-a",
+            )
+
+        with open(os.path.join(workspace_config_dir, "ramble.yaml")) as f:
+            variables = yaml.safe_load(f)["ramble"]["variables"]
+        self.assertEqual(variables["chs_run_id"], "run-a")
+        self.assertEqual(variables["worker_service_name"], "chs-run-a")
 
     def test_discover_networks_success(self, mock_logger):
         """Test _discover_networks with success and grouping."""
@@ -1240,7 +1421,8 @@ ramble:
                         },
                     },
                     "status": {
-                        "conditions": [{"type": "Ready", "status": "True"}]
+                        "allocatable": {"nvidia.com/gpu": "8"},
+                        "conditions": [{"type": "Ready", "status": "True"}],
                     },
                 },
             )
@@ -1261,7 +1443,10 @@ ramble:
             "nodes",
             {
                 "metadata": {"name": "node1", "labels": {}},
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
         )
         self.kube.add_object(
@@ -1272,7 +1457,10 @@ ramble:
                     "name": "node2",
                     "labels": {"cloud.google.com/gce-topology-block": "block2"},
                 },
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
             },
         )
 
@@ -1284,47 +1472,162 @@ ramble:
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
-    def test_cleanup_scheduler_resources(self, mock_logger):
-        """Test cleanup_scheduler_resources cleans up slices and namespace."""
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
+    def test_get_topology_falls_back_to_gce_physical_host_topology(
+        self, mock_query_info, mock_logger
+    ):
+        """Test get_topology queries GCE topology when labels are missing."""
+        scheduler = KubernetesScheduler(nodes="node1,node2")
+        self.mock_adc.return_value = (mock.Mock(), "adc-project")
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1", "labels": {}},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node2", "labels": {}},
+                "status": {
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            },
+        )
+        mock_query_info.return_value = {
+            "node1": {
+                "machine_type": "a3-megagpu-8g",
+                "instance_id": "111",
+                "block": "gce-block-1",
+                "subblock": "gce-subblock-1",
+            },
+            "node2": {
+                "machine_type": "a3-megagpu-8g",
+                "instance_id": "222",
+            },
+        }
+
+        machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
+        topology = scheduler.get_topology()
+
+        self.assertEqual(machine_types, ["a3-megagpu-8g"])
+        mock_query_info.assert_called_once_with(
+            "adc-project", ["node1", "node2"]
+        )
+        self.assertEqual(
+            topology,
+            {
+                "gce-block-1": {"gce-subblock-1": ["node1"]},
+                "default-block": {"default-subblock": ["node2"]},
+            },
+        )
+
+    def test_resolve_raw_nodes_skips_non_accelerator_nodes(self, mock_logger):
+        """Test resolve_raw_nodes skips 0-accelerator nodes."""
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "cp-cpu-node",
+                    "labels": {"node-role.kubernetes.io/control-plane": ""},
+                },
+                "status": {"allocatable": {"cpu": "16"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "cp-tpu-node",
+                    "labels": {"node-role.kubernetes.io/control-plane": "true"},
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "no-status-node", "labels": {}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "cpu-node", "labels": {}},
+                "status": {
+                    "allocatable": {
+                        "cpu": "32",
+                        "memory": "128Gi",
+                        "nvidia.com/gpu": "0",
+                    }
+                },
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "gpu-node", "labels": {}},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "tpu-node", "labels": {}},
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+        )
+
         scheduler = KubernetesScheduler()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_dir = os.path.join(tmpdir, "configs")
-            os.makedirs(config_dir, exist_ok=True)
-            scheduler.workspace_config_dir = config_dir
+        nodes = scheduler.resolve_raw_nodes()
+        self.assertEqual(nodes, ["cp-tpu-node", "gpu-node", "tpu-node"])
 
-            scheduler.cleanup_scheduler_resources()
-
-            # No slices exist, so delete_custom_objects receives []; the
-            # namespace delete takes the secrets with it.
-            self.assertEqual(
-                self.kube.calls,
-                [
-                    _LIST_CHS_SLICES,
-                    Call(
-                        "delete_custom_objects",
-                        {
-                            "group": "accelerator.gke.io",
-                            "version": "v1beta1",
-                            "plural": "slices",
-                            "object_names": [],
-                            "wait_timeout_seconds": 300,
-                        },
-                    ),
-                    _DELETE_CHS_NAMESPACE,
-                ],
-            )
-
-    def test_cleanup_scheduler_resources_file_backstop(self, mock_logger):
-        """Test cleanup_scheduler_resources cleans up statelessly."""
+    def test_cancel_all_runs_without_jobs(self, mock_logger):
+        """Test cancel_all_runs deletes the slices and the namespace."""
         scheduler = KubernetesScheduler()
-        scheduler.workspace_config_dir = None
 
-        scheduler.cleanup_scheduler_resources()
+        scheduler.cancel_all_runs()
 
-        self.assertIn(_DELETE_CHS_NAMESPACE, self.kube.calls)
+        self.assertEqual(
+            self.kube.calls,
+            [
+                Call(
+                    "list_jobs",
+                    {
+                        "namespace": CHS_NAMESPACE,
+                        "label_selector": f"{_MANAGED_BY}=chs",
+                    },
+                ),
+                _LIST_CHS_SLICES,
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": "accelerator.gke.io",
+                        "version": "v1beta1",
+                        "plural": "slices",
+                        "object_names": [],
+                        "wait_timeout_seconds": 300,
+                    },
+                ),
+                _DELETE_CHS_NAMESPACE,
+            ],
+        )
 
-    def test_cancel_jobs_deletes_secrets(self, mock_logger):
-        """Test cancel_jobs deletes only cancelled jobs' -ssh secrets."""
+    def test_cancel_jobs_deletes_secrets_and_compute_domains(self, mock_logger):
+        """Test cancel_jobs deletes only cancelled jobs' secrets and CDs."""
         for name in ("chs-job1", "chs-job2", "chs-job3"):
             self.kube.add_object(
                 "batch",
@@ -1344,33 +1647,33 @@ ramble:
                 {"metadata": {"name": name}},
                 namespace=CHS_NAMESPACE,
             )
+        for name in ("chs-job1-cd", "chs-job3-cd"):
+            self.kube.add_object(
+                "resource.nvidia.com",
+                "computedomains",
+                {"metadata": {"name": name}},
+                namespace=CHS_NAMESPACE,
+            )
         scheduler = KubernetesScheduler()
 
         scheduler.cancel_jobs(["chs-job1", "chs-job2"])
 
         self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "delete_jobs",
-                    {
-                        "object_names": ["chs-job1", "chs-job2"],
-                        "namespace": CHS_NAMESPACE,
-                        "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
-                    },
-                ),
-                Call("list_secrets", {"namespace": CHS_NAMESPACE}),
-                Call(
-                    "delete_secret",
-                    {"name": "chs-job1-ssh", "namespace": CHS_NAMESPACE},
-                ),
-                Call(
-                    "delete_secret",
-                    {"name": "chs-job2-ssh", "namespace": CHS_NAMESPACE},
-                ),
-            ],
+            self.kube.calls[0],
+            Call(
+                "delete_jobs",
+                {
+                    "object_names": ["chs-job1", "chs-job2"],
+                    "namespace": CHS_NAMESPACE,
+                    "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
+                },
+            ),
         )
         self.assertEqual(self.kube.stored_names("batch", "jobs"), ["chs-job3"])
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"),
+            ["chs-job3-cd"],
+        )
         stored_secrets = self.kube.stored_names("", "secrets")
         self.assertIn("chs-job3-ssh", stored_secrets)
         self.assertIn("other-secret", stored_secrets)
@@ -1389,8 +1692,74 @@ ramble:
             error,
         )
 
-    def test_cleanup_scheduler_resources_deletes_secrets(self, mock_logger):
-        """Test that cleanup_scheduler_resources deletes secrets when the
+    def test_cancel_jobs_cleans_dependents_when_deleting_fails(
+        self, mock_logger
+    ):
+        self.kube.add_object(
+            "",
+            "secrets",
+            {"metadata": {"name": "chs-job1-ssh"}},
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.fail_next(
+            "delete_jobs", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        KubernetesScheduler().cancel_jobs(["chs-job1"])
+
+        self.assertEqual(self.kube.stored_names("", "secrets"), [])
+        mock_logger.error.assert_called_once()
+
+    def test_cancel_run_raises_when_listing_jobs_fails(self, mock_logger):
+        self.kube.add_object(
+            "",
+            "secrets",
+            {
+                "metadata": {
+                    "name": "chs-run-a-job-ssh",
+                    "labels": {_MANAGED_BY: "chs", _INSTANCE: "run-a"},
+                }
+            },
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.fail_next(
+            "list_jobs", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException, "Failed to list the Jobs matching"
+        ):
+            KubernetesScheduler().cancel_run("run-a")
+
+        self.assertEqual(
+            self.kube.stored_names("", "secrets"), ["chs-run-a-job-ssh"]
+        )
+        self.assertEqual(self.kube.calls_to("delete_jobs"), [])
+
+    def test_poll_jobs_logs_failure_to_delete_skipped_jobs(self, mock_logger):
+        self.kube.add_object(
+            "batch", "jobs", _job_object("job1", ["node1"]), namespace="chs"
+        )
+        self.kube.add_object(
+            "",
+            "pods",
+            _accelerator_pod("other", "node1"),
+            namespace=CHS_NAMESPACE,
+        )
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_jobs", error)
+
+        statuses = KubernetesScheduler().poll_jobs(["job1"])
+
+        self.assertEqual(statuses, {"job1": "DEADLINE"})
+        mock_logger.error.assert_called_once_with(
+            "Encountered an error while attempting to "
+            "delete active Jobs. Error: %s",
+            error,
+        )
+
+    def test_cancel_all_runs_deletes_secrets(self, mock_logger):
+        """Test that cancel_all_runs deletes CHS secrets when the
         namespace, which would delete them too, cannot be deleted."""
         forbidden = k8s_client.KubeError("forbidden", status=403)
         self.kube.fail_next("delete_namespace", forbidden)
@@ -1400,12 +1769,28 @@ ramble:
         self.kube.add_object(
             "",
             "secrets",
-            {"metadata": {"name": "chs-job1-ssh"}},
+            {
+                "metadata": {
+                    "name": "chs-job1-ssh",
+                    "labels": {_MANAGED_BY: "chs", _INSTANCE: "run-a"},
+                }
+            },
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "",
+            "secrets",
+            {"metadata": {"name": "user-secret"}},
             namespace=CHS_NAMESPACE,
         )
         scheduler = KubernetesScheduler()
 
-        scheduler.cleanup_scheduler_resources()
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the CHS chs namespace\. Run "
+            r"`chs cancel --all` again to retry\.$",
+        ):
+            scheduler.cancel_all_runs()
 
         self.assertIn(
             _DELETE_CHS_NAMESPACE,
@@ -1425,7 +1810,7 @@ ramble:
                 )
             ],
         )
-        self.assertEqual(self.kube.stored_names("", "secrets"), [])
+        self.assertEqual(self.kube.stored_names("", "secrets"), ["user-secret"])
 
     def test_resolve_project_id_kubernetes_success(self, mock_logger):
         self.kube.add_object(
@@ -1501,7 +1886,16 @@ ramble:
                 scheduler._resolve_project_id("node1")
             self.assertIs(cm.exception.__cause__, error)
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    def test_resolve_project_id_kubernetes_falls_back_to_adc(self, mock_logger):
+        """Test _resolve_project_id falls back to ADC without providerID."""
+        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        self.mock_adc.return_value = (mock.Mock(), "adc-fallback-project")
+        scheduler = KubernetesScheduler()
+        self.assertEqual(
+            scheduler._resolve_project_id("node1"), "adc-fallback-project"
+        )
+
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_success(self, mock_query_info, mock_logger):
         scheduler = KubernetesScheduler()
         # Node objects without GKE's instance-type label and instance_id
@@ -1530,7 +1924,7 @@ ramble:
                 {"node1": "12345", "node2": "67890"},
             )
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_heterogeneous(
         self, mock_query_info, mock_logger
     ):
@@ -1557,7 +1951,7 @@ ramble:
             machine_types = scheduler.detect_nodes_hardware(["node1", "node2"])
             self.assertEqual(machine_types, ["a3-megagpu-8g", "a3-ultragpu-8g"])
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_unknown(self, mock_query_info, mock_logger):
         scheduler = KubernetesScheduler()
         # Node objects without GKE's instance-type label and instance_id
@@ -1579,12 +1973,19 @@ ramble:
             self.assertEqual(machine_types, ["a3-megagpu-8g", "unknown"])
             self.assertEqual(scheduler.node_to_instance_id, {"node1": "12345"})
 
-    @mock.patch("chs.schedulers.base.query_gce_instances_info")
+    @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_detect_nodes_hardware_fallback_to_labels(
         self, mock_query_info, mock_logger
     ):
         scheduler = KubernetesScheduler()
-        self.kube.add_object("", "nodes", {"metadata": {"name": "node1"}})
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node1"},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        )
         self.kube.add_object(
             "",
             "nodes",
@@ -1596,7 +1997,8 @@ ramble:
                             "a5x-highgpu-4g-metal"
                         ),
                     },
-                }
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "4"}},
             },
         )
         with mock.patch.object(
@@ -1687,7 +2089,7 @@ ramble:
         nodes = scheduler.get_nodes_under_test()
         self.assertEqual(nodes, ["node1", "node2"])
 
-    def test_cleanup_dynamic_slices(self, mock_logger):
+    def test_list_slice_names_returns_only_matching_slices(self, mock_logger):
         self.kube.add_object(
             "accelerator.gke.io", "slices", _chs_slice("pool1", "Ready")
         )
@@ -1697,11 +2099,71 @@ ramble:
             {"metadata": {"name": "user-slice"}},
         )
         scheduler = KubernetesScheduler()
-        scheduler._cleanup_dynamic_slices()
+
+        self.assertEqual(
+            scheduler._list_slice_names(f"{_MANAGED_BY}=chs"),
+            ["chs-slice-pool1"],
+        )
+        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
+        mock_logger.warning.assert_not_called()
+
+    def test_list_slice_names_crd_not_found(self, mock_logger):
+        # Without the Slice CRD there is nothing to delete, and a list
+        # failing with 404 is silently ignored.
+        self.kube.unregister_type("accelerator.gke.io", "slices")
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(scheduler._list_slice_names(f"{_MANAGED_BY}=chs"), [])
+        self.assertEqual(
+            self.kube.calls_to("list_custom_objects"), [_LIST_CHS_SLICES]
+        )
+        mock_logger.warning.assert_not_called()
+
+    def test_list_slice_names_returns_none_if_listing_fails(self, mock_logger):
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("list_custom_objects", error)
+        scheduler = KubernetesScheduler()
+
+        self.assertIsNone(scheduler._list_slice_names(f"{_MANAGED_BY}=chs"))
+        mock_logger.warning.assert_called_once()
+        self.assertIn(
+            "Failed to list the dynamic TPU slices",
+            str(mock_logger.warning.call_args.args[1]),
+        )
+
+    def test_list_slice_names_skips_slices_without_name(self, mock_logger):
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("pool1", "Ready")
+        )
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("nameless", "Ready")
+        )
+        del self.kube.objects[
+            ("accelerator.gke.io", "slices", None, "chs-slice-nameless")
+        ]["metadata"]["name"]
+        scheduler = KubernetesScheduler()
+
+        self.assertEqual(
+            scheduler._list_slice_names(f"{_MANAGED_BY}=chs"),
+            ["chs-slice-pool1"],
+        )
+
+    def test_delete_slices_deletes_only_named_slices(self, mock_logger):
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("pool1", "Ready")
+        )
+        self.kube.add_object(
+            "accelerator.gke.io",
+            "slices",
+            {"metadata": {"name": "user-slice"}},
+        )
+        scheduler = KubernetesScheduler()
+
+        self.assertTrue(scheduler._delete_slices(["chs-slice-pool1"]))
+
         self.assertEqual(
             self.kube.calls,
             [
-                _LIST_CHS_SLICES,
                 Call(
                     "delete_custom_objects",
                     {
@@ -1714,104 +2176,22 @@ ramble:
                 ),
             ],
         )
-        # Only the slices CHS created are deleted.
         self.assertEqual(
             self.kube.stored_names("accelerator.gke.io", "slices"),
             ["user-slice"],
         )
         mock_logger.warning.assert_not_called()
 
-    def test_cleanup_dynamic_slices_crd_not_found(self, mock_logger):
-        # Without the Slice CRD there is nothing to delete, and a list
-        # failing with 404 is silently ignored.
-        self.kube.unregister_type("accelerator.gke.io", "slices")
-        scheduler = KubernetesScheduler()
-        scheduler._cleanup_dynamic_slices()
-        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
-        mock_logger.warning.assert_not_called()
-
-    def test_cleanup_dynamic_slices_failure_is_logged(self, mock_logger):
+    def test_delete_slices_failure_is_logged_and_reported(self, mock_logger):
         error = k8s_client.KubeError("timed out deleting slices")
         self.kube.fail_next("delete_custom_objects", error)
         scheduler = KubernetesScheduler()
-        # Cleanup is best effort: the error is logged, not raised.
-        scheduler._cleanup_dynamic_slices()
+
+        self.assertFalse(scheduler._delete_slices(["chs-slice-pool1"]))
         mock_logger.warning.assert_called_once_with(
-            "Failed to delete dynamic TPU slices after execution. "
+            "Failed to delete dynamic TPU slices. "
             "Manual cleanup may be required. Error: %s",
             error,
-        )
-
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._delete_namespace"
-    )
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler."
-        "_cleanup_dynamic_slices"
-    )
-    def test_cancel_jobs_by_prefix_does_not_delete_namespace(
-        self,
-        mock_cleanup_slices,
-        mock_delete_ns,
-        mock_logger,
-    ):
-        for name in ("chs-test-job1", "chs-test-job2", "other-job"):
-            self.kube.add_object(
-                "batch",
-                "jobs",
-                {"metadata": {"name": name}},
-                namespace=CHS_NAMESPACE,
-            )
-        scheduler = KubernetesScheduler()
-        with mock.patch.object(scheduler, "cancel_jobs") as mock_cancel_jobs:
-            scheduler.cancel_jobs_by_prefix("chs-test")
-            mock_cancel_jobs.assert_called_once_with(
-                ["chs-test-job1", "chs-test-job2"]
-            )
-            mock_delete_ns.assert_not_called()
-            mock_cleanup_slices.assert_not_called()
-        self.assertEqual(
-            self.kube.calls,
-            [Call("list_jobs", {"namespace": CHS_NAMESPACE})],
-        )
-
-    def test_get_active_job_names_timeout_raises(self, mock_logger):
-        """A timeout must not look like "no jobs" to the foreign-run check."""
-        self.kube.fail_next("list_jobs", k8s_client.KubeError("read timed out"))
-        with self.assertRaisesRegex(
-            ex.ChsSchedulerException, "Failed to list active Jobs"
-        ):
-            KubernetesScheduler().get_active_job_names()
-
-    def test_get_active_job_names_api_error_returns_empty(self, mock_logger):
-        self.kube.fail_next(
-            "list_jobs",
-            k8s_client.KubeError("forbidden", status=403),
-        )
-        self.assertEqual(KubernetesScheduler().get_active_job_names(), [])
-
-    def test_get_active_job_names_excludes_finished_jobs(self, mock_logger):
-        for name, status in (
-            ("chs-running", {"active": 1}),
-            ("chs-pending", {}),
-            (
-                "chs-complete",
-                {"conditions": [{"type": "Complete", "status": "True"}]},
-            ),
-            (
-                "chs-failed",
-                {"conditions": [{"type": "Failed", "status": "True"}]},
-            ),
-        ):
-            self.kube.add_object(
-                "batch",
-                "jobs",
-                {"metadata": {"name": name}, "status": status},
-                namespace=CHS_NAMESPACE,
-            )
-        self.assertEqual(
-            KubernetesScheduler().get_active_job_names(),
-            ["chs-running", "chs-pending"],
         )
 
     def test_get_job_statuses_from_job_conditions(self, mock_logger):
@@ -1878,20 +2258,36 @@ ramble:
             self.kube.calls, [Call("list_jobs", {"namespace": CHS_NAMESPACE})]
         )
 
-    def test_ensure_namespace_applies_worker_service(self, mock_logger):
-        KubernetesScheduler()._ensure_namespace_exists()
+    def test_apply_scheduler_resources_creates_run_worker_service(
+        self, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        with tempfile.TemporaryDirectory() as workspace_config_dir:
+            scheduler.setup_scheduler_resources(
+                workspace_config_dir, run_id="run-a"
+            )
+        with mock.patch.object(
+            scheduler, "get_nodes_under_test", return_value=[]
+        ):
+            scheduler.apply_scheduler_resources()
+            scheduler.apply_scheduler_resources()
 
-        service = self.kube.objects[("", "services", CHS_NAMESPACE, "chs")]
+        service = self.kube.objects[
+            ("", "services", CHS_NAMESPACE, "chs-run-a")
+        ]
+        self.assertEqual(
+            service["metadata"]["labels"],
+            {_MANAGED_BY: "chs", _INSTANCE: "run-a"},
+        )
         self.assertEqual(
             service["spec"],
             {
                 "clusterIP": "None",
                 "publishNotReadyAddresses": True,
-                "selector": {"chs.gke.io/worker": "true"},
+                "selector": {**_WORKER_LABELS, _INSTANCE: "run-a"},
             },
         )
-        KubernetesScheduler()._ensure_namespace_exists()
-        self.assertEqual(len(self.kube.calls_to("apply_service")), 2)
+        self.assertEqual(self.kube.stored_names("", "services"), ["chs-run-a"])
 
     def test_fetch_job_log_selects_pods_by_job_name(self, mock_logger):
         for index in ("0", "1"):
@@ -1935,11 +2331,12 @@ ramble:
         self, mock_time, mock_sleep, mock_logger
     ):
         scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
         self.kube.add_object(
             "accelerator.gke.io", "slices", _chs_slice("mypool", "ACTIVE")
         )
         success, failed = scheduler._wait_for_slices_active(["mypool"])
-        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
+        self.assertEqual(self.kube.calls, [_LIST_RUN_A_SLICES])
         self.assertEqual(success, ["mypool"])
         self.assertEqual(failed, [])
         mock_sleep.assert_not_called()
@@ -1950,11 +2347,12 @@ ramble:
         self, mock_time, mock_sleep, mock_logger
     ):
         scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
         self.kube.add_object(
             "accelerator.gke.io", "slices", _chs_slice("mypool", "FAILED")
         )
         success, failed = scheduler._wait_for_slices_active(["mypool"])
-        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
+        self.assertEqual(self.kube.calls, [_LIST_RUN_A_SLICES])
         self.assertEqual(success, [])
         self.assertEqual(failed, ["mypool"])
         mock_sleep.assert_not_called()
@@ -1965,6 +2363,7 @@ ramble:
         self, mock_time, mock_sleep, mock_logger
     ):
         scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
         self.kube.add_object(
             "accelerator.gke.io", "slices", _chs_slice("mypool", "CREATING")
         )
@@ -1973,7 +2372,7 @@ ramble:
         )
         self.assertEqual(success, [])
         self.assertEqual(failed, ["mypool"])
-        self.assertEqual(self.kube.calls, [_LIST_CHS_SLICES])
+        self.assertEqual(self.kube.calls, [_LIST_RUN_A_SLICES])
         mock_sleep.assert_called_once_with(10)
 
     @mock.patch(
@@ -1990,12 +2389,8 @@ ramble:
         "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
         return_value={"mypool": ["node1"]},
     )
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._cleanup_dynamic_slices"
-    )
     def test_apply_scheduler_resources_failed_nodepools(
         self,
-        mock_cleanup,
         mock_group,
         mock_get_nodes,
         mock_provision,
@@ -2020,6 +2415,84 @@ ramble:
         self.assertNotIn("mypool", scheduler._tpu_slice_data.pools)
         self.assertNotIn("mypool", scheduler._tpu_slice_data.pool_to_topology)
         self.assertNotIn("node1", scheduler._tpu_slice_data.node_to_pool)
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
+        return_value={"good": ["node1"], "bad": ["node2"]},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._provision_dynamic_slices"
+    )
+    def test_apply_scheduler_resources_deletes_failed_slices(
+        self, mock_provision, mock_group, mock_logger
+    ):
+        for pool, reason in (("good", "ACTIVE"), ("bad", "FAILED")):
+            self.kube.add_object(
+                "accelerator.gke.io", "slices", _chs_slice(pool, reason)
+            )
+        scheduler = KubernetesScheduler()
+        scheduler._resolved_nodes = ["node1", "node2"]
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools={"good": ["node1"], "bad": ["node2"]},
+            node_to_pool={"node1": "good", "node2": "bad"},
+            pool_to_topology={"good": "2x2", "bad": "2x2"},
+            dynamic_slice_partitions={"good": "p-good", "bad": "p-bad"},
+            pool_to_accelerator={"good": "tpu7x", "bad": "tpu7x"},
+        )
+        mock_provision.return_value = (["good"], ["bad"])
+
+        scheduler.apply_scheduler_resources()
+
+        self.assertEqual(scheduler._resolved_nodes, ["node1"])
+        self.assertEqual(
+            self.kube.calls_to("delete_custom_objects"),
+            [
+                Call(
+                    "delete_custom_objects",
+                    {
+                        "group": "accelerator.gke.io",
+                        "version": "v1beta1",
+                        "plural": "slices",
+                        "object_names": ["chs-slice-bad"],
+                        "wait_timeout_seconds": 300,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            ["chs-slice-good"],
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
+        return_value={"good": ["node1"], "bad": ["node2"]},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._provision_dynamic_slices"
+    )
+    def test_apply_scheduler_resources_logs_failure_to_delete_failed_slices(
+        self, mock_provision, mock_group, mock_logger
+    ):
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_custom_objects", error)
+        scheduler = KubernetesScheduler()
+        scheduler._resolved_nodes = ["node1", "node2"]
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools={"good": ["node1"], "bad": ["node2"]},
+            node_to_pool={"node1": "good", "node2": "bad"},
+            pool_to_topology={"good": "2x2", "bad": "2x2"},
+        )
+        mock_provision.return_value = (["good"], ["bad"])
+
+        scheduler.apply_scheduler_resources()
+
+        self.assertEqual(scheduler._resolved_nodes, ["node1"])
+        mock_logger.warning.assert_any_call(
+            "Failed to delete dynamic TPU slices. "
+            "Manual cleanup may be required. Error: %s",
+            error,
+        )
 
     def test_get_already_fulfilled_partitions_success(self, mock_logger):
         scheduler = KubernetesScheduler()
@@ -2052,9 +2525,34 @@ ramble:
                         "group": "accelerator.gke.io",
                         "version": "v1beta1",
                         "plural": "slices",
+                        "label_selector": None,
                     },
                 )
             ],
+        )
+
+    def test_get_already_fulfilled_partitions_skips_other_runs_slices(
+        self, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        for name, labels, partition_id in (
+            ("user-slice", {}, "part-user"),
+            ("own", {_MANAGED_BY: "chs", _INSTANCE: "run-a"}, "part-own"),
+            ("other", {_MANAGED_BY: "chs", _INSTANCE: "run-b"}, "part-b"),
+        ):
+            self.kube.add_object(
+                "accelerator.gke.io",
+                "slices",
+                {
+                    "metadata": {"name": name, "labels": labels},
+                    "spec": {"partitionIds": [partition_id]},
+                },
+            )
+
+        self.assertCountEqual(
+            scheduler._get_already_fulfilled_partitions(),
+            ["part-user", "part-own"],
         )
 
     def test_get_already_fulfilled_partitions_error(self, mock_logger):
@@ -2116,6 +2614,7 @@ ramble:
         self, mock_wait, mock_get_fulfilled, mock_logger
     ):
         scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
         target_pools = {"pool1": ["node1"]}
 
         scheduler.workspace_config_dir = self.tmp_dir
@@ -2135,14 +2634,89 @@ ramble:
             ("accelerator.gke.io", "slices", None, "chs-slice-pool1")
         ]
         self.assertEqual(len(self.kube.calls), 1)
-        self.assertEqual(self.kube.calls[0].method, "apply_custom_object")
+        self.assertEqual(self.kube.calls[0].method, "create_custom_object")
         self.assertEqual(self.kube.calls[0].kwargs["plural"], "slices")
         self.assertEqual(
             applied["metadata"]["labels"],
-            {"created-by": "chs", "chs-nodepool": "pool1"},
+            {_MANAGED_BY: "chs", _INSTANCE: "run-a"},
         )
         self.assertEqual(applied["spec"]["partitionIds"], ["part1"])
         mock_wait.assert_called_once_with(["pool1"], 300)
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["pool1", "pool2"], []),
+    )
+    def test_provision_dynamic_slices_writes_separated_documents(
+        self, mock_wait, mock_get_fulfilled, mock_logger
+    ):
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
+        target_pools = {"pool1": ["node1"], "pool2": ["node2"]}
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools=target_pools,
+            pool_to_topology={"pool1": "2x2", "pool2": "2x2"},
+            dynamic_slice_partitions={"pool1": "part1", "pool2": "part2"},
+            pool_to_accelerator={
+                "pool1": "tpu-v4-podslice",
+                "pool2": "tpu-v4-podslice",
+            },
+        )
+
+        scheduler._provision_dynamic_slices(target_pools)
+
+        with open(os.path.join(self.tmp_dir, "chs-slices.yaml")) as f:
+            content = f.read()
+        self.assertIn("\n---\n", content)
+        self.assertEqual(
+            [s["metadata"]["name"] for s in yaml.safe_load_all(content)],
+            ["chs-slice-pool1", "chs-slice-pool2"],
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
+    )
+    def test_provision_dynamic_slices_never_takes_over_existing_slice(
+        self, mock_wait, mock_get_fulfilled, mock_logger
+    ):
+        existing = {
+            "metadata": {
+                "name": "chs-slice-pool1",
+                "labels": {_MANAGED_BY: "chs", _INSTANCE: "run-b"},
+            },
+            "spec": {"partitionIds": ["part1"]},
+        }
+        self.kube.add_object("accelerator.gke.io", "slices", existing)
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
+        scheduler._tpu_slice_data = TpuSliceData(
+            pools={"pool1": ["node1"]},
+            dynamic_slice_partitions={"pool1": "part1"},
+        )
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException,
+            "Dynamic slice 'chs-slice-pool1' already exists; another CHS run "
+            "may be using nodepool pool1",
+        ):
+            scheduler._provision_dynamic_slices({"pool1": ["node1"]})
+
+        stored = self.kube.objects[
+            ("accelerator.gke.io", "slices", None, "chs-slice-pool1")
+        ]
+        self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
+        self.assertEqual(self.kube.calls_to("apply_custom_object"), [])
+        mock_wait.assert_not_called()
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
@@ -2185,6 +2759,41 @@ ramble:
         self.assertEqual(res.dynamic_slice_partitions["pool1"], "partition1")
         self.assertEqual(res.pool_to_accelerator["pool1"], "tpu-v4")
         mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_missing_gke_tpu_accelerator_label(
+        self, mock_fetch, mock_logger
+    ):
+        """Test _get_tpu_slices falls back to allocatable TPU resources."""
+        mock_fetch.return_value = [
+            {
+                "metadata": {
+                    "name": "tpu-node",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "pool-tpu",
+                        "cloud.google.com/gke-tpu-topology": "2x2",
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            },
+            {
+                "metadata": {
+                    "name": "gpu-node",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "pool-gpu",
+                    },
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        ]
+
+        scheduler = KubernetesScheduler()
+        res = scheduler._get_tpu_slices()
+
+        self.assertEqual(res.pools, {"pool-tpu": ["tpu-node"]})
+        self.assertEqual(res.all_tpu_nodes, {"tpu-node"})
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
@@ -2553,7 +3162,7 @@ ramble:
         self.kube.add_object(
             "",
             "pods",
-            _accelerator_pod("old-test", "node1", {WORKER_LABEL: "true"}),
+            _accelerator_pod("old-test", "node1", dict(_WORKER_LABELS)),
             namespace=CHS_NAMESPACE,
         )
         scheduler = KubernetesScheduler()
@@ -2570,25 +3179,28 @@ ramble:
     def test_poll_jobs_counts_unlabeled_pods_in_chs_namespace(
         self, mock_logger
     ):
-        """Test a pod in the chs namespace without the CHS label blocks."""
-        self.kube.add_object(
-            "batch",
-            "jobs",
-            _job_object("job1", ["node1"]),
-            namespace=CHS_NAMESPACE,
-        )
-        self.kube.add_object(
-            "",
-            "pods",
-            _accelerator_pod("other", "node1"),
-            namespace=CHS_NAMESPACE,
-        )
-        scheduler = KubernetesScheduler()
+        """Test a pod in the chs namespace without the CHS labels blocks."""
+        for labels in ({}, {"app.kubernetes.io/component": "worker"}):
+            with self.subTest(labels=labels):
+                kube = install_fake_client(self)
+                kube.add_object(
+                    "batch",
+                    "jobs",
+                    _job_object("job1", ["node1"]),
+                    namespace=CHS_NAMESPACE,
+                )
+                kube.add_object(
+                    "",
+                    "pods",
+                    _accelerator_pod("other", "node1", labels),
+                    namespace=CHS_NAMESPACE,
+                )
+                scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1"])
+                statuses = scheduler.poll_jobs(["job1"])
 
-        self.assertEqual(statuses, {"job1": "DEADLINE"})
-        self.assertEqual(self.kube.calls_to("patch_job"), [])
+                self.assertEqual(statuses, {"job1": "DEADLINE"})
+                self.assertEqual(kube.calls_to("patch_job"), [])
 
     @mock.patch("time.sleep", return_value=None)
     def test_poll_jobs_starts_jobs_if_node_check_fails(
@@ -2704,7 +3316,7 @@ ramble:
         self.kube.add_object(
             "",
             "pods",
-            _accelerator_pod("old-test", "node1", {WORKER_LABEL: "true"}),
+            _accelerator_pod("old-test", "node1", dict(_WORKER_LABELS)),
             namespace=CHS_NAMESPACE,
         )
         scheduler = KubernetesScheduler()
@@ -2781,7 +3393,7 @@ ramble:
                     node,
                     {
                         "batch.kubernetes.io/job-name": "gang",
-                        WORKER_LABEL: "true",
+                        **_WORKER_LABELS,
                     },
                 ),
                 namespace=CHS_NAMESPACE,
@@ -3097,6 +3709,656 @@ ramble:
         scheduler = KubernetesScheduler()
         self.assertEqual(scheduler.get_unschedulable_jobs([]), [])
         self.assertEqual(self.kube.calls, [])
+
+
+def _run_job(
+    name: str, run_id: str, nodes: list[str], **kwargs: Any
+) -> dict[str, Any]:
+    """Returns a Job of the run pinned to nodes."""
+    job = _job_object(name, nodes, **kwargs)
+    job["metadata"]["labels"] = {_MANAGED_BY: "chs", _INSTANCE: run_id}
+    return job
+
+
+_PARTITION_ID_LABEL = (
+    f"cloud.google.com/gke-tpu-partition-{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
+)
+
+
+def _add_chs_slice(
+    kube: Any, pool: str, run_id: str | None, partition_ids: list[str]
+) -> None:
+    """Stores a CHS dynamic Slice of the run over the partitions."""
+    labels = {_MANAGED_BY: "chs"}
+    if run_id is not None:
+        labels[_INSTANCE] = run_id
+    kube.add_object(
+        "accelerator.gke.io",
+        "slices",
+        {
+            "metadata": {"name": f"chs-slice-{pool}", "labels": labels},
+            "spec": {"partitionIds": partition_ids},
+        },
+    )
+
+
+def _partition_node(name: str, partition_id: str) -> dict[str, Any]:
+    """Returns a Node object in the TPU partition."""
+    return {
+        "metadata": {
+            "name": name,
+            "labels": {_PARTITION_ID_LABEL: partition_id},
+        }
+    }
+
+
+@mock.patch("chs.schedulers.kubernetes.logger")
+class TestKubernetesRunsTargetingNodes(unittest.TestCase):
+    """Tests finding the other runs whose Jobs or Slices target nodes."""
+
+    def setUp(self):
+        super().setUp()
+        self.kube = install_fake_client(self)
+        self.scheduler = KubernetesScheduler()
+
+    def _add_job(self, job: dict[str, Any]) -> None:
+        self.kube.add_object("batch", "jobs", job, namespace=CHS_NAMESPACE)
+
+    def test_find_runs_targeting_nodes_includes_all_existing_jobs(
+        self, mock_logger
+    ):
+        self._add_job(_run_job("chs-run-b-nccl-a1b2c3", "run-b", ["n1"]))
+        self._add_job(
+            _run_job("chs-run-b-dcgm-b2c3d4", "run-b", ["n3"], suspended=False)
+        )
+        running = _run_job(
+            "chs-run-c-gpu-c3d4e5", "run-c", ["n2"], suspended=False
+        )
+        running["status"] = {"active": 1}
+        self._add_job(running)
+        for name, condition, node in (
+            ("chs-run-d-x-d4e5f6", "Complete", "n4"),
+            ("chs-run-d-y-e5f6a7", "Failed", "n5"),
+        ):
+            finished = _finished_job(name, node, condition, "")
+            finished["metadata"]["labels"] = {
+                _MANAGED_BY: "chs",
+                _INSTANCE: "run-d",
+            }
+            self._add_job(finished)
+        self._add_job(_run_job("chs-run-e-far-a7b8c9", "run-e", ["n9"]))
+
+        conflicts = self.scheduler.find_runs_targeting_nodes(
+            ["n1", "n2", "n3", "n4", "n5", "n6"]
+        )
+
+        # Finished Jobs keep their nodes until their run is torn down, so a
+        # run between tiers still claims them.
+        self.assertEqual(
+            conflicts,
+            {"run-b": ["n1", "n3"], "run-c": ["n2"], "run-d": ["n4", "n5"]},
+        )
+
+    def test_find_runs_targeting_nodes_includes_terminating_jobs(
+        self, mock_logger
+    ):
+        job = _run_job("chs-run-b-x-a1b2c3", "run-b", ["n1"], suspended=False)
+        job["metadata"]["deletionTimestamp"] = "2026-10-14T09:00:00Z"
+        job["status"] = {"active": 1}
+        self._add_job(job)
+
+        self.assertEqual(
+            self.scheduler.find_runs_targeting_nodes(["n1"]),
+            {"run-b": ["n1"]},
+        )
+
+    def test_find_runs_targeting_nodes_attributes_jobs_by_instance_label(
+        self, mock_logger
+    ):
+        self._add_job(_run_job("chs-x-a1b2c3", "run-b", ["n1"]))
+        self._add_job(_run_job("chs-run-a-x-c3d4e5", "run-a-2", ["n3"]))
+        self._add_job(_job_object("chs-run-z-unlabeled-d4e5f6", ["n4"]))
+
+        self.assertEqual(
+            self.scheduler.find_runs_targeting_nodes(["n1", "n3", "n4"]),
+            {"run-b": ["n1"], "run-a-2": ["n3"]},
+        )
+
+    def test_find_runs_targeting_nodes_ignores_non_chs_and_nameless_jobs(
+        self, mock_logger
+    ):
+        third_party = _job_object("other-app-job", ["n1"])
+        third_party["metadata"]["labels"] = {_INSTANCE: "my-release"}
+        self._add_job(third_party)
+        self._add_job(_run_job("nameless", "run-b", ["n2"]))
+        del self.kube.objects[("batch", "jobs", CHS_NAMESPACE, "nameless")][
+            "metadata"
+        ]["name"]
+        self._add_job(_run_job("chs-run-c-x-a1b2c3", "run-c", ["n3"]))
+
+        self.assertEqual(
+            self.scheduler.find_runs_targeting_nodes(["n1", "n2", "n3"]),
+            {"run-c": ["n3"]},
+        )
+        self.assertEqual(
+            self.kube.calls_to("list_jobs"),
+            [
+                Call(
+                    "list_jobs",
+                    {
+                        "namespace": CHS_NAMESPACE,
+                        "label_selector": f"{_MANAGED_BY}=chs",
+                    },
+                )
+            ],
+        )
+
+    def test_find_runs_targeting_nodes_raises_if_listing_fails(
+        self, mock_logger
+    ):
+        for error in (
+            k8s_client.KubeError("connection refused"),
+            k8s_client.KubeError("forbidden", status=403),
+        ):
+            with self.subTest(status=error.status):
+                self.kube.fail_next("list_jobs", error)
+                with self.assertRaisesRegex(
+                    ChsSchedulerException, "cannot verify"
+                ):
+                    self.scheduler.find_runs_targeting_nodes(["n1"])
+
+    def test_find_runs_targeting_nodes_includes_slices_of_other_runs(
+        self, mock_logger
+    ):
+        for name, partition_id in (
+            ("t1", "part-1"),
+            ("t2", "part-1"),
+            ("t3", "part-2"),
+            ("t4", "part-3"),
+            ("t5", "part-4"),
+        ):
+            self.kube.add_object(
+                "", "nodes", _partition_node(name, partition_id)
+            )
+        _add_chs_slice(self.kube, "pool-b", "run-b", ["part-1"])
+        _add_chs_slice(self.kube, "pool-far", "run-c", ["part-4"])
+        _add_chs_slice(self.kube, "pool-unlabeled", None, ["part-2"])
+
+        conflicts = self.scheduler.find_runs_targeting_nodes(
+            ["t1", "t2", "t3", "t4"]
+        )
+
+        self.assertEqual(conflicts, {"run-b": ["t1", "t2"]})
+
+    def test_find_runs_targeting_nodes_uses_cached_nodes(self, mock_logger):
+        self.scheduler._resolved_node_resources = [
+            _partition_node("t1", "part-1")
+        ]
+        _add_chs_slice(self.kube, "pool-b", "run-b", ["part-1"])
+
+        self.assertEqual(
+            self.scheduler.find_runs_targeting_nodes(["t1"]),
+            {"run-b": ["t1"]},
+        )
+        self.assertEqual(self.kube.calls_to("list_nodes"), [])
+
+    def test_find_runs_targeting_nodes_without_slice_crd(self, mock_logger):
+        self.kube.unregister_type("accelerator.gke.io", "slices")
+
+        self.assertEqual(self.scheduler.find_runs_targeting_nodes(["n1"]), {})
+
+    def test_find_runs_targeting_nodes_raises_if_slice_listing_fails(
+        self, mock_logger
+    ):
+        self.kube.fail_next(
+            "list_custom_objects", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(ChsSchedulerException, "cannot verify"):
+            self.scheduler.find_runs_targeting_nodes(["n1"])
+
+    def test_find_runs_targeting_nodes_without_nodes(self, mock_logger):
+        self.assertEqual(self.scheduler.find_runs_targeting_nodes([]), {})
+        self.assertEqual(self.kube.calls, [])
+
+    def test_list_slices_without_slice_crd_returns_no_slices(self, mock_logger):
+        self.kube.unregister_type("accelerator.gke.io", "slices")
+
+        self.assertEqual(self.scheduler._list_slices(), [])
+
+    def test_list_slices_raises_scheduler_exception_on_api_error(
+        self, mock_logger
+    ):
+        self.kube.fail_next(
+            "list_custom_objects", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "Failed to list the dynamic TPU slices"
+        ):
+            self.scheduler._list_slices()
+
+    def test_cancel_run_deletes_the_rest_if_listing_slices_fails(
+        self, mock_logger
+    ):
+        self._add_job(_run_job("chs-run-a-x-a1b2c3", "run-a", ["n1"]))
+        self.kube.fail_next(
+            "list_custom_objects", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            "^Failed to delete the dynamic slices of CHS run 'run-a'\\.",
+        ):
+            self.scheduler.cancel_run("run-a")
+        self.assertEqual(self.kube.stored_names("batch", "jobs"), [])
+        self.assertEqual(len(self.kube.calls_to("delete_service")), 1)
+
+
+@mock.patch("chs.schedulers.kubernetes.logger")
+class TestKubernetesRunScopedCleanup(unittest.TestCase):
+    """Tests that cleanup of a run leaves concurrent runs alone."""
+
+    def setUp(self):
+        super().setUp()
+        self.kube = install_fake_client(self)
+        self.scheduler = KubernetesScheduler()
+
+    def _add_slice(self, pool: str, run_id: str | None) -> None:
+        _add_chs_slice(self.kube, pool, run_id, [f"part-{pool}"])
+
+    def _slices(self) -> list[str]:
+        return sorted(self.kube.stored_names("accelerator.gke.io", "slices"))
+
+    def _add_run_objects(self, job: str, run_id: str) -> None:
+        """Stores a Job of the run with its Secret and ComputeDomain."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _run_job(job, run_id, ["n1"]),
+            namespace=CHS_NAMESPACE,
+        )
+        labels = {_MANAGED_BY: "chs", _INSTANCE: run_id}
+        self.kube.add_object(
+            "",
+            "secrets",
+            {"metadata": {"name": f"{job}-ssh", "labels": labels}},
+            namespace=CHS_NAMESPACE,
+        )
+        self.kube.add_object(
+            "resource.nvidia.com",
+            "computedomains",
+            {"metadata": {"name": f"{job}-cd", "labels": labels}},
+            namespace=CHS_NAMESPACE,
+        )
+
+    def test_cancel_run_deletes_only_objects_of_that_exact_run(
+        self, mock_logger
+    ):
+        self.kube.create_namespace_if_not_exists(name=CHS_NAMESPACE)
+        for run_id in ("run-a", "run-a-x1y2"):
+            self.kube.add_object(
+                "",
+                "services",
+                {"metadata": {"name": f"chs-{run_id}"}},
+                namespace=CHS_NAMESPACE,
+            )
+        # run-a-x1y2's Job names start with run-a's Job name prefix.
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_run_objects("chs-run-a-x1y2-nccl-b2c3d4", "run-a-x1y2")
+        self._add_slice("pool-a", "run-a")
+        self._add_slice("pool-b", "run-a-x1y2")
+        self._add_slice("pool-unlabeled", None)
+
+        self.scheduler.cancel_run("run-a")
+
+        other = "chs-run-a-x1y2-nccl-b2c3d4"
+        self.assertEqual(self.kube.stored_names("batch", "jobs"), [other])
+        self.assertEqual(
+            self.kube.stored_names("", "secrets"), [f"{other}-ssh"]
+        )
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"),
+            [f"{other}-cd"],
+        )
+        self.assertEqual(
+            self._slices(), ["chs-slice-pool-b", "chs-slice-pool-unlabeled"]
+        )
+        self.assertEqual(
+            self.kube.stored_names("", "services"), ["chs-run-a-x1y2"]
+        )
+        self.assertIn(
+            ("", "namespaces", None, CHS_NAMESPACE), self.kube.objects
+        )
+        mock_logger.warning.assert_not_called()
+
+    def test_cancel_run_cleans_up_even_if_deleting_jobs_fails(
+        self, mock_logger
+    ):
+        self.kube.create_namespace_if_not_exists(name=CHS_NAMESPACE)
+        self.kube.add_object(
+            "",
+            "services",
+            {"metadata": {"name": "chs-run-a"}},
+            namespace=CHS_NAMESPACE,
+        )
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_slice("pool-a", "run-a")
+        self.kube.fail_next(
+            "delete_jobs", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the Jobs of CHS run 'run-a'\. Run "
+            r"`chs cancel run-a` again to retry\.$",
+        ):
+            self.scheduler.cancel_run("run-a")
+
+        self.assertEqual(
+            self.kube.stored_names("batch", "jobs"), ["chs-run-a-nccl-a1b2c3"]
+        )
+        self.assertEqual(self.kube.stored_names("", "secrets"), [])
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"), []
+        )
+        self.assertEqual(self._slices(), [])
+        self.assertEqual(self.kube.stored_names("", "services"), [])
+        mock_logger.error.assert_called_once()
+
+    def test_cancel_run_lists_every_kind_that_failed_to_delete(
+        self, mock_logger
+    ):
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_slice("pool-a", "run-a")
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_jobs", error)
+        self.kube.fail_next("delete_secret", error)
+        self.kube.fail_next("delete_service", error)
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the Jobs, Secrets, worker Service of CHS run "
+            r"'run-a'\.",
+        ):
+            self.scheduler.cancel_run("run-a")
+
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"), []
+        )
+        self.assertEqual(self._slices(), [])
+
+    def test_cancel_run_raises_if_listing_secrets_fails(self, mock_logger):
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self.kube.fail_next(
+            "list_secrets", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the Secrets of CHS run 'run-a'\.",
+        ):
+            self.scheduler.cancel_run("run-a")
+
+        self.assertEqual(self.kube.stored_names("batch", "jobs"), [])
+        self.assertEqual(
+            self.kube.stored_names("", "secrets"), ["chs-run-a-nccl-a1b2c3-ssh"]
+        )
+
+    def test_cancel_run_raises_if_slice_deletion_fails(self, mock_logger):
+        self._add_slice("pool-a", "run-a")
+        self.kube.fail_next(
+            "delete_custom_objects",
+            None,
+            k8s_client.KubeError("timed out deleting slices"),
+        )
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the dynamic slices of CHS run 'run-a'\.",
+        ):
+            self.scheduler.cancel_run("run-a")
+
+        self.assertEqual(
+            self.kube.calls_to("delete_custom_objects")[1].kwargs["plural"],
+            "slices",
+        )
+
+    def test_cancel_run_returns_whether_the_run_had_jobs_or_slices(
+        self, mock_logger
+    ):
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_slice("pool-b", "run-b")
+
+        self.assertTrue(self.scheduler.cancel_run("run-a"))
+        self.assertTrue(self.scheduler.cancel_run("run-b"))
+        self.assertFalse(self.scheduler.cancel_run("run-a"))
+        self.assertFalse(self.scheduler.cancel_run("run-unknown"))
+
+    def test_cancel_run_logs_service_deletion_errors(self, mock_logger):
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_service", error)
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the worker Service of CHS run 'run-a'\.",
+        ):
+            self.scheduler.cancel_run("run-a")
+
+        mock_logger.warning.assert_called_once_with(
+            "Failed to delete the worker Service of run '%s'. Error: %s",
+            "run-a",
+            error,
+        )
+
+    def test_cancel_run_without_compute_domain_crd(self, mock_logger):
+        self.kube.unregister_type("resource.nvidia.com", "computedomains")
+
+        self.scheduler.cancel_run("run-a")
+
+        mock_logger.warning.assert_not_called()
+
+    def test_cancel_run_skips_objects_without_name(self, mock_logger):
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_run_objects("nameless", "run-a")
+        for key in (
+            ("", "secrets", CHS_NAMESPACE, "nameless-ssh"),
+            (
+                "resource.nvidia.com",
+                "computedomains",
+                CHS_NAMESPACE,
+                "nameless-cd",
+            ),
+        ):
+            del self.kube.objects[key]["metadata"]["name"]
+
+        self.scheduler.cancel_run("run-a")
+
+        self.assertEqual(
+            [
+                call.kwargs["name"]
+                for call in self.kube.calls_to("delete_secret")
+            ],
+            ["chs-run-a-nccl-a1b2c3-ssh"],
+        )
+        self.assertEqual(
+            [
+                call.kwargs["object_names"]
+                for call in self.kube.calls_to("delete_custom_objects")
+                if call.kwargs["plural"] == "computedomains"
+            ],
+            [["chs-run-a-nccl-a1b2c3-cd"]],
+        )
+
+    def test_cancel_run_deletes_secrets_independently(self, mock_logger):
+        self._add_run_objects("chs-run-a-x-a1b2c3", "run-a")
+        self._add_run_objects("chs-run-a-y-b2c3d4", "run-a")
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_secret", error)
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the Secrets of CHS run 'run-a'\.",
+        ):
+            self.scheduler.cancel_run("run-a")
+
+        self.assertEqual(len(self.kube.calls_to("delete_secret")), 2)
+        self.assertEqual(len(self.kube.stored_names("", "secrets")), 1)
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"), []
+        )
+        mock_logger.warning.assert_called_once_with(
+            "Failed to delete Kubernetes secret '%s'. Error: %s",
+            mock.ANY,
+            error,
+        )
+
+    def test_cancel_jobs_deletes_dependents_independently(self, mock_logger):
+        for job in ("chs-run-a-x-a1b2c3", "chs-run-a-y-b2c3d4"):
+            self._add_run_objects(job, "run-a")
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_secret", error)
+
+        self.scheduler.cancel_jobs(["chs-run-a-x-a1b2c3", "chs-run-a-y-b2c3d4"])
+
+        # The first Secret fails, but the second Secret and both
+        # ComputeDomains are still deleted.
+        self.assertEqual(
+            self.kube.stored_names("", "secrets"), ["chs-run-a-x-a1b2c3-ssh"]
+        )
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"), []
+        )
+        mock_logger.warning.assert_called_once_with(
+            "Failed to delete Kubernetes secret '%s'. Error: %s",
+            "chs-run-a-x-a1b2c3-ssh",
+            error,
+        )
+
+    def test_cancel_jobs_logs_compute_domain_deletion_errors(self, mock_logger):
+        self._add_run_objects("chs-run-a-x-a1b2c3", "run-a")
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_custom_objects", error)
+
+        self.scheduler.cancel_jobs(["chs-run-a-x-a1b2c3"])
+
+        self.assertEqual(self.kube.stored_names("", "secrets"), [])
+        mock_logger.warning.assert_called_once_with(
+            "Failed to delete Kubernetes ComputeDomains. Error: %s", error
+        )
+
+    def test_cancel_all_runs_deletes_jobs_namespace_and_all_slices(
+        self, mock_logger
+    ):
+        self.kube.create_namespace_if_not_exists(name=CHS_NAMESPACE)
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_slice("pool-a", "run-a")
+        self._add_slice("pool-unlabeled", None)
+
+        self.scheduler.cancel_all_runs()
+
+        self.assertEqual(
+            [
+                call.kwargs["object_names"]
+                for call in self.kube.calls_to("delete_jobs")
+            ],
+            [["chs-run-a-nccl-a1b2c3"]],
+        )
+        self.assertEqual(self._slices(), [])
+        self.assertEqual(self.kube.stored_names("", "namespaces"), [])
+
+    def test_cancel_all_runs_attempts_every_deletion_and_lists_failures(
+        self, mock_logger
+    ):
+        self.kube.create_namespace_if_not_exists(name=CHS_NAMESPACE)
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self._add_slice("pool-a", "run-a")
+        error = k8s_client.KubeError("forbidden", status=403)
+        self.kube.fail_next("delete_jobs", error)
+        self.kube.fail_next("delete_namespace", error)
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            r"^Failed to delete the CHS Jobs, chs namespace\. Run "
+            r"`chs cancel --all` again to retry\.$",
+        ):
+            self.scheduler.cancel_all_runs()
+
+        self.assertEqual(self._slices(), [])
+        self.assertEqual(self.kube.stored_names("", "secrets"), [])
+        self.assertEqual(
+            self.kube.stored_names("resource.nvidia.com", "computedomains"), []
+        )
+
+    def test_cancel_all_runs_deletes_the_rest_if_listing_slices_fails(
+        self, mock_logger
+    ):
+        self.kube.create_namespace_if_not_exists(name=CHS_NAMESPACE)
+        self._add_run_objects("chs-run-a-nccl-a1b2c3", "run-a")
+        self.kube.fail_next(
+            "list_custom_objects", k8s_client.KubeError("forbidden", status=403)
+        )
+
+        with self.assertRaisesRegex(
+            ex.ChsCancellationException,
+            "^Failed to delete the CHS dynamic slices\\.",
+        ):
+            self.scheduler.cancel_all_runs()
+
+        self.assertEqual(self.kube.stored_names("batch", "jobs"), [])
+        self.assertEqual(len(self.kube.calls_to("delete_namespace")), 1)
+
+    def test_apply_scheduler_resources_deletes_no_existing_slices(
+        self, mock_logger
+    ):
+        self._add_slice("pool-a", "run-old")
+        self._add_slice("pool-b", "run-b")
+        self.scheduler._tpu_slice_data = TpuSliceData(
+            pools={"pool-a": ["a1"], "pool-b": ["b1"]},
+            dynamic_slice_partitions={"pool-a": "part-a", "pool-b": "part-b"},
+        )
+        with (
+            mock.patch.object(
+                self.scheduler, "get_nodes_under_test", return_value=["a1"]
+            ),
+            mock.patch.object(
+                self.scheduler,
+                "_group_nodes_by_slice",
+                return_value={"pool-a": ["a1"]},
+            ),
+            mock.patch.object(
+                self.scheduler,
+                "_provision_dynamic_slices",
+                return_value=(["pool-a"], []),
+            ),
+        ):
+            self.scheduler.apply_scheduler_resources()
+
+        self.assertEqual(
+            self._slices(), ["chs-slice-pool-a", "chs-slice-pool-b"]
+        )
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+
+    @mock.patch("time.sleep")
+    @mock.patch("time.time", side_effect=[0, 1, 310])
+    def test_wait_for_slices_active_ignores_other_pools(
+        self, mock_time, mock_sleep, mock_logger
+    ):
+        self.scheduler._run_id = "run-a"
+        self.kube.add_object(
+            "accelerator.gke.io",
+            "slices",
+            _chs_slice("other", "ACTIVE", run_id="run-b"),
+        )
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("mypool", "CREATING")
+        )
+
+        success, failed = self.scheduler._wait_for_slices_active(["mypool"])
+
+        self.assertEqual(success, [])
+        self.assertEqual(failed, ["mypool"])
+        mock_sleep.assert_called_once_with(10)
 
 
 class TestSchedulerDetection(unittest.TestCase):

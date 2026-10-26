@@ -18,6 +18,13 @@ import math
 import os
 import textwrap
 
+from chs.constants import (
+    COMPONENT_LABEL,
+    MANAGED_BY_CHS,
+    MANAGED_BY_LABEL,
+    SLURM_RUN_ID_COMMENT_PREFIX,
+    WORKER_COMPONENT,
+)
 from chs.testkit import config as chs_config
 from chs.utils.cluster import sanitize_dns_1123
 
@@ -40,15 +47,20 @@ def nodes_str(scheduler: str, nodes: list[str] | None) -> str:
     return ""
 
 
-_WORKER_LABEL = "chs.gke.io/worker"
 _JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
 _TPU_SLICE_TOPOLOGY_KEY = "cloud.google.com/gke-tpu-slice"
 EXCLUSIVE_SLICE_KEY = "_chs_exclusive_tpu_slice"
 
 _ONE_POD_PER_NODE_TERM = f'''- labelSelector:
     matchExpressions:
-    - key: {_WORKER_LABEL}
-      operator: Exists
+    - key: {MANAGED_BY_LABEL}
+      operator: In
+      values:
+      - {MANAGED_BY_CHS}
+    - key: {COMPONENT_LABEL}
+      operator: In
+      values:
+      - {WORKER_COMPONENT}
   topologyKey: "kubernetes.io/hostname"'''
 
 _SAME_SLICE_POD_AFFINITY = f"""podAffinity:
@@ -63,8 +75,14 @@ _SAME_SLICE_POD_AFFINITY = f"""podAffinity:
 
 _EXCLUSIVE_SLICE_TERM = f"""- labelSelector:
     matchExpressions:
-    - key: {_WORKER_LABEL}
-      operator: Exists
+    - key: {MANAGED_BY_LABEL}
+      operator: In
+      values:
+      - {MANAGED_BY_CHS}
+    - key: {COMPONENT_LABEL}
+      operator: In
+      values:
+      - {WORKER_COMPONENT}
     - key: {_JOB_NAME_LABEL}
       operator: NotIn
       values:
@@ -158,6 +176,7 @@ def common_sbatch_headers(variables: dict, nodes_block: str) -> dict:
         # Slurm takes whole minutes; round up so short timeouts are not 0.
         "--time": str(max(1, math.ceil(timeout_seconds / 60))),
         "--deadline": f"now+{deadline_seconds + timeout_seconds}seconds",
+        "--comment": f"{SLURM_RUN_ID_COMMENT_PREFIX}{{chs_run_id}}",
     }
 
 
@@ -386,6 +405,8 @@ def build_slice_contexts(
             benchmark_config=benchmark_config,
             benchmarks_dir=benchmarks_dir,
         )
+        if not slice_topology:
+            context_dict["variables"]["node_selector_yaml"] = ""
         contexts.append((slice_experiment_name, context_dict))
 
     return contexts

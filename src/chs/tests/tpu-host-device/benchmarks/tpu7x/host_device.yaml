@@ -14,10 +14,13 @@
 
 benchmarks:
 - benchmark_name: host_device
+  single_host_tpu_init: True
   num_runs: 20
   benchmark_sweep_params:
-  - {
-      data_size_mib_list: [1, 16, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
-    }
+  - transfer_type: "pinned_memory"
+    num_devices_list: [8]
+    data_size_mib_list: [4096]
+    input_type_list: ["jax"]
+    dtype_list: ["float32"]
   csv_path: "../microbenchmarks/host_device"
   trace_dir: "../microbenchmarks/host_device/trace"

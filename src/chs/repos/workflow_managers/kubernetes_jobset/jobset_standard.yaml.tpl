@@ -27,7 +27,7 @@ spec:
 {pod_annotations_section}
     spec:
       restartPolicy: Never
-      subdomain: chs
+      subdomain: {worker_service_name}
       terminationGracePeriodSeconds: 5
 {node_selector_section}
 {affinity_section}

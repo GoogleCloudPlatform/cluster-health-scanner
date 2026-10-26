@@ -4,6 +4,7 @@ kind: Secret
 metadata:
   name: {sanitized_job_name}-ssh
   namespace: {kubernetes_namespace}
+{jobset_labels_section}
 type: Opaque
 stringData:
   ssh-privatekey: |
@@ -39,7 +40,7 @@ spec:
 {pod_annotations_section}
     spec:
       restartPolicy: Never
-      subdomain: chs
+      subdomain: {worker_service_name}
       terminationGracePeriodSeconds: 5
 {node_selector_section}
 {affinity_section}
@@ -95,7 +96,7 @@ spec:
           if [[ "$JOB_COMPLETION_INDEX" -eq "0" ]]; then
             echo "Discovering hosts..."
             for i in $(seq 0 $(( {n_nodes} - 1 ))); do
-              OTHER="{sanitized_job_name}-${i}.chs"
+              OTHER="{sanitized_job_name}-${i}.{worker_service_name}"
               until ssh -p {ssh_port} -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 $OTHER true; do
                 echo "Waiting for $OTHER to become available..."
                 sleep 5
@@ -112,7 +113,7 @@ spec:
             exit $EXIT_CODE
           else
             echo "Worker started. Idling while launcher coordinates..."
-            HEAD_NODE="{sanitized_job_name}-0.chs"
+            HEAD_NODE="{sanitized_job_name}-0.{worker_service_name}"
             DNS_DEADLINE=$(( $(date +%s) + {dns_wait_timeout} ))
 
             # Wait for head node to become reachable

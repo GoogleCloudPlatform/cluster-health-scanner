@@ -41,10 +41,13 @@ suites:
   - name: tpu-gemm
     workloads: [check]
     variables:
-      timeout: 180
+      timeout: 300
   - name: tpu-hbm
     variables:
       timeout: 300
+  - name: tpu-host-device
+    variables:
+      timeout: 240
   - name: tpu-collectives
     workloads: [psum]
     variables:
@@ -88,7 +91,10 @@ suites:
       timeout: 300
   - name: tpu-gemm
     variables:
-      timeout: 180
+      timeout: 300
+  - name: tpu-host-device
+    variables:
+      timeout: 240
   - name: tpu-collectives
     workloads: [psum]
     variables:

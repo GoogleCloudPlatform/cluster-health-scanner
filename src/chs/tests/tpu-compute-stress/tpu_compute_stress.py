@@ -17,16 +17,6 @@ import time
 import logging
 import functools
 
-init_args = (
-    " --tpu_link_up_check_timeout=15s"
-    " --megascale_error_reporter_abort_on_hang=true"
-)
-os.environ["LIBTPU_INIT_ARGS"] = (
-    os.environ.get("LIBTPU_INIT_ARGS", "") + init_args
-)
-
-# IMPORTANT: These imports must sit below the LIBTPU_INIT_ARGS population block
-# because JAX reads the environment configs directly upon initialization.
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -42,8 +32,8 @@ NUM_ITERATIONS_MEASURE = 1500
 NUM_MATMULS_PER_ITERATION = 4
 
 
-@functools.partial(jax.pmap, axis_name="device")
-def init_payloads(key):
+@jax.jit
+def _init_single_device_payloads(key):
     k1, k2, k3 = jax.random.split(key, 3)
     A = jax.random.normal(k1, (MATRIX_DIM, MATRIX_DIM), dtype=jnp.bfloat16)
 
@@ -57,25 +47,72 @@ def init_payloads(key):
     return A, W1, W2
 
 
-@functools.partial(jax.pmap, axis_name="device", in_axes=(0, 0, 0, None))
+def init_payloads(key):
+    local_devices = jax.local_devices()
+    mesh = jax.sharding.Mesh(np.array(local_devices), axis_names="device")
+    sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec(None, None)
+    )
+    with jax.default_device(local_devices[0]):
+        a0, w1_0, w2_0 = _init_single_device_payloads(key)
+        a_np, w1_np, w2_np = jax.device_get((a0, w1_0, w2_0))
+
+    def _replicate(d0_arr, host_np):
+        shards = [d0_arr] + [
+            jax.device_put(host_np, d) for d in local_devices[1:]
+        ]
+        return jax.make_array_from_single_device_arrays(
+            (MATRIX_DIM, MATRIX_DIM), sharding, shards
+        )
+
+    A = _replicate(a0, a_np)
+    W1 = _replicate(w1_0, w1_np)
+    W2 = _replicate(w2_0, w2_np)
+    jax.block_until_ready((A, W1, W2))
+    return A, W1, W2
+
+
+def _stress_step(x, W1, W2):
+    for _ in range(NUM_MATMULS_PER_ITERATION):
+        x = jnp.matmul(x, W1)
+        x = jnp.matmul(x, W2)
+
+    x = jax.lax.add(x, jnp.roll(x, shift=1, axis=0))
+
+    x = jax.nn.swish(x)
+
+    mean_sq = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+    x = x * jax.lax.rsqrt(mean_sq + 1e-5)
+
+    return x
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def _stress_device_loop(A, W1, W2, iterations):
+    mesh = jax.sharding.Mesh(np.array(jax.local_devices()), axis_names="device")
+    spec = jax.sharding.PartitionSpec(None, None)
+
+    def _loop(x, w1, w2):
+        return jax.lax.fori_loop(
+            0, iterations, lambda _, v: _stress_step(v, w1, w2), x, unroll=True
+        )
+
+    return jax.shard_map(
+        _loop,
+        mesh=mesh,
+        in_specs=(spec, spec, spec),
+        out_specs=spec,
+    )(A, W1, W2)
+
+
 def hardware_health_stress(A, W1, W2, iterations):
-    def body_fn(i, val):
-        x = val
-
-        for _ in range(NUM_MATMULS_PER_ITERATION):
-            x = jnp.matmul(x, W1)
-            x = jnp.matmul(x, W2)
-
-        x = jax.lax.add(x, jnp.roll(x, shift=1, axis=0))
-
-        x = jax.nn.swish(x)
-
-        mean_sq = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-        x = x * jax.lax.rsqrt(mean_sq + 1e-5)
-
-        return x
-
-    return jax.lax.fori_loop(0, iterations, body_fn, A)
+    remaining = int(iterations)
+    x = A
+    while remaining > 0:
+        step = min(NUM_ITERATIONS_WARMUP, remaining)
+        x = _stress_device_loop(x, W1, W2, step)
+        remaining -= step
+    return [s.data for s in x.addressable_shards]
 
 
 def main():
@@ -93,10 +130,9 @@ def main():
     )
 
     root_key = jax.random.PRNGKey(42)
-    device_keys = jnp.stack([root_key] * len(local_devices))
 
     logging.info(f"NODE:{node_name} EVENT:WARMUP_START")
-    A_stack, W1_stack, W2_stack = init_payloads(device_keys)
+    A_stack, W1_stack, W2_stack = init_payloads(root_key)
 
     warmup_iters = jnp.array(NUM_ITERATIONS_WARMUP, dtype=jnp.int32)
     measure_iters = jnp.array(NUM_ITERATIONS_MEASURE, dtype=jnp.int32)
@@ -104,12 +140,12 @@ def main():
     warmup_res = hardware_health_stress(
         A_stack, W1_stack, W2_stack, warmup_iters
     )
-    warmup_res.block_until_ready()
+    jax.block_until_ready(warmup_res)
 
     logging.info(f"NODE:{node_name} EVENT:MEASURE_START")
     start_time = time.time()
     outputs = hardware_health_stress(A_stack, W1_stack, W2_stack, measure_iters)
-    outputs.block_until_ready()
+    jax.block_until_ready(outputs)
     duration = time.time() - start_time
 
     flops_per_matmul = 2.0 * (MATRIX_DIM**3)
@@ -117,7 +153,7 @@ def main():
     total_flops = total_flops_per_loop * NUM_ITERATIONS_MEASURE
     tflops_per_core = (total_flops / duration) / (1e12)
 
-    cpu_outputs = np.asarray(outputs)
+    cpu_outputs = np.asarray(jax.device_get(outputs))
     sdc_failed = False
 
     baseline = cpu_outputs[0]

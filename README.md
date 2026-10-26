@@ -33,7 +33,7 @@ gcloud container clusters get-credentials <cluster_name> \
     --project <project_id>
 ```
 
-> **Note (Gang Scheduling):** CHS gang-schedules multi-node tests itself: each test runs as a Kubernetes Job that is created suspended and started only when all of its target nodes are free, so the CHS process must stay running for the duration of the run. If it is killed before it can clean up (for example by `kill -9`), run `chs cancel` to remove the leftover resources.
+> **Note (Gang Scheduling):** CHS gang-schedules multi-node tests itself: each test runs as a Kubernetes Job that is created suspended and started only when all of its target nodes are free, so the CHS process must stay running for the duration of the run. If it is killed before it can clean up (for example by `kill -9`), run `chs cancel <RUN_ID>` to remove the leftover resources and release its nodes.
 
 #### Slurm
 Commands for Slurm should be run from the Slurm controller/login node. Enroot is required to run containerized workloads. Run the following commands on the Slurm cluster to configure Artifact Registry credentials for Enroot:
@@ -206,8 +206,8 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 ##### Suite Composition
 | Suite | Est. Duration | Description | Included GPU Tests | Included TPU Tests |
 | --- | --- | --- | --- | --- |
-| `lite` (default) | ~5 mins | Quick health verification | `nvidia-smi`, `dcgm` (level 2), `gemm`, `nccl-single-node` | `tpu-info`, `tpu-gemm`, `tpu-hbm`, `tpu-collectives` |
-| `standard` | ~30 mins | Thorough hardware, memory & collective validation | `nvidia-smi`, `dcgm` (level 3), `stream`, `nccl-cluster`, `nccl-pairwise`, `gemm` | `tpu-info`, `tpu-hbm`, `tpu-gemm`, `tpu-collectives`, `tpu-compute-stress`, `tpu-hbm-stress`, `tpu-network-stress` |
+| `lite` (default) | ~5 mins | Quick health verification | `nvidia-smi`, `dcgm` (level 2), `gemm`, `nccl-single-node` | `tpu-info`, `tpu-gemm`, `tpu-hbm`, `tpu-host-device`, `tpu-collectives` |
+| `standard` | ~30 mins | Thorough hardware, memory & collective validation | `nvidia-smi`, `dcgm` (level 3), `stream`, `nccl-cluster`, `nccl-pairwise`, `gemm` | `tpu-info`, `tpu-hbm`, `tpu-gemm`, `tpu-host-device`, `tpu-collectives`, `tpu-compute-stress`, `tpu-hbm-stress`, `tpu-network-stress` |
 
 #### Examples
 
@@ -236,14 +236,17 @@ chs run --tests nccl-pairwise,stream --nodelists node-[1-4]
 ```
 
 ### `chs cancel`
-Safely terminates all running CHS jobs and cleans up temporary CHS resources on the active cluster. Prompts for `[y/N]` confirmation unless `--auto-approve` (`-y`) is passed.
+Safely terminates a CHS run: cancels its jobs, cleans up its CHS resources, and releases its nodes so other runs can use them. Without `RUN_ID`, your latest run is cancelled. `RUN_ID` can be any run on the cluster, including one started by another user. `--all` cancels **every** CHS run on the cluster, including other users' runs, and deletes all CHS resources. Prompts for `[y/N]` confirmation unless `--auto-approve` (`-y`) is passed.
 
 ```bash
-# Cancel all active CHS jobs interactively
+# Cancel your latest run interactively
 chs cancel
 
-# Cancel without prompting
-chs cancel --auto-approve
+# Cancel a specific run without prompting
+chs cancel my-cluster-lite-a1b2 --auto-approve
+
+# Cancel every CHS run on the cluster
+chs cancel --all
 ```
 
 ### `chs results`

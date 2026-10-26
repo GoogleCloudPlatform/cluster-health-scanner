@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
 import os
 import time
 import logging
+import functools
 
 accel_type = os.environ.get("ACCELERATOR_TYPE", "").lower()
 
@@ -31,13 +31,13 @@ init_args = (
     " --xla_tpu_scoped_vmem_limit_kib=65536"
     " --xla_jf_bounds_check=false"
     f" --xla_tpu_dvfs_p_state={p_state}"
-    " --tpu_link_up_check_timeout=15s"
     " --megascale_error_reporter_abort_on_hang=true"
 )
 os.environ["LIBTPU_INIT_ARGS"] = (
     os.environ.get("LIBTPU_INIT_ARGS", "") + init_args
 )
 
+import numpy as np
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -59,29 +59,75 @@ _safe_elements = int((_hbm_bytes * 0.20) // 4)
 # Snapping _safe_elements strictly down to the nearest floor power-of-two
 # to natively sidestep the XLA compilation padding explosion on threefry/randint
 NUM_ELEMENTS = 1 << (_safe_elements.bit_length() - 1)
-NUM_ITERATIONS_WARMUP = 1
+NUM_ITERATIONS_WARMUP = 100
 NUM_ITERATIONS_MEASURE = 15000
 
 
-@jax.pmap
-def init_memory(key):
+@jax.jit
+def _init_single_memory(key):
     return jax.random.randint(
         key, (NUM_ELEMENTS,), minval=0, maxval=2147483647, dtype=jnp.uint32
     )
 
 
-@functools.partial(jax.pmap, in_axes=(0, None))
+def init_memory(key):
+    local_devices = jax.local_devices()
+    mesh = jax.sharding.Mesh(np.array(local_devices), axis_names="device")
+    sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec(None)
+    )
+    with jax.default_device(local_devices[0]):
+        a0 = _init_single_memory(key)
+        a_np = jax.device_get(a0)
+
+    shards = [a0] + [jax.device_put(a_np, d) for d in local_devices[1:]]
+    A = jax.make_array_from_single_device_arrays(
+        (NUM_ELEMENTS,), sharding, shards
+    )
+    jax.block_until_ready(A)
+    return A
+
+
+def _hbm_burn_step(x):
+    return jax.lax.bitwise_not(x)
+
+
+@functools.partial(jax.jit, static_argnums=(1,))
+def _hbm_burn_device_loop(a, num_iters):
+    mesh = jax.sharding.Mesh(np.array(jax.local_devices()), axis_names="device")
+    spec = jax.sharding.PartitionSpec(None)
+
+    def _loop(x):
+        return jax.lax.fori_loop(
+            0, num_iters, lambda _, v: _hbm_burn_step(v), x
+        )
+
+    return jax.shard_map(
+        _loop,
+        mesh=mesh,
+        in_specs=spec,
+        out_specs=spec,
+    )(a)
+
+
 def hbm_burn(a, num_iters):
-    def body_fun(i, x):
-        return jax.lax.bitwise_not(x)
+    remaining = int(num_iters)
+    x = a
+    while remaining > 0:
+        step = min(NUM_ITERATIONS_WARMUP, remaining)
+        x = _hbm_burn_device_loop(x, step)
+        remaining -= step
+    return [s.data for s in x.addressable_shards]
 
-    return jax.lax.fori_loop(0, num_iters, body_fun, a)
 
-
-@jax.pmap
-def hbm_checksum(a):
+@jax.jit
+def _hbm_checksum_single(a):
     a_int64 = a.astype(jnp.int64)
     return jnp.sum(a_int64 ^ jnp.roll(a_int64, shift=1), dtype=jnp.int64)
+
+
+def hbm_checksum(a):
+    return [_hbm_checksum_single(x) for x in a]
 
 
 def main():
@@ -100,8 +146,7 @@ def main():
 
     logging.info(f"NODE:{node_name} EVENT:WARMUP_START")
     root_key = jax.random.PRNGKey(42)
-    device_keys = jnp.stack([root_key] * len(local_devices))
-    A_mem = init_memory(device_keys)
+    A_mem = init_memory(root_key)
 
     warmup_res = hbm_burn(A_mem, NUM_ITERATIONS_WARMUP)
     jax.block_until_ready(warmup_res)

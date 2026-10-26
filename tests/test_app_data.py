@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import fcntl
+import multiprocessing
+import os
 import pathlib
 import tempfile
 import unittest
@@ -19,6 +22,16 @@ from unittest import mock
 
 from chs.utils import app_data
 import chs.exceptions as ex
+
+
+_UPDATES_PER_WORKER = 50
+
+
+def _record_runs(data_dir: str, worker: int) -> None:
+    store = app_data.ChsAppData(data_dir=data_dir)
+    for i in range(_UPDATES_PER_WORKER):
+        store.update_run(f"run-{worker}-{i}", {"run_id": f"run-{worker}-{i}"})
+        store.update_run_status("shared", {f"job-{worker}-{i}": "PENDING"})
 
 
 class TestChsAppData(unittest.TestCase):
@@ -160,6 +173,52 @@ class TestChsAppData(unittest.TestCase):
         config = {"type": "path", "path": {"path": "/foo"}}
         self.app_data.set_storage_config(config)
         self.assertEqual(self.app_data.get_storage_config(), config)
+
+    def test_concurrent_processes_never_lose_updates(self):
+        """Test updates from concurrent CHS processes all persist."""
+        workers = 2
+        ctx = multiprocessing.get_context("spawn")
+        processes = [
+            ctx.Process(target=_record_runs, args=(self.test_dir.name, w))
+            for w in range(workers)
+        ]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=60)
+            self.assertEqual(process.exitcode, 0)
+
+        runs = self.app_data.get_all_runs()
+        expected_runs = {
+            f"run-{w}-{i}"
+            for w in range(workers)
+            for i in range(_UPDATES_PER_WORKER)
+        }
+        expected_jobs = {
+            f"job-{w}-{i}"
+            for w in range(workers)
+            for i in range(_UPDATES_PER_WORKER)
+        }
+        self.assertEqual(set(runs) - {"shared"}, expected_runs)
+        self.assertEqual(set(runs["shared"]["job_entries"]), expected_jobs)
+
+    def test_failed_update_releases_the_lock(self):
+        """Test a failure mid-update releases the lock for the next writer."""
+        with mock.patch.object(
+            self.app_data, "_save_json", side_effect=RuntimeError("disk")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "disk"):
+                self.app_data.update_run("run-1", {"run_id": "run-1"})
+
+        fd = os.open(
+            pathlib.Path(self.test_dir.name) / "app_data.lock", os.O_RDWR
+        )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+        self.app_data.update_run("run-2", {"run_id": "run-2"})
+        self.assertIn("run-2", self.app_data.get_all_runs())
 
 
 if __name__ == "__main__":

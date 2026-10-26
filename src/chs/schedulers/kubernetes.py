@@ -33,7 +33,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
-from chs.schedulers.base import BaseScheduler
+from chs.schedulers.base import CHS_JOB_PREFIX, BaseScheduler
 from chs.schedulers.gang_admission import (
     pinned_nodes,
     plan_admissions,
@@ -41,6 +41,7 @@ from chs.schedulers.gang_admission import (
 )
 from chs.utils import k8s_client
 from chs.exceptions import (
+    ChsCancellationException,
     ChsSchedulerException,
     ChsValidationError,
 )
@@ -48,9 +49,14 @@ from chs.utils.lifecycle import JobStatus
 from chs import resources
 from chs.constants import (
     CHS_NAMESPACE,
+    COMPONENT_LABEL,
     DELETE_WAIT_TIMEOUT_SEC,
+    INSTANCE_LABEL,
+    MANAGED_BY_CHS,
+    MANAGED_BY_LABEL,
     NAMESPACE_DELETE_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+    WORKER_COMPONENT,
 )
 
 _BUSY_NODES_BATCH_SIZE = 32
@@ -63,9 +69,12 @@ _JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
 _JOB_COMPLETION_INDEX_LABEL = "batch.kubernetes.io/job-completion-index"
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
-
-WORKER_SERVICE_NAME = "chs"
-WORKER_LABEL = "chs.gke.io/worker"
+_CHS_SELECTOR = f"{MANAGED_BY_LABEL}={MANAGED_BY_CHS}"
+_PARTITION_ID_LABEL = (
+    f"cloud.google.com/gke-tpu-partition-{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
+)
+_COMPUTE_DOMAIN_GROUP = "resource.nvidia.com"
+_COMPUTE_DOMAIN_VERSION = "v1beta1"
 
 _API_MAX_CONCURRENCY = 32
 _APPLY_ATTEMPTS = 5
@@ -164,6 +173,22 @@ def _job_condition(job: dict, condition_type: str) -> dict | None:
     return None
 
 
+def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
+    """Returns True if resources has non-zero quantity for accelerator_type."""
+    return any(
+        accelerator_type in key.lower() and quantity not in (0, "0", None, "")
+        for key, quantity in (resources_map or {}).items()
+    )
+
+
+def _is_accelerator_node(node: dict) -> bool:
+    """Returns True if the node has allocatable GPU or TPU resources."""
+    allocatable = (node.get("status") or {}).get("allocatable")
+    return _has_accelerator(allocatable, "gpu") or _has_accelerator(
+        allocatable, "tpu"
+    )
+
+
 def _requests_accelerator(pod: dict) -> bool:
     """Returns True if a container of the pod asks for GPUs or TPUs."""
     spec = pod.get("spec") or {}
@@ -172,14 +197,9 @@ def _requests_accelerator(pod: dict) -> bool:
     ):
         container_resources = container.get("resources") or {}
         for section in ("requests", "limits"):
-            for resource, quantity in (
-                container_resources.get(section) or {}
-            ).items():
-                resource_lower = resource.lower()
-                if (
-                    "gpu" in resource_lower or "tpu" in resource_lower
-                ) and quantity not in (0, "0", None, ""):
-                    return True
+            res = container_resources.get(section)
+            if _has_accelerator(res, "gpu") or _has_accelerator(res, "tpu"):
+                return True
     return False
 
 
@@ -189,19 +209,52 @@ def _is_chs_pod(pod: dict) -> bool:
     labels = metadata.get("labels") or {}
     return (
         metadata.get("namespace") == CHS_NAMESPACE
-        and labels.get(WORKER_LABEL) == "true"
+        and labels.get(MANAGED_BY_LABEL) == MANAGED_BY_CHS
+        and labels.get(COMPONENT_LABEL) == WORKER_COMPONENT
     )
 
 
-def _worker_service(namespace: str) -> dict:
+def _run_labels(run_id: str) -> dict[str, str]:
+    """Returns the labels of every object CHS creates for the run."""
+    return {MANAGED_BY_LABEL: MANAGED_BY_CHS, INSTANCE_LABEL: run_id}
+
+
+def _run_selector(run_id: str) -> str:
+    """Returns the label selector of every object CHS creates for the run."""
+    return ",".join(f"{k}={v}" for k, v in _run_labels(run_id).items())
+
+
+def _object_names(objects: list[dict]) -> list[str]:
+    """Returns the names of the Kubernetes objects that have one."""
+    names = (obj.get("metadata", {}).get("name") for obj in objects)
+    return [name for name in names if name]
+
+
+def _slice_name(pool_name: str) -> str:
+    return f"chs-slice-{pool_name}"[:63].rstrip("-.")
+
+
+def worker_service_name(run_id: str) -> str:
+    """Returns the name of the headless Service of the run's worker pods."""
+    return f"{CHS_JOB_PREFIX}{run_id}"
+
+
+def _worker_service(run_id: str) -> dict:
     return {
         "apiVersion": "v1",
         "kind": "Service",
-        "metadata": {"name": WORKER_SERVICE_NAME, "namespace": namespace},
+        "metadata": {
+            "name": worker_service_name(run_id),
+            "namespace": CHS_NAMESPACE,
+            "labels": _run_labels(run_id),
+        },
         "spec": {
             "clusterIP": "None",
             "publishNotReadyAddresses": True,
-            "selector": {WORKER_LABEL: "true"},
+            "selector": {
+                **_run_labels(run_id),
+                COMPONENT_LABEL: WORKER_COMPONENT,
+            },
         },
     }
 
@@ -255,10 +308,11 @@ class KubernetesScheduler(BaseScheduler):
         self._resolved_node_resources: list[dict] | None = None
         self._cluster_name: str | None = None
         self._tpu_slice_data: TpuSliceData | None = None
+        self._run_id: str | None = None
         self.workspace_config_dir: str | None = None
 
     def _resolve_project_id(self, node: str) -> str:
-        """Resolves GCP project ID from Kubernetes node providerID."""
+        """Resolves GCP project ID from Kubernetes node providerID or ADC."""
         try:
             cached_node = next(
                 (
@@ -279,9 +333,13 @@ class KubernetesScheduler(BaseScheduler):
                 raise ValueError(f"Unexpected providerID format: {provider_id}")
             return match.group(1)
         except Exception as e:
-            raise ChsSchedulerException(
-                f"Failed to resolve project ID from node '{node}': {e}"
-            ) from e
+            try:
+                return super()._resolve_project_id()
+            except Exception as fallback_err:
+                raise ChsSchedulerException(
+                    f"Failed to resolve project ID from node '{node}': {e}. "
+                    f"{fallback_err}"
+                ) from e
 
     def detect_nodes_hardware(self, nodes: list[str]) -> list[str]:
         """Detects machine types and maps instance IDs for the given nodes."""
@@ -355,8 +413,10 @@ class KubernetesScheduler(BaseScheduler):
         tests: list[dict[str, Any]] | None = None,
         machine_type: str = "",
         workspace_name: str | None = None,
+        run_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         """Sets up scheduler-specific resources."""
+        self._run_id = run_id
         self.workspace_config_dir = workspace_config_dir
         os.makedirs(workspace_config_dir, exist_ok=True)
         return tests
@@ -397,9 +457,9 @@ class KubernetesScheduler(BaseScheduler):
         return None
 
     def _ensure_namespace_exists(self) -> None:
-        """Ensures the chs namespace and worker Service exist."""
+        """Ensures the chs namespace and the run's worker Service exist."""
         k8s_client.create_namespace_if_not_exists(name=CHS_NAMESPACE)
-        k8s_client.apply_service(body=_worker_service(CHS_NAMESPACE))
+        k8s_client.apply_service(body=_worker_service(self._run_id))
 
     def _delete_namespace(self) -> bool:
         """Deletes the chs namespace during cleanup."""
@@ -417,39 +477,86 @@ class KubernetesScheduler(BaseScheduler):
             return False
         return True
 
-    def _delete_job_secrets(self, job_ids: list[str] | None = None) -> None:
-        """Deletes the SSH secrets of the given jobs, or of all CHS jobs."""
-        try:
-            secrets = k8s_client.list_secrets(namespace=CHS_NAMESPACE)
-            secret_names = [
-                secret.get("metadata", {}).get("name", "") for secret in secrets
-            ]
-            if job_ids is None:
-                secrets_to_delete = [
-                    s
-                    for s in secret_names
-                    if s.startswith("chs-") and s.endswith("-ssh")
-                ]
-            else:
-                job_secrets = {f"{job_id}-ssh" for job_id in job_ids}
-                secrets_to_delete = [
-                    s for s in secret_names if s in job_secrets
-                ]
+    def _delete_job_dependents(self, job_ids: list[str]) -> None:
+        """Deletes the SSH Secrets and ComputeDomains of the given Jobs."""
+        for job_id in job_ids:
+            self._delete_secret(f"{job_id}-ssh")
+        self._delete_compute_domains_by_name(
+            [f"{job_id}-cd" for job_id in job_ids]
+        )
 
-            if secrets_to_delete:
-                for name in secrets_to_delete:
-                    k8s_client.delete_secret(name=name, namespace=CHS_NAMESPACE)
-                logger.debug(
-                    "Successfully deleted secrets: %s",
-                    ", ".join(secrets_to_delete),
-                )
-            else:
-                logger.debug("No CHS SSH secrets found to delete.")
-        except Exception as e:
+    def _delete_secret(self, name: str) -> bool:
+        """Deletes the named Secret and returns whether that succeeded."""
+        try:
+            k8s_client.delete_secret(name=name, namespace=CHS_NAMESPACE)
+        except k8s_client.KubeError as e:
             logger.warning(
-                "Failed to delete Kubernetes secrets. Error: %s",
+                "Failed to delete Kubernetes secret '%s'. Error: %s", name, e
+            )
+            return False
+        return True
+
+    def _delete_secrets(self, label_selector: str) -> bool:
+        """Deletes the Secrets that match label_selector.
+
+        Returns:
+          Whether every matching Secret was deleted.
+        """
+        try:
+            secrets = k8s_client.list_secrets(
+                namespace=CHS_NAMESPACE, label_selector=label_selector
+            )
+        except k8s_client.KubeError as e:
+            logger.warning(
+                "Failed to list Kubernetes secrets. Error: %s",
                 e,
             )
+            return False
+        results = [self._delete_secret(name) for name in _object_names(secrets)]
+        return all(results)
+
+    def _delete_compute_domains_by_name(self, names: list[str]) -> bool:
+        """Deletes the named ComputeDomains; returns whether it succeeded."""
+        try:
+            k8s_client.delete_custom_objects(
+                group=_COMPUTE_DOMAIN_GROUP,
+                version=_COMPUTE_DOMAIN_VERSION,
+                plural=_CUSTOM_RESOURCE_PLURALS["ComputeDomain"],
+                namespace=CHS_NAMESPACE,
+                object_names=names,
+                wait_timeout_seconds=DELETE_WAIT_TIMEOUT_SEC,
+            )
+        except k8s_client.KubeError as e:
+            logger.warning(
+                "Failed to delete Kubernetes ComputeDomains. Error: %s",
+                e,
+            )
+            return False
+        return True
+
+    def _delete_compute_domains(self, label_selector: str) -> bool:
+        """Deletes the ComputeDomains that match label_selector.
+
+        Returns:
+          Whether every matching ComputeDomain was deleted.
+        """
+        try:
+            domains = k8s_client.list_custom_objects(
+                group=_COMPUTE_DOMAIN_GROUP,
+                version=_COMPUTE_DOMAIN_VERSION,
+                plural=_CUSTOM_RESOURCE_PLURALS["ComputeDomain"],
+                namespace=CHS_NAMESPACE,
+                label_selector=label_selector,
+            )
+        except k8s_client.KubeError as e:
+            if e.status == 404:
+                return True
+            logger.warning(
+                "Failed to list Kubernetes ComputeDomains. Error: %s",
+                e,
+            )
+            return False
+        return self._delete_compute_domains_by_name(_object_names(domains))
 
     def _get_node_objects(self, node_names: list[str]) -> list[dict]:
         """Returns the node objects of node_names, in node_names order."""
@@ -683,7 +790,9 @@ class KubernetesScheduler(BaseScheduler):
             ) from e
 
         resolved_resources = [
-            node for node in node_resources if isinstance(node, dict)
+            node
+            for node in node_resources
+            if isinstance(node, dict) and _is_accelerator_node(node)
         ]
 
         if self.nodepools_arg:
@@ -764,7 +873,6 @@ class KubernetesScheduler(BaseScheduler):
 
         try:
             nodes = self._fetch_raw_node_resources()
-            node_data = {"items": nodes}
         except Exception as e:
             raise ChsSchedulerException(
                 f"Failed to get node labels for TPU topology: {e}"
@@ -779,14 +887,15 @@ class KubernetesScheduler(BaseScheduler):
 
         unhealthy_pools = set()
 
-        for node in node_data.get("items", []):
+        for node in nodes:
             node_name = node.get("metadata", {}).get("name")
             if not node_name:
                 continue
 
             labels = node.get("metadata", {}).get("labels", {})
             tpu_type = labels.get("cloud.google.com/gke-tpu-accelerator")
-            if not tpu_type:
+            allocatable = (node.get("status") or {}).get("allocatable")
+            if not tpu_type and not _has_accelerator(allocatable, "tpu"):
                 continue
 
             all_tpu_nodes.add(node_name)
@@ -814,11 +923,7 @@ class KubernetesScheduler(BaseScheduler):
                         pool_to_topology[nodepool] = (
                             SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
                         )
-                        id_label = (
-                            "cloud.google.com/gke-tpu-partition-"
-                            f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
-                        )
-                        partition_id = labels.get(id_label)
+                        partition_id = labels.get(_PARTITION_ID_LABEL)
                         if partition_id:
                             dynamic_slice_partitions[nodepool] = partition_id
                         if tpu_type:
@@ -960,6 +1065,19 @@ class KubernetesScheduler(BaseScheduler):
             else:
                 gpu_nodes.add(node)
 
+        candidate_nodes = set(gpu_nodes)
+        for pool_name in requested_tpu_slices:
+            candidate_nodes.update(topology.pools[pool_name])
+        for run_id, run_nodes in sorted(
+            self.find_runs_targeting_nodes(sorted(candidate_nodes)).items()
+        ):
+            excluded_nodes.update(run_nodes)
+            logger.warning(
+                "Skipping %d node(s) targeted by CHS run '%s'.",
+                len(run_nodes),
+                run_id,
+            )
+
         valid_nodes = []
         if gpu_nodes:
             excluded_gpus = gpu_nodes.intersection(excluded_nodes)
@@ -1016,22 +1134,24 @@ class KubernetesScheduler(BaseScheduler):
 
         try:
             items = self._get_node_objects(nodes)
-
             topology = defaultdict(lambda: defaultdict(list))
             for item in items:
                 metadata = item.get("metadata", {})
                 name = metadata.get("name")
                 labels = metadata.get("labels", {})
-
-                block = labels.get(
-                    "cloud.google.com/gce-topology-block", "default-block"
-                )
-                subblock = labels.get(
-                    "cloud.google.com/gce-topology-subblock", "default-subblock"
-                )
+                block = labels.get("cloud.google.com/gce-topology-block")
+                subblock = labels.get("cloud.google.com/gce-topology-subblock")
+                if not (block and subblock):
+                    instance_info = self._get_instances_info(nodes).get(
+                        name, {}
+                    )
+                    block = block or instance_info.get("block")
+                    subblock = subblock or instance_info.get("subblock")
 
                 if name:
-                    topology[block][subblock].append(name)
+                    topology[block or "default-block"][
+                        subblock or "default-subblock"
+                    ].append(name)
 
             return {b: dict(s) for b, s in topology.items()}
 
@@ -1093,6 +1213,7 @@ class KubernetesScheduler(BaseScheduler):
         variables["default_interface_name"] = default_interface_name
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
         variables["chs_run_id"] = run_id
+        variables["worker_service_name"] = worker_service_name(run_id)
         if deadline is not None:
             variables["deadline"] = deadline
 
@@ -1486,38 +1607,71 @@ class KubernetesScheduler(BaseScheduler):
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
 
-    def _cleanup_dynamic_slices(self) -> None:
-        """Deletes dynamic TPU slices created by CHS."""
+    def _list_slices(self, label_selector: str | None = None) -> list[dict]:
+        """Returns the Slices that match label_selector.
+
+        A cluster without the Slice CRD has no Slices.
+
+        Raises:
+          ChsSchedulerException: If the Slices cannot be listed.
+        """
         try:
-            slices = k8s_client.list_custom_objects(
+            return k8s_client.list_custom_objects(
                 group=_SLICE_GROUP,
                 version=_SLICE_VERSION,
                 plural="slices",
-                label_selector="created-by=chs",
+                label_selector=label_selector,
             )
+        except k8s_client.KubeError as e:
+            if e.status == 404:
+                logger.debug("The Slice CRD is not installed: %s", e)
+                return []
+            raise ChsSchedulerException(
+                f"Failed to list the dynamic TPU slices: {e}"
+            ) from e
+
+    def _list_slice_names(self, label_selector: str) -> list[str] | None:
+        """Returns the names of the dynamic TPU slices matching the selector.
+
+        Returns:
+          The slice names, or None if the Slices cannot be listed.
+        """
+        try:
+            slices = self._list_slices(label_selector)
+        except ChsSchedulerException as e:
+            logger.warning("%s", e)
+            return None
+        return _object_names(slices)
+
+    def _delete_slices(self, names: list[str]) -> bool:
+        """Deletes the named dynamic TPU slices.
+
+        Returns:
+          Whether the deletion succeeded.
+        """
+        try:
             k8s_client.delete_custom_objects(
                 group=_SLICE_GROUP,
                 version=_SLICE_VERSION,
                 plural="slices",
-                object_names=[
-                    tpu_slice["metadata"]["name"] for tpu_slice in slices
-                ],
+                object_names=names,
                 wait_timeout_seconds=300,
             )
         except k8s_client.KubeError as e:
-            if e.status == 404:
-                return
             logger.warning(
-                "Failed to delete dynamic TPU slices after execution. "
+                "Failed to delete dynamic TPU slices. "
                 "Manual cleanup may be required. Error: %s",
                 e,
             )
+            return False
+        return True
 
     def _wait_for_slices_active(
         self, expected_nodepools: list[str], timeout_sec: int = 300
     ) -> tuple[list[str], list[str]]:
         """Waits for dynamically provisioned slices to reach terminal states."""
         start_time = time.time()
+        pool_of_slice = {_slice_name(pool): pool for pool in expected_nodepools}
         slice_terminal_statuses = {}
         failed_reasons = {
             "FAILED",
@@ -1528,21 +1682,14 @@ class KubernetesScheduler(BaseScheduler):
 
         while time.time() - start_time < timeout_sec:
             try:
-                slices = k8s_client.list_custom_objects(
-                    group=_SLICE_GROUP,
-                    version=_SLICE_VERSION,
-                    plural="slices",
-                    label_selector="created-by=chs",
-                )
+                slices = self._list_slices(_run_selector(self._run_id))
                 if not slices:
                     time.sleep(10)
                     continue
 
                 for tpu_slice in slices:
-                    nodepool = (
-                        tpu_slice.get("metadata", {})
-                        .get("labels", {})
-                        .get("chs-nodepool")
+                    nodepool = pool_of_slice.get(
+                        tpu_slice.get("metadata", {}).get("name")
                     )
                     if not nodepool:
                         continue
@@ -1564,7 +1711,7 @@ class KubernetesScheduler(BaseScheduler):
                 if len(slice_terminal_statuses) >= len(expected_nodepools):
                     break
 
-            except k8s_client.KubeError as e:
+            except ChsSchedulerException as e:
                 logger.debug("Failed to check status for dynamic slices: %s", e)
             time.sleep(10)
 
@@ -1579,20 +1726,46 @@ class KubernetesScheduler(BaseScheduler):
         return success_nodepools, failed_nodepools
 
     def _get_already_fulfilled_partitions(self) -> set[str]:
-        """Returns partition IDs of all existing slices."""
+        """Returns partition IDs of existing slices, except other runs'."""
         fulfilled = set()
         try:
-            slices = k8s_client.list_custom_objects(
-                group=_SLICE_GROUP, version=_SLICE_VERSION, plural="slices"
-            )
+            slices = self._list_slices()
             for tpu_slice in slices:
-                if tpu_slice.get("metadata", {}).get("deletionTimestamp"):
+                metadata = tpu_slice.get("metadata", {})
+                labels = metadata.get("labels") or {}
+                owned_by_other_run = (
+                    labels.get(MANAGED_BY_LABEL) == MANAGED_BY_CHS
+                    and labels.get(INSTANCE_LABEL) != self._run_id
+                )
+                if metadata.get("deletionTimestamp") or owned_by_other_run:
                     continue
                 for pid in tpu_slice.get("spec", {}).get("partitionIds", []):
                     fulfilled.add(pid)
-        except k8s_client.KubeError as e:
+        except ChsSchedulerException as e:
             logger.debug("Could not retrieve existing slices: %s", e)
         return fulfilled
+
+    def _create_slice(self, slice_manifest: dict, pool_name: str) -> None:
+        """Creates the Slice of the nodepool.
+
+        Raises:
+          ChsSchedulerException: If the Slice exists or cannot be created.
+        """
+        name = slice_manifest.get("metadata", {}).get("name")
+        try:
+            k8s_client.create_custom_object(
+                plural="slices", body=slice_manifest
+            )
+        except k8s_client.KubeError as e:
+            if e.status == 409:
+                raise ChsSchedulerException(
+                    f"Dynamic slice '{name}' already exists; another CHS run "
+                    f"may be using nodepool {pool_name}. Wait for that run to "
+                    "finish or cancel it with `chs cancel <run_id>`."
+                ) from e
+            raise ChsSchedulerException(
+                f"Failed to create dynamic slice '{name}': {e}"
+            ) from e
 
     def _provision_dynamic_slices(
         self, target_pools: dict[str, list[str]]
@@ -1612,7 +1785,7 @@ class KubernetesScheduler(BaseScheduler):
         slice_yaml_path = os.path.join(
             self.workspace_config_dir, "chs-slices.yaml"
         )
-        all_slices_yaml = ""
+        slice_manifests = []
         template_path = pkg_resources.files("chs.schedulers").joinpath(
             "slice.yaml.tpl"
         )
@@ -1640,32 +1813,25 @@ class KubernetesScheduler(BaseScheduler):
             )
             shape = self._tpu_slice_data.pool_to_topology.get(pool_name, "")
 
-            slice_name = f"chs-slice-{pool_name}"[:63].rstrip("-.")
-            rendered = template_str.format(
-                slice_name=slice_name,
-                pool_name=pool_name,
-                tpu_type=tpu_type,
-                shape=shape,
-                partition_id=partition_id,
+            slice_manifest = yaml.safe_load(
+                template_str.format(
+                    slice_name=_slice_name(pool_name),
+                    tpu_type=tpu_type,
+                    shape=shape,
+                    partition_id=partition_id,
+                )
             )
-            if all_slices_yaml:
-                all_slices_yaml += "---\n"
-            all_slices_yaml += rendered
+            slice_manifest["metadata"]["labels"] = _run_labels(self._run_id)
+            slice_manifests.append(slice_manifest)
 
-        if all_slices_yaml:
+        if slice_manifests:
             with open(slice_yaml_path, "w") as f:
-                f.write(all_slices_yaml)
+                yaml.safe_dump_all(slice_manifests, f, sort_keys=False)
 
-            try:
-                for slice_manifest in yaml.safe_load_all(all_slices_yaml):
-                    if slice_manifest:
-                        k8s_client.apply_custom_object(
-                            plural="slices", body=slice_manifest
-                        )
-            except k8s_client.KubeError as e:
-                raise ChsSchedulerException(
-                    f"Failed to apply dynamic slice configuration: {e}"
-                ) from e
+            for pool_name, slice_manifest in zip(
+                pools_to_provision, slice_manifests
+            ):
+                self._create_slice(slice_manifest, pool_name)
 
             success, failed = self._wait_for_slices_active(
                 pools_to_provision, 300
@@ -1681,15 +1847,12 @@ class KubernetesScheduler(BaseScheduler):
         if nodes:
             target_pools = self._group_nodes_by_slice(nodes)
 
-        if self._tpu_slice_data and any(
-            pool in self._tpu_slice_data.dynamic_slice_partitions
-            for pool in target_pools
-        ):
-            self._cleanup_dynamic_slices()
-
         _, failed_nodepools = self._provision_dynamic_slices(target_pools)
 
         if failed_nodepools and self._tpu_slice_data:
+            self._delete_slices(
+                [_slice_name(nodepool) for nodepool in failed_nodepools]
+            )
             nodes_to_remove = set()
             for nodepool in failed_nodepools:
                 nodes_to_remove.update(target_pools.get(nodepool, []))
@@ -1722,19 +1885,176 @@ class KubernetesScheduler(BaseScheduler):
 
         self._ensure_namespace_exists()
 
-    def cleanup_scheduler_resources(self) -> None:
-        """Cleans up scheduler-specific resources statelessly."""
-        self._cleanup_dynamic_slices()
+    def find_runs_targeting_nodes(
+        self, nodes: list[str]
+    ) -> dict[str, list[str]]:
+        """Finds the CHS runs whose Jobs or dynamic Slices target the nodes.
 
-        if not self._delete_namespace():
-            self._delete_job_secrets()
+        Raises:
+          ChsSchedulerException: If the Jobs, Slices or nodes cannot be
+            listed.
+        """
+        if not nodes:
+            return {}
+        requested = set(nodes)
+        try:
+            targeted_by_jobs = self._runs_targeting_by_jobs(requested)
+            targeted_by_slices = self._runs_targeting_by_slices(requested)
+        except (k8s_client.KubeError, ChsSchedulerException) as e:
+            raise ChsSchedulerException(
+                "Failed to list the CHS Jobs, Slices or nodes; cannot verify "
+                f"that the nodes are not targeted by another CHS run: {e}"
+            ) from e
+        targeted = defaultdict(set)
+        for runs in (targeted_by_jobs, targeted_by_slices):
+            for run_id, run_nodes in runs.items():
+                targeted[run_id] |= run_nodes
+        return {
+            run_id: sorted(run_nodes)
+            for run_id, run_nodes in targeted.items()
+            if run_nodes
+        }
+
+    def _runs_targeting_by_jobs(
+        self, requested: set[str]
+    ) -> dict[str, set[str]]:
+        """Maps run IDs to the requested nodes their Jobs are pinned to."""
+        jobs = k8s_client.list_jobs(
+            namespace=CHS_NAMESPACE, label_selector=_CHS_SELECTOR
+        )
+        run_of_job = {}
+        named_jobs = []
+        for job in jobs:
+            metadata = job.get("metadata", {})
+            name = metadata.get("name")
+            run_id = (metadata.get("labels") or {}).get(INSTANCE_LABEL)
+            if name and run_id:
+                run_of_job[name] = run_id
+                named_jobs.append(job)
+        targeted = defaultdict(set)
+        for job_name, job_nodes in pinned_nodes(named_jobs, run_of_job).items():
+            targeted[run_of_job[job_name]] |= job_nodes & requested
+        return targeted
+
+    def _runs_targeting_by_slices(
+        self, requested: set[str]
+    ) -> dict[str, set[str]]:
+        """Maps run IDs to the requested nodes in their Slices' partitions."""
+        run_of_partition = {}
+        for tpu_slice in self._list_slices(_CHS_SELECTOR):
+            labels = tpu_slice.get("metadata", {}).get("labels") or {}
+            run_id = labels.get(INSTANCE_LABEL)
+            if not run_id:
+                continue
+            for partition_id in tpu_slice.get("spec", {}).get(
+                "partitionIds", []
+            ):
+                run_of_partition[partition_id] = run_id
+
+        targeted = defaultdict(set)
+        if not run_of_partition:
+            return targeted
+        node_objects = self._resolved_node_resources
+        if node_objects is None:
+            node_objects = k8s_client.list_nodes()
+        for node in node_objects:
+            metadata = node.get("metadata", {})
+            node_name = metadata.get("name")
+            partition_id = (metadata.get("labels") or {}).get(
+                _PARTITION_ID_LABEL
+            )
+            if node_name in requested and partition_id in run_of_partition:
+                targeted[run_of_partition[partition_id]].add(node_name)
+        return targeted
+
+    def cancel_run(self, run_id: str) -> bool:
+        """Deletes the run's Jobs and every object CHS created for it.
+
+        Objects are selected by the run's labels. Every kind of object is
+        attempted even if another kind fails to delete. The chs namespace is
+        kept for the other runs.
+
+        Returns:
+          Whether the run was active, i.e. had Jobs or Slices on the cluster.
+
+        Raises:
+          ChsCancellationException: If the run's Jobs cannot be listed or
+            some of its objects could not be listed or deleted.
+        """
+        selector = _run_selector(run_id)
+        job_names = self._list_job_names(selector)
+        slice_names = self._list_slice_names(selector)
+        deletions = {
+            "Jobs": self._delete_jobs(job_names),
+            "Secrets": self._delete_secrets(selector),
+            "ComputeDomains": self._delete_compute_domains(selector),
+            "dynamic slices": (
+                slice_names is not None and self._delete_slices(slice_names)
+            ),
+            "worker Service": self._delete_worker_service(run_id),
+        }
+        failed = [kind for kind, deleted in deletions.items() if not deleted]
+        if failed:
+            raise ChsCancellationException(
+                f"Failed to delete the {', '.join(failed)} of CHS run "
+                f"'{run_id}'. Run `chs cancel {run_id}` again to retry."
+            )
+        return bool(job_names or slice_names)
+
+    def cancel_all_runs(self) -> None:
+        """Deletes all CHS Jobs and Slices and the chs namespace.
+
+        Raises:
+          ChsCancellationException: If the CHS Jobs cannot be listed or
+            some CHS objects could not be listed or deleted.
+        """
+        job_names = self._list_job_names(_CHS_SELECTOR)
+        slice_names = self._list_slice_names(_CHS_SELECTOR)
+        deletions = {
+            "Jobs": self._delete_jobs(job_names),
+            "dynamic slices": (
+                slice_names is not None and self._delete_slices(slice_names)
+            ),
+            "chs namespace": self._delete_namespace(),
+        }
+        if not deletions["chs namespace"]:
+            self._delete_secrets(_CHS_SELECTOR)
+            self._delete_compute_domains(_CHS_SELECTOR)
+        failed = [kind for kind, deleted in deletions.items() if not deleted]
+        if failed:
+            raise ChsCancellationException(
+                f"Failed to delete the CHS {', '.join(failed)}. Run "
+                "`chs cancel --all` again to retry."
+            )
 
     def cancel_jobs(self, job_ids: list[str]) -> None:
-        """Cancels the given Jobs by deleting them via the Kubernetes API."""
+        """Deletes the given Jobs and their Secrets and ComputeDomains."""
         if not job_ids:
             logger.warning("No job IDs to cancel.")
             return
+        self._delete_jobs(job_ids)
+        self._delete_job_dependents(job_ids)
 
+    def _list_job_names(self, label_selector: str) -> list[str]:
+        """Returns the names of the CHS Jobs that match label_selector.
+
+        Raises:
+          ChsCancellationException: If the Jobs cannot be listed.
+        """
+        try:
+            jobs = k8s_client.list_jobs(
+                namespace=CHS_NAMESPACE, label_selector=label_selector
+            )
+        except k8s_client.KubeError as e:
+            raise ChsCancellationException(
+                f"Failed to list the Jobs matching '{label_selector}': {e}"
+            ) from e
+        return _object_names(jobs)
+
+    def _delete_jobs(self, job_ids: list[str]) -> bool:
+        """Deletes the given Jobs and returns whether that succeeded."""
+        if not job_ids:
+            return True
         try:
             k8s_client.delete_jobs(
                 object_names=job_ids,
@@ -1748,60 +2068,20 @@ class KubernetesScheduler(BaseScheduler):
                 "delete active Jobs. Error: %s",
                 e,
             )
+            return False
+        return True
 
-        self._delete_job_secrets(job_ids)
-
-    def get_active_job_names(self) -> list[str]:
-        """Returns the names of active CHS Jobs on the cluster."""
+    def _delete_worker_service(self, run_id: str) -> bool:
+        """Deletes the run's worker Service; returns whether it succeeded."""
         try:
-            jobs = self._list_jobs()
-            names = [
-                job.get("metadata", {}).get("name")
-                for job in jobs
-                if not _job_condition(job, "Complete")
-                and not _job_condition(job, "Failed")
-            ]
-            return [name for name in names if name]
-        except k8s_client.KubeError as e:
-            if e.status is None:
-                raise ChsSchedulerException(
-                    "Failed to list active Jobs; cannot verify that no "
-                    f"other CHS run is in progress: {e}"
-                ) from e
-            logger.warning(
-                "Failed to retrieve the list of active Jobs "
-                "from the cluster. Error: %s",
-                e,
+            k8s_client.delete_service(
+                name=worker_service_name(run_id), namespace=CHS_NAMESPACE
             )
-            return []
-
-    def cancel_jobs_by_prefix(self, prefix: str) -> None:
-        """Cancels all Jobs matching the specified prefix natively."""
-        logger.debug("Attempting native cancel for prefix: %s", prefix)
-        sanitized_match = prefix.replace("_", "-").replace(".", "-").lower()
-
-        try:
-            jobs = self._list_jobs()
-            if not jobs:
-                return
-
-            job_names = [job.get("metadata", {}).get("name") for job in jobs]
-            job_ids = [
-                name for name in job_names if name and sanitized_match in name
-            ]
-
-            if job_ids:
-                logger.debug(
-                    "Found %d Jobs to cancel matching %s.",
-                    len(job_ids),
-                    prefix,
-                )
-                self.cancel_jobs(job_ids)
-            else:
-                logger.debug("No matching Jobs found for %s.", prefix)
         except k8s_client.KubeError as e:
             logger.warning(
-                "Failed to execute native job cancellation "
-                "via Kubernetes. Error: %s",
+                "Failed to delete the worker Service of run '%s'. Error: %s",
+                run_id,
                 e,
             )
+            return False
+        return True

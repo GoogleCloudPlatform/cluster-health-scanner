@@ -14,6 +14,14 @@
 
 from ramble.appkit import *
 
+_BW_VALUE = r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+_H2D_MEDIAN_REGEX = (
+    r".*H2D_bw \(GiB/s\) median:\s*(?P<h2d_bandwidth>" + _BW_VALUE + r")"
+)
+_D2H_MEDIAN_REGEX = (
+    r".*D2H_bw \(GiB/s\) median:\s*(?P<d2h_bandwidth>" + _BW_VALUE + r")"
+)
+
 
 class TpuHostDevice(ExecutableApplication):
     """TPU JAX Host-Device I/O benchmark for cluster health scanner.
@@ -75,13 +83,13 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"HOST (?P<node>\S+): Running .* with params:.*'data_size_mib': (?P<size>\d+)",
+        regex=r"HOST (?P<node>\S+): Running host_device with params:.*?'data_size_mib':\s*(?P<size>\d+)",
         output_format="{node},{size}MiB",
     )
 
     figure_of_merit(
         "H2D Bandwidth",
-        fom_regex=r".*(?:Host-to-Device|H2D).*?:\s*(?P<h2d_bandwidth>\d+\.\d+)",
+        fom_regex=_H2D_MEDIAN_REGEX,
         group_name="h2d_bandwidth",
         units="GiB/s",
         contexts=["params"],
@@ -89,7 +97,7 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit(
         "D2H Bandwidth",
-        fom_regex=r".*(?:Device-to-Host|D2H).*?:\s*(?P<d2h_bandwidth>\d+\.\d+)",
+        fom_regex=_D2H_MEDIAN_REGEX,
         group_name="d2h_bandwidth",
         units="GiB/s",
         contexts=["params"],

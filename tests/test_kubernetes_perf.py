@@ -27,6 +27,7 @@ from chs.constants import (
     NAMESPACE_DELETE_TIMEOUT_SEC,
 )
 from chs.exceptions import (
+    ChsCancellationException,
     ChsSchedulerException,
     ChsValidationError,
 )
@@ -43,13 +44,14 @@ _CLUSTER_NAME = "container.googleapis.com/cluster_name"
 _NODEPOOL = "cloud.google.com/gke-nodepool"
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
+_CHS_SELECTOR = "app.kubernetes.io/managed-by=chs"
 _SLICE_LIST = Call(
     "list_custom_objects",
     {
         "group": _SLICE_GROUP,
         "version": _SLICE_VERSION,
         "plural": "slices",
-        "label_selector": "created-by=chs",
+        "label_selector": _CHS_SELECTOR,
     },
 )
 
@@ -71,6 +73,7 @@ def _node(name, labels=None, annotations=None, provider_id=None):
             "labels": dict(labels or {}),
             "annotations": dict(annotations or {}),
         },
+        "status": {"allocatable": {"nvidia.com/gpu": "8"}},
     }
     if provider_id is not None:
         node["spec"] = {"providerID": provider_id}
@@ -89,6 +92,18 @@ class _KubernetesTestBase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.kube = install_fake_client(self)
+        self.mock_adc = self._patch(
+            mock.patch(
+                "chs.utils.gcp.get_default_credentials",
+                return_value=(None, None),
+            )
+        )
+        self._patch(
+            mock.patch(
+                "chs.utils.gcp.query_gce_instances_info",
+                return_value={},
+            )
+        )
         self.mock_logger = self._patch(mock.patch.object(kubernetes, "logger"))
         tmp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(tmp_dir.cleanup)
@@ -486,9 +501,21 @@ class TestNodeObjectCache(_KubernetesTestBase):
 
     def test_cached_nodes_need_no_kubectl_and_preserve_order(self):
         """Nodes in the cached list are never fetched again and keep order."""
-        node_0 = _node("node0", {_NODEPOOL: "pool-a"})
-        node_1 = _node("node1", {_NODEPOOL: "pool-b"})
-        node_2 = _node("node2", {_NODEPOOL: "pool-a"})
+        node_0 = _node(
+            "node0",
+            {_NODEPOOL: "pool-a"},
+            provider_id="gce://proj/zone/node0",
+        )
+        node_1 = _node(
+            "node1",
+            {_NODEPOOL: "pool-b"},
+            provider_id="gce://proj/zone/node1",
+        )
+        node_2 = _node(
+            "node2",
+            {_NODEPOOL: "pool-a"},
+            provider_id="gce://proj/zone/node2",
+        )
         self.scheduler._resolved_node_resources = [node_0, node_1, node_2]
 
         self.assertEqual(
@@ -689,7 +716,7 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
         super().setUp()
         self.scheduler = KubernetesScheduler()
         self.mock_query_gce = self._patch(
-            mock.patch("chs.schedulers.base.query_gce_instances_info")
+            mock.patch("chs.utils.gcp.query_gce_instances_info")
         )
         self._patch(mock.patch("chs.schedulers.base.logger"))
 
@@ -926,9 +953,9 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
         ]
 
     def test_back_to_back_cleanups_delete_slices_once(self):
-        """cancel_jobs_by_prefix + cleanup deletes slices once statelessly."""
+        """cancel_all_runs deletes the Jobs and lists slices only once."""
         for name, labels in (
-            ("chs-slice", {"created-by": "chs"}),
+            ("chs-slice", {"app.kubernetes.io/managed-by": "chs"}),
             ("user-slice", {}),
         ):
             self.kube.add_object(
@@ -939,12 +966,16 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
         self.kube.add_object(
             "batch",
             "jobs",
-            {"metadata": {"name": "chs-run1-nccl"}},
+            {
+                "metadata": {
+                    "name": "chs-run1-nccl",
+                    "labels": {"app.kubernetes.io/managed-by": "chs"},
+                }
+            },
             namespace=CHS_NAMESPACE,
         )
 
-        self.scheduler.cancel_jobs_by_prefix("chs-")
-        self.scheduler.cleanup_scheduler_resources()
+        self.scheduler.cancel_all_runs()
 
         self.assertEqual(
             self._slice_calls(),
@@ -967,27 +998,14 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
             self.kube.stored_names(_SLICE_GROUP, "slices"), ["user-slice"]
         )
 
-    def test_cleanup_dynamic_slices_is_stateless(self):
-        """_cleanup_dynamic_slices holds no flag and always queries cluster."""
+    def test_list_slice_names_is_stateless(self):
+        """_list_slice_names holds no flag and always queries the cluster."""
         self.assertFalse(hasattr(self.scheduler, "_dynamic_slices_cleaned"))
 
-        self.scheduler._cleanup_dynamic_slices()
-        self.scheduler._cleanup_dynamic_slices()
+        self.assertEqual(self.scheduler._list_slice_names(_CHS_SELECTOR), [])
+        self.assertEqual(self.scheduler._list_slice_names(_CHS_SELECTOR), [])
 
-        empty_delete = Call(
-            "delete_custom_objects",
-            {
-                "group": _SLICE_GROUP,
-                "version": _SLICE_VERSION,
-                "plural": "slices",
-                "object_names": [],
-                "wait_timeout_seconds": 300,
-            },
-        )
-        self.assertEqual(
-            self._slice_calls(),
-            [_SLICE_LIST, empty_delete, _SLICE_LIST, empty_delete],
-        )
+        self.assertEqual(self._slice_calls(), [_SLICE_LIST, _SLICE_LIST])
 
     def test_get_job_statuses_uses_namespaced_list_for_multiple_jobs(self):
         """get_job_statuses lists chs namespace once and filters."""
@@ -1027,18 +1045,18 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
             [Call("list_jobs", {"namespace": CHS_NAMESPACE})],
         )
 
-    def test_apply_cleans_slices_only_for_dynamic_pools(self):
-        """Slices are cleaned before provisioning only for dynamic pools."""
+    def test_apply_never_deletes_existing_slices(self):
+        """Existing Slices belong to other runs, so apply never deletes."""
         slice_data = TpuSliceData(
             pool_to_topology={"static-pool": "2x2", "dyn-pool": "2x2"},
             dynamic_slice_partitions={"dyn-pool": "part-1"},
         )
         cases = [
-            ("static pool", slice_data, {"static-pool": ["s1"]}, False),
-            ("dynamic pool", slice_data, {"dyn-pool": ["d1"]}, True),
-            ("GPU pool", None, {"default-slice": ["g1"]}, False),
+            ("static pool", slice_data, {"static-pool": ["s1"]}),
+            ("dynamic pool", slice_data, {"dyn-pool": ["d1"]}),
+            ("GPU pool", None, {"default-slice": ["g1"]}),
         ]
-        for label, tpu_slice_data, target_pools, cleans in cases:
+        for label, tpu_slice_data, target_pools in cases:
             with self.subTest(label):
                 scheduler = KubernetesScheduler()
                 scheduler._tpu_slice_data = tpu_slice_data
@@ -1053,8 +1071,8 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
                         return_value=target_pools,
                     ),
                     mock.patch.object(
-                        scheduler, "_cleanup_dynamic_slices"
-                    ) as mock_clean,
+                        scheduler, "_delete_slices"
+                    ) as mock_delete,
                     mock.patch.object(
                         scheduler,
                         "_provision_dynamic_slices",
@@ -1064,7 +1082,7 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
                 ):
                     scheduler.apply_scheduler_resources()
 
-                self.assertEqual(mock_clean.called, cleans)
+                mock_delete.assert_not_called()
                 mock_prov.assert_called_once_with(target_pools)
         self.assertEqual(self.kube.calls, [])
 
@@ -1075,29 +1093,51 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
     def setUp(self):
         super().setUp()
         self.scheduler = KubernetesScheduler()
-        self.mock_cleanup_slices = self._patch(
-            mock.patch.object(self.scheduler, "_cleanup_dynamic_slices")
+        self.mock_list_slice_names = self._patch(
+            mock.patch.object(
+                self.scheduler, "_list_slice_names", return_value=[]
+            )
+        )
+        self.mock_delete_slices = self._patch(
+            mock.patch.object(
+                self.scheduler, "_delete_slices", return_value=True
+            )
+        )
+        self.mock_delete_dependents = self._patch(
+            mock.patch.object(self.scheduler, "_delete_job_dependents")
         )
         self.mock_delete_secrets = self._patch(
-            mock.patch.object(self.scheduler, "_delete_job_secrets")
+            mock.patch.object(self.scheduler, "_delete_secrets")
+        )
+        self.mock_delete_compute_domains = self._patch(
+            mock.patch.object(self.scheduler, "_delete_compute_domains")
         )
 
     def test_deleted_namespace_needs_no_secret_cleanup(self):
         """Secrets go with the namespace, so they are not deleted apart."""
-        self.scheduler.cleanup_scheduler_resources()
+        self.scheduler.cancel_all_runs()
 
-        self.mock_cleanup_slices.assert_called_once_with()
+        self.mock_list_slice_names.assert_called_once_with(_CHS_SELECTOR)
+        self.mock_delete_slices.assert_called_once_with([])
         self.mock_delete_secrets.assert_not_called()
+        self.mock_delete_compute_domains.assert_not_called()
         self.assertEqual(
             self.kube.calls,
             [
+                Call(
+                    "list_jobs",
+                    {
+                        "namespace": CHS_NAMESPACE,
+                        "label_selector": _CHS_SELECTOR,
+                    },
+                ),
                 Call(
                     "delete_namespace",
                     {
                         "name": CHS_NAMESPACE,
                         "wait_timeout_seconds": NAMESPACE_DELETE_TIMEOUT_SEC,
                     },
-                )
+                ),
             ],
         )
 
@@ -1110,9 +1150,13 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
             ),
         )
 
-        self.scheduler.cleanup_scheduler_resources()
+        with self.assertRaisesRegex(
+            ChsCancellationException, "Failed to delete the CHS chs namespace"
+        ):
+            self.scheduler.cancel_all_runs()
 
-        self.mock_delete_secrets.assert_called_once_with()
+        self.mock_delete_secrets.assert_called_once_with(_CHS_SELECTOR)
+        self.mock_delete_compute_domains.assert_called_once_with(_CHS_SELECTOR)
         self.mock_logger.warning.assert_called_once()
 
     def test_cancel_jobs_still_deletes_secrets(self):
@@ -1129,10 +1173,10 @@ class TestNamespaceSubsumesSecrets(_KubernetesTestBase):
                         "namespace": CHS_NAMESPACE,
                         "wait_timeout_seconds": DELETE_WAIT_TIMEOUT_SEC,
                     },
-                )
+                ),
             ],
         )
-        self.mock_delete_secrets.assert_called_once_with(["chs-job1"])
+        self.mock_delete_dependents.assert_called_once_with(["chs-job1"])
 
 
 if __name__ == "__main__":

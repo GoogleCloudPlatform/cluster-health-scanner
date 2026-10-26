@@ -212,7 +212,7 @@ machines:
           NCCL_NET: gIB
           NCCL_TESTS_SPLIT_MASK: '0x0'
       variables:
-        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-gib-a4x-max-arm64:v1.1.1
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.4
         mpi_command: |
           mpirun -n {n_ranks} -N {processes_per_node} \
             --hostfile /tmp/hostfile --bind-to none \

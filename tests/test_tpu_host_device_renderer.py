@@ -52,6 +52,8 @@ class TestTpuHostDeviceRenderer(unittest.TestCase):
         self.assertIn("1024", output)
         self.assertIn("15.60", output)
         self.assertIn("16.20", output)
+        self.assertIn("H2D Bandwidth (GiB/s)", output)
+        self.assertIn("D2H Bandwidth (GiB/s)", output)
 
 
 if __name__ == "__main__":

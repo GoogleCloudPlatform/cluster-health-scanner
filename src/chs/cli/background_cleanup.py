@@ -80,8 +80,9 @@ class BackgroundCleanup:
         except KeyboardInterrupt:
             logger.warning(
                 "Interrupted while cleaning up CHS resources for run %s; "
-                "cleanup may be incomplete. Run 'chs cancel' to finish "
+                "cleanup may be incomplete. Run 'chs cancel %s' to finish "
                 "cleaning up.",
+                self._run_id,
                 self._run_id,
             )
             raise
@@ -94,10 +95,18 @@ class BackgroundCleanup:
         if isinstance(
             error, (ex.ChsException, subprocess.SubprocessError, OSError)
         ):
-            logger.warning("Failed to clean CHS resources. Error: %s", error)
+            self._warn_cleanup_failed(error)
             return
         if body_failed:
-            logger.warning("Failed to clean CHS resources. Error: %s", error)
+            self._warn_cleanup_failed(error)
             logger.debug("Background cleanup failed.", exc_info=error)
             return
         raise error
+
+    def _warn_cleanup_failed(self, error: BaseException) -> None:
+        logger.warning(
+            "Failed to clean CHS resources. Run 'chs cancel %s' to finish "
+            "cleaning up. Error: %s",
+            self._run_id,
+            error,
+        )

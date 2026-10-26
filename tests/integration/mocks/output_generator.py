@@ -61,9 +61,12 @@ TPU_HBM_STRESS_TEMPLATE = (
 )
 
 TPU_HOST_DEVICE_TEMPLATE = (
-    "HOST {node}: Running benchmark with params: 'data_size_mib': 256\n"
-    "HOST {node}: Host-to-Device : {bandwidth}\n"
-    "HOST {node}: Device-to-Host : {bandwidth}\n"
+    "HOST {node}: Running host_device with params: {'transfer_type': "
+    "'pinned_memory', 'num_devices': 8, 'data_size_mib': 4096, "
+    "'input_type': 'jax', 'dtype': <class 'jax.numpy.float32'>, "
+    "'num_runs': 20}\n"
+    "HOST {node}:   H2D_bw (GiB/s) median: {bandwidth}, P95: {bandwidth}\n"
+    "HOST {node}:   D2H_bw (GiB/s) median: {bandwidth}, P95: {bandwidth}\n"
 )
 
 TPU_NETWORK_STRESS_TEMPLATE = (
@@ -391,7 +394,7 @@ class RambleOutputGenerator:
                 + "\n"
             )
 
-        bandwidth = 50.0  # Standard PCIe healthy BW
+        bandwidth = 210.0
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
             if "Bandwidth" in metrics or "h2d_bandwidth" in metrics:

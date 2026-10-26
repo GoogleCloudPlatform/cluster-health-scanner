@@ -93,8 +93,8 @@ class TpuNetworkStressTest(unittest.TestCase):
         )
 
     def test_libtpu_init_args_set(self):
-        self.assertIn(
-            "--tpu_link_up_check_timeout=15s",
+        self.assertNotIn(
+            "--tpu_link_up_check_timeout",
             os.environ.get("LIBTPU_INIT_ARGS", ""),
         )
         self.assertIn(

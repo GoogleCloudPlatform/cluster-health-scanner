@@ -14,8 +14,12 @@
 
 """Unit tests for chs.testkit.context."""
 
+import json
 import os
 import shutil
+import subprocess
+import sys
+import sysconfig
 import tempfile
 import textwrap
 import unittest
@@ -25,6 +29,14 @@ import yaml
 
 from chs.testkit import config as chs_config
 from chs.testkit import context as ctx
+
+_RAMBLE_LIB = os.path.join(sysconfig.get_path("purelib"), "lib", "ramble")
+_EXPAND_SBATCH_HEADERS = (
+    "import json, sys\n"
+    "from ramble.expander import Expander\n"
+    "variables = json.load(sys.stdin)\n"
+    "print(Expander(variables, None).expand_var_name('extra_sbatch_headers'))"
+)
 
 
 def variables(**overrides):
@@ -88,9 +100,15 @@ class KubernetesAffinityTest(unittest.TestCase):
                         "labelSelector": {
                             "matchExpressions": [
                                 {
-                                    "key": "chs.gke.io/worker",
-                                    "operator": "Exists",
-                                }
+                                    "key": "app.kubernetes.io/managed-by",
+                                    "operator": "In",
+                                    "values": ["chs"],
+                                },
+                                {
+                                    "key": "app.kubernetes.io/component",
+                                    "operator": "In",
+                                    "values": ["worker"],
+                                },
                             ]
                         },
                         "topologyKey": "kubernetes.io/hostname",
@@ -378,6 +396,39 @@ class BaseContextTest(StubbedConfigTestCase):
         self.assertIn("#SBATCH --gpu-bind=single:1", headers)
         self.assertIn("#SBATCH --time", headers)
 
+    def test_slurm_jobs_are_stamped_with_the_run_id(self):
+        context = ctx.build_base_context(variables(scheduler="slurm"), "node-1")
+
+        self.assertIn(
+            "#SBATCH --comment=chs-run-id={chs_run_id}",
+            context["variables"]["extra_sbatch_headers"],
+        )
+
+    @unittest.skipUnless(os.path.isdir(_RAMBLE_LIB), "Ramble is not installed")
+    def test_ramble_renders_the_run_id_into_the_sbatch_header(self):
+        context = ctx.build_base_context(variables(scheduler="slurm"), "node-1")
+        headers = context["variables"]["extra_sbatch_headers"]
+        ramble_variables = {
+            "chs_run_id": "run-a",
+            "extra_sbatch_headers": headers,
+        }
+
+        rendered = subprocess.run(
+            [sys.executable, "-c", _EXPAND_SBATCH_HEADERS],
+            input=json.dumps(ramble_variables),
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    [_RAMBLE_LIB, os.path.join(_RAMBLE_LIB, "external")]
+                ),
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+        self.assertIn("#SBATCH --comment=chs-run-id=run-a\n", rendered)
+
     def test_an_unrecognised_scheduler_gets_no_placement(self):
         """Neither Slurm headers nor Kubernetes affinity would mean anything."""
         context = ctx.build_base_context(variables(scheduler="pbs"), "node-1")
@@ -461,6 +512,27 @@ class SliceContextTest(StubbedConfigTestCase):
         self.assertEqual(contexts[0][1]["variables"]["tpu_topology"], "2x2x1")
         self.assertEqual(contexts[1][1]["variables"]["tpu_topology"], "2x2x2")
 
+    def test_clears_node_selector_without_slice_topology(self):
+        self.resolve_test.return_value = {
+            "variables": {
+                "node_selector_yaml": (
+                    'cloud.google.com/gke-tpu-topology: "{tpu_topology}"'
+                )
+            }
+        }
+        contexts = self.build(
+            variables(
+                tpu_slices={"a": ["node-1"], "b": ["node-2"]},
+                tpu_slice_topologies={"a": "2x2x1"},
+            )
+        )
+
+        self.assertEqual(
+            contexts[0][1]["variables"]["node_selector_yaml"],
+            'cloud.google.com/gke-tpu-topology: "{tpu_topology}"',
+        )
+        self.assertEqual(contexts[1][1]["variables"]["node_selector_yaml"], "")
+
     def test_a_dynamic_slice_asks_for_exclusive_hardware(self):
         contexts = self.build(
             variables(
@@ -510,7 +582,16 @@ class SliceContextTest(StubbedConfigTestCase):
         self.assertEqual(
             anti_terms[1]["labelSelector"]["matchExpressions"],
             [
-                {"key": "chs.gke.io/worker", "operator": "Exists"},
+                {
+                    "key": "app.kubernetes.io/managed-by",
+                    "operator": "In",
+                    "values": ["chs"],
+                },
+                {
+                    "key": "app.kubernetes.io/component",
+                    "operator": "In",
+                    "values": ["worker"],
+                },
                 {
                     "key": "batch.kubernetes.io/job-name",
                     "operator": "NotIn",

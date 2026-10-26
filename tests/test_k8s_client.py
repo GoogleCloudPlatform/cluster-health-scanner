@@ -742,13 +742,11 @@ class ClientFunctionsTest(unittest.TestCase):
             read.assert_not_called()
             self.assertEqual(self.clock.sleeps, [])
 
-        with self.subTest(
-            "computes deadline before deletes and ignores 404 on delete"
-        ):
+        with self.subTest("computes deadline before deletes"):
 
             def slow_delete(**_kwargs: Any) -> Any:
                 self.clock.now += 2.0
-                raise _api_error(404, "NotFound", "not found")
+                return _FakeResponse({})
 
             delete = mock.Mock(side_effect=slow_delete)
             read = mock.Mock(return_value=_FakeResponse({}))
@@ -759,6 +757,31 @@ class ClientFunctionsTest(unittest.TestCase):
             # Because the deadline was computed before slow_delete advanced the
             # clock by 4s (> 1.0s), the first poll immediately times out
             # without sleeping.
+            self.assertEqual(self.clock.sleeps, [])
+
+        with self.subTest("does not wait for objects that returned 404"):
+            delete = mock.Mock(
+                side_effect=[
+                    _api_error(404, "NotFound", "not found"),
+                    _FakeResponse({}),
+                ]
+            )
+            read = mock.Mock(
+                side_effect=_api_error(404, "NotFound", "not found")
+            )
+            k8s_client._delete_and_wait(delete, read, ["a", "b"], 1.0)
+            self.assertEqual(delete.call_count, 2)
+            read.assert_called_once_with(
+                name="b", _preload_content=False, _request_timeout=120
+            )
+
+        with self.subTest("all deletes returned 404 skips polling"):
+            delete = mock.Mock(
+                side_effect=_api_error(404, "NotFound", "not found")
+            )
+            read = mock.Mock()
+            k8s_client._delete_and_wait(delete, read, ["a", "b"], 1.0)
+            read.assert_not_called()
             self.assertEqual(self.clock.sleeps, [])
 
         with self.subTest("polls until timeout when still present"):
@@ -851,6 +874,28 @@ class ClientFunctionsTest(unittest.TestCase):
             k8s_client.delete_secret(name="s1", namespace="chs")
         self.assertEqual(ctx.exception.status, 403)
 
+    def test_delete_service_ignores_404_only(self) -> None:
+        self.sdk.core.delete_namespaced_service.return_value = _FakeResponse({})
+        k8s_client.delete_service(name="chs-run1", namespace="chs")
+        self.sdk.core.delete_namespaced_service.assert_called_once_with(
+            name="chs-run1",
+            namespace="chs",
+            _preload_content=False,
+            _request_timeout=120,
+        )
+
+        self.sdk.core.delete_namespaced_service.side_effect = _api_error(
+            404, "NotFound", "not found"
+        )
+        k8s_client.delete_service(name="chs-run1", namespace="chs")
+
+        self.sdk.core.delete_namespaced_service.side_effect = _api_error(
+            403, "Forbidden", "forbidden"
+        )
+        with self.assertRaises(KubeError) as ctx:
+            k8s_client.delete_service(name="chs-run1", namespace="chs")
+        self.assertEqual(ctx.exception.status, 403)
+
     def test_jobs(self) -> None:
         self.sdk.batch.list_namespaced_job.return_value = _FakeResponse(
             {"items": [{"metadata": {"name": "j1"}}]}
@@ -911,7 +956,7 @@ class ClientFunctionsTest(unittest.TestCase):
                 group="accelerator.gke.io",
                 version="v1beta1",
                 plural="slices",
-                label_selector="created-by=chs",
+                label_selector="app.kubernetes.io/managed-by=chs",
             ),
             [{"metadata": {"name": "s1"}}],
         )
@@ -919,7 +964,7 @@ class ClientFunctionsTest(unittest.TestCase):
             group="accelerator.gke.io",
             version="v1beta1",
             plural="slices",
-            label_selector="created-by=chs",
+            label_selector="app.kubernetes.io/managed-by=chs",
             _preload_content=False,
             _request_timeout=120,
         )
@@ -1080,6 +1125,26 @@ class ClientFunctionsTest(unittest.TestCase):
             * 2,
         )
 
+    def test_create_custom_object(self) -> None:
+        cluster_body = {
+            "apiVersion": "accelerator.gke.io/v1beta1",
+            "kind": "Slice",
+            "metadata": {"name": "s1"},
+        }
+        self.sdk.custom.create_cluster_custom_object.return_value = (
+            _FakeResponse({})
+        )
+        k8s_client.create_custom_object(plural="slices", body=cluster_body)
+        self.sdk.custom.create_cluster_custom_object.assert_called_once_with(
+            group="accelerator.gke.io",
+            version="v1beta1",
+            plural="slices",
+            body=cluster_body,
+            _preload_content=False,
+            _request_timeout=120,
+        )
+        self.sdk.custom.patch_cluster_custom_object.assert_not_called()
+
     def test_apply_custom_object(self) -> None:
         namespaced_body = {
             "apiVersion": "resource.nvidia.com/v1beta1",
@@ -1182,6 +1247,18 @@ class FakeKubeClientContractTest(unittest.TestCase):
                 },
             )
         self.assertEqual(ctx.exception.status, 404)
+
+    def test_delete_service_semantics(self) -> None:
+        fake = k8s_fakes.FakeKubeClient()
+        for name in ("chs-run1", "chs-run2"):
+            fake.add_object(
+                "", "services", {"metadata": {"name": name, "namespace": "chs"}}
+            )
+
+        fake.delete_service(name="chs-run1", namespace="chs")
+        fake.delete_service(name="chs-run1", namespace="chs")
+
+        self.assertEqual(fake.stored_names("", "services"), ["chs-run2"])
 
 
 if __name__ == "__main__":
