@@ -34,7 +34,7 @@ defaults:
     - name: gpu-persistence-mode
     variables:
       container_image: nvcr.io/nvidia/cloud-native/dcgm:4.5.1-1-ubi9
-      jobset_template: jobset_standard.yaml.tpl
+      job_template: job_standard.yaml.tpl
       mpi_command: ''
 machines:
   a4x-maxgpu-4g-metal:

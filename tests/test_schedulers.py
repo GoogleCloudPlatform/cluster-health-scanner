@@ -149,7 +149,7 @@ def _job_object(
 
 
 def _job_manifest(name: str, node: str) -> dict[str, Any]:
-    """Returns a rendered jobset.yaml Job pinned to one node."""
+    """Returns a rendered job.yaml Job pinned to one node."""
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -1323,7 +1323,7 @@ class TestKubernetesScheduler(unittest.TestCase):
         mock_template_content = """
 ramble:
   variants:
-    workflow_manager: kubernetes-jobset
+    workflow_manager: kubernetes-job
   variables:
     nodes: {nodes}
     machine_type: {machine_type}
@@ -1486,7 +1486,7 @@ ramble:
     def test_write_ramble_config_template_defaults(
         self, mock_filter, mock_logger
     ):
-        """Test write_ramble_config writes defaults with suspend_jobset."""
+        """Test write_ramble_config writes defaults with suspend_job."""
         scheduler = KubernetesScheduler(
             nodes="node1",
         )
@@ -1512,7 +1512,7 @@ ramble:
             data = yaml.safe_load(f)
 
         variables = data["ramble"]["variables"]
-        self.assertEqual(variables["suspend_jobset"], "true")
+        self.assertEqual(variables["suspend_job"], "true")
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
@@ -2369,7 +2369,7 @@ ramble:
         scheduler = KubernetesScheduler()
         job_id = scheduler.extract_job_id("/tmp/exp")
         self.assertEqual(job_id, "my-job")
-        mock_open.assert_called_once_with("/tmp/exp/jobset.yaml", "r")
+        mock_open.assert_called_once_with("/tmp/exp/job.yaml", "r")
 
     @mock.patch(
         "builtins.open",
@@ -3774,7 +3774,7 @@ ramble:
     def _write_experiment(self, name: str, *objects: dict) -> str:
         experiment_dir = os.path.join(self.tmp_dir, "experiments", name)
         os.makedirs(experiment_dir)
-        with open(os.path.join(experiment_dir, "jobset.yaml"), "w") as f:
+        with open(os.path.join(experiment_dir, "job.yaml"), "w") as f:
             yaml.safe_dump_all(objects, f)
         return experiment_dir
 

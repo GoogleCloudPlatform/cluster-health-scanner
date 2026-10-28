@@ -24,7 +24,7 @@ ALLOW_LIST = {
 
 
 EXPERIMENT_ARTIFACT_SUFFIXES = (
-    "jobset.yaml",
+    "job.yaml",
     "sbatch",
     ".sh",
     "execute_experiment",

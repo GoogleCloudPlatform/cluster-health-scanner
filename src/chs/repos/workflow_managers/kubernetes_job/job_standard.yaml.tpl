@@ -4,8 +4,8 @@ kind: Job
 metadata:
   name: {sanitized_job_name}
   namespace: {kubernetes_namespace}
-{jobset_labels_section}
-{jobset_annotations_section}
+{job_labels_section}
+{job_annotations_section}
 spec:
   {suspend_section}
   completionMode: Indexed

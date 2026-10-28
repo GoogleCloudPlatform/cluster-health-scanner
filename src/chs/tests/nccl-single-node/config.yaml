@@ -37,7 +37,7 @@ defaults:
     - name: gpu-persistence-mode
     variables:
       container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
-      jobset_template: jobset_mpi.yaml.tpl
+      job_template: job_mpi.yaml.tpl
       mpi_command: |
         mpirun -n {n_ranks} -N {processes_per_node} \
           --hostfile /tmp/hostfile --bind-to none \

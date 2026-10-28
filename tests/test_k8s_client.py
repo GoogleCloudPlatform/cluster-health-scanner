@@ -901,12 +901,12 @@ class ClientFunctionsTest(unittest.TestCase):
             {"items": [{"metadata": {"name": "j1"}}]}
         )
         self.assertEqual(
-            k8s_client.list_jobs(namespace="chs", label_selector="jobset=js1"),
+            k8s_client.list_jobs(namespace="chs", label_selector="job=j1"),
             [{"metadata": {"name": "j1"}}],
         )
         self.sdk.batch.list_namespaced_job.assert_called_once_with(
             namespace="chs",
-            label_selector="jobset=js1",
+            label_selector="job=j1",
             _preload_content=False,
             _request_timeout=120,
         )
@@ -915,11 +915,11 @@ class ClientFunctionsTest(unittest.TestCase):
             {"items": [{"metadata": {"name": "j2"}}]}
         )
         self.assertEqual(
-            k8s_client.list_jobs(label_selector="jobset=js1"),
+            k8s_client.list_jobs(label_selector="job=j1"),
             [{"metadata": {"name": "j2"}}],
         )
         self.sdk.batch.list_job_for_all_namespaces.assert_called_once_with(
-            label_selector="jobset=js1",
+            label_selector="job=j1",
             _preload_content=False,
             _request_timeout=120,
         )

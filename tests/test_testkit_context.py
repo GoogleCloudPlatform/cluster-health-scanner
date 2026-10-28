@@ -543,7 +543,7 @@ class SliceContextTest(StubbedConfigTestCase):
         )
 
         static, dynamic = (c[1]["variables"] for c in contexts)
-        self.assertNotIn("jobset_annotations_yaml", dynamic)
+        self.assertNotIn("job_annotations_yaml", dynamic)
         self.assertNotIn("podAffinity", static["affinity_yaml"])
         self.assertIn("2x2x2", dynamic["pod_annotations_yaml"])
         for ctx_vars in (static, dynamic):
@@ -611,12 +611,12 @@ class SliceContextTest(StubbedConfigTestCase):
             variables(
                 tpu_slices={"b": ["node-2"]},
                 tpu_dynamic_pools=["b"],
-                jobset_annotations_yaml="keep: me",
+                job_annotations_yaml="keep: me",
             )
         )
 
         self.assertEqual(
-            contexts[0][1]["variables"]["jobset_annotations_yaml"], "keep: me"
+            contexts[0][1]["variables"]["job_annotations_yaml"], "keep: me"
         )
 
     def test_slurm_collapses_to_a_single_node_matrix(self):

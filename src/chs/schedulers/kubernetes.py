@@ -103,7 +103,7 @@ def _get_log_fetch_executor() -> ThreadPoolExecutor:
 
 
 def _read_manifests(experiment_dir: str) -> list[dict]:
-    manifest_path = os.path.join(experiment_dir, "jobset.yaml")
+    manifest_path = os.path.join(experiment_dir, "job.yaml")
     try:
         with open(manifest_path, "r") as f:
             objects = [obj for obj in yaml.safe_load_all(f) if obj]
@@ -125,7 +125,7 @@ def _find_job(objects: list[dict], experiment_dir: str) -> dict:
         if obj["kind"] == "Job" and obj.get("metadata", {}).get("name"):
             return obj
     raise ChsSchedulerException(
-        f"Job kind not found in {experiment_dir}/jobset.yaml"
+        f"Job kind not found in {experiment_dir}/job.yaml"
     )
 
 

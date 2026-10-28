@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the kubernetes-jobset workflow manager."""
+"""Unit tests for the kubernetes-job workflow manager."""
 
 import os
 import re
@@ -51,8 +51,8 @@ sys.modules["ramble"] = ramble_mock
 sys.modules["ramble.wmkit"] = ramble_mock.wmkit
 sys.modules["ramble.experiment_result"] = ramble_mock.experiment_result
 
-from chs.repos.workflow_managers.kubernetes_jobset.workflow_manager import (  # noqa: E402
-    KubernetesJobset,
+from chs.repos.workflow_managers.kubernetes_job.workflow_manager import (  # noqa: E402
+    KubernetesJob,
 )
 
 _WORKER_SERVICE_NAME = "chs-run1"
@@ -65,7 +65,7 @@ _JOB_LABELS = {**_RUN_LABELS, "team": "infra"}
 _POD_LABELS = {**_WORKER_LABELS, "team": "infra"}
 
 
-_JOBSET_VARS_INPUTS = {
+_JOB_VARS_INPUTS = {
     "job_name": "chs-run1-nccl-tests-all-gather",
     "command": "mpirun -n 16 all_gather_perf",
     "experiment_run_dir": "/workspace/experiments/nccl/all-gather/exp1",
@@ -80,9 +80,9 @@ _JOBSET_VARS_INPUTS = {
         "  restartPolicy: Always"
     ),
     "container_resources_yaml": "limits:\n  nvidia.com/gpu: 8",
-    "suspend_jobset": "true",
+    "suspend_job": "true",
     "chs_run_id": "run1",
-    "jobset_labels_yaml": "app.kubernetes.io/managed-by: chs\nteam: infra",
+    "job_labels_yaml": "app.kubernetes.io/managed-by: chs\nteam: infra",
     # CHS labels win over user labels with the same key.
     "pod_labels_yaml": "app.kubernetes.io/instance: other\nteam: infra",
 }
@@ -90,8 +90,8 @@ _JOBSET_VARS_INPUTS = {
 _TEMPLATE_PLACEHOLDER = re.compile(r"(?<![$\w])\{(\w+)\}")
 
 
-def _workflow_manager(var_map: dict[str, str]) -> KubernetesJobset:
-    wm = KubernetesJobset(mock.Mock())
+def _workflow_manager(var_map: dict[str, str]) -> KubernetesJob:
+    wm = KubernetesJob(mock.Mock())
     wm.app_inst = mock.Mock()
     wm.app_inst.expander.expand_var_name.side_effect = lambda name: (
         var_map.get(name, "")
@@ -99,22 +99,22 @@ def _workflow_manager(var_map: dict[str, str]) -> KubernetesJobset:
     return wm
 
 
-class KubernetesJobsetTest(unittest.TestCase):
-    """Tests for the kubernetes-jobset workflow manager."""
+class KubernetesJobTest(unittest.TestCase):
+    """Tests for the kubernetes-job workflow manager."""
 
     def setUp(self):
         super().setUp()
         self.generate_ssh_keys = self.enterContext(
             mock.patch.object(
-                KubernetesJobset,
+                KubernetesJob,
                 "_generate_ssh_keys",
                 autospec=True,
                 return_value=("private-key", "public-key"),
             )
         )
 
-    def test_kubernetes_jobset_extra_annotations_and_resources(self):
-        wm = KubernetesJobset(mock.Mock())
+    def test_kubernetes_job_extra_annotations_and_resources(self):
+        wm = KubernetesJob(mock.Mock())
         wm.app_inst = mock.Mock()
 
         var_map = {
@@ -123,8 +123,8 @@ class KubernetesJobsetTest(unittest.TestCase):
             "experiment_run_dir": "/tmp/exp",
             "app_workdir": "",
             "container_image": "image:latest",
-            "jobset_labels_yaml": "",
-            "jobset_annotations_yaml": "",
+            "job_labels_yaml": "",
+            "job_annotations_yaml": "",
             "pod_labels_yaml": "",
             "pod_annotations_yaml": "networking.gke.io/default-interface: eth0",
             "extra_pod_annotations_yaml": (
@@ -145,12 +145,12 @@ class KubernetesJobsetTest(unittest.TestCase):
             "init_containers_yaml": "",
             "custom_resources_yaml": "",
             "pod_resource_claims_yaml": "",
-            "suspend_jobset": "false",
+            "suspend_job": "false",
         }
         wm.app_inst.expander.expand_var_name.side_effect = (
             lambda k: var_map.get(k, "")
         )
-        res = wm._jobset_vars()
+        res = wm._job_vars()
 
         # Check annotations merged
         self.assertIn(
@@ -175,7 +175,7 @@ class KubernetesJobsetTest(unittest.TestCase):
         # When extra fields are empty
         var_map["extra_pod_annotations_yaml"] = ""
         var_map["extra_container_resources_yaml"] = ""
-        res_empty = wm._compute_jobset_vars()
+        res_empty = wm._compute_job_vars()
         self.assertIn(
             "networking.gke.io/default-interface: eth0",
             res_empty["pod_annotations_section"],
@@ -185,11 +185,11 @@ class KubernetesJobsetTest(unittest.TestCase):
         )
         self.assertNotIn("claims:", res_empty["container_resources_section"])
 
-    def test_jobset_vars_are_computed_once_per_experiment(self):
+    def test_job_vars_are_computed_once_per_experiment(self):
         """All templates of one experiment share one Job name and key."""
-        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
+        wm = _workflow_manager(dict(_JOB_VARS_INPUTS))
 
-        rendered_vars = [wm._jobset_vars() for _ in range(5)]
+        rendered_vars = [wm._job_vars() for _ in range(5)]
 
         self.generate_ssh_keys.assert_called_once()
         self.assertEqual(
@@ -198,20 +198,20 @@ class KubernetesJobsetTest(unittest.TestCase):
         )
         self.assertTrue(all(v == rendered_vars[0] for v in rendered_vars))
 
-    def test_jobset_vars_differ_between_experiments(self):
+    def test_job_vars_differ_between_experiments(self):
         """Different experiments never share a Job name or key pair."""
-        var_map = dict(_JOBSET_VARS_INPUTS)
+        var_map = dict(_JOB_VARS_INPUTS)
         wm = _workflow_manager(var_map)
         self.generate_ssh_keys.side_effect = [
             ("private-key-1", "public-key-1"),
             ("private-key-2", "public-key-2"),
         ]
 
-        first = wm._jobset_vars()
+        first = wm._job_vars()
         var_map["experiment_run_dir"] = (
             "/workspace/experiments/nccl/all-gather/exp2"
         )
-        second = wm._jobset_vars()
+        second = wm._job_vars()
 
         self.assertEqual(self.generate_ssh_keys.call_count, 2)
         self.assertNotEqual(
@@ -222,17 +222,17 @@ class KubernetesJobsetTest(unittest.TestCase):
             second["ssh_private_key_indented"],
         )
 
-    def test_returned_jobset_vars_do_not_alias_the_cache(self):
+    def test_returned_job_vars_do_not_alias_the_cache(self):
         """Mutating returned variables does not leak into later templates."""
-        wm = _workflow_manager(dict(_JOBSET_VARS_INPUTS))
-        job_name = wm._jobset_vars()["sanitized_job_name"]
+        wm = _workflow_manager(dict(_JOB_VARS_INPUTS))
+        job_name = wm._job_vars()["sanitized_job_name"]
 
-        wm._jobset_vars()["sanitized_job_name"] = "mutated"
+        wm._job_vars()["sanitized_job_name"] = "mutated"
 
-        self.assertEqual(wm._jobset_vars()["sanitized_job_name"], job_name)
+        self.assertEqual(wm._job_vars()["sanitized_job_name"], job_name)
 
     def _render(self, template_name, var_map, **extra_vars):
-        """Renders a kubernetes-jobset template like Ramble does."""
+        """Renders a kubernetes-job template like Ramble does."""
         wm = _workflow_manager(var_map)
         template_vars = {
             "kubernetes_namespace": "chs",
@@ -242,10 +242,10 @@ class KubernetesJobsetTest(unittest.TestCase):
             "processes_per_node": "8",
             "worker_service_name": _WORKER_SERVICE_NAME,
             **extra_vars,
-            **wm._jobset_vars(),
+            **wm._job_vars(),
         }
         template_path = os.path.join(
-            os.path.dirname(sys.modules[KubernetesJobset.__module__].__file__),
+            os.path.dirname(sys.modules[KubernetesJob.__module__].__file__),
             template_name,
         )
         with open(template_path) as template_file:
@@ -295,7 +295,7 @@ class KubernetesJobsetTest(unittest.TestCase):
     def test_standard_template_renders_one_indexed_job(self):
         """Golden structure of the standard template for a TPU test."""
         var_map = {
-            **_JOBSET_VARS_INPUTS,
+            **_JOB_VARS_INPUTS,
             "command": "echo one\necho two",
             "n_nodes": "2",
             "affinity_yaml": (
@@ -316,7 +316,7 @@ class KubernetesJobsetTest(unittest.TestCase):
             ),
         }
 
-        template_vars, docs = self._render("jobset_standard.yaml.tpl", var_map)
+        template_vars, docs = self._render("job_standard.yaml.tpl", var_map)
 
         job_name = template_vars["sanitized_job_name"]
         self.assertEqual(len(docs), 1)
@@ -377,14 +377,14 @@ class KubernetesJobsetTest(unittest.TestCase):
     def test_mpi_template_renders_secret_and_one_indexed_job(self):
         """Golden structure of the MPI template."""
         var_map = {
-            **_JOBSET_VARS_INPUTS,
+            **_JOB_VARS_INPUTS,
             "command": "mpirun -n 16 \\\n  all_gather_perf",
             "n_nodes": "3",
             "extra_volumes_yaml": "- name: shm\n  emptyDir: {}",
             "extra_volume_mounts_yaml": "- name: shm\n  mountPath: /dev/shm",
         }
 
-        template_vars, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+        template_vars, docs = self._render("job_mpi.yaml.tpl", var_map)
 
         job_name = template_vars["sanitized_job_name"]
         self.assertEqual([d["kind"] for d in docs], ["Secret", "Job"])
@@ -432,9 +432,9 @@ class KubernetesJobsetTest(unittest.TestCase):
 
     def test_custom_resources_get_run_labels(self):
         """Custom resources keep their labels and get the run's labels."""
-        raw_job_name = _JOBSET_VARS_INPUTS["job_name"]
+        raw_job_name = _JOB_VARS_INPUTS["job_name"]
         var_map = {
-            **_JOBSET_VARS_INPUTS,
+            **_JOB_VARS_INPUTS,
             "custom_resources_yaml": (
                 "apiVersion: resource.nvidia.com/v1beta1\n"
                 "kind: ComputeDomain\n"
@@ -449,7 +449,7 @@ class KubernetesJobsetTest(unittest.TestCase):
             ),
         }
 
-        template_vars, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+        template_vars, docs = self._render("job_mpi.yaml.tpl", var_map)
 
         job_name = template_vars["sanitized_job_name"]
         self.assertEqual(
@@ -464,12 +464,12 @@ class KubernetesJobsetTest(unittest.TestCase):
     def test_labels_without_user_labels(self):
         """Without user labels, the objects carry only the CHS labels."""
         var_map = {
-            **_JOBSET_VARS_INPUTS,
-            "jobset_labels_yaml": "",
+            **_JOB_VARS_INPUTS,
+            "job_labels_yaml": "",
             "pod_labels_yaml": "",
         }
 
-        _, docs = self._render("jobset_mpi.yaml.tpl", var_map)
+        _, docs = self._render("job_mpi.yaml.tpl", var_map)
 
         secret, job = docs
         self.assertEqual(secret["metadata"]["labels"], _RUN_LABELS)
@@ -480,9 +480,7 @@ class KubernetesJobsetTest(unittest.TestCase):
 
     def test_tpu_worker_env_is_left_to_gke(self):
         """CHS sets no TPU worker variables; GKE's TPU webhook injects them."""
-        _, docs = self._render(
-            "jobset_standard.yaml.tpl", dict(_JOBSET_VARS_INPUTS)
-        )
+        _, docs = self._render("job_standard.yaml.tpl", dict(_JOB_VARS_INPUTS))
 
         env_names = [
             e["name"]

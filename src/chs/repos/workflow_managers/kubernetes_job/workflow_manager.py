@@ -40,14 +40,14 @@ _CONTAINER_FIELD_INDENT = 10
 _DNS_WAIT_TIMEOUT_SECONDS = 300
 
 
-class KubernetesJobset(WorkflowManagerBase):
+class KubernetesJob(WorkflowManagerBase):
     """Kubernetes workflow manager that runs each test as an Indexed Job"""
 
-    name = "kubernetes-jobset"
+    name = "kubernetes-job"
 
     maintainers("bytetwin")
 
-    tags("workflow", "kubernetes", "jobset")
+    tags("workflow", "kubernetes", "job")
     variable(
         "processes_per_node",
         default="1",
@@ -68,8 +68,8 @@ class KubernetesJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
-        name="jobset_template",
-        default="jobset_standard.yaml.tpl",
+        name="job_template",
+        default="job_standard.yaml.tpl",
         description="Default Job template file",
     )
 
@@ -80,19 +80,19 @@ class KubernetesJobset(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
-        name="jobset_labels_yaml",
+        name="job_labels_yaml",
         default="",
         description="Raw YAML string for Job metadata.labels",
     )
 
     workflow_manager_variable(
-        name="suspend_jobset",
+        name="suspend_job",
         default="false",
         description="Whether to create the Job in a suspended state",
     )
 
     workflow_manager_variable(
-        name="jobset_annotations_yaml",
+        name="job_annotations_yaml",
         default="",
         description="Raw YAML string for Job metadata.annotations",
     )
@@ -207,7 +207,7 @@ class KubernetesJobset(WorkflowManagerBase):
 
     def __init__(self, file_path):
         super().__init__(file_path)
-        self._jobset_vars_by_experiment_run_dir = {}
+        self._job_vars_by_experiment_run_dir = {}
 
     def _yaml_block(self, var_name, key_name, indent_spaces):
         """Constructs a full YAML key-value block with proper indentation."""
@@ -277,18 +277,18 @@ class KubernetesJobset(WorkflowManagerBase):
 
         return priv_key, pub_key
 
-    def _jobset_vars(self) -> dict[str, str]:
+    def _job_vars(self) -> dict[str, str]:
         """Returns the experiment's template variables, computed once."""
         experiment_run_dir = self.app_inst.expander.expand_var_name(
             "experiment_run_dir"
         )
-        if experiment_run_dir not in self._jobset_vars_by_experiment_run_dir:
-            self._jobset_vars_by_experiment_run_dir[experiment_run_dir] = (
-                self._compute_jobset_vars()
+        if experiment_run_dir not in self._job_vars_by_experiment_run_dir:
+            self._job_vars_by_experiment_run_dir[experiment_run_dir] = (
+                self._compute_job_vars()
             )
-        return dict(self._jobset_vars_by_experiment_run_dir[experiment_run_dir])
+        return dict(self._job_vars_by_experiment_run_dir[experiment_run_dir])
 
-    def _compute_jobset_vars(self) -> dict[str, str]:
+    def _compute_job_vars(self) -> dict[str, str]:
         expander = self.app_inst.expander
         raw_job_name = expander.expand_var_name("job_name")
         # K8S resource names can be max 63 chars and no `_` is supported
@@ -329,15 +329,15 @@ class KubernetesJobset(WorkflowManagerBase):
 
         # Top-Level blocks
         jl = self._labels_section(
-            expander.expand_var_name("jobset_labels_yaml").replace(
+            expander.expand_var_name("job_labels_yaml").replace(
                 raw_job_name, sanitized_job_name
             ),
             run_labels,
             2,
         )
-        ja = self._yaml_block(
-            "jobset_annotations_yaml", "annotations", 2
-        ).replace(raw_job_name, sanitized_job_name)
+        ja = self._yaml_block("job_annotations_yaml", "annotations", 2).replace(
+            raw_job_name, sanitized_job_name
+        )
 
         # Pod Spec blocks
         pl = self._labels_section(
@@ -407,15 +407,15 @@ class KubernetesJobset(WorkflowManagerBase):
         ).replace(raw_job_name, sanitized_job_name)
 
         priv_key, pub_key = self._generate_ssh_keys()
-        suspend = expander.expand_var_name("suspend_jobset")
+        suspend = expander.expand_var_name("suspend_job")
         suspend_section = "suspend: true" if suspend == "true" else ""
 
         return {
             "suspend_section": suspend_section,
             "custom_resources_section": custom_res,
             "pod_resource_claims_section": pod_claims,
-            "jobset_labels_section": jl,
-            "jobset_annotations_section": ja,
+            "job_labels_section": jl,
+            "job_annotations_section": ja,
             "pod_labels_section": pl,
             "pod_annotations_section": pa,
             "node_selector_section": ns,
@@ -440,24 +440,24 @@ class KubernetesJobset(WorkflowManagerBase):
         }
 
     register_template(
-        name="jobset_yaml",
-        src_path="{jobset_template}",
-        dest_path="jobset.yaml",
-        extra_vars_func="jobset_vars",
+        name="job_yaml",
+        src_path="{job_template}",
+        dest_path="job.yaml",
+        extra_vars_func="job_vars",
     )
 
     register_template(
         name="batch_submit",
         src_path="batch_submit.tpl",
         dest_path="batch_submit",
-        extra_vars_func="jobset_vars",
+        extra_vars_func="job_vars",
     )
 
     register_template(
         name="execute_experiment",
         src_path="batch_submit.tpl",
         dest_path="execute_experiment",
-        extra_vars_func="jobset_vars",
+        extra_vars_func="job_vars",
     )
 
     def _prepare_analysis(self, workspace):

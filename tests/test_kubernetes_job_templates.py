@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for kubernetes_jobset batch templates."""
+"""Unit tests for kubernetes_job batch templates."""
 
 import pathlib
 import re
@@ -20,7 +20,7 @@ import unittest
 
 _TEMPLATE_DIR = (
     pathlib.Path(__file__).resolve().parents[1]
-    / "src/chs/repos/workflow_managers/kubernetes_jobset"
+    / "src/chs/repos/workflow_managers/kubernetes_job"
 )
 
 _TIMEOUT_FLAG = re.compile(r"--(request-)?timeout=\d+s")
@@ -34,7 +34,7 @@ def _kubectl_lines(template: str, needle: str = "kubectl ") -> list[str]:
     ]
 
 
-class TestKubernetesJobsetTemplates(unittest.TestCase):
+class TestKubernetesJobTemplates(unittest.TestCase):
     """Every kubectl call in the batch templates must be time-bounded."""
 
     def test_every_kubectl_call_has_timeout(self):
