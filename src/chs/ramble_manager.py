@@ -48,6 +48,7 @@ from chs.utils import file_utils
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 from chs.storage import StorageProviderFactory
+from chs.telemetry import reporting as telemetry_reporting
 from chs.utils import theme
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
@@ -57,6 +58,13 @@ logger = logging.getLogger(__name__)
 
 _JOB_POLL_INTERVAL_SECONDS = 5
 _MAX_POLL_OUTAGE_SECONDS = 180
+
+
+def _file_size(path: str | os.PathLike[str] | None) -> int:
+    try:
+        return os.path.getsize(path) if path else 0
+    except Exception:
+        return 0
 
 
 class RambleManager:
@@ -1478,6 +1486,7 @@ class RambleManager:
             logger.debug("Failed to upload Bill of Health.")
             all_uploads_succeeded = False
 
+        archive_size = _file_size(archive_file)
         ws_dest = (
             self._upload_workspace_archive(provider, archive_file)
             if archive_file
@@ -1486,6 +1495,21 @@ class RambleManager:
         if not ws_dest:
             logger.debug("Failed to upload workspace archive.")
             all_uploads_succeeded = False
+
+        uploads = {"workspace": (bool(ws_dest), archive_size)}
+        if boh_json_dest or not boh_success:
+            uploads["bill_of_health"] = (
+                boh_success,
+                sum(
+                    _file_size(path)
+                    for path, dest in (
+                        (local_json_path, boh_json_dest),
+                        (local_html_path, boh_html_dest),
+                    )
+                    if dest
+                ),
+            )
+        telemetry_reporting.record_uploads(provider, uploads)
 
         return (
             provider.get_uri(ws_dest)

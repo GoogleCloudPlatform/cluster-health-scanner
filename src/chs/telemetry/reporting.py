@@ -32,14 +32,22 @@ from click.core import ParameterSource
 from chs import telemetry
 from chs.core.summary_aggregator import RunSummaryData, aggregate_boh_summary
 from chs.protos import bill_of_health_pb2 as pb
-from chs.schedulers.base import BaseScheduler
+from chs.schedulers.base import BaseScheduler, TpuSliceSummary
+from chs.storage.base import StorageProvider
 from chs.telemetry.supported_metrics import MetricName
 
 logger = logging.getLogger(__name__)
 
 _FLAGS_META_KEY = "chs.telemetry.command_flags"
 
-_TEST_PROJECTS = {"hpc-toolkit-dev"}
+_TEST_PROJECTS = {
+    "cmcs-a4x-max",
+    "gke-aishared-gsc-dev",
+    "hpc-toolkit-demo",
+    "hpc-toolkit-dev",
+    "hpc-toolkit-gsc",
+    "supercomputer-testing",
+}
 
 _CLUSTER_TYPES = {"slurm": "SLURM", "kubernetes": "GKE"}
 
@@ -166,6 +174,17 @@ def record_run(
     if suite:
         telemetry.send_metric(MetricName.TEST_SUITE, suite)
     telemetry.send_metric(MetricName.TEST_NAME, ",".join(sorted(test_names)))
+    _record_tpu_slices(scheduler_obj.get_tpu_slice_summary(nodes))
+
+
+def _record_tpu_slices(tpu: TpuSliceSummary | None) -> None:
+    if not tpu:
+        return
+    telemetry.send_metric(MetricName.TPU_SLICE_TYPE, tpu.slice_type)
+    if tpu.topologies:
+        telemetry.send_metric(MetricName.TPU_SLICE_TOPOLOGIES, tpu.topologies)
+    if tpu.nodepool_count is not None:
+        telemetry.send_metric(MetricName.TPU_NODEPOOL_COUNT, tpu.nodepool_count)
 
 
 @_never_raises
@@ -240,3 +259,23 @@ def record_test_results(boh: pb.BillOfHealth) -> None:
         return
     telemetry.send_metric(MetricName.TEST_RESULTS, _test_results(summary))
     telemetry.send_metric(MetricName.DETECTED_ERRORS, _detected_errors(summary))
+
+
+@_never_raises
+def record_uploads(
+    provider: StorageProvider, uploads: dict[str, tuple[bool, int]]
+) -> None:
+    telemetry.send_metric(
+        MetricName.UPLOAD_STATUS,
+        {
+            name: "success" if uploaded else "failed"
+            for name, (uploaded, _) in sorted(uploads.items())
+        },
+    )
+    sizes = {
+        name: size
+        for name, (uploaded, size) in sorted(uploads.items())
+        if uploaded and size
+    }
+    if sizes and provider.get_uri("").startswith("gs://"):
+        telemetry.send_metric(MetricName.ARTIFACT_SIZE_BYTES, sizes)

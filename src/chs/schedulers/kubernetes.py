@@ -18,6 +18,7 @@ import datetime
 import hashlib
 import importlib.resources as pkg_resources
 import json
+import math
 import time
 import logging
 import os
@@ -30,11 +31,15 @@ import random
 
 
 from typing import Any, Callable
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
-from chs.schedulers.base import CHS_JOB_PREFIX, BaseScheduler
+from chs.schedulers.base import (
+    CHS_JOB_PREFIX,
+    BaseScheduler,
+    TpuSliceSummary,
+)
 from chs.schedulers.gang_admission import (
     pinned_nodes,
     plan_admissions,
@@ -220,6 +225,16 @@ def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
         accelerator_type in key.lower() and quantity not in (0, "0", None, "")
         for key, quantity in (resources_map or {}).items()
     )
+
+
+def _is_single_host_slice(
+    topology: str | None, allocatable: dict | None
+) -> bool:
+    try:
+        chips = math.prod(int(dim) for dim in (topology or "").split("x"))
+        return chips <= int((allocatable or {}).get("google.com/tpu", 0))
+    except Exception:
+        return False
 
 
 def _is_accelerator_node(node: dict) -> bool:
@@ -444,6 +459,7 @@ class TpuSliceData:
     all_tpu_nodes: set[str] = field(default_factory=set)
     provision_only_nodes: set[str] = field(default_factory=set)
     single_host_slices: dict[str, SliceSpec] = field(default_factory=dict)
+    single_host_pools: set[str] = field(default_factory=set)
 
     def purge_pool(self, pool: str) -> None:
         """Forgets the pool and its nodes so that no test targets them."""
@@ -452,6 +468,7 @@ class TpuSliceData:
         self.pool_to_topology.pop(pool, None)
         self.dynamic_slice_partitions.pop(pool, None)
         self.pool_to_accelerator.pop(pool, None)
+        self.single_host_pools.discard(pool)
 
 
 def boolean_representer(dumper, data):
@@ -1106,6 +1123,15 @@ class KubernetesScheduler(BaseScheduler):
                 _record_subslice_node(data, node_name, labels)
             else:
                 _record_pool_node(data, unhealthy_pools, node_name, labels)
+                pool = data.node_to_pool.get(node_name)
+                if (
+                    pool
+                    and not is_provision_only
+                    and _is_single_host_slice(
+                        labels.get(_TPU_TOPOLOGY_LABEL), allocatable
+                    )
+                ):
+                    data.single_host_pools.add(pool)
 
         if unhealthy_pools:
             logger.warning(
@@ -1288,6 +1314,35 @@ class KubernetesScheduler(BaseScheduler):
                 _format_node_list(in_slice),
             )
         return set(unhealthy) | set(in_slice)
+
+    def get_tpu_slice_summary(self, nodes: list[str]) -> TpuSliceSummary | None:
+        slices = self._tpu_slice_data
+        if not slices:
+            return None
+        tested = set(nodes)
+        subslice_nodes = tested & self._subslice_nodes
+        pools = {
+            slices.node_to_pool[n] for n in tested if n in slices.node_to_pool
+        }
+        if not pools and not subslice_nodes:
+            return None
+        topologies = Counter()
+        if subslice_nodes:
+            topologies[DYNAMIC_SINGLE_HOST_TOPOLOGY] += len(subslice_nodes)
+        for pool in pools:
+            topology = slices.pool_to_topology.get(pool, "unknown")
+            if pool in slices.single_host_pools:
+                topologies[topology] += len(tested & set(slices.pools[pool]))
+            else:
+                topologies[topology] += 1
+        is_dynamic = bool(subslice_nodes) or not pools.isdisjoint(
+            slices.dynamic_slice_partitions
+        )
+        return TpuSliceSummary(
+            slice_type="dynamic" if is_dynamic else "static",
+            topologies=dict(sorted(topologies.items())),
+            nodepool_count=None if self.nodes_arg else len(pools),
+        )
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
         """Discovers network topology from the labels of the node objects."""

@@ -26,7 +26,7 @@ from click.testing import CliRunner
 from chs import telemetry
 from chs.core import summary_aggregator
 from chs.protos import bill_of_health_pb2 as pb
-from chs.schedulers.base import BaseScheduler
+from chs.schedulers.base import BaseScheduler, TpuSliceSummary
 from chs.schedulers.slurm import SlurmScheduler
 from chs.telemetry import reporting as tr
 from chs.telemetry.supported_metrics import MetricName
@@ -103,6 +103,7 @@ def _scheduler(
     scheduler.name = name
     scheduler.project_id = project_id
     scheduler.node_to_zone = node_to_zone or {}
+    scheduler.get_tpu_slice_summary.return_value = None
     return scheduler
 
 
@@ -340,6 +341,7 @@ class RecordRunTest(_ReportingTestCase):
     def test_is_test_data(self):
         for project_id, expected in (
             ("hpc-toolkit-dev", "true"),
+            ("gke-aishared-gsc-dev", "true"),
             ("customer-project", "false"),
             (None, "false"),
         ):
@@ -361,6 +363,37 @@ class RecordRunTest(_ReportingTestCase):
         self.assertEqual(sent[MetricName.STORAGE_TYPE], "NONE")
         self.assertEqual(sent[MetricName.MACHINE_TYPE], "a3-megagpu-8g")
         self.assertEqual(sent[MetricName.TEST_NAME], "dcgm,nvidia-smi")
+
+    def test_reports_tpu_slices(self):
+        scheduler = _scheduler(name="kubernetes")
+        scheduler.get_tpu_slice_summary.return_value = TpuSliceSummary(
+            slice_type="dynamic",
+            topologies={"2x2x1": 1, "4x4x4": 2},
+            nodepool_count=3,
+        )
+
+        sent = self._record_run(scheduler)
+
+        scheduler.get_tpu_slice_summary.assert_called_once_with(
+            ["n0", "n1", "n2"]
+        )
+        self.assertEqual(sent[MetricName.TPU_SLICE_TYPE], "dynamic")
+        self.assertEqual(
+            sent[MetricName.TPU_SLICE_TOPOLOGIES], {"2x2x1": 1, "4x4x4": 2}
+        )
+        self.assertEqual(sent[MetricName.TPU_NODEPOOL_COUNT], 3)
+
+    def test_unknown_tpu_slice_details_are_left_out(self):
+        scheduler = _scheduler(name="kubernetes")
+        scheduler.get_tpu_slice_summary.return_value = TpuSliceSummary(
+            slice_type="static", topologies={}, nodepool_count=None
+        )
+
+        sent = self._record_run(scheduler)
+
+        self.assertEqual(sent[MetricName.TPU_SLICE_TYPE], "static")
+        self.assertNotIn(MetricName.TPU_SLICE_TOPOLOGIES, sent)
+        self.assertNotIn(MetricName.TPU_NODEPOOL_COUNT, sent)
 
     def test_never_raises(self):
         tr.record_run(mock.Mock(spec=[]), {}, "m", [], None, [])
@@ -391,6 +424,45 @@ class RecordTestDurationTest(_ReportingTestCase):
                 tr.record_test_duration(submission_time)
 
                 self.send.assert_not_called()
+
+
+def _provider(uri: str) -> mock.Mock:
+    provider = mock.Mock()
+    provider.get_uri.return_value = uri
+    return provider
+
+
+class RecordUploadsTest(_ReportingTestCase):
+    def test_reports_upload_status_and_gcs_sizes(self):
+        tr.record_uploads(
+            _provider("gs://bucket/"),
+            {"workspace": (False, 5000), "bill_of_health": (True, 300)},
+        )
+
+        self.assertEqual(
+            self.sent(),
+            {
+                MetricName.UPLOAD_STATUS: {
+                    "bill_of_health": "success",
+                    "workspace": "failed",
+                },
+                MetricName.ARTIFACT_SIZE_BYTES: {"bill_of_health": 300},
+            },
+        )
+
+    def test_sizes_are_only_reported_for_gcs(self):
+        tr.record_uploads(_provider("/data/chs/"), {"workspace": (True, 5000)})
+
+        self.assertEqual(
+            self.sent(), {MetricName.UPLOAD_STATUS: {"workspace": "success"}}
+        )
+
+    def test_never_raises(self):
+        tr.record_uploads(mock.Mock(spec=[]), {"workspace": (True, 5000)})
+
+        self.assertEqual(
+            self.sent(), {MetricName.UPLOAD_STATUS: {"workspace": "success"}}
+        )
 
 
 class IsCommandSupportedTest(unittest.TestCase):

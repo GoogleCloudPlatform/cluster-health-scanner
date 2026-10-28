@@ -163,6 +163,7 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.partitions_arg = None
         self.mock_scheduler.require_whole_slices = False
         self.mock_scheduler.partially_busy_slices = {}
+        self.mock_scheduler.get_tpu_slice_summary.return_value = None
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         self.mock_scheduler.find_runs_targeting_nodes.return_value = {}
         self.mock_scheduler.cancel_run.return_value = True

@@ -31,6 +31,7 @@ from chs.constants import (
     NAMESPACE_DELETE_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
+from chs.schedulers.base import TpuSliceSummary
 from chs.schedulers.kubernetes import (
     _APPLY_ATTEMPTS,
     KubernetesScheduler,
@@ -4306,6 +4307,54 @@ ramble:
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
     )
+    def test__get_tpu_slices_marks_single_host_pools(
+        self, mock_fetch, mock_logger
+    ):
+        mock_fetch.return_value = [
+            {
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": pool,
+                        "cloud.google.com/gke-tpu-topology": topology,
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            }
+            for name, pool, topology in (
+                ("n1", "single", "2x2x1"),
+                ("n2", "single", "2x2x1"),
+                ("n3", "multi", "2x2x2"),
+                ("n4", "multi", "2x2x2"),
+            )
+        ] + [
+            {
+                "metadata": {
+                    "name": "d1",
+                    "labels": {
+                        "cloud.google.com/gke-nodepool": "dyn",
+                        "cloud.google.com/gke-tpu-topology": "2x2x1",
+                        "cloud.google.com/gke-accelerator-topology-mode": (
+                            "PROVISION_ONLY"
+                        ),
+                        (
+                            "cloud.google.com/gke-tpu-partition-"
+                            f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
+                        ): "HEALTHY",
+                    },
+                },
+                "status": {"allocatable": {"google.com/tpu": "4"}},
+            }
+        ]
+
+        res = KubernetesScheduler()._get_tpu_slices()
+
+        self.assertIn("dyn", res.pools)
+        self.assertEqual(res.single_host_pools, {"single"})
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
     def test__get_tpu_slices_provision_only_unhealthy(
         self, mock_fetch, mock_logger
     ):
@@ -6279,6 +6328,127 @@ class TestSchedulerDetection(unittest.TestCase):
 
         with self.assertRaises(ChsSchedulerException):
             detect_scheduler()
+
+
+class TestTpuSliceSummary(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        install_fake_client(self)
+
+    def _scheduler(self, slices, **kwargs) -> KubernetesScheduler:
+        scheduler = KubernetesScheduler(**kwargs)
+        scheduler._tpu_slice_data = slices
+        return scheduler
+
+    def test_counts_partly_tested_slices_too(self):
+        scheduler = self._scheduler(
+            TpuSliceData(
+                pools={"p1": ["n1", "n2"], "p2": ["n3", "n4"]},
+                node_to_pool={"n1": "p1", "n2": "p1", "n3": "p2", "n4": "p2"},
+                pool_to_topology={"p1": "2x2x2", "p2": "2x2x2"},
+            )
+        )
+
+        summary = scheduler.get_tpu_slice_summary(["n1", "n2", "n3"])
+
+        self.assertEqual(
+            summary,
+            TpuSliceSummary(
+                slice_type="static",
+                topologies={"2x2x2": 2},
+                nodepool_count=2,
+            ),
+        )
+
+    def test_any_dynamic_pool_makes_the_run_dynamic(self):
+        scheduler = self._scheduler(
+            TpuSliceData(
+                pools={"dyn": ["n1", "n2"], "st": ["n3"]},
+                node_to_pool={"n1": "dyn", "n2": "dyn", "n3": "st"},
+                pool_to_topology={
+                    "dyn": SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+                    "st": "2x2x1",
+                },
+                dynamic_slice_partitions={"dyn": "part-1"},
+            ),
+            nodepools="dyn,st",
+        )
+
+        summary = scheduler.get_tpu_slice_summary(["n1", "n2", "n3"])
+
+        self.assertEqual(
+            summary,
+            TpuSliceSummary(
+                slice_type="dynamic",
+                topologies={"2x2x1": 1, SUPPORTED_DYNAMIC_SLICE_TOPOLOGY: 1},
+                nodepool_count=2,
+            ),
+        )
+        self.assertEqual(
+            list(summary.topologies),
+            ["2x2x1", SUPPORTED_DYNAMIC_SLICE_TOPOLOGY],
+        )
+
+    def test_no_nodepool_count_when_nodes_are_targeted(self):
+        scheduler = self._scheduler(
+            TpuSliceData(
+                pools={"p1": ["n1", "n2"]},
+                node_to_pool={"n1": "p1", "n2": "p1"},
+                pool_to_topology={"p1": "2x2x2"},
+            ),
+            nodes="n1",
+        )
+
+        summary = scheduler.get_tpu_slice_summary(["n1"])
+
+        self.assertEqual(summary.topologies, {"2x2x2": 1})
+        self.assertIsNone(summary.nodepool_count)
+
+    def test_each_node_of_a_single_host_pool_is_a_slice(self):
+        scheduler = self._scheduler(
+            TpuSliceData(
+                pools={"sh": ["n1", "n2", "n3"], "mh": ["n4", "n5"]},
+                node_to_pool={
+                    "n1": "sh",
+                    "n2": "sh",
+                    "n3": "sh",
+                    "n4": "mh",
+                    "n5": "mh",
+                },
+                pool_to_topology={"sh": "2x2x1", "mh": "2x2x2"},
+                single_host_pools={"sh"},
+            ),
+            nodes="n1,n2,n4",
+        )
+
+        summary = scheduler.get_tpu_slice_summary(["n1", "n2", "n4"])
+
+        self.assertEqual(summary.topologies, {"2x2x1": 2, "2x2x2": 1})
+
+    def test_dynamic_nodes_targeted_with_nodes_get_single_host_slices(self):
+        scheduler = self._scheduler(
+            TpuSliceData(provision_only_nodes={"d1", "d2", "d3"}),
+            nodes="d1,d2",
+        )
+        scheduler._subslice_nodes = {"d1", "d2"}
+
+        summary = scheduler.get_tpu_slice_summary(["d1", "d2"])
+
+        self.assertEqual(
+            summary,
+            TpuSliceSummary(
+                slice_type="dynamic",
+                topologies={DYNAMIC_SINGLE_HOST_TOPOLOGY: 2},
+                nodepool_count=None,
+            ),
+        )
+
+    def test_none_without_tpu_nodes(self):
+        self.assertIsNone(self._scheduler(None).get_tpu_slice_summary(["n1"]))
+        self.assertIsNone(
+            self._scheduler(TpuSliceData()).get_tpu_slice_summary(["gpu-1"])
+        )
+        self.assertIsNone(SlurmScheduler().get_tpu_slice_summary(["n1"]))
 
 
 if __name__ == "__main__":

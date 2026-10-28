@@ -740,6 +740,54 @@ mycriteria:
                 mock_provider, archive_file
             )
 
+    def _archive_and_get_reported_uploads(self, boh_result, ws_dest):
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        os.makedirs(
+            os.path.join(manager.path, ".ramble-workspace"), exist_ok=True
+        )
+        pathlib.Path(manager.path, "bill_of_health.json").write_text("{}")
+        pathlib.Path(manager.path, "bill_of_health.html").write_text("<p></p>")
+        archive_file = pathlib.Path(manager.path, "ws1.tar.gz")
+        archive_file.write_bytes(b"x" * 100)
+        provider = mock.Mock()
+
+        with (
+            mock.patch(
+                "chs.storage.StorageProviderFactory.get_provider_for_run",
+                return_value=provider,
+            ),
+            mock.patch.object(manager, "_upload_boh", return_value=boh_result),
+            mock.patch.object(
+                manager, "_create_workspace_archive", return_value=archive_file
+            ),
+            mock.patch.object(
+                manager, "_upload_workspace_archive", return_value=ws_dest
+            ),
+            mock.patch(
+                "chs.ramble_manager.telemetry_reporting.record_uploads"
+            ) as record_uploads,
+        ):
+            manager.archive()
+
+        record_uploads.assert_called_once()
+        reported_provider, uploads = record_uploads.call_args.args
+        self.assertIs(reported_provider, provider)
+        return uploads
+
+    def test_archive_reports_uploads(self):
+        self.assertEqual(
+            self._archive_and_get_reported_uploads(
+                ("dest_json", "dest_html", True), "dest_ws"
+            ),
+            {"workspace": (True, 100), "bill_of_health": (True, 9)},
+        )
+
+    def test_archive_reports_failed_upload_without_bill_of_health(self):
+        self.assertEqual(
+            self._archive_and_get_reported_uploads((None, None, True), None),
+            {"workspace": (False, 100)},
+        )
+
     def test_archive_no_provider(self):
         """Test archive skips upload if provider cannot be loaded."""
         manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)

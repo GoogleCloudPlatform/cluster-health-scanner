@@ -15,6 +15,7 @@
 """Base scheduler module."""
 
 import abc
+import dataclasses
 import json
 import os
 from typing import Any
@@ -26,6 +27,13 @@ from chs.utils import gcp
 logger = logging.getLogger(__name__)
 
 CHS_JOB_PREFIX = "chs-"
+
+
+@dataclasses.dataclass(frozen=True)
+class TpuSliceSummary:
+    slice_type: str
+    topologies: dict[str, int]
+    nodepool_count: int | None
 
 
 class BaseScheduler(abc.ABC):
@@ -220,6 +228,9 @@ class BaseScheduler(abc.ABC):
         other CHS runs, which are logged with the runs targeting them.
         """
         pass
+
+    def get_tpu_slice_summary(self, nodes: list[str]) -> TpuSliceSummary | None:
+        return None
 
     @abc.abstractmethod
     def write_ramble_config(
