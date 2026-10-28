@@ -10,5 +10,5 @@ We use g.co/vulnz for our intake, and do coordination and disclosure here using 
 
 Bill of Health reports, workspace archives, and logs may contain sensitive
 information such as cluster and node names, Compute Engine instance IDs,
-bucket names, and the `chs run` command line. Review and redact this data
-before attaching it to a public issue.
+bucket names, and the `chs run` command line. Do not attach workspace
+archives or unredacted logs to public GitHub issues.

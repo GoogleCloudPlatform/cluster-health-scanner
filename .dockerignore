@@ -29,5 +29,5 @@ pytest.ini
 
 # Extra developer documentation (Note: README.md is included because pyproject.toml requires it)
 CONTRIBUTING.md
-DEVELOPMENT.md
 RELEASING.md
+SUPPORT.md

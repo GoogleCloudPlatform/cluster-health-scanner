@@ -1,341 +1,200 @@
 # Cluster Health Scanner (CHS)
 
-Cluster Health Scanner (CHS) is a command-line tool designed to validate the health, performance, and infrastructure of GPU clusters on Google Kubernetes Engine (GKE) and Slurm, and of TPU clusters on GKE.
+Cluster Health Scanner (CHS) is an end-to-end diagnostic tool for evaluating the health, performance, and reliability of TPU and GPU hardware. It abstracts away the underlying infrastructure so that the same tool runs natively on Kubernetes (including Google Kubernetes Engine (GKE)), Slurm, and standalone TPU VMs, with a unified, deterministic approach to hardware validation.
 
-> **Note:** Looking for the legacy v1 (`cluster_diag` / Helm `health_runner`) implementation? It is preserved under the [`legacy-archive`](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/legacy-archive) tag (`git clone -b legacy-archive https://github.com/GoogleCloudPlatform/cluster-health-scanner.git`).
+> **Note:** Looking for the legacy v1 (`cluster_diag` / Helm `health_runner`) implementation? It is preserved under the [`legacy-archive`](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/legacy-archive) tag.
 
-## Overview
+## Why use CHS
 
-CHS helps site reliability engineers and cluster administrators verify that accelerator infrastructure is operating at peak performance before or between workloads:
+- **Unified:** One tool, one set of commands, and one report format for TPUs and GPUs, including day-zero support for next-generation architectures.
+- **Multiple environments:** Native support for Kubernetes, Slurm, and standalone TPU VMs. CHS automatically detects the scheduler and accelerator (machine type), so you don't need to specify them.
+- **Scalable validation:** Scales seamlessly from isolating single-host faults to validating multi-node topologies and the networking between them.
+- **Slicing support:** Full orchestration support for both dynamic and static TPU slice topologies on Kubernetes.
+- **Safe by default:** Preflight checks validate the targets, and CHS tests only idle nodes, so running workloads aren't disrupted.
+- **Clear verdicts:** CHS compares each metric with a precalibrated baseline for the accelerator and reports a clear health status for every test result instead of raw logs.
+- **Extensible:** Plug-in architecture that lets users [add their own tests](docs/test-development.md).
 
-- **Run Diagnostics:** Execute curated validation suites (`lite`, `standard`) or individual hardware and network benchmarks across Kubernetes and Slurm clusters.
-- **Automatic Hardware & Scheduler Detection:** Automatically detects your active scheduler (`slurm`, `kubernetes`, or `standalone` on a single TPU VM) and node machine types.
-- **Evaluate Health & Thresholds:** Evaluates benchmark results against built-in platform thresholds and generates an interactive HTML health report and a structured `bill_of_health.json`.
-- **Discover Resources:** Query supported machine types, test suites, individual benchmarks, and schedulers for GPU and TPU platforms.
+## How CHS works
 
----
+A run goes through three stages:
 
-## 1. Prerequisites
+1. **Preflight.** Validates the target environment and selects only idle nodes with the same accelerator.
+2. **Execution.** Runs the selected diagnostic tests across the target nodes.
+3. **Evaluation and reporting.** Compares collected metrics with the [baseline thresholds](src/chs/platforms/README.md) for the accelerator and generates a human-readable **interactive health report** (`bill_of_health.html`) and a machine-readable **Bill of Health** (`bill_of_health.json`).
 
-Before running CHS, ensure your environment meets the following requirements:
+Sample interactive health report (`bill_of_health.html`):
 
-### Google Cloud Storage (Optional)
-GCS storage is optional. CHS operates entirely on local disk by default, saving health reports and diagnostic logs to `./chs-output/`. Remote storage may be configured via `chs configure storage gcs` if cloud persistence is desired.
+![Sample interactive health report](docs/sample-health-report.png)
 
-### Cluster Credentials
+### Limitations
 
-#### Google Kubernetes Engine (GKE)
-CHS can run from any environment that can access your GKE cluster. Fetch your cluster credentials using `gcloud`:
+- Multiple TPU slices can be tested in parallel in a single run, with a **max** topology per slice of `4x4x4` on TPU7x and `16x16` on TPU v6e.
+- **Cross-slice testing** is not supported; each TPU slice is tested independently.
 
-```bash
-gcloud container clusters get-credentials <cluster_name> \
-    --location <region_or_zone> \
-    --project <project_id>
-```
+## Installation
 
-> **Note (Gang Scheduling):** CHS gang-schedules multi-node tests itself: each test runs as a Kubernetes Job that is created suspended and started only when all of its target nodes are free, so the CHS process must stay running for the duration of the run. If it is killed before it can clean up (for example by `kill -9`), run `chs cancel <RUN_ID>` to remove the leftover resources and release its nodes.
+Install CHS using either the Python package or the container image on the machine that runs the tests — **any machine with `kubectl` access** for Kubernetes, the **controller or login node** for Slurm, or **the TPU VM itself** for standalone mode (see [Where to run](#where-to-run) for environment setup).
 
-#### Slurm
-Commands for Slurm should be run from the Slurm controller/login node. Enroot is required to run containerized workloads. Run the following commands on the Slurm cluster to configure Artifact Registry credentials for Enroot:
+### Option 1: Python package
 
-```bash
-# 1. Verify gcloud authentication
-gcloud auth list
-
-# 2. Configure Docker to use the US Artifact Registry
-gcloud auth configure-docker us-docker.pkg.dev
-
-# 3. Create the Enroot configuration directory
-mkdir -p ~/.enroot
-
-# 4. Set the credentials file path
-export ENROOT_CONFIG_CREDENTIALS="${HOME}/.enroot/.credentials"
-
-# 5. Generate the Enroot credentials file using your gcloud access token
-cat <<EOF > "${ENROOT_CONFIG_CREDENTIALS}"
-machine us-docker.pkg.dev login oauth2accesstoken password $(gcloud auth application-default print-access-token)
-EOF
-```
-
-#### Standalone (single TPU VM)
-Run CHS on the TPU VM itself (`ct6e-standard-4t` or `tpu7x-standard-4t`) to test that VM; no Slurm or Kubernetes is needed. CHS uses standalone when it detects neither, or when you pass `--scheduler standalone`.
-
-From the CHS Docker image, give the container access to the host:
+> **Note:** Supported on **Kubernetes**, **Slurm**, and **standalone TPU VMs**. Requires [Python 3.12+](https://www.python.org/downloads/) and [`git`](https://git-scm.com/downloads). If your `python3` is older, see [Troubleshooting](docs/troubleshooting.md#python-312-is-not-available).
 
 ```bash
-docker run --rm -it --privileged --pid=host -v /:/host \
-  -v chs-local-state:/workspace/.local/share \
-  us-docker.pkg.dev/gce-ai-infra/chs/chs:latest run --scheduler standalone
-```
-
----
-
-## 2. Installation & Setup
-
-You can run CHS either via the pre-built **Docker container image** (recommended for GKE / Kubernetes) or by installing the **Python CLI package** in a virtual environment (required for Slurm, optional for Kubernetes).
-
-### Option A: Docker Image (Recommended for GKE / Kubernetes)
-
-1. **Authenticate with Artifact Registry and pull the CHS image:**
-
-   ```bash
-   gcloud auth configure-docker us-docker.pkg.dev
-   docker pull us-docker.pkg.dev/gce-ai-infra/chs/chs:latest
-   ```
-
-2. **Configure a terminal alias:**
-
-   The CHS container requires read access to your host Kubernetes and Google Cloud credentials (`~/.kube` and `~/.config/gcloud`), uses a named Docker volume (`chs-local-state`) to persist run state and storage configuration, and bind-mounts `chs-output` to access exported reports and test logs directly in your current directory. Setting an alias lets you invoke `chs` commands directly:
-
-   ```bash
-   alias chs='docker run --rm -it --network host \
-     -v ~/.kube:/workspace/.kube:ro \
-     -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
-     -v chs-local-state:/workspace/.local/share \
-     -v "$(pwd)/chs-output":/workspace/chs-output \
-     us-docker.pkg.dev/gce-ai-infra/chs/chs:latest'
-   ```
-
-   > **Tip:** To run `chs run` in the background without blocking your terminal, replace `--rm -it` with `-d` and pass `--auto-approve` (`-y`).
-
-### Option B: Python Virtual Environment (Slurm, Kubernetes, or Standalone)
-
-Requires Python 3.12 or newer.
-
-```bash
-# Create and activate a virtual environment
 python3 -m venv chs-venv
 source chs-venv/bin/activate
-
-# Install CHS from GitHub
 pip install git+https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
 ```
 
----
-
-## 3. Quick Start
-
-Once installed (or with the Docker alias configured), start a diagnostic run. Results are saved locally under `./chs-output/<workspace_name>/`:
+To install a specific release from [GitHub Releases](https://github.com/GoogleCloudPlatform/cluster-health-scanner/releases) (for example, `v0.3.0`), append `@<VERSION>`:
 
 ```bash
-# Run the default 'lite' suite on your cluster
-chs run --nodepools <nodepool_name>
-
-# (Optional) Upload all subsequent run results to a pre-existing GCS bucket (only needed once per environment)
-chs configure storage gcs <pre-existing-bucket-name>
+pip install git+https://github.com/GoogleCloudPlatform/cluster-health-scanner.git@v0.3.0
 ```
 
----
+### Option 2: Container image
 
-## 4. Core Operations (CLI Commands)
+> **Note:**
+> - Requires [Docker](https://docs.docker.com/engine/install/).
+> - On a standalone TPU VM running **Container-Optimized OS (COS)**, this is the only supported way to run CHS.
+> - Not supported on **Slurm**; use the Python package.
 
-The general syntax for CHS is:
+Pull the container image:
 
 ```bash
-chs [OPTIONS] COMMAND [ARGS]...
+docker pull us-docker.pkg.dev/gce-ai-infra/chs/chs:latest
 ```
 
-### Global Options
-- `-v`, `--verbose`: Enable verbose debug logging.
-- `--version`: Show the installed CHS version and exit.
-- `-h`, `--help`: Show help message and exit. Append `--help` to any subcommand (e.g., `chs run --help` or `chs list --help`) for detailed usage and examples.
-
-### `chs configure`
-Configure optional persistent GCS storage for CHS reports and workspace archives (results are always saved locally regardless). During configuration, CHS validates write access to the target bucket via a canary check and fails fast if permissions are missing.
-
-- `chs configure storage gcs <BUCKET_OR_PATH>`: Set a pre-existing GCS bucket, or a path within it (e.g., `my-bucket`, `my-bucket/team-a`, or `gs://my-bucket/team-a`), as the upload destination.
-- `chs configure storage show`: Display the currently configured storage target.
-- `chs configure storage remove`: Remove the saved storage configuration.
-- `chs configure telemetry enable|disable|status`: Turn usage telemetry on or off, or show whether it is on. See [Telemetry](#7-telemetry).
+To use a specific release from [GitHub Releases](https://github.com/GoogleCloudPlatform/cluster-health-scanner/releases) (for example, `v0.3.0`), replace `:latest` with the version without the `v` here and in the `chs` alias below:
 
 ```bash
-# Configure GCS bucket
-chs configure storage gcs my-chs-results-bucket
-
-# Verify configured storage
-chs configure storage show
+docker pull us-docker.pkg.dev/gce-ai-infra/chs/chs:0.3.0
 ```
 
-### `chs list`
-Query supported machine types, test suites, individual benchmarks, and schedulers.
+Define a `chs` alias so that `chs` commands can be run directly:
 
-**Subcommands:**
-- `chs list`: List all supported machine types, tests, suites, and schedulers.
-- `chs list suites`: List pre-configured test suites (`lite`, `standard`).
-- `chs list tests`: List individual benchmarks (optionally filtered by `--suite <SUITE_NAME>` or `--machine-type <MACHINE_TYPE>`).
-- `chs list machine-types`: List supported accelerator machine types.
-- `chs list schedulers`: List supported schedulers (`kubernetes`, `slurm`, `standalone`).
+- **Kubernetes:** Mounts your `kubeconfig` and `gcloud` configuration read-only, persists run state in `chs-local-state`, and writes outputs to `./chs-output`:
+  ```bash
+  alias chs='docker run --rm -it --network host \
+    -v ~/.kube:/workspace/.kube:ro \
+    -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
+    -v chs-local-state:/workspace/.local/share \
+    -v "$(pwd)/chs-output":/workspace/chs-output \
+    us-docker.pkg.dev/gce-ai-infra/chs/chs:latest'
+  ```
+- **Standalone (TPU VM):** Grants access to the VM's TPU devices and host PID namespace, persists run state in `chs-local-state`, and writes outputs to `./chs-output`:
+  ```bash
+  alias chs='docker run --rm -it --privileged --pid=host \
+    -v /:/host \
+    -v chs-local-state:/workspace/.local/share \
+    -v "$(pwd)/chs-output":/workspace/chs-output \
+    us-docker.pkg.dev/gce-ai-infra/chs/chs:latest'
+  ```
 
-**Accelerator Filters:**
-Append `--tpu` or `--gpu` to any `chs list` command to filter results by accelerator family.
+## Where to run
 
-```bash
-# List all TPU suites and tests
-chs list suites --tpu
-chs list tests --tpu
+Where you run CHS depends on the environment that you're testing:
 
-# List GPU tests included in the 'lite' suite
-chs list tests --gpu --suite lite
-
-# List tests compatible with a specific machine type
-chs list tests --machine-type a3-ultragpu-8g
-```
-
-### `chs run`
-Execute a diagnostic suite or custom list of tests on your cluster.
-
-**Scheduler & Hardware Auto-detection:** CHS automatically detects the active scheduler (`slurm` via `sinfo`/`squeue`, then `kubernetes` via `kubectl`/in-cluster config, otherwise `standalone`, which tests the VM CHS runs on) and discovers the machine type of the target nodes. Pass `--scheduler` to skip auto-detection.
-
-**Options:**
-- `--suite`, `-s <SUITE_NAME>`: Pre-configured test suite to run (`lite` or `standard`). Defaults to `lite` when `--tests` is not specified.
-- `--tests`, `-t <TEST_LIST>`: Comma-separated list of individual benchmarks to run instead of a full suite (e.g., `--tests nccl-cluster,gemm`).
-- `--nodepools <NODEPOOL_LIST>`: Comma-separated list of Kubernetes node pools to target (can target single-host benchmarks across entire pools, and required for multi-host TPU benchmarks on Kubernetes).
-- `--nodes <NODE_LIST>`: Comma-separated list of individual nodes to target (on Kubernetes, single-host TPU benchmarks support targeting static pool nodes, while multi-host benchmarks require whole-slice targeting via `--nodepools`).
-- `--partitions <PARTITION_LIST>`: Comma-separated list of Slurm partitions to target.
-- `--nodelists <NODE_PATTERN_LIST>`: Slurm nodelist pattern to target, e.g., `node-[1-4]`.
-- `--auto-approve`, `-y`: Automatically confirm the execution preview without interactive prompting (useful for CI and scripts).
-- `--run-id <RUN_ID>`: Custom identifier for the run.
-- `--scheduler {kubernetes,slurm,standalone}`: Scheduler to use instead of auto-detection. `standalone` tests the TPU VM CHS runs on; `--nodes`, `--nodelists`, `--nodepools` and `--partitions` don't apply to it.
-- `--storage-path <DESTINATION>`: Per-run destination override for health reports and diagnostic logs. Accepts either:
-  - **Cloud Storage URI (`gs://<bucket>/[<prefix>]`):** Uploads the interactive HTML report (`bill_of_health.html`), structured summary (`bill_of_health.json`), and full workspace archive (`<workspace_name>.tar.gz`) to GCS instead of the globally configured bucket. Individual raw test logs and diagnostics remain saved locally under `./chs-output/<workspace_name>/`.
-  - **Local Directory (`/path/to/dir` or `./custom-out`):** Exports the interactive HTML report, Bill of Health JSON, per-node raw benchmark logs (`<test>-<node>.log`), and debug traces (`debug.txt`, `internal.log`) into `<DESTINATION>/<workspace_name>/` instead of `./chs-output/`. Any value without a `gs://` prefix is treated as a local path (relative paths resolve against the current working directory). If global GCS storage is configured, cloud uploads still occur. When running via Docker, target a path within `/workspace/chs-output` or another host bind mount.
-  - All destinations undergo upfront validation before tests are submitted, invalid buckets or unwritable directories fail fast immediately.
-
-#### Supported Suites and Tests
-
-##### GPU Benchmarks
-- `nvidia-smi`: Basic GPU health and driver check (GPU count, power draw, clock frequencies, performance state).
-- `dcgm`: Deep hardware diagnostics using NVIDIA Data Center GPU Manager (PCIe, memory, and compute stress tests).
-- `gemm`: General Matrix Multiply (GEMM) floating-point throughput benchmark (TFLOPS).
-- `stream`: Sustainable GPU memory bandwidth benchmark (GB/s).
-- `nccl-single-node`: Intra-node GPU-to-GPU NCCL collective bandwidth and latency benchmark.
-- `nccl-cluster`: Multi-node NCCL collective bandwidth benchmark across the cluster.
-- `nccl-domain`: Intra-domain MNNVL NCCL bandwidth benchmark run per NVLink domain on `a4x-highgpu-4g`, `a4x-maxgpu-4g-metal`, and `a5x-highgpu-4g-metal`.
-- `nccl-pairwise`: Point-to-point NCCL bandwidth and latency benchmark between node pairs to isolate degraded links.
-
-##### TPU Benchmarks
-- `tpu-info`: Basic TPU health check covering device count, `libtpu` version, and device topology.
-- `tpu-gemm`: Generalized matrix multiplication benchmark measuring sustained TPU compute throughput (TFLOP/s).
-- `tpu-hbm`: High Bandwidth Memory (HBM) read/write bandwidth benchmark.
-- `tpu-host-device`: Host-to-device and device-to-host transfer bandwidth and latency check.
-- `tpu-collectives`: Distributed cross-chip collective operations benchmark across TPU slices.
-- `tpu-compute-stress`: Sustained matrix multiplication stress test for TPU compute cores.
-- `tpu-hbm-stress`: Heavy synthetic load test for TPU High Bandwidth Memory stability.
-- `tpu-network-stress`: Sustained point-to-point stress test across TPU interconnect (ICI) links.
-
-##### Suite Composition
-| Suite | Est. Duration | Description | Included GPU Tests | Included TPU Tests |
-| --- | --- | --- | --- | --- |
-| `lite` (default) | ~5 mins | Quick health verification | `nvidia-smi`, `dcgm` (level 2), `gemm`, `nccl-single-node` | `tpu-info`, `tpu-gemm`, `tpu-hbm`, `tpu-host-device`, `tpu-collectives` |
-| `standard` | ~30 mins | Thorough hardware, memory & collective validation | `nvidia-smi`, `dcgm` (level 3), `stream`, `nccl-cluster`, `nccl-pairwise`, `gemm` | `tpu-info`, `tpu-hbm`, `tpu-gemm`, `tpu-host-device`, `tpu-collectives`, `tpu-compute-stress`, `tpu-hbm-stress`, `tpu-network-stress` |
-
-#### Examples
-
-**Kubernetes (GKE):**
-```bash
-# Run the default 'lite' suite on a specific node pool
-chs run --nodepools my-node-pool
-
-# Run the 'standard' validation suite on a TPU node pool
-chs run --suite standard --nodepools tpu-pool-1
-
-# Run specific GPU benchmarks on selected nodes
-chs run --tests nccl-cluster,gemm --nodes node-01,node-02
-```
-
-**Slurm:**
-```bash
-# Run the default 'lite' suite on discovered idle nodes
-chs run
-
-# Run the 'lite' suite on a specific Slurm partition
-chs run --partitions gpu-partition
-
-# Run specific tests using a Slurm nodelist range
-chs run --tests nccl-pairwise,stream --nodelists node-[1-4]
-```
-
-### `chs cancel`
-Safely terminates a CHS run: cancels its jobs, cleans up its CHS resources, and releases its nodes so other runs can use them. Without `RUN_ID`, your latest run is cancelled. `RUN_ID` can be any run on the cluster, including one started by another user. `--all` cancels **every** CHS run on the cluster, including other users' runs, and deletes all CHS resources. A run you started is cancelled on the scheduler it ran on; otherwise CHS auto-detects the scheduler. Prompts for `[y/N]` confirmation unless `--auto-approve` (`-y`) is passed.
-
-```bash
-# Cancel your latest run interactively
-chs cancel
-
-# Cancel a specific run without prompting
-chs cancel my-cluster-lite-a1b2 --auto-approve
-
-# Cancel every CHS run on the cluster
-chs cancel --all
-```
-
-### `chs results`
-Displays the Bill of Health summary in the terminal, followed by the locations of the run's artifacts: the interactive HTML report and the Bill of Health JSON. For runs uploaded to GCS these are `gs://` links; for local runs they are paths on disk (relative to the current directory when under it). If `RUN_ID` is omitted, CHS presents an interactive selector for your recent runs.
-
-```bash
-# Select from recent runs interactively
-chs results
-
-# View results for a specific run ID
-chs results my-cluster-lite-a1b2
-```
-
-### `chs history`
-Displays a summary table of the last 5 runs, including Run ID, submission status, configured storage bucket, age, and the command executed.
-
-```bash
-chs history
-```
-
----
-
-## 5. Reporting & Diagnostic Artifacts
-
-Upon completion of a run, CHS evaluates the collected metrics against platform thresholds. By default, CHS exports clean benchmark test logs, the interactive Bill of Health, and workspace diagnostics into a local output directory (`./chs-output/<workspace_name>/`), and optionally uploads artifacts to GCS if configured:
-
-1. **Interactive HTML Diagnostic Report:** Saved locally at `./chs-output/<workspace_name>/bill_of_health.html` (and optionally uploaded to `gs://<bucket>/[<prefix>/]bills_of_health/<workspace_name>.html`).
-2. **Bill of Health (JSON):** Saved locally at `./chs-output/<workspace_name>/bill_of_health.json` (and optionally uploaded to `gs://<bucket>/[<prefix>/]bills_of_health/<workspace_name>.json`) containing structured pass/fail statuses, extracted metrics, and log paths.
-3. **Workspace Diagnostics and Raw Logs:** Saved locally under `./chs-output/<workspace_name>/` (containing test logs like `nvidia-smi-<node>.log`, `nccl-pairwise-*.log`, `debug.txt`, and `internal.log`).
-4. **Workspace Archive (when GCS configured):** Uploaded to `gs://<bucket>/[<prefix>/]workspaces/<workspace_name>.tar.gz` containing full workspace outputs and configs.
-
-Local workspaces are also preserved on the host (or inside the `chs-local-state` Docker volume) under `~/.local/share/chs/workspaces/<workspace_name>/`.
-
----
-
-## 6. FAQ & Troubleshooting
-
-### `ERROR: The caller doesn't have permission to access the project <project-id>`
-**Root Cause:** Your current environment is unauthenticated, using expired credentials, or the active identity (such as a default Compute Engine Service Account) lacks IAM permissions on the target GCP project or GCS bucket.
-
-- **Case 1 (Override default Service Account with personal Application Default Credentials):**
+- **Kubernetes:** Run CHS from **any machine with `kubectl` access** to the cluster, such as your **local machine** or **Cloud Shell**. Authenticate and fetch cluster credentials before running:
   ```bash
   gcloud auth application-default login
+  gcloud container clusters get-credentials <cluster_name> --location <region_or_zone> --project <project_id>
   ```
-- **Case 2 (Authenticate `gcloud` and `kubectl` CLI tools with your user identity):**
+- **Slurm:** Run CHS on the **Slurm controller or login node**, where `sinfo` and `sbatch` are available. Configure **Enroot credentials** on the cluster so nodes can pull diagnostic test images from `us-docker.pkg.dev`:
   ```bash
-  gcloud auth login --no-browser
+  gcloud auth configure-docker us-docker.pkg.dev
+  mkdir -p ~/.enroot
+  cat <<EOF > "${HOME}/.enroot/.credentials"
+  machine us-docker.pkg.dev login oauth2accesstoken password $(gcloud auth application-default print-access-token)
+  EOF
+  ```
+- **Standalone (TPU VM):** Run CHS **directly on the TPU VM**, which must expose TPU devices under `/dev/vfio`. Run as `root` or raise the **memlock limit** (`ulimit -l unlimited`) before running native TPU tests.
+
+### Required IAM roles (Google Cloud)
+
+| Role | Required for | Purpose |
+| --- | --- | --- |
+| **Kubernetes Engine Developer** (`roles/container.developer`) | **Kubernetes** | Create and clean up diagnostic jobs and resources on the cluster. |
+| **Compute Viewer** (`roles/compute.viewer`) | **Kubernetes**, **Slurm** | Read Compute Engine node metadata and topology. |
+| **Storage Object Admin** (`roles/storage.objectAdmin`) | **Optional** (GCS bucket) | Upload result artifacts when GCS storage is configured. |
+
+## Quickstart
+
+> **Tip:** Append `--help` to any command for detailed usage, or see the [CLI reference](docs/cli.md) for all commands and options.
+
+### 1. List suites and tests
+
+List the predefined suites and the individual tests:
+
+```bash
+chs list suites
+chs list tests
+```
+
+### 2. Run diagnostics
+
+Run a suite (`lite` or `standard`) on your cluster or TPU VM:
+
+- **Kubernetes:**
+
+  ```bash
+  chs run --nodepools=NODE_POOL_NAMES --suite=lite
   ```
 
-### Targeting TPUs (`--nodepools`)
-TPUs are supported on Kubernetes and, through the `standalone` scheduler, on a single TPU VM; they are not supported on Slurm. Multi-host TPU benchmarks (such as `tpu-collectives` and `tpu-network-stress`) require an entire slice, so individual node targeting (`--nodes`) is not supported for them. On Kubernetes, single-host TPU benchmarks (such as `tpu-info`, `tpu-gemm`, and `tpu-hbm`) support targeting individual nodes with `--nodes`. On dynamic TPU pools on GKE (version 1.36.0-gke.3712000 or later), CHS provisions a single-host 2x2x1 slice for each targeted node whose 2x2x1 partition is `HEALTHY`, even when the surrounding 4x4x4 partition is degraded, and drops, with a warning, any node whose slice cannot be provisioned. Multi-host benchmarks on dynamic TPU pools require whole-partition provisioning via `--nodepools`. When running suites or mixed benchmarks with `--nodes` on Kubernetes, multi-host benchmarks requiring a full slice are automatically skipped with an informative warning. Additionally, all nodes targeted within a single `chs run` invocation must belong to the same machine type.
+- **Slurm:**
 
-### GCS Bucket Creation
-`chs configure storage gcs <bucket-name>` requires an existing GCS bucket with write permissions; CHS does not create new GCS buckets automatically.
+  ```bash
+  chs run --partitions=PARTITION_NAMES --suite=lite
+  ```
 
----
+- **Standalone (TPU VM):**
 
-## 7. Telemetry
+  ```bash
+  chs run --suite=lite
+  ```
 
-CHS sends usage metrics to Google (`play.googleapis.com`) to help improve the tool. Telemetry is on by default. Metrics are sent in the background: at exit, CHS waits at most two seconds for the last request, and if a request fails with a network error, CHS stops sending for the rest of the command.
+To run individual tests instead of a suite, use `--tests`:
 
-**Opting out:**
-- `chs configure telemetry disable` turns telemetry off and saves the setting; `enable` turns it back on, and `status` shows whether it's on.
-- Setting `CHS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns telemetry off irrespective of the saved setting. Use this for CI and containers, e.g. `docker run -e CHS_TELEMETRY=0 ...`.
+```bash
+chs run --nodepools=NODE_POOL_NAMES --tests=tpu-info,tpu-hbm
+```
 
-**Seeing what is sent:** Put `-v` before the command, for example `chs -v run`, and CHS prints all the telemetry data it sends.
+Replace the following:
 
----
+- `NODE_POOL_NAMES`: a comma-separated list of the Kubernetes node pools to test.
+- `PARTITION_NAMES`: the Slurm partitions to test.
 
-## Contributing & Development
+### 3. View results
 
-Interested in contributing or building CHS from source? See [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPMENT.md](DEVELOPMENT.md).
+Print the locations of a run's interactive health report (`bill_of_health.html`) and Bill of Health (`bill_of_health.json`):
+
+```bash
+chs results
+```
+
+### Optional: Cancel a run
+
+Cancel your most recent run, stopping its jobs and cleaning up its resources:
+
+```bash
+chs cancel
+```
+
+## Telemetry
+
+CHS sends anonymous usage metrics to help improve the tool. It doesn't collect personally identifiable information (PII). Telemetry is on by default; run `chs configure telemetry disable` or set `CHS_TELEMETRY=0` to opt out. See [Telemetry](docs/telemetry.md) for what is sent.
+
+## Documentation
+
+- [CLI reference](docs/cli.md)
+- [Tests and suites](src/chs/tests/README.md)
+- [Machine types and thresholds](src/chs/platforms/README.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Telemetry](docs/telemetry.md)
+
+## Support
+
+See [SUPPORT.md](SUPPORT.md) for how to report bugs and ask questions.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development.md](docs/development.md). For adding your own test, see the [Test development guide](docs/test-development.md).
