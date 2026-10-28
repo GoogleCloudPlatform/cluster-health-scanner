@@ -150,3 +150,7 @@ class InvalidTestConfigException(ChsException):
     """Raised test config defined in suites.yaml is invalid"""
 
     pass
+
+
+class TpuRuntimeException(ChsException):
+    """Raised when the TPU runtime can't be found, built or used."""
