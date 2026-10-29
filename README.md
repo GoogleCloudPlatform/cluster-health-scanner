@@ -19,8 +19,8 @@ CHS helps site reliability engineers and cluster administrators verify that acce
 
 Before running CHS, ensure your environment meets the following requirements:
 
-### Google Cloud Storage (GCS) Bucket
-You must manually pre-create a GCS bucket before running diagnostics. CHS uses this bucket to persist interactive HTML health reports, `bill_of_health.json` summaries, and diagnostic workspace archives.
+### Google Cloud Storage (Optional)
+GCS storage is optional. CHS operates entirely on local disk by default, saving health reports and diagnostic logs to `./chs-output/`. Remote storage may be configured via `chs configure storage gcs` if cloud persistence is desired.
 
 ### Cluster Credentials
 
@@ -74,13 +74,14 @@ You can run CHS either via the pre-built **Docker container image** (recommended
 
 2. **Configure a terminal alias:**
 
-   The CHS container requires read access to your host Kubernetes and Google Cloud credentials (`~/.kube` and `~/.config/gcloud`) and uses a named Docker volume (`chs-local-state`) to persist run state and storage configuration. Setting an alias lets you invoke `chs` commands directly:
+   The CHS container requires read access to your host Kubernetes and Google Cloud credentials (`~/.kube` and `~/.config/gcloud`), uses a named Docker volume (`chs-local-state`) to persist run state and storage configuration, and bind-mounts `chs-output` to access exported reports and test logs directly in your current directory. Setting an alias lets you invoke `chs` commands directly:
 
    ```bash
    alias chs='docker run --rm -it --network host \
      -v ~/.kube:/workspace/.kube:ro \
      -v ~/.config/gcloud:/workspace/.config/gcloud:ro \
      -v chs-local-state:/workspace/.local/share \
+     -v "$(pwd)/chs-output":/workspace/chs-output \
      us-docker.pkg.dev/gce-ai-infra/chs/chs:latest'
    ```
 
@@ -101,14 +102,14 @@ pip install git+https://github.com/GoogleCloudPlatform/cluster-health-scanner.gi
 
 ## 3. Quick Start
 
-Once installed (or with the Docker alias configured), configure your GCS bucket once and start a diagnostic run:
+Once installed (or with the Docker alias configured), start a diagnostic run. Results are saved locally under `./chs-output/<workspace_name>/`:
 
 ```bash
-# 1. Configure your pre-existing GCS bucket (only needed once per environment)
-chs configure storage gcs <pre-existing-bucket-name>
-
-# 2. Run the default 'lite' suite on your cluster
+# Run the default 'lite' suite on your cluster
 chs run --nodepools <nodepool_name>
+
+# (Optional) Upload all subsequent run results to a pre-existing GCS bucket (only needed once per environment)
+chs configure storage gcs <pre-existing-bucket-name>
 ```
 
 ---
@@ -127,9 +128,9 @@ chs [OPTIONS] COMMAND [ARGS]...
 - `-h`, `--help`: Show help message and exit. Append `--help` to any subcommand (e.g., `chs run --help` or `chs list --help`) for detailed usage and examples.
 
 ### `chs configure`
-Configure persistent storage settings for CHS reports and workspace archives. During configuration, CHS validates write access to the target bucket via a canary check and fails fast if permissions are missing.
+Configure optional persistent GCS storage for CHS reports and workspace archives (results are always saved locally regardless). During configuration, CHS validates write access to the target bucket via a canary check and fails fast if permissions are missing.
 
-- `chs configure storage gcs <BUCKET_NAME>`: Set a pre-existing GCS bucket as the upload destination.
+- `chs configure storage gcs <BUCKET_OR_PATH>`: Set a pre-existing GCS bucket, or a path within it (e.g., `my-bucket`, `my-bucket/team-a`, or `gs://my-bucket/team-a`), as the upload destination.
 - `chs configure storage show`: Display the currently configured storage target.
 - `chs configure storage remove`: Remove the saved storage configuration.
 - `chs configure telemetry enable|disable|status`: Turn usage telemetry on or off, or show whether it is on. See [Telemetry](#7-telemetry).
@@ -181,6 +182,8 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 - `--nodelists <NODE_PATTERN_LIST>`: Slurm nodelist pattern to target, e.g., `node-[1-4]` (not supported for TPUs; use `--partitions`).
 - `--auto-approve`, `-y`: Automatically confirm the execution preview without interactive prompting (useful for CI and scripts).
 - `--run-id <RUN_ID>`: Custom identifier for the run.
+- `--output-dir <DIR>`: Directory where test logs, Bill of Health artifacts, and debug logs are saved, in a per-run `<DIR>/<workspace_name>/` subfolder. Overrides the default `./chs-output/` destination for this run. When running via Docker, use a path under `/workspace/chs-output` (or another bind-mounted directory); other paths exist only inside the container and are lost when it exits.
+- `--storage-path <bucket-or-path>`: GCS destination bucket or path (e.g., `my-bucket`, `gs://my-bucket`, or `gs://my-bucket/prefix`) to upload results for this run, overriding the global storage configuration.
 
 #### Supported Suites and Tests
 
@@ -272,13 +275,14 @@ chs history
 
 ## 5. Reporting & Diagnostic Artifacts
 
-Upon completion of a run, CHS evaluates the collected metrics against platform thresholds and uploads three artifacts to your configured GCS bucket:
+Upon completion of a run, CHS evaluates the collected metrics against platform thresholds. By default, CHS exports clean benchmark test logs, the interactive Bill of Health, and workspace diagnostics into a local output directory (`./chs-output/<workspace_name>/`), and optionally uploads artifacts to GCS if configured:
 
-1. **Interactive HTML Diagnostic Report:** `gs://<bucket>/bills_of_health/<workspace_name>.html` (viewable in your browser via the `https://storage.cloud.google.com/...` link printed in the terminal).
-2. **Bill of Health (JSON):** `gs://<bucket>/bills_of_health/<workspace_name>.json` containing structured pass/fail statuses, extracted metrics, and relative log paths.
-3. **Workspace Archive:** `gs://<bucket>/workspaces/<workspace_name>.tar.gz` containing raw benchmark outputs, configurations, and debug logs.
+1. **Interactive HTML Diagnostic Report:** Saved locally at `./chs-output/<workspace_name>/bill_of_health.html` (and optionally uploaded to `gs://<bucket>/[<prefix>/]bills_of_health/<workspace_name>.html`).
+2. **Bill of Health (JSON):** Saved locally at `./chs-output/<workspace_name>/bill_of_health.json` (and optionally uploaded to `gs://<bucket>/[<prefix>/]bills_of_health/<workspace_name>.json`) containing structured pass/fail statuses, extracted metrics, and log paths.
+3. **Workspace Diagnostics and Raw Logs:** Saved locally under `./chs-output/<workspace_name>/` (containing test logs like `nvidia-smi-<node>.log`, `nccl-pairwise-*.log`, `debug.txt`, and `internal.log`).
+4. **Workspace Archive (when GCS configured):** Uploaded to `gs://<bucket>/[<prefix>/]workspaces/<workspace_name>.tar.gz` containing full workspace outputs and configs.
 
-Local workspaces are also stored on the host (or inside the `chs-local-state` Docker volume) under `~/.local/share/chs/workspaces/<workspace_name>/`.
+Local workspaces are also preserved on the host (or inside the `chs-local-state` Docker volume) under `~/.local/share/chs/workspaces/<workspace_name>/`.
 
 ---
 

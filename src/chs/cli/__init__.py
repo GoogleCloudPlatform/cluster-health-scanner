@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 import warnings
 from contextlib import contextmanager
 from typing import Any
@@ -45,6 +46,7 @@ from chs import (
     ChsAppData,
     RambleManager,
     ResultsViewer,
+    constants,
     detect_scheduler,
     exceptions as ex,
     get_scheduler,
@@ -163,6 +165,136 @@ def _make_clickable_link(path_or_uri: str) -> str:
     return f"[link={href}]{path_or_uri}[/link]"
 
 
+def _parse_gcs_path(path: str) -> tuple[str, str]:
+    """Parses a GCS path or bucket string into (bucket_name, prefix)."""
+    cleaned = path.strip()
+    if cleaned.lower().startswith("gs://"):
+        cleaned = cleaned[5:]
+    cleaned = cleaned.strip("/")
+    if "/" in cleaned:
+        bucket, prefix = cleaned.split("/", 1)
+        return bucket, prefix.strip("/")
+    return cleaned, ""
+
+
+def _build_gcs_config(path: str) -> dict:
+    """Builds a GCS storage config from a bucket name, path, or gs:// URI.
+
+    Raises:
+      click.ClickException: If the bucket name is empty.
+    """
+    bucket, prefix = _parse_gcs_path(path)
+    if not bucket:
+        raise click.ClickException(
+            "Storage validation failed: GCS bucket name cannot be empty."
+        )
+    config = {"type": "gcs", "gcs": {"bucket_name": bucket}}
+    if prefix:
+        config["gcs"]["prefix"] = prefix
+    return config
+
+
+def _resolve_and_validate_storage(
+    storage_path: str | None, app_data: ChsAppData
+) -> dict | None:
+    """Validates and resolves storage configuration for the run."""
+    if storage_path:
+        config = _build_gcs_config(storage_path)
+        try:
+            provider = StorageProviderFactory.get_provider(config)
+            provider.validate()
+        except Exception as e:
+            raise click.ClickException(f"Storage validation failed: {e}") from e
+        return config
+
+    return app_data.get_storage_config()
+
+
+def _validate_output_dir(output_dir: str | None) -> None:
+    """Validates upfront that the output directory is writable if specified."""
+    if not output_dir:
+        return
+    out_path = pathlib.Path(output_dir).expanduser().resolve()
+    try:
+        out_path.mkdir(parents=True, exist_ok=True)
+        test_file = out_path / f".chs_write_test_{uuid.uuid4().hex}"
+        test_file.touch()
+        test_file.unlink()
+    except Exception as e:
+        raise click.ClickException(f"Output directory validation failed: {e}")
+
+
+def _resolve_export_logs_dir(
+    output_dir: str | None,
+    workspace_name: str,
+) -> str:
+    """Returns the directory to export logs to.
+
+    Results are always saved in a per-run '<workspace_name>' subfolder, under
+    output_dir if provided, otherwise under constants.DEFAULT_OUTPUT_DIR.
+    """
+    base_dir = (
+        pathlib.Path(output_dir).expanduser().resolve()
+        if output_dir
+        else pathlib.Path.cwd() / constants.DEFAULT_OUTPUT_DIR
+    )
+    return str(base_dir / workspace_name)
+
+
+def _export_logs(ramble_manager: RambleManager) -> None:
+    """Copies the run's logs to its configured export directory, if any.
+
+    Export is best-effort and never blocks archival: on any failure the user
+    is warned that the results remain in the internal workspace, which already
+    holds all of the run's artifacts. The configured directory is left
+    unchanged.
+    """
+    export_dir = ramble_manager.export_logs_dir
+    if not export_dir:
+        return
+    try:
+        ramble_manager.export_logs(export_dir)
+    except Exception as e:  # Best-effort: must not block GCS archival.
+        reason = getattr(e, "strerror", None) or e
+        Console().print(
+            f"[Warning] Could not export results to '{export_dir}' "
+            f"({reason}). Results preserved in workspace: "
+            f"{ramble_manager.path}",
+            style=theme.CHS_WARNING_STYLE,
+            markup=False,
+        )
+        logger.debug("Failed to export logs to %s: %s", export_dir, e)
+        return
+    logger.debug("Exported results to: %s", export_dir)
+
+
+def _find_local_artifact(name: str, *dirs: str | None) -> str | None:
+    """Returns the path of `name` in the first directory that contains it."""
+    for directory in dirs:
+        if directory:
+            candidate = os.path.join(directory, name)
+            if os.path.exists(candidate):
+                return candidate
+    return None
+
+
+def _format_local_display_path(path_or_uri: str | None) -> str | None:
+    """Formats a path for display relative to current directory if under cwd."""
+    if not path_or_uri:
+        return path_or_uri
+    if path_or_uri.startswith("gs://") or "://" in path_or_uri:
+        return path_or_uri
+    try:
+        resolved_path = pathlib.Path(path_or_uri).resolve()
+        cwd = pathlib.Path.cwd().resolve()
+        rel_path = resolved_path.relative_to(cwd)
+        if rel_path == pathlib.Path("."):
+            return "."
+        return f"./{rel_path}"
+    except (ValueError, RuntimeError):
+        return path_or_uri
+
+
 def _archive_and_log(
     ramble_manager: RambleManager, spinner_label: str | None = None
 ) -> None:
@@ -181,42 +313,74 @@ def _archive_and_log(
         ws_path, boh_json_path, boh_html_path, all_uploads_succeeded = (
             ramble_manager.archive()
         )
+
+    _export_logs(ramble_manager)
+
     storage_provider = StorageProviderFactory.get_provider_for_run(
         ramble_manager.workspace_name
     )
     updates = {}
-    if boh_html_path and storage_provider:
-        console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report saved at: "
-            f"{_make_clickable_link(boh_html_path)}[/{theme.CHS_SUCCESS_STYLE}]"
-        )
-        updates["boh_html_uri"] = boh_html_path
-    if boh_json_path and storage_provider:
-        console.print(
-            f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-            f"{_make_clickable_link(boh_json_path)}[/{theme.CHS_SUCCESS_STYLE}]"
-        )
-        updates["boh_uri"] = boh_json_path
-    if ws_path and storage_provider:
-        logger.debug(f"Workspace archived to: {_get_href_link(ws_path)}")
-        updates["workspace_uri"] = ws_path
 
-    if not all_uploads_succeeded:
-        console.print(
-            f"[{theme.CHS_FAILURE_STYLE}]Upload to GCS failed for some files, "
-            f"check the local paths above.[/{theme.CHS_FAILURE_STYLE}]"
-        )
-        console.print(
-            f"[{theme.CHS_NEUTRAL_STYLE}]Tip:  If mounted, Check your "
-            f"docker host volume mount to access the local files for the "
-            f"same.[/{theme.CHS_NEUTRAL_STYLE}]"
-        )
+    export_dir = ramble_manager.export_logs_dir
+    local_html = _find_local_artifact(
+        "bill_of_health.html", export_dir, ramble_manager.path
+    )
+    local_json = _find_local_artifact(
+        "bill_of_health.json", export_dir, ramble_manager.path
+    )
 
     if storage_provider and all_uploads_succeeded:
+        if boh_html_path:
+            console.print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report "
+                f"saved at: {_make_clickable_link(boh_html_path)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+            updates["boh_html_uri"] = boh_html_path
+        if boh_json_path:
+            console.print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
+                f"{_make_clickable_link(boh_json_path)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+            updates["boh_uri"] = boh_json_path
+        if ws_path:
+            logger.debug(f"Workspace archived to: {_get_href_link(ws_path)}")
+            updates["workspace_uri"] = ws_path
         updates["is_archived"] = True
-        ramble_manager._app_data.update_run(
-            ramble_manager.workspace_name, updates
-        )
+    else:
+        if storage_provider:
+            destination = storage_provider.get_uri("").rstrip("/")
+            console.print(
+                f"[Warning] Failed to upload results to GCS ({destination}). "
+                "Results are preserved locally:",
+                style=theme.CHS_WARNING_STYLE,
+                markup=False,
+            )
+
+        html_path = local_html or boh_html_path
+        json_path = local_json or boh_json_path
+
+        display_html = _format_local_display_path(html_path)
+        display_json = _format_local_display_path(json_path)
+
+        if display_html:
+            console.print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report "
+                f"saved at: {_make_clickable_link(display_html)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+            updates["boh_html_uri"] = html_path
+        if display_json:
+            console.print(
+                f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
+                f"{_make_clickable_link(display_json)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]"
+            )
+            updates["boh_uri"] = json_path
+
+    if updates:
+        ramble_manager.update_run_entry(updates)
 
 
 @contextmanager
@@ -529,16 +693,6 @@ def _validate_cli_args(
     )
     if errors:
         raise ex.ChsValidationError("\n".join(errors))
-
-
-def _validate_storage(app_data: ChsAppData) -> None:
-    """Validates that GCS storage is configured."""
-    storage_config = app_data.get_storage_config()
-    if not storage_config or storage_config.get("type") != "gcs":
-        raise ex.ChsValidationError(
-            "GCS storage must be configured to run CHS. "
-            "Please configure GCS using 'chs configure storage gcs'."
-        )
 
 
 def _validate_run_args(
@@ -887,11 +1041,18 @@ def _show_results(
         telemetry.set_telemetry_run_id(workspace_name)
 
     boh_path = workspaces_dir / workspace_name / "bill_of_health.json"
+    run_data = app_data.get_run(workspace_name)
+    if not boh_path.exists() and isinstance(run_data, dict):
+        export_dir = run_data.get("export_logs_dir")
+        if export_dir:
+            exported_boh = pathlib.Path(export_dir) / "bill_of_health.json"
+            if exported_boh.exists():
+                boh_path = exported_boh
+
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
 
     boh_uri = None
     if not suppress_boh_uri:
-        run_data = app_data.get_run(workspace_name)
         if isinstance(run_data, dict):
             boh_uri = run_data.get("boh_html_uri") or run_data.get("boh_uri")
         if not boh_uri and run_provider:
@@ -901,8 +1062,16 @@ def _show_results(
                 boh_uri = run_provider.get_uri(html_remote)
             elif run_provider.exists(json_remote):
                 boh_uri = run_provider.get_uri(json_remote)
+        if boh_uri:
+            boh_uri = _format_local_display_path(boh_uri)
 
     if not boh_path.exists():
+        if not run_provider and not app_data.get_storage_config():
+            raise ex.BillOfHealthNotFoundException(
+                f"Results not found for run '{run_id}'.\n"
+                "This usually happens if the jobs are still running, "
+                "the run was canceled, or the run ID is incorrect."
+            )
         logger.debug(
             "Local Bill of Health not found. "
             "Attempting to download from storage..."
@@ -1071,14 +1240,15 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     accelerator clusters (Kubernetes or Slurm) to evaluate their health.
 
     \b
-    TL;DR: To get started, configure a pre-existing GCS bucket and run a health
-    check:
-        chs configure storage gcs <bucket-name>
+    TL;DR: To get started, run a health check:
         chs run --nodepools <nodepool-name>
+
+    Or optionally configure a GCS bucket to store and share results remotely:
+        chs configure storage gcs <bucket-name>
 
     \b
     Examples:
-      # First, configure a pre-existing GCS storage bucket to store results
+      # (Optional) Configure a GCS bucket to upload and share results
       chs configure storage gcs <bucket-name>
 
     \b
@@ -1376,6 +1546,29 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     ),
     callback=validators.validate_run_id,
 )
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False),
+    help=(
+        "Directory where test logs, Bill of Health artifacts, and debug "
+        "logs are saved, in a per-run '<workspace_name>/' subfolder. "
+        f"Overrides the default './{constants.DEFAULT_OUTPUT_DIR}/' "
+        "destination for this run. "
+        "When running via Docker, use a path under "
+        f"'/workspace/{constants.DEFAULT_OUTPUT_DIR}' or a bind-mounted "
+        "directory."
+        "\n\n "
+    ),
+)
+@click.option(
+    "--storage-path",
+    help=(
+        "GCS destination bucket or path (e.g., my-bucket, gs://my-bucket, "
+        "or gs://my-bucket/prefix) to upload results for this run, "
+        "overriding the global storage configuration."
+        "\n\n "
+    ),
+)
 @click.pass_obj
 @_handle_termination_signals(_interrupt_run)
 def run(
@@ -1389,6 +1582,8 @@ def run(
     partitions: str | None,
     auto_approve: bool = False,
     run_id: str | None = None,
+    output_dir: str | None = None,
+    storage_path: str | None = None,
 ) -> RunExecutionResult:
     """Run tests or a suite on the specified cluster hardware.
 
@@ -1434,7 +1629,10 @@ def run(
             partitions=partitions,
         )
 
-        _validate_storage(app_data)
+        _validate_output_dir(output_dir)
+        run_storage_config = _resolve_and_validate_storage(
+            storage_path, app_data
+        )
 
         preflights.run_platform_preflights()
 
@@ -1687,6 +1885,18 @@ def run(
     test_names = ", ".join(scheduled_test_names)
     preview_title = "CHS Execution Preview:"
     console = Console()
+    if not run_storage_config:
+        dest_display = os.path.join(
+            output_dir or f"./{constants.DEFAULT_OUTPUT_DIR}", ""
+        )
+        console.print(
+            f"[Info] No GCS storage configured. Results will be saved "
+            f"locally under {dest_display}\n"
+            "(To configure remote GCS upload, run "
+            "'chs configure storage gcs <bucket-or-path>')",
+            style=theme.CHS_NEUTRAL_STYLE,
+            markup=False,
+        )
     console.print(f"[bold]{preview_title}[/bold]")
     console.print(
         f"  Target Cluster:    [{theme.CHS_HEADER_STYLE}]{full_cluster_name}"
@@ -1749,7 +1959,7 @@ def run(
     telemetry.set_telemetry_run_id(workspace_name)
     telemetry_reporting.record_run(
         scheduler_obj,
-        app_data.get_storage_config(),
+        run_storage_config,
         machine_type,
         nodes_under_test,
         suite,
@@ -1788,7 +1998,7 @@ def run(
             "scheduler": scheduler_obj.name,
             "machine_type": machine_type,
             "command_statement": command_statement,
-            "storage": app_data.get_storage_config(),
+            "storage": run_storage_config,
             "node_to_instance_id": scheduler_obj.node_to_instance_id,
             "deadline": deadline,
             "tests": parsed_tests,
@@ -1797,6 +2007,9 @@ def run(
             "active_tier": 1,
             "active_tier_tests": active_tier_tests,
             "submission_complete": False,
+            "export_logs_dir": _resolve_export_logs_dir(
+                output_dir, workspace_name
+            ),
         },
     )
 
@@ -2070,24 +2283,9 @@ def _validate_and_save_storage(app_data: ChsAppData, config: dict) -> None:
 
 def _interactive_configure_storage(app_data: ChsAppData) -> None:
     """Guided flow for storage configuration."""
-    # Temporarily bypassing storage type selection to mandate GCS storage
-    # click.echo("Select storage type:")
-    # click.echo("  [1] GCS")
-    # click.echo("  [2] Path")
-    # choice = click.prompt("Choice", type=int, default=1)
-    #
-    # if choice == 1:
     click.echo("Configuring GCS storage...")
-    bucket_name = click.prompt("Enter GCS bucket name")
-    if bucket_name.lower().startswith("gs://"):
-        bucket_name = bucket_name[5:]
-    config = {"type": "gcs", "gcs": {"bucket_name": bucket_name}}
-    # elif choice == 2:
-    #     path = click.prompt("Enter target directory path (absolute)")
-    #     config = {"type": "path", "path": {"path": path}}
-    # else:
-    #     raise click.ClickException("Invalid choice.")
-
+    bucket_name = click.prompt("Enter GCS bucket name or path")
+    config = _build_gcs_config(bucket_name)
     _validate_and_save_storage(app_data, config)
 
 
@@ -2110,31 +2308,16 @@ def configure_storage(ctx: click.Context) -> None:
 @click.argument("bucket_name", required=False)
 @click.pass_context
 def configure_gcs(ctx: click.Context, bucket_name: str | None) -> None:
-    """Configure GCS storage."""
+    """Configure GCS storage.
+
+    BUCKET_NAME may be a bucket name, a bucket/prefix path, or a gs:// URI
+    (e.g. my-bucket, my-bucket/team-a, gs://my-bucket/team-a).
+    """
     app_data = ctx.obj["app_data"]
     if not bucket_name:
-        bucket_name = click.prompt("Enter GCS bucket name")
+        bucket_name = click.prompt("Enter GCS bucket name or path")
 
-    if bucket_name.lower().startswith("gs://"):
-        bucket_name = bucket_name[5:]
-
-    config = {"type": "gcs", "gcs": {"bucket_name": bucket_name}}
-    _validate_and_save_storage(app_data, config)
-
-
-# Temporarily disabled to mandate GCS storage.
-# Uncomment to re-enable local path storage configuration.
-# @configure_storage.command("path")
-# @click.argument("path", required=False)
-# @click.pass_context
-# def configure_path(ctx: click.Context, path: str | None) -> None:
-#     """Configure Local Path storage."""
-#     app_data = ctx.obj["app_data"]
-#     if not path:
-#         path = click.prompt("Enter target directory path (absolute)")
-#
-#     config = {"type": "path", "path": {"path": path}}
-#     _validate_and_save_storage(app_data, config)
+    _validate_and_save_storage(app_data, _build_gcs_config(bucket_name))
 
 
 @configure_storage.command("show")

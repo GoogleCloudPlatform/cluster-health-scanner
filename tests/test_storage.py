@@ -216,7 +216,7 @@ class TestGcsStorageProvider(unittest.TestCase):
         provider = GcsStorageProvider({"bucket_name": "my-bucket"})
         with self.assertRaises(ChsValidationError) as ctx:
             provider.validate()
-        self.assertIn("Failed to access GCS bucket", str(ctx.exception))
+        self.assertIn("Failed to access GCS path", str(ctx.exception))
         mock_blob.delete.assert_not_called()
 
     @mock.patch("chs.storage.gcs.storage.Client")
@@ -248,7 +248,30 @@ class TestGcsStorageProvider(unittest.TestCase):
         with self.assertRaises(ChsValidationError) as ctx:
             provider.validate()
         self.assertIn(
-            "Access denied: Write permission missing", str(ctx.exception)
+            "Access denied: Write permission missing for GCS path 'my-bucket'",
+            str(ctx.exception),
+        )
+        mock_blob.delete.assert_not_called()
+
+    @mock.patch("chs.storage.gcs.storage.Client")
+    def test_validate_write_failure_forbidden_with_prefix(
+        self, mock_storage_client
+    ):
+        """Test validate includes prefix in error message if write forbidden."""
+        mock_client = mock_storage_client.return_value
+        mock_bucket = mock_client.bucket.return_value
+        mock_blob = mock_bucket.blob.return_value
+        mock_blob.upload_from_string.side_effect = gcp_ex.Forbidden("Forbidden")
+
+        provider = GcsStorageProvider(
+            {"bucket_name": "my-bucket", "prefix": "sub/folder"}
+        )
+        with self.assertRaises(ChsValidationError) as ctx:
+            provider.validate()
+        self.assertIn(
+            "Access denied: Write permission missing for GCS path "
+            "'my-bucket/sub/folder'",
+            str(ctx.exception),
         )
         mock_blob.delete.assert_not_called()
 
@@ -268,6 +291,43 @@ class TestGcsStorageProvider(unittest.TestCase):
         provider.validate()
         mock_blob.upload_from_string.assert_called_once()
         mock_blob.delete.assert_called_once()
+
+    @mock.patch("chs.storage.gcs.storage.Client")
+    def test_prefix_operations(self, mock_storage_client):
+        """Test GcsStorageProvider with a configured subpath/prefix."""
+        mock_client = mock_storage_client.return_value
+        mock_bucket = mock_client.bucket.return_value
+        mock_blob = mock_bucket.blob.return_value
+
+        provider = GcsStorageProvider(
+            {"bucket_name": "my-bucket", "prefix": "sub/path"}
+        )
+        self.assertEqual(provider.bucket_name, "my-bucket")
+        self.assertEqual(provider.prefix, "sub/path")
+        self.assertEqual(
+            provider.get_uri("bills_of_health/run1.json"),
+            "gs://my-bucket/sub/path/bills_of_health/run1.json",
+        )
+
+        # Upload
+        provider.upload_file("/tmp/local.txt", "remote/path.txt")
+        mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
+
+        # Download
+        provider.download_file("remote/path.txt", "/tmp/local.txt")
+        mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
+
+        # Exists
+        mock_blob.exists.return_value = True
+        self.assertTrue(provider.exists("remote/path.txt"))
+        mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
+
+        # Validate canary uses prefix
+        provider.validate()
+        canary_call_arg = mock_bucket.blob.call_args[0][0]
+        self.assertTrue(
+            canary_call_arg.startswith("sub/path/.chs-connectivity-test-")
+        )
 
 
 class TestGcsStorageProviderClientReuse(unittest.TestCase):

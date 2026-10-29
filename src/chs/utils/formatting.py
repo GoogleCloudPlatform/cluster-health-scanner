@@ -51,19 +51,26 @@ def format_relative_time(timestamp_iso: str) -> str:
         return "Unknown"
 
 
-def format_storage_path(storage_dict: dict) -> str:
+def format_storage_path(storage_dict: dict | None) -> str:
     """Formats a storage configuration dictionary into a concise string.
 
     Args:
         storage_dict: The storage dictionary from the run metadata.
 
     Returns:
-        A concise path representation (e.g. 'gs://bucket/prefix' or local path).
+        A concise path representation (e.g. 'gs://bucket/prefix' or local path),
+        or 'Local' if no remote storage is configured.
     """
+    if not storage_dict:
+        return "Local"
     storage_type = storage_dict.get("type", "unknown").upper()
     if storage_type == "GCS":
-        bucket = storage_dict.get("gcs", {}).get("bucket_name", "")
-        return f"gs://{bucket.rstrip('/')}"
+        gcs_config = storage_dict.get("gcs", {})
+        bucket = gcs_config.get("bucket_name", "").strip("/")
+        prefix = gcs_config.get("prefix", "").strip("/")
+        if prefix:
+            return f"gs://{bucket}/{prefix}"
+        return f"gs://{bucket}"
     elif storage_type == "PATH":
         return storage_dict.get("path", {}).get("path", "")
     return "Unknown"

@@ -17,12 +17,14 @@
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import sysconfig
 import tempfile
 import unittest
 from unittest import mock
+from chs import constants
 from chs.ramble_manager import RambleManager
 from chs.exceptions import ChsException
 
@@ -460,9 +462,16 @@ class TestRambleManager(unittest.TestCase):
         manager._scheduler = mock.Mock()
         manager._scheduler.name = "slurm"
         results_json_path = f"{self.tmp_dir}/ws1/results.latest.json"
+        # The run's own storage wins over the (different) global config.
         self.mock_app_data.get_storage_config.return_value = {
             "type": "gcs",
-            "gcs": {"bucket_name": "my-bucket"},
+            "gcs": {"bucket_name": "global-bucket"},
+        }
+        self.mock_app_data.get_run.return_value = {
+            "storage": {
+                "type": "gcs",
+                "gcs": {"bucket_name": "my-bucket", "prefix": "team-a"},
+            }
         }
 
         with mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen:
@@ -479,11 +488,32 @@ class TestRambleManager(unittest.TestCase):
                             results_json_path,
                             base_log_dir=f"{self.tmp_dir}/ws1",
                             cluster_type="slurm",
-                            gcs_base_path="gs://my-bucket/workspaces/ws1",
+                            gcs_base_path="gs://my-bucket/team-a/workspaces/ws1",
                             thresholds_path=None,
                             skip_validation=False,
                         )
                     mock_boh_gen.return_value.generate.assert_called_once()
+
+    def test_generate_boh_local_run_ignores_global_storage(self):
+        """A local-only run never links to the global GCS bucket."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        manager._scheduler = mock.Mock()
+        manager._scheduler.name = "slurm"
+        results_json_path = f"{self.tmp_dir}/ws1/results.latest.json"
+        self.mock_app_data.get_storage_config.return_value = {
+            "type": "gcs",
+            "gcs": {"bucket_name": "configured-later"},
+        }
+        self.mock_app_data.get_run.return_value = {"storage": None}
+
+        with (
+            mock.patch("chs.ramble_manager.BOHGenerator") as mock_boh_gen,
+            mock.patch("chs.core.plugin_manager.PluginManager"),
+        ):
+            self.mock_os_path_exists.side_effect = lambda p: True
+            manager.generate_boh(results_json_path)
+
+        self.assertIsNone(mock_boh_gen.call_args.kwargs["gcs_base_path"])
 
     def test_wait_for_jobs(self):
         """Test wait_for_jobs calls _monitor_jobs."""
@@ -792,6 +822,190 @@ mycriteria:
         paths = [call.kwargs["args"][-1] for call in mock_ramble.call_args_list]
         self.assertEqual(
             [os.path.basename(p) for p in paths], ["repos", "tests"]
+        )
+
+    def _make_experiment(self, manager, app, workload, exp_name, write_out):
+        """Creates an experiment dir, optionally with its .out log."""
+        exp_dir = os.path.join(
+            manager.path, "experiments", app, workload, exp_name
+        )
+        os.makedirs(exp_dir)
+        if write_out:
+            with open(os.path.join(exp_dir, f"{exp_name}.out"), "w") as f:
+                f.write(f"output of {exp_name}\n")
+        return exp_dir
+
+    def test_export_logs_copies_flat_with_prefix_stripped(self):
+        """Logs land in one flat dir named <experiment>.log minus the prefix."""
+        run_id = "cluster-lite-ab12"
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, run_id)
+        smi = self._make_experiment(
+            manager,
+            "nvidia-smi",
+            "local",
+            f"chs-{run_id}-nvidia-smi-node-a",
+            write_out=True,
+        )
+        pair = self._make_experiment(
+            manager,
+            "nccl-tests",
+            "all-gather",
+            f"chs-{run_id}-nccl-pairwise-all-gather-node-a-node-b",
+            write_out=True,
+        )
+        self.mock_app_data.get_run.return_value = {
+            "job_entries": {
+                "job-1": {"experiment_dir": smi},
+                "job-2": {"experiment_dir": pair},
+            }
+        }
+        for name in (
+            "bill_of_health.html",
+            "bill_of_health.json",
+            "debug.txt",
+            "internal.log",
+        ):
+            with open(os.path.join(manager.path, name), "w") as f:
+                f.write(name)
+
+        target = os.path.join(self.tmp_dir, constants.DEFAULT_OUTPUT_DIR, "ws1")
+        exported = manager.export_logs(target)
+
+        self.assertCountEqual(
+            os.listdir(target),
+            [
+                "nvidia-smi-node-a.log",
+                "nccl-pairwise-all-gather-node-a-node-b.log",
+                "bill_of_health.html",
+                "bill_of_health.json",
+                "debug.txt",
+                "internal.log",
+            ],
+        )
+        self.assertEqual(len(exported), 6)
+        with open(os.path.join(target, "nvidia-smi-node-a.log")) as f:
+            self.assertIn("nvidia-smi-node-a", f.read())
+
+    def test_export_logs_skips_jobs_without_output(self):
+        """Jobs whose .out never appeared are skipped, not errors."""
+        run_id = "cluster-lite-ab12"
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, run_id)
+        present = self._make_experiment(
+            manager,
+            "nvidia-smi",
+            "local",
+            f"chs-{run_id}-nvidia-smi-node-a",
+            write_out=True,
+        )
+        missing = self._make_experiment(
+            manager,
+            "nvidia-dcgm",
+            "diag",
+            f"chs-{run_id}-dcgm-level-3-node-a",
+            write_out=False,
+        )
+        self.mock_app_data.get_run.return_value = {
+            "job_entries": {
+                "job-1": {"experiment_dir": present},
+                "job-2": {"experiment_dir": missing},
+                "job-3": {},
+            }
+        }
+
+        target = os.path.join(self.tmp_dir, "out")
+        exported = manager.export_logs(target)
+
+        self.assertEqual(os.listdir(target), ["nvidia-smi-node-a.log"])
+        self.assertEqual(len(exported), 1)
+
+    def test_export_logs_without_run_id_keeps_full_name(self):
+        """With no run_id there is no prefix to strip."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        exp = self._make_experiment(
+            manager,
+            "nvidia-smi",
+            "local",
+            "chs-x-nvidia-smi-node-a",
+            write_out=True,
+        )
+        self.mock_app_data.get_run.return_value = {
+            "job_entries": {"job-1": {"experiment_dir": exp}}
+        }
+
+        target = os.path.join(self.tmp_dir, "out")
+        manager.export_logs(target)
+
+        self.assertEqual(os.listdir(target), ["chs-x-nvidia-smi-node-a.log"])
+
+    def test_export_logs_raises_when_target_unwritable(self):
+        """A target that cannot be created surfaces as OSError to the caller."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, "r1")
+        blocker = os.path.join(self.tmp_dir, "file")
+        with open(blocker, "w") as f:
+            f.write("")
+        with self.assertRaises(OSError):
+            manager.export_logs(
+                os.path.join(blocker, constants.DEFAULT_OUTPUT_DIR)
+            )
+
+    def test_export_logs_raises_on_partial_copy_failure(self):
+        """A failed file copy raises, after copying everything else."""
+        run_id = "r1"
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, run_id)
+        ok = self._make_experiment(
+            manager, "nvidia-smi", "local", f"chs-{run_id}-ok", True
+        )
+        bad = self._make_experiment(
+            manager, "nvidia-smi", "local", f"chs-{run_id}-bad", True
+        )
+        self.mock_app_data.get_run.return_value = {
+            "job_entries": {
+                "job-1": {"experiment_dir": bad},
+                "job-2": {"experiment_dir": ok},
+            }
+        }
+        real_copy2 = shutil.copy2
+
+        def flaky_copy2(src, dest):
+            if "bad" in str(src):
+                raise PermissionError(13, "Permission denied")
+            return real_copy2(src, dest)
+
+        target = os.path.join(self.tmp_dir, "out")
+        with mock.patch(
+            "chs.ramble_manager.shutil.copy2", side_effect=flaky_copy2
+        ):
+            with self.assertRaisesRegex(
+                OSError, "1 file\\(s\\) failed to copy: Permission denied"
+            ):
+                manager.export_logs(target)
+
+        self.assertEqual(os.listdir(target), ["ok.log"])
+
+    def test_export_logs_dir_property(self):
+        """export_logs_dir reflects the registry; non-str / missing is None."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, "r1")
+        cases = {
+            "set": (
+                {"export_logs_dir": f"/tmp/{constants.DEFAULT_OUTPUT_DIR}/ws1"},
+                f"/tmp/{constants.DEFAULT_OUTPUT_DIR}/ws1",
+            ),
+            "disabled": ({"export_logs_dir": None}, None),
+            "legacy_run": ({}, None),
+            "no_entry": (None, None),
+            "non_str": ({"export_logs_dir": 123}, None),
+        }
+        for name, (entry, expected) in cases.items():
+            with self.subTest(name):
+                self.mock_app_data.get_run.return_value = entry
+                self.assertEqual(manager.export_logs_dir, expected)
+
+    def test_update_run_entry(self):
+        """update_run_entry merges updates into this run's registry entry."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, "r1")
+        manager.update_run_entry({"export_logs_dir": "/ws"})
+        self.mock_app_data.update_run.assert_called_once_with(
+            "ws1", {"export_logs_dir": "/ws"}
         )
 
 

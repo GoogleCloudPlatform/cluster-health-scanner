@@ -139,7 +139,7 @@ def record_command_flags(ctx: click.Context) -> None:
 @_never_raises
 def record_run(
     scheduler_obj: BaseScheduler,
-    storage_config: dict,
+    storage_config: dict | None,
     machine_type: str,
     nodes: list[str],
     suite: str | None,
@@ -150,7 +150,7 @@ def record_run(
         MetricName.CLUSTER_TYPE,
         _CLUSTER_TYPES.get(scheduler_obj.name, "UNKNOWN"),
     )
-    storage_type = storage_config.get("type") or "none"
+    storage_type = (storage_config or {}).get("type") or "none"
     telemetry.send_metric(MetricName.STORAGE_TYPE, storage_type.upper())
     telemetry.send_metric(MetricName.MACHINE_TYPE, machine_type)
     telemetry.send_metric(MetricName.NODE_COUNT, len(nodes))

@@ -21,6 +21,7 @@ routing, and error handling for various valid and invalid inputs.
 import dataclasses
 import datetime
 import os
+import pathlib
 import shutil
 import signal
 import stat
@@ -34,11 +35,13 @@ import click
 from click import testing
 
 from chs import cli
+from chs import constants
 from chs import exceptions
 from chs import telemetry
 from chs.cli import background_cleanup
 from chs.cli import list_formatting
 from chs.protos import bill_of_health_pb2 as pb
+from chs.ramble_manager import RambleManager
 from chs.utils.k8s_client import KubeError
 from chs.utils.tests import TestsMap as _TestsMap
 
@@ -131,6 +134,7 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance = self.mock_rm_cls.return_value
         self.mock_rm_instance.workspace_name = MOCK_WORKSPACE_NAME
         self.mock_rm_instance.path = f"/mocked/workspaces/{MOCK_WORKSPACE_NAME}"
+        self.mock_rm_instance.export_logs_dir = None
         self.mock_rm_instance.execute_experiments.return_value = []
         self.mock_rm_instance.archive.return_value = (
             "mock_ws_path",
@@ -1662,6 +1666,423 @@ class TestCli(unittest.TestCase):
             self.mock_app_data, expected_run_id
         )
 
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_output_dir_and_storage_path(self, mock_analyze_action):
+        """Test --output-dir and --storage-path flag behavior on chs run."""
+        self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "slurm"
+        workspace_name = "20230101-120000_customrun-mockhash"
+
+        with tempfile.TemporaryDirectory() as cwd:
+            # 1. Default run: saves to ./<DEFAULT_OUTPUT_DIR>/<workspace_name>
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                    ],
+                    standalone_mode=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                expected_default_dir = os.path.join(
+                    cwd, constants.DEFAULT_OUTPUT_DIR, workspace_name
+                )
+                self.assertEqual(
+                    run_details["export_logs_dir"], expected_default_dir
+                )
+                self.assertEqual(
+                    run_details["storage"],
+                    {"type": "gcs", "gcs": {"bucket_name": "test_bucket"}},
+                )
+
+            # 2. Custom --output-dir
+            custom_out = os.path.join(cwd, "custom_output")
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                        "--output-dir",
+                        custom_out,
+                    ],
+                    standalone_mode=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                self.assertEqual(
+                    run_details["export_logs_dir"],
+                    os.path.join(custom_out, workspace_name),
+                )
+
+            # 3. Unwritable --output-dir fails validation upfront
+            with mock.patch(
+                "chs.cli.pathlib.Path.mkdir",
+                side_effect=PermissionError("Permission denied"),
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                        "--output-dir",
+                        "/root/forbidden",
+                    ],
+                )
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn(
+                    "Output directory validation failed:", result.output
+                )
+
+            # 4. Custom --storage-path variations (prefix, bare bucket, path)
+            storage_cases = [
+                (
+                    "gs://my-bucket/custom/prefix",
+                    {"bucket_name": "my-bucket", "prefix": "custom/prefix"},
+                ),
+                (
+                    "bare-bucket",
+                    {"bucket_name": "bare-bucket"},
+                ),
+                (
+                    "bare-bucket/sub/path",
+                    {"bucket_name": "bare-bucket", "prefix": "sub/path"},
+                ),
+            ]
+            for storage_input, expected_gcs in storage_cases:
+                with (
+                    self.subTest(storage_input=storage_input),
+                    mock.patch(
+                        "chs.cli.pathlib.Path.cwd",
+                        return_value=pathlib.Path(cwd),
+                    ),
+                    mock.patch(
+                        "chs.cli.StorageProviderFactory.get_provider"
+                    ) as mock_get_provider,
+                ):
+                    mock_provider = mock.Mock()
+                    mock_get_provider.return_value = mock_provider
+                    result = self.runner.invoke(
+                        cli.cli,
+                        [
+                            "run",
+                            "--suite",
+                            "suite1",
+                            "--run-id",
+                            "customrun",
+                            "--auto-approve",
+                            "--storage-path",
+                            storage_input,
+                        ],
+                        standalone_mode=False,
+                    )
+                    self.assertEqual(result.exit_code, 0, result.output)
+                    mock_provider.validate.assert_called_once()
+                    _, run_details = self.mock_app_data.update_run.call_args[0]
+                    self.assertEqual(
+                        run_details["storage"],
+                        {
+                            "type": "gcs",
+                            "gcs": expected_gcs,
+                        },
+                    )
+
+            # 5. Invalid --storage-path with empty bucket
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--run-id",
+                    "customrun",
+                    "--auto-approve",
+                    "--storage-path",
+                    "gs://",
+                ],
+            )
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn(
+                "Storage validation failed: GCS bucket name cannot be "
+                "empty.",
+                result.output,
+            )
+
+            # 7. No storage configured (local-only mode)
+            self.mock_app_data.get_storage_config.return_value = None
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                    ],
+                    standalone_mode=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                self.assertIsNone(run_details["storage"])
+                self.assertIn("No GCS storage configured", result.output)
+                self.assertIn(
+                    f"./{constants.DEFAULT_OUTPUT_DIR}/", result.output
+                )
+
+    def test_resolve_export_logs_dir(self):
+        """Resolver always nests results in a per-run subfolder."""
+        with tempfile.TemporaryDirectory() as cwd:
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                # Default when output_dir is None
+                self.assertEqual(
+                    cli._resolve_export_logs_dir(None, "ws1"),
+                    os.path.join(cwd, constants.DEFAULT_OUTPUT_DIR, "ws1"),
+                )
+
+                # Custom absolute path gets a per-run subfolder too
+                custom_abs = os.path.join(cwd, "my_custom_dir")
+                self.assertEqual(
+                    cli._resolve_export_logs_dir(custom_abs, "ws1"),
+                    os.path.join(custom_abs, "ws1"),
+                )
+
+    @mock.patch("chs.cli.logger", autospec=True)
+    def test_export_logs_hook(self, mock_logger):
+        """_export_logs exports, or falls back to workspace on OSError."""
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/mocked/workspaces/ws1"
+
+        rm.export_logs_dir = None
+        cli._export_logs(rm)
+        rm.export_logs.assert_not_called()
+        mock_logger.debug.assert_not_called()
+
+        export_dir = f"/custom/{constants.DEFAULT_OUTPUT_DIR}/ws1"
+        rm.export_logs_dir = export_dir
+        rm.export_logs.return_value = [f"{export_dir}/a.log"]
+        cli._export_logs(rm)
+        rm.export_logs.assert_called_once_with(export_dir)
+        rm.update_run_entry.assert_not_called()
+
+        # OSError: warn, do NOT copy into the workspace, and keep the
+        # configured export location so later retries can still export there.
+        rm.export_logs.reset_mock()
+        rm.export_logs.side_effect = PermissionError(13, "Permission denied")
+        with mock.patch("chs.cli.Console", autospec=True) as mock_console:
+            cli._export_logs(rm)
+        rm.export_logs.assert_called_once_with(export_dir)
+        rm.update_run_entry.assert_not_called()
+        warning = mock_console.return_value.print.call_args[0][0]
+        self.assertIn(f"Could not export results to '{export_dir}'", warning)
+        self.assertIn("Permission denied", warning)
+        self.assertIn(
+            "Results preserved in workspace: /mocked/workspaces/ws1", warning
+        )
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_exports_after_archiving(self, mock_export):
+        """_archive_and_log triggers the export hook after archiving."""
+        calls = []
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/nonexistent/ws1"
+        rm.export_logs_dir = None
+        rm.has_bill_of_health.return_value = False
+        mock_export.side_effect = lambda _: calls.append("export")
+        rm.archive.side_effect = lambda: calls.append("archive") or (
+            None,
+            None,
+            None,
+            False,
+        )
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider_for_run",
+            return_value=None,
+        ):
+            cli._archive_and_log(rm)
+        self.assertEqual(calls, ["archive", "export"])
+        mock_export.assert_called_once_with(rm)
+        rm.update_run_entry.assert_not_called()
+
+    def test_archive_and_log_still_archives_when_export_crashes(self):
+        """An unexpected export error never blocks the GCS upload."""
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/nonexistent/ws1"
+        rm.export_logs_dir = "/out/ws1"
+        rm.has_bill_of_health.return_value = False
+        rm.export_logs.side_effect = AttributeError("bad run metadata")
+        rm.archive.return_value = (None, None, None, False)
+        with (
+            mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ),
+            mock.patch("chs.cli.Console", autospec=True) as mock_console,
+        ):
+            cli._archive_and_log(rm)
+        rm.archive.assert_called_once()
+        printed = [
+            c.args[0] for c in mock_console.return_value.print.call_args_list
+        ]
+        self.assertTrue(
+            any("Could not export results to '/out/ws1'" in p for p in printed)
+        )
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_gcs_upload_failure_warns(self, mock_export):
+        """GCS upload failure names the destination and shows local paths."""
+        with tempfile.TemporaryDirectory() as export_dir:
+            for name in ("bill_of_health.html", "bill_of_health.json"):
+                pathlib.Path(export_dir, name).write_text("{}")
+            rm = mock.create_autospec(RambleManager, instance=True)
+            rm.workspace_name = "ws1"
+            rm.path = "/nonexistent/ws1"
+            rm.export_logs_dir = export_dir
+            rm.has_bill_of_health.return_value = True
+            rm.archive.return_value = (None, None, None, False)
+            provider = mock.Mock()
+            provider.get_uri.return_value = "gs://my-bucket/team-a/"
+            with (
+                mock.patch(
+                    "chs.cli.StorageProviderFactory.get_provider_for_run",
+                    return_value=provider,
+                ),
+                mock.patch("chs.cli.Console", autospec=True) as mock_console,
+            ):
+                cli._archive_and_log(rm)
+
+        printed = [
+            c.args[0] for c in mock_console.return_value.print.call_args_list
+        ]
+        self.assertIn(
+            "[Warning] Failed to upload results to GCS (gs://my-bucket/team-a)."
+            " Results are preserved locally:",
+            printed[0],
+        )
+        self.assertIn(
+            os.path.join(export_dir, "bill_of_health.html"), printed[1]
+        )
+        self.assertIn(
+            os.path.join(export_dir, "bill_of_health.json"), printed[2]
+        )
+        rm.update_run_entry.assert_called_once_with(
+            {
+                "boh_html_uri": os.path.join(export_dir, "bill_of_health.html"),
+                "boh_uri": os.path.join(export_dir, "bill_of_health.json"),
+            }
+        )
+
+    def test_format_local_display_path(self):
+        """_format_local_display_path formats paths relative to cwd."""
+        cwd = pathlib.Path.cwd().resolve()
+        subpath = str(cwd / "chs-output" / "ws1" / "bill_of_health.html")
+        self.assertEqual(
+            cli._format_local_display_path(subpath),
+            "./chs-output/ws1/bill_of_health.html",
+        )
+
+        # Path outside cwd remains unchanged
+        outside = "/tmp/somewhere/outside/bill_of_health.html"
+        self.assertEqual(cli._format_local_display_path(outside), outside)
+
+        # Remote URIs remain unchanged
+        gcs_uri = "gs://bucket/path/bill_of_health.html"
+        self.assertEqual(cli._format_local_display_path(gcs_uri), gcs_uri)
+
+        # None remains None
+        self.assertIsNone(cli._format_local_display_path(None))
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_formats_local_paths_relative_to_cwd(
+        self, mock_export
+    ):
+        """_archive_and_log prints local paths as ./chs-output/..."""
+        cwd = pathlib.Path.cwd().resolve()
+        rel_export_dir = "chs-output/ws1"
+        export_dir = str(cwd / rel_export_dir)
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/workspace/ws1"
+        rm.export_logs_dir = export_dir
+        rm.has_bill_of_health.return_value = True
+        rm.archive.return_value = (None, None, None, False)
+
+        with (
+            mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ),
+            mock.patch("chs.cli.Console", autospec=True) as mock_console,
+            mock.patch(
+                "chs.cli._find_local_artifact",
+                side_effect=lambda name, *dirs: os.path.join(export_dir, name),
+            ),
+        ):
+            cli._archive_and_log(rm)
+
+        printed = [
+            c.args[0] for c in mock_console.return_value.print.call_args_list
+        ]
+        expected_html = f"./{rel_export_dir}/bill_of_health.html"
+        expected_json = f"./{rel_export_dir}/bill_of_health.json"
+        self.assertIn(expected_html, printed[0])
+        self.assertIn(expected_json, printed[1])
+        rm.update_run_entry.assert_called_once_with(
+            {
+                "boh_html_uri": os.path.join(export_dir, "bill_of_health.html"),
+                "boh_uri": os.path.join(export_dir, "bill_of_health.json"),
+            }
+        )
+
+    def test_show_results_when_boh_missing_and_no_storage_configured(self):
+        """When BoH is missing and storage unconfigured, raise clear error."""
+        app_data = mock.Mock()
+        app_data.get_workspaces_dir.return_value = "/tmp/nonexistent-workspaces"
+        app_data.resolve_run_id.return_value = "ws_test"
+        app_data.get_run.return_value = {}
+        app_data.get_storage_config.return_value = {}
+
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider_for_run",
+            return_value=None,
+        ):
+            with self.assertRaises(
+                exceptions.BillOfHealthNotFoundException
+            ) as ctx:
+                cli._show_results(app_data, "ws_test")
+
+        msg = str(ctx.exception)
+        self.assertIn("Results not found for run 'ws_test'.", msg)
+        self.assertNotIn("No storage provider configured", msg)
+        self.assertNotIn("chs configure storage", msg)
+
     @mock.patch("chs.cli._analyze_action", autospec=True)
     def test_run_command_rechecks_targeted_nodes_before_submitting(
         self, mock_analyze_action
@@ -2501,6 +2922,8 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_success(self):
         """Test archive_workspace calling archival on success."""
         mock_rm = mock.Mock()
+        mock_rm.path = "/mock/workspace"
+        mock_rm.export_logs_dir = None
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
@@ -2514,6 +2937,8 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_failure(self):
         """Test archive_workspace calling archival on failure."""
         mock_rm = mock.Mock()
+        mock_rm.path = "/mock/workspace"
+        mock_rm.export_logs_dir = None
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",

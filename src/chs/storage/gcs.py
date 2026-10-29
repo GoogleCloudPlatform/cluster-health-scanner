@@ -38,47 +38,55 @@ class GcsStorageProvider(StorageProvider):
 
     def __init__(self, config: dict) -> None:
         super().__init__(config)
-        self.bucket_name = config.get("bucket_name", "")
+        self.bucket_name = config.get("bucket_name", "").strip("/")
+        self.prefix = config.get("prefix", "").strip("/")
+
+    def _get_blob_name(self, dest: str) -> str:
+        """Returns destination blob name, prepending prefix if configured."""
+        clean_dest = dest.lstrip("/")
+        return f"{self.prefix}/{clean_dest}" if self.prefix else clean_dest
 
     def upload_file(self, local_src: str, remote_dest: str) -> None:
         """Uploads a local file to the GCS bucket."""
+        blob_name = self._get_blob_name(remote_dest)
         try:
             client = _storage_client()
             bucket = client.bucket(self.bucket_name)
-            blob = bucket.blob(remote_dest)
+            blob = bucket.blob(blob_name)
             blob.upload_from_filename(local_src)
             logger.debug(
                 "Uploaded %s to gs://%s/%s",
                 local_src,
                 self.bucket_name,
-                remote_dest,
+                blob_name,
             )
         except Exception as e:
             raise OSError(
                 f"Failed to upload {local_src} to "
-                f"gs://{self.bucket_name}/{remote_dest}: {e}"
+                f"gs://{self.bucket_name}/{blob_name}: {e}"
             ) from e
 
     def download_file(self, remote_src: str, local_dest: str) -> None:
         """Downloads a file from the GCS bucket to local path."""
+        blob_name = self._get_blob_name(remote_src)
         try:
             client = _storage_client()
             bucket = client.bucket(self.bucket_name)
-            blob = bucket.blob(remote_src)
+            blob = bucket.blob(blob_name)
             blob.download_to_filename(local_dest)
             logger.debug(
                 "Downloaded gs://%s/%s to %s",
                 self.bucket_name,
-                remote_src,
+                blob_name,
                 local_dest,
             )
         except gcp_ex.NotFound as e:
             raise StorageObjectNotFoundException(
-                f"File gs://{self.bucket_name}/{remote_src} not found."
+                f"File gs://{self.bucket_name}/{blob_name} not found."
             ) from e
         except Exception as e:
             raise OSError(
-                f"Failed to download gs://{self.bucket_name}/{remote_src} "
+                f"Failed to download gs://{self.bucket_name}/{blob_name} "
                 f"to {local_dest}: {e}"
             ) from e
 
@@ -90,8 +98,16 @@ class GcsStorageProvider(StorageProvider):
         client = _storage_client()
         bucket = client.bucket(self.bucket_name)
 
-        canary_name = f".chs-connectivity-test-{uuid.uuid4()}"
+        canary_name = self._get_blob_name(
+            f".chs-connectivity-test-{uuid.uuid4()}"
+        )
         blob = bucket.blob(canary_name)
+
+        target_path = (
+            f"{self.bucket_name}/{self.prefix}"
+            if self.prefix
+            else self.bucket_name
+        )
 
         # Write phase
         try:
@@ -111,14 +127,13 @@ class GcsStorageProvider(StorageProvider):
             ) from e
         except gcp_ex.Forbidden as e:
             raise ChsValidationError(
-                f"Access denied: Write permission missing for GCS bucket "
-                f"'{self.bucket_name}'.\n"
+                f"Access denied: Write permission missing for GCS path "
+                f"'{target_path}'.\n"
                 f"Details: {e}"
             ) from e
         except (gcp_ex.GoogleAPICallError, Exception) as e:
             raise ChsValidationError(
-                f"Failed to access GCS bucket '{self.bucket_name}'.\n"
-                f"Details: {e}"
+                f"Failed to access GCS path '{target_path}'.\n" f"Details: {e}"
             ) from e
 
         # Delete phase
@@ -150,14 +165,14 @@ class GcsStorageProvider(StorageProvider):
 
     def get_uri(self, remote_path: str) -> str:
         """Returns the gs:// URI for the remote path."""
-        return f"gs://{self.bucket_name}/{remote_path}"
+        return f"gs://{self.bucket_name}/{self._get_blob_name(remote_path)}"
 
     def exists(self, remote_path: str) -> bool:
         """Checks if blob exists in GCS bucket."""
         try:
             client = _storage_client()
             bucket = client.bucket(self.bucket_name)
-            blob = bucket.blob(remote_path)
+            blob = bucket.blob(self._get_blob_name(remote_path))
             return blob.exists()
         except Exception:
             return False

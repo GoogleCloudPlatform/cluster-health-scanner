@@ -355,6 +355,13 @@ class RecordRunTest(_ReportingTestCase):
         self.assertNotIn(MetricName.ZONE, sent)
         self.assertNotIn(MetricName.TEST_SUITE, sent)
 
+    def test_local_only_run_reports_all_metrics(self):
+        sent = self._record_run(_scheduler(), storage_config=None)
+
+        self.assertEqual(sent[MetricName.STORAGE_TYPE], "NONE")
+        self.assertEqual(sent[MetricName.MACHINE_TYPE], "a3-megagpu-8g")
+        self.assertEqual(sent[MetricName.TEST_NAME], "dcgm,nvidia-smi")
+
     def test_never_raises(self):
         tr.record_run(mock.Mock(spec=[]), {}, "m", [], None, [])
 

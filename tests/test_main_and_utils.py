@@ -21,6 +21,7 @@ from chs import main as chs_main
 from chs import telemetry
 from chs.main import _normalize_argv
 from chs.validators.utils import validate_non_empty_string
+from chs.utils.formatting import format_storage_path
 
 
 class TestMain(unittest.TestCase):
@@ -190,3 +191,26 @@ class TestValidatorsUtils(unittest.TestCase):
     def test_validate_non_empty_string_tuple_only_empty_strings(self):
         with self.assertRaises(click.BadParameter):
             validate_non_empty_string(self.ctx, self.param, ("", "  "))
+
+
+class TestFormatting(unittest.TestCase):
+    def test_format_storage_path_gcs_without_prefix(self):
+        config = {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
+        self.assertEqual(format_storage_path(config), "gs://my-bucket")
+
+    def test_format_storage_path_gcs_with_prefix(self):
+        config = {
+            "type": "gcs",
+            "gcs": {"bucket_name": "my-bucket", "prefix": "sub/folder"},
+        }
+        self.assertEqual(
+            format_storage_path(config), "gs://my-bucket/sub/folder"
+        )
+
+    def test_format_storage_path_path(self):
+        config = {"type": "path", "path": {"path": "/local/path"}}
+        self.assertEqual(format_storage_path(config), "/local/path")
+
+    def test_format_storage_path_none(self):
+        self.assertEqual(format_storage_path(None), "Local")
+        self.assertEqual(format_storage_path({}), "Local")
