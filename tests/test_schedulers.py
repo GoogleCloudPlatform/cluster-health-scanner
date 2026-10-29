@@ -18,6 +18,7 @@ import contextlib
 import datetime
 import json
 import os
+import re
 import tempfile
 from typing import Any
 import unittest
@@ -26,12 +27,21 @@ from unittest import mock
 from chs.constants import (
     CHS_NAMESPACE,
     DELETE_WAIT_TIMEOUT_SEC,
+    DYNAMIC_SINGLE_HOST_TOPOLOGY,
     NAMESPACE_DELETE_TIMEOUT_SEC,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
 )
 from chs.schedulers.kubernetes import (
+    _APPLY_ATTEMPTS,
     KubernetesScheduler,
+    SliceSpec,
     TpuSliceData,
+    _gke_version,
+    _partition_ids,
+    _record_pool_node,
+    _record_subslice_node,
+    _slice_name,
+    _with_retries,
 )
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import _get_kubectl_context, detect_scheduler
@@ -432,6 +442,125 @@ class TestSlurmScheduler(unittest.TestCase):
         self.assertTrue(scheduler.allow_interdomain_pairs("a3-megagpu-8g"))
         self.assertTrue(scheduler.allow_interdomain_pairs("a3-ultragpu-8g"))
         self.assertTrue(scheduler.allow_interdomain_pairs())
+
+
+def _tpu_node(
+    name: str, pool: str, partition_ids: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Returns a TPU Node object of the pool in the partitions by shape."""
+    labels = {
+        "cloud.google.com/gke-nodepool": pool,
+        "cloud.google.com/gke-tpu-accelerator": "tpu7x",
+    }
+    for topology, partition_id in (partition_ids or {}).items():
+        labels[f"cloud.google.com/gke-tpu-partition-{topology}-id"] = (
+            partition_id
+        )
+    return {
+        "metadata": {"name": name, "labels": labels},
+        "status": {"allocatable": {"google.com/tpu": "4"}},
+    }
+
+
+def _versioned_tpu_node(
+    name: str, kubelet_version: str | None, provision_only: bool = True
+) -> dict[str, Any]:
+    """Returns a TPU Node object whose kubelet runs the given version."""
+    node = _tpu_node(name, "dynpool" if provision_only else "staticpool")
+    if provision_only:
+        node["metadata"]["labels"][
+            "cloud.google.com/gke-accelerator-topology-mode"
+        ] = "PROVISION_ONLY"
+    if kubelet_version is not None:
+        node["status"]["nodeInfo"] = {"kubeletVersion": kubelet_version}
+    return node
+
+
+def _foreign_slice(
+    name: str, partition_id: str, reason: str | None
+) -> dict[str, Any]:
+    """Returns a Slice not created by CHS, with the given Ready reason."""
+    tpu_slice = {
+        "metadata": {"name": name},
+        "spec": {"partitionIds": [partition_id]},
+    }
+    if reason is not None:
+        tpu_slice["status"] = {
+            "conditions": [{"type": "Ready", "reason": reason}]
+        }
+    return tpu_slice
+
+
+def _dynamic_tpu_node(
+    name: str, single_host_state: str | None, pool_state: str = "UNHEALTHY"
+) -> dict[str, Any]:
+    """Returns a provision-only TPU Node with the given partition states."""
+    node = _tpu_node(
+        name,
+        "dynpool",
+        {
+            DYNAMIC_SINGLE_HOST_TOPOLOGY: f"sub-{name}",
+            SUPPORTED_DYNAMIC_SLICE_TOPOLOGY: "cube-1",
+        },
+    )
+    labels = node["metadata"]["labels"]
+    labels["cloud.google.com/gke-accelerator-topology-mode"] = "PROVISION_ONLY"
+    labels[
+        f"cloud.google.com/gke-tpu-partition-"
+        f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
+    ] = pool_state
+    if single_host_state is not None:
+        labels[
+            f"cloud.google.com/gke-tpu-partition-"
+            f"{DYNAMIC_SINGLE_HOST_TOPOLOGY}-state"
+        ] = single_host_state
+    return node
+
+
+def _in_tpu_slice(
+    node: dict[str, Any], topology: str = DYNAMIC_SINGLE_HOST_TOPOLOGY
+) -> dict[str, Any]:
+    """Returns the node with the topology label GKE stamps in a Slice."""
+    node["metadata"]["labels"]["cloud.google.com/gke-tpu-topology"] = topology
+    return node
+
+
+def _labels(node: dict[str, Any]) -> dict[str, str]:
+    """Returns the labels of the Node object."""
+    return node["metadata"]["labels"]
+
+
+def _single_host_slice(partition_id: str) -> SliceSpec:
+    """Returns the SliceSpec of a single-host slice on the partition."""
+    return SliceSpec(
+        accelerator="tpu7x",
+        topology=DYNAMIC_SINGLE_HOST_TOPOLOGY,
+        partition_id=partition_id,
+    )
+
+
+def _dynamic_pool_data(
+    subslice_partitions: dict[str, str | None], pool: str = "dynpool"
+) -> TpuSliceData:
+    """Returns the TpuSliceData of a dynamic pool of the given nodes.
+
+    Nodes mapped to None have no HEALTHY single-host partition.
+    """
+    nodes = list(subslice_partitions)
+    return TpuSliceData(
+        pools={pool: nodes},
+        node_to_pool={node: pool for node in nodes},
+        pool_to_topology={pool: SUPPORTED_DYNAMIC_SLICE_TOPOLOGY},
+        dynamic_slice_partitions={pool: f"{pool}-cube"},
+        pool_to_accelerator={pool: "tpu7x"},
+        all_tpu_nodes=set(nodes),
+        provision_only_nodes=set(nodes),
+        single_host_slices={
+            node: _single_host_slice(partition_id)
+            for node, partition_id in subslice_partitions.items()
+            if partition_id
+        },
+    )
 
 
 @mock.patch("chs.schedulers.kubernetes.logger")
@@ -934,7 +1063,7 @@ class TestKubernetesScheduler(unittest.TestCase):
         mock_not_ready,
         mock_logger,
     ):
-        """Test dynamic TPU pools need a whole slice for single-host tests."""
+        """Test dynamic TPU nodes need a whole pool or their own sub-slice."""
         self.kube.add_object(
             "",
             "nodes",
@@ -985,27 +1114,535 @@ class TestKubernetesScheduler(unittest.TestCase):
         )
 
         mock_tpu_slices.return_value = TpuSliceData(
-            pools={"dynpool": ["node1"], "staticpool": ["node2"]},
-            node_to_pool={"node1": "dynpool", "node2": "staticpool"},
-            pool_to_topology={"dynpool": "4x4x4", "staticpool": "2x2"},
-            dynamic_slice_partitions={"dynpool": "dyn-part-1"},
-            pool_to_accelerator={"dynpool": "tpu7x", "staticpool": "tpu7x"},
+            pools={"staticpool": ["node2"]},
+            node_to_pool={"node2": "staticpool"},
+            pool_to_topology={"staticpool": "2x2"},
+            pool_to_accelerator={"staticpool": "tpu7x"},
+            all_tpu_nodes={"node1", "node2"},
+            provision_only_nodes={"node1"},
         )
         mixed_scheduler = KubernetesScheduler(nodes="node1,node2")
         mock_not_ready.return_value = set()
         self.assertEqual(mixed_scheduler.get_nodes_under_test(), ["node2"])
+        self.assertEqual(mixed_scheduler._subslice_nodes, set())
         mock_logger.warning.assert_any_call(
-            "Excluded node(s) %s because individual node targeting "
-            "(--nodes) is not supported on dynamic TPU pool '%s'. "
-            "Dynamic TPU pools require --nodepools.",
+            "Excluded node(s) %s from testing because their %s TPU "
+            "partition is not HEALTHY or not labelled on the node.",
             "node1",
-            "dynpool",
+            DYNAMIC_SINGLE_HOST_TOPOLOGY,
         )
 
+        mock_tpu_slices.return_value = TpuSliceData(
+            all_tpu_nodes={"node1"},
+            provision_only_nodes={"node1"},
+            single_host_slices={"node1": _single_host_slice("sub-part-1")},
+        )
         only_dynamic_scheduler = KubernetesScheduler(nodes="node1")
-        self.assertEqual(only_dynamic_scheduler.get_nodes_under_test(), [])
+        self.assertEqual(
+            only_dynamic_scheduler.get_nodes_under_test(), ["node1"]
+        )
+        self.assertEqual(only_dynamic_scheduler._subslice_nodes, {"node1"})
+        self.assertEqual(only_dynamic_scheduler.partially_busy_slices, {})
         for call_args in mock_logger.info.call_args_list:
             self.assertNotIn("existing workloads", call_args[0][0])
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value={"d3"},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_targets_each_dynamic_node_as_a_subslice(
+        self, mock_tpu_slices, mock_busy, mock_not_ready, mock_logger
+    ):
+        for name in ("d1", "d2", "d3"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                _tpu_node(
+                    name,
+                    "dynpool",
+                    {DYNAMIC_SINGLE_HOST_TOPOLOGY: f"sub-{name}"},
+                ),
+            )
+        mock_tpu_slices.return_value = _dynamic_pool_data(
+            {"d1": "sub-d1", "d2": "sub-d2", "d3": "sub-d3"}
+        )
+        scheduler = KubernetesScheduler(nodes="d1,d2,d3")
+
+        self.assertEqual(scheduler.get_nodes_under_test(), ["d1", "d2"])
+        self.assertEqual(scheduler._subslice_nodes, {"d1", "d2"})
+        self.assertEqual(scheduler.partially_busy_slices, {})
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_excludes_dynamic_nodes_unfit_for_a_subslice(
+        self, mock_tpu_slices, mock_busy, mock_not_ready, mock_logger
+    ):
+        for node in (
+            _tpu_node("bare", "dynpool"),
+            _in_tpu_slice(
+                _tpu_node(
+                    "taken-sub", "dynpool", {DYNAMIC_SINGLE_HOST_TOPOLOGY: "s1"}
+                )
+            ),
+            _in_tpu_slice(
+                _tpu_node(
+                    "taken-cube",
+                    "dynpool",
+                    {
+                        DYNAMIC_SINGLE_HOST_TOPOLOGY: "s2",
+                        SUPPORTED_DYNAMIC_SLICE_TOPOLOGY: "cube-1",
+                    },
+                ),
+                SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+            ),
+            _tpu_node("free", "dynpool", {DYNAMIC_SINGLE_HOST_TOPOLOGY: "s3"}),
+        ):
+            self.kube.add_object("", "nodes", node)
+        mock_tpu_slices.return_value = _dynamic_pool_data(
+            {"bare": None, "taken-sub": "s1", "taken-cube": "s2", "free": "s3"}
+        )
+        scheduler = KubernetesScheduler(nodes="bare,taken-sub,taken-cube,free")
+
+        self.assertEqual(scheduler.get_nodes_under_test(), ["free"])
+        self.assertEqual(scheduler._subslice_nodes, {"free"})
+        self.assertEqual(
+            mock_logger.warning.call_args_list,
+            [
+                mock.call(
+                    "Excluded node(s) %s from testing because their %s TPU "
+                    "partition is not HEALTHY or not labelled on the node.",
+                    "bare",
+                    DYNAMIC_SINGLE_HOST_TOPOLOGY,
+                ),
+                mock.call(
+                    "Excluded node(s) %s from testing because they are "
+                    "already part of a TPU slice.",
+                    "taken-sub, taken-cube",
+                ),
+            ],
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_excludes_nodes_in_a_slice_by_label_only(
+        self, mock_tpu_slices, mock_busy, mock_not_ready, mock_logger
+    ):
+        nodes = ("d1", "d2", "d3", "d4")
+        for name in nodes:
+            node = _tpu_node(
+                name, "dynpool", {DYNAMIC_SINGLE_HOST_TOPOLOGY: f"sub-{name}"}
+            )
+            if name != "d4":
+                _in_tpu_slice(node)
+            self.kube.add_object("", "nodes", node)
+        mock_tpu_slices.return_value = _dynamic_pool_data(
+            {name: f"sub-{name}" for name in nodes}
+        )
+        scheduler = KubernetesScheduler(nodes="d1,d2,d3,d4")
+
+        self.assertEqual(scheduler.get_nodes_under_test(), ["d4"])
+        self.assertEqual(scheduler._subslice_nodes, {"d4"})
+        mock_logger.warning.assert_called_once_with(
+            "Excluded node(s) %s from testing because they are already "
+            "part of a TPU slice.",
+            "d1, d2, d3",
+        )
+        self.assertEqual(
+            self.kube.calls_to("list_custom_objects"), [_LIST_CHS_SLICES]
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._nodes_unfit_for_subslice"
+    )
+    def test_get_nodes_under_test_skips_subslice_checks_without_dynamic_nodes(
+        self, mock_unfit, mock_busy, mock_not_ready, mock_logger
+    ):
+        for name in ("s1", "s2"):
+            self.kube.add_object(
+                "", "nodes", _in_tpu_slice(_tpu_node(name, "staticpool"), "2x2")
+            )
+        scheduler = KubernetesScheduler(nodes="s1,s2")
+
+        self.assertCountEqual(scheduler.get_nodes_under_test(), ["s1", "s2"])
+        self.assertEqual(scheduler._subslice_nodes, set())
+        mock_unfit.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    def test_get_nodes_under_test_targets_healthy_single_host_partitions(
+        self, mock_busy, mock_not_ready, mock_logger
+    ):
+        for node in (
+            _dynamic_tpu_node("healthy", "HEALTHY"),
+            _dynamic_tpu_node("unhealthy", "UNHEALTHY"),
+            _dynamic_tpu_node("unlabeled", None),
+        ):
+            self.kube.add_object("", "nodes", node)
+        scheduler = KubernetesScheduler(nodes="healthy,unhealthy,unlabeled")
+
+        self.assertEqual(scheduler.get_nodes_under_test(), ["healthy"])
+        self.assertEqual(scheduler._subslice_nodes, {"healthy"})
+        mock_logger.warning.assert_called_once_with(
+            "Excluded node(s) %s from testing because their %s TPU "
+            "partition is not HEALTHY or not labelled on the node.",
+            "unhealthy, unlabeled",
+            DYNAMIC_SINGLE_HOST_TOPOLOGY,
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
+        return_value=set(),
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._get_busy_nodes",
+        return_value=set(),
+    )
+    @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._get_tpu_slices")
+    def test_get_nodes_under_test_nodepools_targets_the_whole_dynamic_pool(
+        self, mock_tpu_slices, mock_busy, mock_not_ready, mock_logger
+    ):
+        for name in ("d1", "d2"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                _tpu_node(
+                    name,
+                    "dynpool",
+                    {DYNAMIC_SINGLE_HOST_TOPOLOGY: f"sub-{name}"},
+                ),
+            )
+        mock_tpu_slices.return_value = _dynamic_pool_data(
+            {"d1": "sub-d1", "d2": "sub-d2"}
+        )
+        scheduler = KubernetesScheduler(nodepools="dynpool")
+
+        self.assertCountEqual(scheduler.get_nodes_under_test(), ["d1", "d2"])
+        self.assertEqual(scheduler._subslice_nodes, set())
+
+    def test_slices_to_provision_keys_subslice_nodes_by_node_name(
+        self, mock_logger
+    ):
+        for name, pool in (
+            ("d1", "dynpool"),
+            ("d2", "dynpool"),
+            ("s1", "staticpool"),
+            ("s2", "staticpool"),
+        ):
+            self.kube.add_object("", "nodes", _tpu_node(name, pool))
+        scheduler = KubernetesScheduler()
+        scheduler._subslice_nodes = {"d1", "d2"}
+
+        self.assertEqual(
+            scheduler._slices_to_provision(["d1", "s1", "d2", "s2"]),
+            {"d1": ["d1"], "d2": ["d2"], "staticpool": ["s1", "s2"]},
+        )
+        self.assertEqual(
+            scheduler._group_nodes_by_slice(["d1", "s1", "d2", "s2"]),
+            {"dynpool": ["d1", "d2"], "staticpool": ["s1", "s2"]},
+        )
+
+    def test_tpu_slice_data_purge_pool_keeps_single_host_slices(
+        self, mock_logger
+    ):
+        single_host_slices = {
+            "d1": _single_host_slice("s1"),
+            "e1": _single_host_slice("s3"),
+        }
+        data = TpuSliceData(
+            pools={"dynpool": ["d1", "d2"], "otherpool": ["e1"]},
+            node_to_pool={"d1": "dynpool", "d2": "dynpool", "e1": "otherpool"},
+            pool_to_topology={"dynpool": "4x4x4", "otherpool": "4x4x4"},
+            dynamic_slice_partitions={"dynpool": "c1", "otherpool": "c2"},
+            pool_to_accelerator={"dynpool": "tpu7x", "otherpool": "tpu7x"},
+            provision_only_nodes={"d1", "d2", "e1"},
+            single_host_slices=dict(single_host_slices),
+        )
+
+        data.purge_pool("dynpool")
+
+        self.assertEqual(
+            data,
+            TpuSliceData(
+                pools={"otherpool": ["e1"]},
+                node_to_pool={"e1": "otherpool"},
+                pool_to_topology={"otherpool": "4x4x4"},
+                dynamic_slice_partitions={"otherpool": "c2"},
+                pool_to_accelerator={"otherpool": "tpu7x"},
+                provision_only_nodes={"d1", "d2", "e1"},
+                single_host_slices=single_host_slices,
+            ),
+        )
+
+    def test_slice_name_keeps_keys_that_fit(self, mock_logger):
+        longest_key = "n" * 39
+
+        self.assertEqual(_slice_name("pool1"), "chs-slice-pool1")
+        self.assertEqual(_slice_name(longest_key), f"chs-slice-{longest_key}")
+
+    def test_slice_name_shortens_long_keys_uniquely(self, mock_logger):
+        prefix = "gke-my-cluster-tpu7x-dynamic-pool-" + "a" * 20 + "-3f2a9c1b"
+        keys = [f"{prefix}-x7k2", f"{prefix}-q9m4"]
+        names = [_slice_name(key) for key in keys]
+
+        for key, name in zip(keys, names):
+            self.assertLessEqual(len(name), 49)
+            self.assertRegex(name, r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+            match = re.fullmatch(r"chs-slice-(.+)-([0-9a-f]{8})", name)
+            self.assertIsNotNone(match)
+            self.assertTrue(key.endswith(match.group(1)))
+            self.assertTrue(match.group(1).endswith(key[-4:]))
+            self.assertEqual(_slice_name(key), name)
+        self.assertNotEqual(names[0], names[1])
+
+    def _assert_preflight_rejects(
+        self, scheduler: KubernetesScheduler, node: str, version: str
+    ) -> None:
+        with self.assertRaises(ex.ChsValidationError) as cm:
+            scheduler.run_preflight_checks([{"name": "test1"}])
+        self.assertEqual(
+            str(cm.exception),
+            f"Node '{node}' of a provision-only TPU node pool runs GKE "
+            f"'{version}', but --nodes needs GKE 1.36.0-gke.3712000 or later "
+            "to create single-host slices. Upgrade its node pool, or test the "
+            "whole pool with --nodepools.",
+        )
+
+    def test_run_preflight_checks_rejects_dynamic_nodes_too_old_to_subslice(
+        self, mock_logger
+    ):
+        self.kube.add_object(
+            "", "nodes", _versioned_tpu_node("new", "v1.36.0-gke.3712000")
+        )
+        for name, version in (
+            ("old1", "v1.35.2-gke.100"),
+            ("old2", "v1.36.0-gke.3711999"),
+        ):
+            self.kube.add_object(
+                "", "nodes", _versioned_tpu_node(name, version)
+            )
+            with self.subTest(version=version):
+                self._assert_preflight_rejects(
+                    KubernetesScheduler(nodes=f"new,{name}"), name, version
+                )
+
+    def test_run_preflight_checks_rejects_dynamic_nodes_of_unknown_versions(
+        self, mock_logger
+    ):
+        for name, version in (
+            ("no-gke", "v1.35.0"),
+            ("garbage", "unknown"),
+            ("missing", None),
+        ):
+            self.kube.add_object(
+                "", "nodes", _versioned_tpu_node(name, version)
+            )
+            with self.subTest(version=version):
+                self._assert_preflight_rejects(
+                    KubernetesScheduler(nodes=name), name, version or ""
+                )
+
+    def test_run_preflight_checks_passes_dynamic_nodes_that_can_subslice(
+        self, mock_logger
+    ):
+        for name, version in (
+            ("min", "v1.36.0-gke.3712000"),
+            ("newer", "v1.36.4-gke.2046003"),
+            ("rapid", "1.37.1-gke.2097000"),
+        ):
+            self.kube.add_object(
+                "", "nodes", _versioned_tpu_node(name, version)
+            )
+        tests = [{"name": "test1"}]
+
+        self.assertIs(
+            KubernetesScheduler(nodes="min,newer,rapid").run_preflight_checks(
+                tests
+            ),
+            tests,
+        )
+
+    def test_run_preflight_checks_ignores_old_static_nodes(self, mock_logger):
+        for name, version in (("s1", "v1.30.0-gke.1"), ("s2", None)):
+            self.kube.add_object(
+                "",
+                "nodes",
+                _versioned_tpu_node(name, version, provision_only=False),
+            )
+        tests = [{"name": "test1"}]
+
+        self.assertIs(
+            KubernetesScheduler(nodes="s1,s2").run_preflight_checks(tests),
+            tests,
+        )
+
+    def test_run_preflight_checks_skips_nodepools_on_old_dynamic_pools(
+        self, mock_logger
+    ):
+        self.kube.add_object(
+            "", "nodes", _versioned_tpu_node("d1", "v1.35.2-gke.100")
+        )
+        tests = [{"name": "test1"}]
+
+        scheduler = KubernetesScheduler(nodepools="dynpool")
+
+        self.assertIs(scheduler.run_preflight_checks(tests), tests)
+        self.assertEqual(self.kube.calls, [])
+
+    def test_gke_version(self, mock_logger):
+        for version, expected in (
+            ("v1.36.0-gke.3712000", (1, 36, 0, 3712000)),
+            ("1.36.4-gke.2046003", (1, 36, 4, 2046003)),
+            ("1.37.1-gke.2097000", (1, 37, 1, 2097000)),
+            ("1.11.10-gke.5", (1, 11, 10, 5)),
+            ("v1.36.10-gke.1200-extra", (1, 36, 10, 1200)),
+            ("v1.36.0", ()),
+            ("gke-1.36.0", ()),
+            ("unknown", ()),
+            ("", ()),
+        ):
+            with self.subTest(version=version):
+                self.assertEqual(_gke_version(version), expected)
+        self.assertGreater(
+            _gke_version("v1.36.10-gke.1"),
+            _gke_version("v1.36.9-gke.9999999"),
+        )
+        self.assertLess(
+            _gke_version("1.11.10-gke.5"), _gke_version("1.36.0-gke.1")
+        )
+        self.assertLess(_gke_version("unknown"), _gke_version("0.0.0-gke.0"))
+
+    def test_partition_ids_reads_only_tpu7x_partition_shapes(self, mock_logger):
+        prefix = "cloud.google.com/gke-tpu-partition-"
+        node = {
+            "metadata": {
+                "labels": {
+                    f"{prefix}2x2x1-id": "p-2x2x1",
+                    f"{prefix}2x2x2-id": "p-2x2x2",
+                    f"{prefix}2x2x4-id": "p-2x2x4",
+                    f"{prefix}2x4x4-id": "p-2x4x4",
+                    f"{prefix}4x4x4-id": "p-4x4x4",
+                    f"{prefix}2x2-id": "p-2d",
+                    f"{prefix}8x8x8-id": "p-8x8x8",
+                    f"{prefix}4x4x4-state": "HEALTHY",
+                    "cloud.google.com/gke-nodepool": "dynpool",
+                }
+            }
+        }
+
+        self.assertEqual(
+            _partition_ids(node),
+            {"p-2x2x1", "p-2x2x2", "p-2x2x4", "p-2x4x4", "p-4x4x4"},
+        )
+        self.assertEqual(_partition_ids({"metadata": {}}), set())
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_topology",
+        return_value={},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
+        return_value=["d1", "s1"],
+    )
+    def test_write_ramble_config_emits_subslice_and_pool_topologies(
+        self, mock_nodes, mock_topology, mock_logger
+    ):
+        self.kube.add_object("", "nodes", _tpu_node("d1", "dynpool"))
+        self.kube.add_object("", "nodes", _tpu_node("s1", "staticpool"))
+        data = TpuSliceData(
+            pools={"staticpool": ["s1"]},
+            node_to_pool={"s1": "staticpool"},
+            pool_to_topology={"staticpool": "2x2"},
+            provision_only_nodes={"d1"},
+            single_host_slices={"d1": _single_host_slice("sub-d1")},
+        )
+        scheduler = KubernetesScheduler(nodes="d1,s1")
+        scheduler._tpu_slice_data = data
+        scheduler._subslice_nodes = {"d1"}
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir)
+
+        scheduler.write_ramble_config(
+            workspace_config_dir,
+            [{"name": "test1"}],
+            "tpu7x-standard-4t",
+            run_id="run-a",
+        )
+
+        with open(os.path.join(workspace_config_dir, "ramble.yaml")) as f:
+            variables = yaml.safe_load(f)["ramble"]["variables"]
+        self.assertEqual(
+            variables["tpu_slices"], {"dynpool": ["d1"], "staticpool": ["s1"]}
+        )
+        self.assertEqual(
+            variables["tpu_slice_topologies"],
+            {"dynpool": DYNAMIC_SINGLE_HOST_TOPOLOGY, "staticpool": "2x2"},
+        )
+        self.assertEqual(variables["tpu_dynamic_pools"], [])
+        self.assertEqual(variables["tpu_single_host_pools"], ["dynpool"])
+
+    def test_is_own_slice_finds_only_slices_of_this_run(self, mock_logger):
+        for pool, run_id in (("mine", "run-a"), ("theirs", "run-b")):
+            self.kube.add_object(
+                "accelerator.gke.io",
+                "slices",
+                _chs_slice(pool, "ACTIVE", run_id=run_id),
+            )
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+
+        self.assertTrue(scheduler._is_own_slice("chs-slice-mine"))
+        self.assertFalse(scheduler._is_own_slice("chs-slice-theirs"))
+        self.assertEqual(
+            self.kube.calls_to("list_custom_objects"),
+            [_LIST_RUN_A_SLICES, _LIST_RUN_A_SLICES],
+        )
+
+    def test_is_own_slice_is_false_if_slices_cannot_be_listed(
+        self, mock_logger
+    ):
+        self.kube.add_object(
+            "accelerator.gke.io", "slices", _chs_slice("mine", "ACTIVE")
+        )
+        self.kube.fail_next("list_custom_objects", k8s_client.KubeError("boom"))
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+
+        self.assertFalse(scheduler._is_own_slice("chs-slice-mine"))
+        mock_logger.warning.assert_called_once()
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._get_not_ready_nodes",
@@ -1884,16 +2521,6 @@ ramble:
                     },
                 ),
                 _LIST_CHS_SLICES,
-                Call(
-                    "delete_custom_objects",
-                    {
-                        "group": "accelerator.gke.io",
-                        "version": "v1beta1",
-                        "plural": "slices",
-                        "object_names": [],
-                        "wait_timeout_seconds": 300,
-                    },
-                ),
                 _DELETE_CHS_NAMESPACE,
             ],
         )
@@ -2521,6 +3148,10 @@ ramble:
             error,
         )
 
+    def test_delete_slices_without_names_makes_no_api_call(self, mock_logger):
+        self.assertTrue(KubernetesScheduler()._delete_slices([]))
+        self.assertEqual(self.kube.calls, [])
+
     def test_get_job_statuses_from_job_conditions(self, mock_logger):
         """Job conditions and counts map to CHS job statuses."""
         cases = {
@@ -2743,21 +3374,10 @@ ramble:
         self.assertNotIn("mypool", scheduler._tpu_slice_data.pool_to_topology)
         self.assertNotIn("node1", scheduler._tpu_slice_data.node_to_pool)
 
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
-        return_value={"good": ["node1"], "bad": ["node2"]},
-    )
-    @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._provision_dynamic_slices"
-    )
-    def test_apply_scheduler_resources_deletes_failed_slices(
-        self, mock_provision, mock_group, mock_logger
-    ):
-        for pool, reason in (("good", "ACTIVE"), ("bad", "FAILED")):
-            self.kube.add_object(
-                "accelerator.gke.io", "slices", _chs_slice(pool, reason)
-            )
+    def _two_pool_scheduler(self) -> KubernetesScheduler:
         scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
         scheduler._resolved_nodes = ["node1", "node2"]
         scheduler._tpu_slice_data = TpuSliceData(
             pools={"good": ["node1"], "bad": ["node2"]},
@@ -2766,7 +3386,20 @@ ramble:
             dynamic_slice_partitions={"good": "p-good", "bad": "p-bad"},
             pool_to_accelerator={"good": "tpu7x", "bad": "tpu7x"},
         )
-        mock_provision.return_value = (["good"], ["bad"])
+        return scheduler
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
+        return_value={"good": ["node1"], "bad": ["node2"]},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["good"], ["bad"]),
+    )
+    def test_apply_scheduler_resources_deletes_failed_slices(
+        self, mock_wait, mock_group, mock_logger
+    ):
+        scheduler = self._two_pool_scheduler()
 
         scheduler.apply_scheduler_resources()
 
@@ -2796,53 +3429,57 @@ ramble:
         return_value={"good": ["node1"], "bad": ["node2"]},
     )
     @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._provision_dynamic_slices"
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["good"], ["bad"]),
     )
     def test_apply_scheduler_resources_logs_failure_to_delete_failed_slices(
-        self, mock_provision, mock_group, mock_logger
+        self, mock_wait, mock_group, mock_logger
     ):
         error = k8s_client.KubeError("forbidden", status=403)
         self.kube.fail_next("delete_custom_objects", error)
-        scheduler = KubernetesScheduler()
-        scheduler._resolved_nodes = ["node1", "node2"]
-        scheduler._tpu_slice_data = TpuSliceData(
-            pools={"good": ["node1"], "bad": ["node2"]},
-            node_to_pool={"node1": "good", "node2": "bad"},
-            pool_to_topology={"good": "2x2", "bad": "2x2"},
-        )
-        mock_provision.return_value = (["good"], ["bad"])
+        scheduler = self._two_pool_scheduler()
 
         scheduler.apply_scheduler_resources()
 
         self.assertEqual(scheduler._resolved_nodes, ["node1"])
+        self.assertEqual(
+            [
+                call.kwargs["object_names"]
+                for call in self.kube.calls_to("delete_custom_objects")
+            ],
+            [["chs-slice-bad"]],
+        )
         mock_logger.warning.assert_any_call(
             "Failed to delete dynamic TPU slices. "
             "Manual cleanup may be required. Error: %s",
             error,
         )
 
-    def test_get_already_fulfilled_partitions_success(self, mock_logger):
+    def test_existing_slice_states_maps_partitions_to_slice_states(
+        self, mock_logger
+    ):
         scheduler = KubernetesScheduler()
-        for slice_obj in [
+        for name, partition_ids, reason in (
+            ("active", ["part-1"], "ACTIVE"),
+            ("activating", ["part-3", "part-4"], "ACTIVATING"),
+            ("pending", ["part-5"], None),
+        ):
+            tpu_slice = _foreign_slice(name, partition_ids[0], reason)
+            tpu_slice["spec"]["partitionIds"] = partition_ids
+            self.kube.add_object("accelerator.gke.io", "slices", tpu_slice)
+        deleting = _foreign_slice("deleting", "part-2", "ACTIVE")
+        deleting["metadata"]["deletionTimestamp"] = "2023-10-01T00:00:00Z"
+        self.kube.add_object("accelerator.gke.io", "slices", deleting)
+
+        self.assertEqual(
+            scheduler._existing_slice_states(),
             {
-                "metadata": {"name": "slice1"},
-                "spec": {"partitionIds": ["part-1"]},
+                "part-1": "ACTIVE",
+                "part-3": "ACTIVATING",
+                "part-4": "ACTIVATING",
+                "part-5": None,
             },
-            {
-                "metadata": {
-                    "name": "slice2",
-                    "deletionTimestamp": "2023-10-01T00:00:00Z",
-                },
-                "spec": {"partitionIds": ["part-2"]},
-            },
-            {
-                "metadata": {"name": "slice3"},
-                "spec": {"partitionIds": ["part-3", "part-4"]},
-            },
-        ]:
-            self.kube.add_object("accelerator.gke.io", "slices", slice_obj)
-        fulfilled = scheduler._get_already_fulfilled_partitions()
-        self.assertCountEqual(fulfilled, ["part-1", "part-3", "part-4"])
+        )
         self.assertEqual(
             self.kube.calls,
             [
@@ -2858,9 +3495,7 @@ ramble:
             ],
         )
 
-    def test_get_already_fulfilled_partitions_skips_other_runs_slices(
-        self, mock_logger
-    ):
+    def test_existing_slice_states_skips_other_runs_slices(self, mock_logger):
         scheduler = KubernetesScheduler()
         scheduler._run_id = "run-a"
         for name, labels, partition_id in (
@@ -2868,21 +3503,163 @@ ramble:
             ("own", {_MANAGED_BY: "chs", _INSTANCE: "run-a"}, "part-own"),
             ("other", {_MANAGED_BY: "chs", _INSTANCE: "run-b"}, "part-b"),
         ):
+            tpu_slice = _foreign_slice(name, partition_id, "ACTIVE")
+            tpu_slice["metadata"]["labels"] = labels
+            self.kube.add_object("accelerator.gke.io", "slices", tpu_slice)
+
+        self.assertEqual(
+            scheduler._existing_slice_states(),
+            {"part-user": "ACTIVE", "part-own": "ACTIVE"},
+        )
+
+    def test_existing_slice_states_skips_slices_that_failed_to_form(
+        self, mock_logger
+    ):
+        for name, reason in (
+            ("failed", "FAILED"),
+            ("creation-failed", "SliceCreationFailed"),
+            ("active", "ACTIVE"),
+            ("pending", None),
+        ):
             self.kube.add_object(
                 "accelerator.gke.io",
                 "slices",
-                {
-                    "metadata": {"name": name, "labels": labels},
-                    "spec": {"partitionIds": [partition_id]},
-                },
+                _foreign_slice(name, f"part-{name}", reason),
             )
 
-        self.assertCountEqual(
-            scheduler._get_already_fulfilled_partitions(),
-            ["part-user", "part-own"],
+        self.assertEqual(
+            KubernetesScheduler()._existing_slice_states(),
+            {"part-active": "ACTIVE", "part-pending": None},
         )
 
-    def test_get_already_fulfilled_partitions_error(self, mock_logger):
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["dynpool"], []),
+    )
+    def test_provision_dynamic_slices_replaces_foreign_slices_that_failed(
+        self, mock_wait, mock_logger
+    ):
+        self.kube.add_object(
+            "accelerator.gke.io",
+            "slices",
+            _foreign_slice("user-cube", "dynpool-cube", "FAILED"),
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
+        scheduler._tpu_slice_data = _dynamic_pool_data({"d1": "sub-d1"})
+
+        success, failed = scheduler._provision_dynamic_slices(
+            {"dynpool": ["d1"]}
+        )
+
+        self.assertEqual((success, failed), (["dynpool"], []))
+        self.assertIn(
+            "chs-slice-dynpool",
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+        )
+        mock_wait.assert_called_once_with(["dynpool"], 300)
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
+    )
+    def test_provision_dynamic_slices_reuses_active_foreign_slices(
+        self, mock_wait, mock_logger
+    ):
+        self.kube.add_object(
+            "accelerator.gke.io",
+            "slices",
+            _foreign_slice("user-cube", "dynpool-cube", "ACTIVE"),
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
+        scheduler._tpu_slice_data = _dynamic_pool_data({"d1": "sub-d1"})
+
+        success, failed = scheduler._provision_dynamic_slices(
+            {"dynpool": ["d1"]}
+        )
+
+        self.assertEqual((success, failed), (["dynpool"], []))
+        self.assertEqual(self.kube.calls_to("create_custom_object"), [])
+        mock_wait.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
+    )
+    def test_provision_dynamic_slices_reports_partitions_of_inactive_slices(
+        self, mock_wait, mock_logger
+    ):
+        states = {
+            "d1": "ACTIVATING",
+            "d2": "ACTIVE_DEGRADED",
+            "d3": "INCOMPLETE",
+            "d4": None,
+        }
+        for node, state in states.items():
+            self.kube.add_object(
+                "accelerator.gke.io",
+                "slices",
+                _foreign_slice(f"user-{node}", f"sub-{node}", state),
+            )
+        scheduler = self._subslice_scheduler(*states)
+
+        success, failed = scheduler._provision_dynamic_slices(
+            {node: [node] for node in states}
+        )
+
+        self.assertEqual((success, failed), ([], list(states)))
+        self.assertEqual(self.kube.calls_to("create_custom_object"), [])
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+        self.assertCountEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            [f"user-{node}" for node in states],
+        )
+        mock_wait.assert_not_called()
+        self.assertEqual(
+            mock_logger.warning.call_args_list,
+            [
+                mock.call(
+                    "Cannot provision a dynamic slice for '%s': its TPU "
+                    "partition is held by an existing slice in state %s.",
+                    node,
+                    state or "unknown",
+                )
+                for node, state in states.items()
+            ],
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["d2"], []),
+    )
+    def test_provision_dynamic_slices_reuses_only_active_single_host_slices(
+        self, mock_wait, mock_logger
+    ):
+        for node, state in (("d1", "ACTIVE"), ("d2", "FAILED")):
+            self.kube.add_object(
+                "accelerator.gke.io",
+                "slices",
+                _foreign_slice(f"user-{node}", f"sub-{node}", state),
+            )
+        scheduler = self._subslice_scheduler("d1", "d2")
+
+        success, failed = scheduler._provision_dynamic_slices(
+            {"d1": ["d1"], "d2": ["d2"]}
+        )
+
+        self.assertEqual((success, failed), (["d2", "d1"], []))
+        self.assertEqual(
+            [
+                call.kwargs["body"]["metadata"]["name"]
+                for call in self.kube.calls_to("create_custom_object")
+            ],
+            ["chs-slice-d2"],
+        )
+        mock_wait.assert_called_once_with(["d2"], 300)
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+
+    def test_existing_slice_states_without_listable_slices(self, mock_logger):
         scheduler = KubernetesScheduler()
         self.kube.add_object(
             "accelerator.gke.io",
@@ -2896,21 +3673,19 @@ ramble:
             self.kube.fail_next(
                 "list_custom_objects", k8s_client.KubeError("error")
             )
-            fulfilled = scheduler._get_already_fulfilled_partitions()
-            self.assertEqual(fulfilled, set())
+            self.assertEqual(scheduler._existing_slice_states(), {})
         with self.subTest("Slice CRD not installed"):
             self.kube.unregister_type("accelerator.gke.io", "slices")
-            fulfilled = scheduler._get_already_fulfilled_partitions()
-            self.assertEqual(fulfilled, set())
+            self.assertEqual(scheduler._existing_slice_states(), {})
 
     @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions"
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states"
     )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
     )
-    def test_provision_dynamic_slices_all_fulfilled(
-        self, mock_wait, mock_get_fulfilled, mock_logger
+    def test_provision_dynamic_slices_all_reused(
+        self, mock_wait, mock_existing_states, mock_logger
     ):
         scheduler = KubernetesScheduler()
         target_pools = {"pool1": ["node1"]}
@@ -2923,7 +3698,7 @@ ramble:
             dynamic_slice_partitions={"pool1": "part1"},
             pool_to_accelerator={"pool1": "tpu-v4-podslice"},
         )
-        mock_get_fulfilled.return_value = {"part1"}
+        mock_existing_states.return_value = {"part1": "ACTIVE"}
         success, failed = scheduler._provision_dynamic_slices(target_pools)
         self.assertEqual(success, ["pool1"])
         self.assertEqual(failed, [])
@@ -2932,13 +3707,13 @@ ramble:
         mock_wait.assert_not_called()
 
     @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions"
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states"
     )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
     )
-    def test_provision_dynamic_slices_none_fulfilled(
-        self, mock_wait, mock_get_fulfilled, mock_logger
+    def test_provision_dynamic_slices_none_reused(
+        self, mock_wait, mock_existing_states, mock_logger
     ):
         scheduler = KubernetesScheduler()
         scheduler._run_id = "run-a"
@@ -2952,7 +3727,7 @@ ramble:
             dynamic_slice_partitions={"pool1": "part1"},
             pool_to_accelerator={"pool1": "tpu-v4-podslice"},
         )
-        mock_get_fulfilled.return_value = set()
+        mock_existing_states.return_value = {}
         mock_wait.return_value = (["pool1"], [])
         success, failed = scheduler._provision_dynamic_slices(target_pools)
         self.assertEqual(success, ["pool1"])
@@ -2971,15 +3746,15 @@ ramble:
         mock_wait.assert_called_once_with(["pool1"], 300)
 
     @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions",
-        return_value=set(),
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
     )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
         return_value=(["pool1", "pool2"], []),
     )
     def test_provision_dynamic_slices_writes_separated_documents(
-        self, mock_wait, mock_get_fulfilled, mock_logger
+        self, mock_wait, mock_existing_states, mock_logger
     ):
         scheduler = KubernetesScheduler()
         scheduler._run_id = "run-a"
@@ -3006,14 +3781,14 @@ ramble:
         )
 
     @mock.patch(
-        "chs.schedulers.kubernetes.KubernetesScheduler._get_already_fulfilled_partitions",
-        return_value=set(),
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
     )
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
     )
     def test_provision_dynamic_slices_never_takes_over_existing_slice(
-        self, mock_wait, mock_get_fulfilled, mock_logger
+        self, mock_wait, mock_existing_states, mock_logger
     ):
         existing = {
             "metadata": {
@@ -3034,7 +3809,7 @@ ramble:
         with self.assertRaisesRegex(
             ChsSchedulerException,
             "Dynamic slice 'chs-slice-pool1' already exists; another CHS run "
-            "may be using nodepool pool1",
+            "may be using pool1\\.",
         ):
             scheduler._provision_dynamic_slices({"pool1": ["node1"]})
 
@@ -3044,6 +3819,412 @@ ramble:
         self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
         self.assertEqual(self.kube.calls_to("apply_custom_object"), [])
         mock_wait.assert_not_called()
+
+    def _subslice_scheduler(self, *nodes: str) -> KubernetesScheduler:
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
+        scheduler._tpu_slice_data = _dynamic_pool_data(
+            {node: f"sub-{node}" for node in nodes}
+        )
+        scheduler._subslice_nodes = set(nodes)
+        return scheduler
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["d1", "d2"], []),
+    )
+    def test_provision_dynamic_slices_creates_a_subslice_per_node(
+        self, mock_wait, mock_existing_states, mock_logger
+    ):
+        scheduler = self._subslice_scheduler("d1", "d2")
+
+        success, failed = scheduler._provision_dynamic_slices(
+            {"d1": ["d1"], "d2": ["d2"]}
+        )
+
+        self.assertEqual((success, failed), (["d1", "d2"], []))
+        for node in ("d1", "d2"):
+            stored = self.kube.objects[
+                ("accelerator.gke.io", "slices", None, f"chs-slice-{node}")
+            ]
+            self.assertEqual(
+                stored["metadata"]["labels"],
+                {_MANAGED_BY: "chs", _INSTANCE: "run-a"},
+            )
+            self.assertEqual(
+                stored["spec"],
+                {
+                    "type": "tpu7x",
+                    "topology": DYNAMIC_SINGLE_HOST_TOPOLOGY,
+                    "partitionIds": [f"sub-{node}"],
+                },
+            )
+        mock_wait.assert_called_once_with(["d1", "d2"], 300)
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["d3"], []),
+    )
+    def test_provision_dynamic_slices_reports_subslices_that_fail_to_create(
+        self, mock_wait, mock_existing_states, mock_logger
+    ):
+        _add_chs_slice(self.kube, "d1", "run-b", ["sub-d1"])
+        self.kube.fail_next(
+            "create_custom_object",
+            None,
+            k8s_client.KubeError("invalid slice", status=422),
+        )
+        scheduler = self._subslice_scheduler("d1", "d2", "d3")
+
+        with mock.patch("chs.schedulers.kubernetes._API_MAX_CONCURRENCY", 1):
+            success, failed = scheduler._provision_dynamic_slices(
+                {"d1": ["d1"], "d2": ["d2"], "d3": ["d3"]}
+            )
+
+        self.assertEqual((success, failed), (["d3"], ["d1", "d2"]))
+        mock_wait.assert_called_once_with(["d3"], 300)
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 3)
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+        stored = self.kube.objects[
+            ("accelerator.gke.io", "slices", None, "chs-slice-d1")
+        ]
+        self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
+        warnings = [str(c.args[1]) for c in mock_logger.warning.call_args_list]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("another CHS run may be using d1.", warnings[0])
+        self.assertIn(
+            "Failed to create dynamic slice 'chs-slice-d2'", warnings[1]
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active"
+    )
+    @mock.patch("time.sleep")
+    def test_provision_dynamic_slices_raises_if_a_pool_slice_fails_to_create(
+        self, mock_sleep, mock_wait, mock_existing_states, mock_logger
+    ):
+        self.kube.fail_always(
+            "create_custom_object",
+            k8s_client.KubeError("internal error", status=500),
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+        scheduler.workspace_config_dir = self.tmp_dir
+        scheduler._tpu_slice_data = _dynamic_pool_data({"d1": "sub-d1"})
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException,
+            "^Failed to create dynamic slice 'chs-slice-dynpool'",
+        ):
+            scheduler._provision_dynamic_slices({"dynpool": ["d1"]})
+        mock_wait.assert_not_called()
+        self.assertEqual(
+            len(self.kube.calls_to("create_custom_object")), _APPLY_ATTEMPTS
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
+        return_value={"d1": ["d1"], "d2": ["d2"], "staticpool": ["s1"]},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._provision_dynamic_slices",
+        return_value=(["d2"], ["d1"]),
+    )
+    def test_apply_scheduler_resources_drops_failed_subslices(
+        self, mock_provision, mock_group, mock_logger
+    ):
+        for node, reason in (("d1", "FAILED"), ("d2", "ACTIVE")):
+            self.kube.add_object(
+                "accelerator.gke.io", "slices", _chs_slice(node, reason)
+            )
+        scheduler = self._subslice_scheduler("d1", "d2")
+        scheduler._resolved_nodes = ["d1", "d2", "s1"]
+
+        scheduler.apply_scheduler_resources()
+
+        self.assertEqual(scheduler._resolved_nodes, ["d2", "s1"])
+        self.assertEqual(scheduler._subslice_nodes, {"d2"})
+        self.assertIn("dynpool", scheduler._tpu_slice_data.pools)
+        self.assertEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            ["chs-slice-d1", "chs-slice-d2"],
+        )
+        self.assertEqual(self.kube.calls_to("list_custom_objects"), [])
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+        mock_logger.warning.assert_called_once_with(
+            "Excluded node(s) %s from testing because their %s "
+            "single-host slices could not be provisioned. Tests will "
+            "run on the remaining nodes.",
+            "d1",
+            DYNAMIC_SINGLE_HOST_TOPOLOGY,
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
+        return_value={"d1": ["d1"], "d2": ["d2"], "d3": ["d3"]},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["d3"], ["d2"]),
+    )
+    def test_apply_scheduler_resources_deletes_only_own_failed_subslices(
+        self, mock_wait, mock_group, mock_logger
+    ):
+        foreign = _chs_slice("d1", "ACTIVE", run_id="run-b")
+        foreign["spec"] = {"partitionIds": ["sub-d1"]}
+        self.kube.add_object("accelerator.gke.io", "slices", foreign)
+        scheduler = self._subslice_scheduler("d1", "d2", "d3")
+        scheduler._resolved_nodes = ["d1", "d2", "d3"]
+
+        scheduler.apply_scheduler_resources()
+
+        self.assertEqual(scheduler._resolved_nodes, ["d3"])
+        self.assertEqual(scheduler._subslice_nodes, {"d3"})
+        self.assertEqual(
+            [
+                call.kwargs["object_names"]
+                for call in self.kube.calls_to("delete_custom_objects")
+            ],
+            [["chs-slice-d2"]],
+        )
+        self.assertCountEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            ["chs-slice-d1", "chs-slice-d3"],
+        )
+        stored = self.kube.objects[
+            ("accelerator.gke.io", "slices", None, "chs-slice-d1")
+        ]
+        self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
+
+    def test_drop_failed_slices_raises_if_every_subslice_failed(
+        self, mock_logger
+    ):
+        scheduler = self._subslice_scheduler("d1", "d2")
+        scheduler._resolved_nodes = ["d1", "d2"]
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException,
+            "^All targeted dynamic slices failed to provision: d1, d2\\.$",
+        ):
+            scheduler._drop_failed_slices(
+                ["d1", "d2"], {"d1": ["d1"], "d2": ["d2"]}
+            )
+        self.assertEqual(scheduler._resolved_nodes, [])
+        self.assertEqual(scheduler._subslice_nodes, set())
+
+    @mock.patch("time.sleep")
+    def test_with_retries_retries_throttling_and_server_errors(
+        self, mock_sleep, mock_logger
+    ):
+        call = mock.Mock(
+            side_effect=[
+                k8s_client.KubeError("Too Many Requests", status=429),
+                k8s_client.KubeError("Internal Server Error", status=500),
+                k8s_client.KubeError("connection reset"),
+                None,
+            ]
+        )
+
+        _with_retries(call, "Slice 'chs-slice-d1'")
+
+        self.assertEqual(call.call_count, 4)
+        self.assertEqual(
+            [c.args[0] for c in mock_sleep.call_args_list], [1, 2, 4]
+        )
+
+    @mock.patch("time.sleep")
+    def test_with_retries_does_not_retry_client_errors(
+        self, mock_sleep, mock_logger
+    ):
+        for status in (409, 403, 422):
+            with self.subTest(status=status):
+                error = k8s_client.KubeError("rejected", status=status)
+                call = mock.Mock(side_effect=error)
+
+                with self.assertRaises(k8s_client.KubeError) as cm:
+                    _with_retries(call, "Slice 'chs-slice-d1'")
+
+                self.assertIs(cm.exception, error)
+                call.assert_called_once_with()
+        mock_sleep.assert_not_called()
+
+    @mock.patch("time.sleep")
+    def test_with_retries_gives_up_after_the_last_attempt(
+        self, mock_sleep, mock_logger
+    ):
+        error = k8s_client.KubeError("Service Unavailable", status=503)
+        call = mock.Mock(side_effect=error)
+
+        with self.assertRaises(k8s_client.KubeError) as cm:
+            _with_retries(call, "Slice 'chs-slice-d1'")
+
+        self.assertIs(cm.exception, error)
+        self.assertEqual(call.call_count, _APPLY_ATTEMPTS)
+        self.assertEqual(mock_sleep.call_count, _APPLY_ATTEMPTS - 1)
+
+    def _slice_manifests(self, *keys: str) -> dict[str, dict]:
+        return {
+            key: {
+                "apiVersion": "accelerator.gke.io/v1beta1",
+                "kind": "Slice",
+                "metadata": {"name": _slice_name(key)},
+            }
+            for key in keys
+        }
+
+    @mock.patch("time.sleep")
+    def test_create_slice_retries_throttled_creates(
+        self, mock_sleep, mock_logger
+    ):
+        self.kube.fail_next(
+            "create_custom_object",
+            k8s_client.KubeError("Too Many Requests", status=429),
+        )
+        manifest = self._slice_manifests("d1")["d1"]
+
+        KubernetesScheduler()._create_slice(manifest, "d1")
+
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 2)
+        mock_sleep.assert_called_once_with(1)
+        self.assertEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            ["chs-slice-d1"],
+        )
+
+    @mock.patch("time.sleep")
+    def test_create_slice_accepts_a_conflict_with_its_own_retried_create(
+        self, mock_sleep, mock_logger
+    ):
+        _add_chs_slice(self.kube, "d1", "run-a", ["sub-d1"])
+        self.kube.fail_next(
+            "create_custom_object",
+            k8s_client.KubeError("connection reset", status=500),
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+
+        scheduler._create_slice(self._slice_manifests("d1")["d1"], "d1")
+
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 2)
+        self.assertEqual(
+            self.kube.calls_to("list_custom_objects"), [_LIST_RUN_A_SLICES]
+        )
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch("time.sleep")
+    def test_create_slice_rejects_a_conflict_with_another_runs_slice(
+        self, mock_sleep, mock_logger
+    ):
+        _add_chs_slice(self.kube, "d1", "run-b", ["sub-d1"])
+        self.kube.fail_next(
+            "create_custom_object",
+            k8s_client.KubeError("connection reset", status=500),
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException,
+            "^Dynamic slice 'chs-slice-d1' already exists; another CHS run "
+            "may be using d1\\.",
+        ):
+            scheduler._create_slice(self._slice_manifests("d1")["d1"], "d1")
+
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 2)
+        stored = self.kube.objects[
+            ("accelerator.gke.io", "slices", None, "chs-slice-d1")
+        ]
+        self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=(["d1"], []),
+    )
+    @mock.patch("time.sleep")
+    def test_provision_dynamic_slices_waits_on_its_own_retried_slice(
+        self, mock_sleep, mock_wait, mock_existing_states, mock_logger
+    ):
+        _add_chs_slice(self.kube, "d1", "run-a", ["sub-d1"])
+        self.kube.fail_next(
+            "create_custom_object",
+            k8s_client.KubeError("connection reset", status=500),
+        )
+        scheduler = self._subslice_scheduler("d1")
+
+        success, failed = scheduler._provision_dynamic_slices({"d1": ["d1"]})
+
+        self.assertEqual((success, failed), (["d1"], []))
+        mock_wait.assert_called_once_with(["d1"], 300)
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
+        return_value={},
+    )
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
+        return_value=([], []),
+    )
+    @mock.patch("time.sleep")
+    def test_provision_dynamic_slices_reports_conflicts_with_other_runs(
+        self, mock_sleep, mock_wait, mock_existing_states, mock_logger
+    ):
+        _add_chs_slice(self.kube, "d1", "run-b", ["sub-d1"])
+        self.kube.fail_next(
+            "create_custom_object",
+            k8s_client.KubeError("connection reset", status=500),
+        )
+        scheduler = self._subslice_scheduler("d1")
+
+        success, failed = scheduler._provision_dynamic_slices({"d1": ["d1"]})
+
+        self.assertEqual((success, failed), ([], ["d1"]))
+        mock_wait.assert_called_once_with([], 300)
+        self.assertEqual(self.kube.calls_to("delete_custom_objects"), [])
+        self.assertIn(
+            "another CHS run may be using d1.",
+            str(mock_logger.warning.call_args.args[1]),
+        )
+
+    def test_create_slices_returns_failed_subslices_in_manifest_order(
+        self, mock_logger
+    ):
+        for key in ("d1", "d3"):
+            _add_chs_slice(self.kube, key, "run-b", [f"sub-{key}"])
+        keys = ("d4", "d3", "d2", "d1")
+        scheduler = self._subslice_scheduler(*keys)
+
+        failed = scheduler._create_slices(self._slice_manifests(*keys))
+
+        self.assertEqual(failed, ["d3", "d1"])
+        self.assertCountEqual(
+            self.kube.stored_names("accelerator.gke.io", "slices"),
+            ["chs-slice-d1", "chs-slice-d2", "chs-slice-d3", "chs-slice-d4"],
+        )
+        for key in ("d1", "d3"):
+            stored = self.kube.objects[
+                ("accelerator.gke.io", "slices", None, f"chs-slice-{key}")
+            ]
+            self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
+        self.assertEqual(mock_logger.warning.call_count, 2)
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
@@ -3152,6 +4333,8 @@ ramble:
         res = scheduler._get_tpu_slices()
 
         self.assertNotIn("pool1", res.pools)
+        self.assertEqual(res.provision_only_nodes, set())
+        self.assertEqual(res.single_host_slices, {})
         mock_logger.warning.assert_any_call(
             (
                 "Skipping nodepool '%s' because the %s "
@@ -3159,6 +4342,160 @@ ramble:
             ),
             "pool1",
             SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+        )
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_records_single_host_slices_with_nodes_arg(
+        self, mock_fetch, mock_logger
+    ):
+        mock_fetch.return_value = [
+            _dynamic_tpu_node("healthy", "HEALTHY"),
+            _dynamic_tpu_node("unhealthy", "UNHEALTHY", pool_state="HEALTHY"),
+            _dynamic_tpu_node("unlabeled", None),
+        ]
+
+        res = KubernetesScheduler(
+            nodes="healthy,unhealthy,unlabeled"
+        )._get_tpu_slices()
+
+        self.assertEqual(
+            res.provision_only_nodes, {"healthy", "unhealthy", "unlabeled"}
+        )
+        self.assertEqual(
+            res.single_host_slices,
+            {"healthy": _single_host_slice("sub-healthy")},
+        )
+        self.assertEqual(res.pools, {})
+        self.assertEqual(res.node_to_pool, {})
+        self.assertEqual(res.dynamic_slice_partitions, {})
+        mock_logger.warning.assert_not_called()
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler._fetch_raw_node_resources"
+    )
+    def test__get_tpu_slices_records_no_single_host_slices_with_nodepools_arg(
+        self, mock_fetch, mock_logger
+    ):
+        mock_fetch.return_value = [
+            _dynamic_tpu_node("d1", "HEALTHY", pool_state="HEALTHY"),
+            _dynamic_tpu_node("d2", "UNHEALTHY", pool_state="HEALTHY"),
+        ]
+
+        res = KubernetesScheduler(nodepools="dynpool")._get_tpu_slices()
+
+        self.assertEqual(res.pools, {"dynpool": ["d1", "d2"]})
+        self.assertEqual(res.dynamic_slice_partitions, {"dynpool": "cube-1"})
+        self.assertEqual(res.provision_only_nodes, set())
+        self.assertEqual(res.single_host_slices, {})
+        mock_logger.warning.assert_not_called()
+
+    def test_record_pool_node_records_static_node_by_its_topology(
+        self, mock_logger
+    ):
+        data = TpuSliceData()
+        unhealthy_pools = set()
+        node = _in_tpu_slice(_tpu_node("s1", "staticpool"), "2x2")
+
+        _record_pool_node(data, unhealthy_pools, "s1", _labels(node))
+
+        self.assertEqual(
+            data,
+            TpuSliceData(
+                pools={"staticpool": ["s1"]},
+                node_to_pool={"s1": "staticpool"},
+                pool_to_topology={"staticpool": "2x2"},
+            ),
+        )
+        self.assertEqual(unhealthy_pools, set())
+
+    def test_record_pool_node_purges_static_pool_with_a_node_without_topology(
+        self, mock_logger
+    ):
+        data = TpuSliceData()
+        unhealthy_pools = set()
+        nodes = (
+            _in_tpu_slice(_tpu_node("s1", "staticpool"), "2x2"),
+            _tpu_node("s2", "staticpool"),
+            _in_tpu_slice(_tpu_node("s3", "staticpool"), "2x2"),
+        )
+
+        for node in nodes:
+            _record_pool_node(
+                data, unhealthy_pools, node["metadata"]["name"], _labels(node)
+            )
+
+        self.assertEqual(data, TpuSliceData())
+        self.assertEqual(unhealthy_pools, {"staticpool"})
+        mock_logger.warning.assert_not_called()
+
+    def test_record_pool_node_records_healthy_dynamic_pool_as_a_cube(
+        self, mock_logger
+    ):
+        data = TpuSliceData()
+        unhealthy_pools = set()
+        node = _dynamic_tpu_node("d1", "UNHEALTHY", pool_state="HEALTHY")
+
+        _record_pool_node(data, unhealthy_pools, "d1", _labels(node))
+
+        self.assertEqual(
+            data,
+            TpuSliceData(
+                pools={"dynpool": ["d1"]},
+                node_to_pool={"d1": "dynpool"},
+                pool_to_topology={"dynpool": SUPPORTED_DYNAMIC_SLICE_TOPOLOGY},
+                dynamic_slice_partitions={"dynpool": "cube-1"},
+                pool_to_accelerator={"dynpool": "tpu7x"},
+            ),
+        )
+        self.assertEqual(unhealthy_pools, set())
+
+    def test_record_pool_node_warns_once_about_unhealthy_dynamic_pool(
+        self, mock_logger
+    ):
+        data = TpuSliceData()
+        unhealthy_pools = set()
+
+        for name in ("d1", "d2"):
+            node = _dynamic_tpu_node(name, "HEALTHY", pool_state="UNHEALTHY")
+            _record_pool_node(data, unhealthy_pools, name, _labels(node))
+
+        self.assertEqual(data, TpuSliceData())
+        self.assertEqual(unhealthy_pools, {"dynpool"})
+        mock_logger.warning.assert_called_once_with(
+            "Skipping nodepool '%s' because the %s "
+            "topology is currently unhealthy.",
+            "dynpool",
+            SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+        )
+
+    def test_record_subslice_node_records_only_healthy_single_host_partitions(
+        self, mock_logger
+    ):
+        data = TpuSliceData()
+        missing_id = _dynamic_tpu_node("missing-id", "HEALTHY")
+        del _labels(missing_id)[
+            f"cloud.google.com/gke-tpu-partition-"
+            f"{DYNAMIC_SINGLE_HOST_TOPOLOGY}-id"
+        ]
+        nodes = (
+            _dynamic_tpu_node("healthy", "HEALTHY"),
+            _dynamic_tpu_node("unhealthy", "UNHEALTHY", pool_state="HEALTHY"),
+            missing_id,
+        )
+
+        for node in nodes:
+            _record_subslice_node(data, node["metadata"]["name"], _labels(node))
+
+        self.assertEqual(
+            data,
+            TpuSliceData(
+                provision_only_nodes={"healthy", "unhealthy", "missing-id"},
+                single_host_slices={
+                    "healthy": _single_host_slice("sub-healthy")
+                },
+            ),
         )
 
     @mock.patch(
@@ -4216,6 +5553,55 @@ class TestKubernetesRunsTargetingNodes(unittest.TestCase):
         )
 
         self.assertEqual(conflicts, {"run-b": ["t1", "t2"]})
+
+    def test_find_runs_targeting_nodes_includes_subslices_of_other_runs(
+        self, mock_logger
+    ):
+        for name in ("t1", "t2"):
+            self.kube.add_object(
+                "",
+                "nodes",
+                _tpu_node(
+                    name,
+                    "dynpool",
+                    {
+                        DYNAMIC_SINGLE_HOST_TOPOLOGY: f"sub-{name}",
+                        SUPPORTED_DYNAMIC_SLICE_TOPOLOGY: "cube-1",
+                    },
+                ),
+            )
+        _add_chs_slice(self.kube, "t1", "run-b", ["sub-t1"])
+
+        self.assertEqual(
+            self.scheduler.find_runs_targeting_nodes(["t1", "t2"]),
+            {"run-b": ["t1"]},
+        )
+
+    def test_find_runs_targeting_nodes_includes_slices_that_failed_to_form(
+        self, mock_logger
+    ):
+        for name, run_id, reason in (
+            ("t1", "run-b", "FAILED"),
+            ("t2", "run-c", "SliceCreationFailed"),
+            ("t3", "run-d", "ACTIVE"),
+        ):
+            self.kube.add_object(
+                "",
+                "nodes",
+                _tpu_node(
+                    name,
+                    "dynpool",
+                    {DYNAMIC_SINGLE_HOST_TOPOLOGY: f"sub-{name}"},
+                ),
+            )
+            tpu_slice = _chs_slice(name, reason, run_id=run_id)
+            tpu_slice["spec"] = {"partitionIds": [f"sub-{name}"]}
+            self.kube.add_object("accelerator.gke.io", "slices", tpu_slice)
+
+        self.assertEqual(
+            self.scheduler.find_runs_targeting_nodes(["t1", "t2", "t3"]),
+            {"run-b": ["t1"], "run-c": ["t2"], "run-d": ["t3"]},
+        )
 
     def test_find_runs_targeting_nodes_uses_cached_nodes(self, mock_logger):
         self.scheduler._resolved_node_resources = [

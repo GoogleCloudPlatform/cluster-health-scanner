@@ -1483,8 +1483,8 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
         "Comma-separated list (or multiple flags) of individual nodes to run "
         "the tests on (e.g., --nodes=node1,node2, -n node1 -n node2).\n\n"
         f"{click.style('Note:', fg='yellow', bold=True)} For TPUs, individual "
-        "nodes are supported for single-host tests on static pools. Multi-host "
-        "tests and dynamic TPU pools require --nodepools."
+        "nodes are supported for single-host tests. Multi-host tests require "
+        "--nodepools."
         "\n\n "
     ),
     callback=validators.validate_non_empty_string,
