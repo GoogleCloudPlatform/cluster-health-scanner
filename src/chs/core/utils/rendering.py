@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Any, Iterable
+import urllib.parse
 from chs.protos import bill_of_health_pb2 as pb
 from rich.markup import escape
 
@@ -90,3 +92,42 @@ def format_val(
     if val is None:
         return default
     return f"{val:.{precision}f}"
+
+
+GCS_CONSOLE_URL_PREFIX = "https://storage.cloud.google.com/"
+_URL_SAFE_CHARS = ":/?#@!$&'()*+,;=-._~%"
+
+
+def get_web_href(path_or_uri: str | None) -> str | None:
+    """Returns a browser-openable URL for a remote URI, or None otherwise.
+
+    gs:// URIs map to the Cloud Storage console; http(s):// URLs are returned
+    as-is apart from URL-encoding unsafe characters. Local paths return None:
+    OSC 8 terminal hyperlinks to file:// (or relative) targets fail with
+    "No application found to open URL" on environments without a registered
+    file-scheme handler (e.g. Cloudtop, SSH and browser-based terminals).
+    """
+    if not path_or_uri:
+        return None
+    if path_or_uri.startswith("gs://"):
+        href = path_or_uri.replace("gs://", GCS_CONSOLE_URL_PREFIX, 1)
+    elif path_or_uri.startswith(("http://", "https://")):
+        href = path_or_uri
+    else:
+        return None
+    return urllib.parse.quote(href, safe=_URL_SAFE_CHARS)
+
+
+def format_location(path_or_uri: str | os.PathLike[str]) -> str:
+    """Formats an artifact location as Rich markup.
+
+    The location text is markup-escaped so paths containing brackets render
+    verbatim. Remote URIs are wrapped in a clickable hyperlink; local paths are
+    left as plain text so terminals can detect, open or copy them natively.
+    """
+    location = str(path_or_uri)
+    text = escape(location)
+    href = get_web_href(location)
+    if href:
+        return f"[link={href}]{text}[/link]"
+    return text

@@ -930,7 +930,9 @@ class ShowResultsCachedUriTest(unittest.TestCase):
 
         self.provider.exists.assert_not_called()
         self.viewer_cls.assert_called_once_with(
-            self.boh_path, boh_uri="gs://bucket/bills_of_health/ws1.html"
+            self.boh_path,
+            boh_html_uri="gs://bucket/bills_of_health/ws1.html",
+            boh_json_uri="gs://bucket/bills_of_health/ws1.json",
         )
 
     def test_cached_boh_uri_used_when_html_uri_absent(self):
@@ -943,22 +945,39 @@ class ShowResultsCachedUriTest(unittest.TestCase):
 
         self.provider.exists.assert_not_called()
         self.viewer_cls.assert_called_once_with(
-            self.boh_path, boh_uri="gs://bucket/bills_of_health/ws1.json"
+            self.boh_path,
+            boh_html_uri=None,
+            boh_json_uri="gs://bucket/bills_of_health/ws1.json",
         )
 
     def test_falls_back_to_provider_exists_when_no_cached_uri(self):
         """Without cached URIs in runs.json, storage exists() is queried."""
         self.app_data.get_run.return_value = {}
         self.provider.exists.side_effect = [True]
-        self.provider.get_uri.return_value = (
-            "gs://bucket/bills_of_health/ws1.html"
-        )
+        self.provider.get_uri.side_effect = lambda p: f"gs://bucket/{p}"
 
         cli._show_results(self.app_data, "run1")
 
         self.provider.exists.assert_called_once_with("bills_of_health/ws1.html")
         self.viewer_cls.assert_called_once_with(
-            self.boh_path, boh_uri="gs://bucket/bills_of_health/ws1.html"
+            self.boh_path,
+            boh_html_uri="gs://bucket/bills_of_health/ws1.html",
+            boh_json_uri="gs://bucket/bills_of_health/ws1.json",
+        )
+
+    def test_falls_back_to_provider_when_run_entry_lacks_uris(self):
+        """A run entry without cached BoH URIs still queries storage."""
+        self.app_data.get_run.return_value = {"workspace_path": "/nonexistent"}
+        self.provider.exists.side_effect = [True]
+        self.provider.get_uri.side_effect = lambda p: f"gs://bucket/{p}"
+
+        cli._show_results(self.app_data, "run1")
+
+        self.provider.exists.assert_called_once_with("bills_of_health/ws1.html")
+        self.viewer_cls.assert_called_once_with(
+            self.boh_path,
+            boh_html_uri="gs://bucket/bills_of_health/ws1.html",
+            boh_json_uri="gs://bucket/bills_of_health/ws1.json",
         )
 
 

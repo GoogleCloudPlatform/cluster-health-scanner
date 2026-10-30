@@ -2055,12 +2055,53 @@ class TestCli(unittest.TestCase):
         expected_json = f"./{rel_export_dir}/bill_of_health.json"
         self.assertIn(expected_html, printed[0])
         self.assertIn(expected_json, printed[1])
+        # Local paths must not be OSC 8 hyperlinks (no file-scheme handler).
+        self.assertNotIn("[link=", printed[0])
+        self.assertNotIn("[link=", printed[1])
         rm.update_run_entry.assert_called_once_with(
             {
                 "boh_html_uri": os.path.join(export_dir, "bill_of_health.html"),
                 "boh_uri": os.path.join(export_dir, "bill_of_health.json"),
             }
         )
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_links_gcs_locations(self, mock_export):
+        """_archive_and_log hyperlinks GCS locations to the Cloud console."""
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/nonexistent/ws1"
+        rm.export_logs_dir = None
+        rm.has_bill_of_health.return_value = True
+        rm.archive.return_value = (
+            "gs://bucket/p/workspaces/ws1.tar.gz",
+            "gs://bucket/p/bills_of_health/ws1.json",
+            "gs://bucket/p/bills_of_health/ws1.html",
+            True,
+        )
+        with (
+            mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=mock.Mock(),
+            ),
+            mock.patch("chs.cli.Console", autospec=True) as mock_console,
+        ):
+            cli._archive_and_log(rm)
+
+        calls = mock_console.return_value.print.call_args_list
+        printed = [c.args[0] for c in calls]
+        self.assertIn(
+            "[link=https://storage.cloud.google.com/bucket/p/bills_of_health/"
+            "ws1.html]gs://bucket/p/bills_of_health/ws1.html[/link]",
+            printed[0],
+        )
+        self.assertIn(
+            "[link=https://storage.cloud.google.com/bucket/p/bills_of_health/"
+            "ws1.json]gs://bucket/p/bills_of_health/ws1.json[/link]",
+            printed[1],
+        )
+        for call in calls:
+            self.assertTrue(call.kwargs.get("soft_wrap"))
 
     def test_show_results_when_boh_missing_and_no_storage_configured(self):
         """When BoH is missing and storage unconfigured, raise clear error."""
@@ -2083,6 +2124,119 @@ class TestCli(unittest.TestCase):
         self.assertIn("Results not found for run 'ws_test'.", msg)
         self.assertNotIn("No storage provider configured", msg)
         self.assertNotIn("chs configure storage", msg)
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_show_results_local_run_passes_uris_to_viewer(
+        self, mock_viewer_cls
+    ):
+        """Test _show_results passes local html and json URIs."""
+        mock_viewer = mock_viewer_cls.return_value
+        mock_viewer.boh = pb.BillOfHealth()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws_name = "test-ws-local"
+            ws_path = pathlib.Path(tmp_dir) / "workspaces" / ws_name
+            ws_path.mkdir(parents=True)
+            boh_json = ws_path / "bill_of_health.json"
+            boh_html = ws_path / "bill_of_health.html"
+            boh_json.write_text("{}")
+            boh_html.write_text("<html></html>")
+
+            app_data = mock.Mock()
+            app_data.get_workspaces_dir.return_value = str(
+                pathlib.Path(tmp_dir) / "workspaces"
+            )
+            app_data.resolve_run_id.return_value = ws_name
+            app_data.get_run.return_value = {
+                "workspace_path": str(ws_path),
+                "boh_html_uri": str(boh_html),
+                "boh_uri": str(boh_json),
+            }
+
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ):
+                cli._show_results(app_data, ws_name)
+
+            expected_html = cli._format_local_display_path(str(boh_html))
+            expected_json = cli._format_local_display_path(str(boh_json))
+
+            mock_viewer_cls.assert_called_once_with(
+                boh_json,
+                boh_html_uri=expected_html,
+                boh_json_uri=expected_json,
+            )
+            mock_viewer.show_summary_and_details.assert_called_once()
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_show_results_gcs_run_passes_uris_to_viewer(self, mock_viewer_cls):
+        """Test _show_results passes GCS html and json URIs."""
+        mock_viewer = mock_viewer_cls.return_value
+        mock_viewer.boh = pb.BillOfHealth()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws_name = "test-ws-gcs"
+            ws_path = pathlib.Path(tmp_dir) / "workspaces" / ws_name
+            ws_path.mkdir(parents=True)
+            boh_json = ws_path / "bill_of_health.json"
+            boh_json.write_text("{}")
+
+            app_data = mock.Mock()
+            app_data.get_workspaces_dir.return_value = str(
+                pathlib.Path(tmp_dir) / "workspaces"
+            )
+            app_data.resolve_run_id.return_value = ws_name
+            app_data.get_run.return_value = {
+                "boh_html_uri": f"gs://my-bucket/prefix/bills_of_health/{ws_name}.html",
+                "boh_uri": f"gs://my-bucket/prefix/bills_of_health/{ws_name}.json",
+            }
+
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ):
+                cli._show_results(app_data, ws_name)
+
+            mock_viewer_cls.assert_called_once_with(
+                boh_json,
+                boh_html_uri=f"gs://my-bucket/prefix/bills_of_health/{ws_name}.html",
+                boh_json_uri=f"gs://my-bucket/prefix/bills_of_health/{ws_name}.json",
+            )
+            mock_viewer.show_summary_and_details.assert_called_once()
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_show_results_skips_stale_local_paths(self, mock_viewer_cls):
+        """Deleted export paths fall back to the internal workspace."""
+        mock_viewer = mock_viewer_cls.return_value
+        mock_viewer.boh = pb.BillOfHealth()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws_name = "test-ws-stale"
+            workspaces = pathlib.Path(tmp_dir) / "workspaces"
+            boh_json = workspaces / ws_name / "bill_of_health.json"
+            boh_json.parent.mkdir(parents=True)
+            boh_json.write_text("{}")
+            deleted_export = pathlib.Path(tmp_dir) / "chs-output" / ws_name
+
+            app_data = mock.Mock()
+            app_data.get_workspaces_dir.return_value = str(workspaces)
+            app_data.resolve_run_id.return_value = ws_name
+            app_data.get_run.return_value = {
+                "boh_html_uri": str(deleted_export / "bill_of_health.html"),
+                "boh_uri": str(deleted_export / "bill_of_health.json"),
+            }
+
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ):
+                cli._show_results(app_data, ws_name)
+            mock_viewer_cls.assert_called_once_with(
+                boh_json,
+                boh_html_uri=None,
+                boh_json_uri=cli._format_local_display_path(str(boh_json)),
+            )
 
     @mock.patch("chs.cli._analyze_action", autospec=True)
     def test_run_command_rechecks_targeted_nodes_before_submitting(
@@ -2674,18 +2828,24 @@ class TestCli(unittest.TestCase):
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("failed to resolve storage provider", result.output)
 
+    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
     @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_results_command_download_success(
-        self, mock_viewer, mock_get_provider_for_run
+        self, mock_viewer, mock_get_provider_for_run, mock_get_active_provider
     ):
         """Test results command downloads BoH from storage if missing."""
         mock_viewer.return_value.boh = pb.BillOfHealth()
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
 
+        # Simulate get_provider_for_run returning None (because get_run is None)
+        # and falling back to get_active_provider()
+        mock_get_provider_for_run.return_value = None
         mock_provider = mock.Mock()
-        mock_get_provider_for_run.return_value = mock_provider
+        mock_provider.get_uri.side_effect = lambda p: f"gs://bucket/{p}"
+        mock_provider.exists.side_effect = lambda p: True
+        mock_get_active_provider.return_value = mock_provider
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
@@ -2697,6 +2857,14 @@ class TestCli(unittest.TestCase):
             args, _ = mock_provider.download_file.call_args
             self.assertEqual(args[0], "bills_of_health/latest_run.json")
             mock_viewer.assert_called_once()
+            self.assertEqual(
+                mock_viewer.call_args.kwargs["boh_html_uri"],
+                "gs://bucket/bills_of_health/latest_run.html",
+            )
+            self.assertEqual(
+                mock_viewer.call_args.kwargs["boh_json_uri"],
+                "gs://bucket/bills_of_health/latest_run.json",
+            )
 
     @mock.patch("chs.cli._analyze_action", autospec=True)
     def test_run_command_sets_telemetry_run(self, mock_analyze_action):

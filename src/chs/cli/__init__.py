@@ -63,7 +63,9 @@ from chs.boh_generator import parse_tier_results_from_boh
 from chs.cli import help_command_text
 from chs.cli import list_formatting
 from chs.cli.background_cleanup import BackgroundCleanup
+from chs.core.utils import rendering
 from chs.storage import StorageProviderFactory
+from chs.storage.base import StorageProvider
 from chs.telemetry import reporting as telemetry_reporting
 from chs.tier_manager import TestStatus, TierManager
 from chs.utils import theme
@@ -93,6 +95,14 @@ class RunExecutionResult:
     workspace_name: str
     workspaces_base_dir: str
     job_ids: list[str] | None
+
+
+@dataclasses.dataclass(frozen=True)
+class ResultLocations:
+    """Resolved display locations of run artifacts."""
+
+    boh_html_uri: str | None = None
+    boh_json_uri: str | None = None
 
 
 def handle_chs_exceptions(f):
@@ -149,20 +159,6 @@ def _setup_workspace_logger(workspace_path: str):
         root_logger.setLevel(original_root_level)
         for handler in modified_handlers:
             handler.setLevel(logging.NOTSET)
-
-
-def _get_href_link(path_or_uri: str) -> str:
-    href = path_or_uri
-    if path_or_uri.startswith("gs://"):
-        href = path_or_uri.replace(
-            "gs://", "https://storage.cloud.google.com/", 1
-        )
-    return href
-
-
-def _make_clickable_link(path_or_uri: str) -> str:
-    href = _get_href_link(path_or_uri)
-    return f"[link={href}]{path_or_uri}[/link]"
 
 
 def _parse_gcs_path(path: str) -> tuple[str, str]:
@@ -278,11 +274,14 @@ def _find_local_artifact(name: str, *dirs: str | None) -> str | None:
     return None
 
 
+def _is_remote_uri(path_or_uri: str | None) -> bool:
+    """Returns True if the value is a URI with a scheme (e.g. gs://)."""
+    return bool(path_or_uri) and "://" in path_or_uri
+
+
 def _format_local_display_path(path_or_uri: str | None) -> str | None:
     """Formats a path for display relative to current directory if under cwd."""
-    if not path_or_uri:
-        return path_or_uri
-    if path_or_uri.startswith("gs://") or "://" in path_or_uri:
+    if not path_or_uri or _is_remote_uri(path_or_uri):
         return path_or_uri
     try:
         resolved_path = pathlib.Path(path_or_uri).resolve()
@@ -293,6 +292,77 @@ def _format_local_display_path(path_or_uri: str | None) -> str | None:
         return f"./{rel_path}"
     except (ValueError, RuntimeError):
         return path_or_uri
+
+
+def _resolve_result_locations(
+    run_data: dict | None,
+    run_provider: StorageProvider | None,
+    workspace_name: str,
+    workspaces_dir: pathlib.Path,
+) -> ResultLocations:
+    """Resolves display locations of the BoH HTML and BoH JSON.
+
+    URIs cached in runs.json are preferred (no storage round-trips). If none
+    are cached, the run's storage provider is queried. For runs without remote
+    storage, artifacts are located on local disk. Local paths that no longer
+    exist are skipped, and the rest are formatted relative to cwd when under it.
+
+    Args:
+      run_data: Run entry dictionary from runs.json, or None.
+      run_provider: StorageProvider associated with the run, or None.
+      workspace_name: Name of the workspace/run.
+      workspaces_dir: Path to the workspaces directory.
+
+    Returns:
+      ResultLocations with boh_html_uri and boh_json_uri.
+    """
+    run_data = run_data or {}
+
+    def _existing_local_or_remote(uri: str | None) -> str | None:
+        if not uri:
+            return None
+        if _is_remote_uri(uri) or os.path.exists(uri):
+            return uri
+        return None
+
+    boh_html_uri = _existing_local_or_remote(run_data.get("boh_html_uri"))
+    boh_json_uri = _existing_local_or_remote(run_data.get("boh_uri"))
+
+    if not (boh_html_uri or boh_json_uri) and run_provider:
+        html_remote = f"bills_of_health/{workspace_name}.html"
+        json_remote = f"bills_of_health/{workspace_name}.json"
+        if run_provider.exists(html_remote):
+            boh_html_uri = run_provider.get_uri(html_remote)
+            boh_json_uri = run_provider.get_uri(json_remote)
+        elif run_provider.exists(json_remote):
+            boh_json_uri = run_provider.get_uri(json_remote)
+
+    gcs_ref = next(
+        (
+            uri
+            for uri in (boh_html_uri, boh_json_uri)
+            if uri and uri.startswith("gs://")
+        ),
+        None,
+    )
+    if not gcs_ref:
+        # Fall back to searching the export dir and the internal workspace.
+        ws_dirs = (
+            run_data.get("workspace_path"),
+            str(workspaces_dir / workspace_name),
+        )
+        search_dirs = (run_data.get("export_logs_dir"), *ws_dirs)
+        boh_html_uri = boh_html_uri or _find_local_artifact(
+            "bill_of_health.html", *search_dirs
+        )
+        boh_json_uri = boh_json_uri or _find_local_artifact(
+            "bill_of_health.json", *search_dirs
+        )
+
+    return ResultLocations(
+        boh_html_uri=_format_local_display_path(boh_html_uri),
+        boh_json_uri=_format_local_display_path(boh_json_uri),
+    )
 
 
 def _archive_and_log(
@@ -333,19 +403,24 @@ def _archive_and_log(
         if boh_html_path:
             console.print(
                 f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report "
-                f"saved at: {_make_clickable_link(boh_html_path)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
+                f"saved at: {rendering.format_location(boh_html_path)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]",
+                soft_wrap=True,
             )
             updates["boh_html_uri"] = boh_html_path
         if boh_json_path:
             console.print(
                 f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-                f"{_make_clickable_link(boh_json_path)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
+                f"{rendering.format_location(boh_json_path)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]",
+                soft_wrap=True,
             )
             updates["boh_uri"] = boh_json_path
         if ws_path:
-            logger.debug(f"Workspace archived to: {_get_href_link(ws_path)}")
+            logger.debug(
+                "Workspace archived to: %s",
+                rendering.get_web_href(ws_path) or ws_path,
+            )
             updates["workspace_uri"] = ws_path
         updates["is_archived"] = True
     else:
@@ -367,15 +442,17 @@ def _archive_and_log(
         if display_html:
             console.print(
                 f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report "
-                f"saved at: {_make_clickable_link(display_html)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
+                f"saved at: {rendering.format_location(display_html)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]",
+                soft_wrap=True,
             )
             updates["boh_html_uri"] = html_path
         if display_json:
             console.print(
                 f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-                f"{_make_clickable_link(display_json)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]"
+                f"{rendering.format_location(display_json)}"
+                f"[/{theme.CHS_SUCCESS_STYLE}]",
+                soft_wrap=True,
             )
             updates["boh_uri"] = json_path
 
@@ -903,7 +980,7 @@ def _analyze_action(
                         f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health generated."
                         f"[/{theme.CHS_SUCCESS_STYLE}]"
                     )
-                    _show_results(app_data, run_id, suppress_boh_uri=True)
+                    _show_results(app_data, run_id, suppress_locations=True)
                     return run_id
 
                 # 3. If neither exists, wait for jobs and then analyze
@@ -1008,7 +1085,7 @@ def _analyze_action(
                     )
 
                 background_cleanup.start(ramble_manager)
-                _show_results(app_data, run_id, suppress_boh_uri=True)
+                _show_results(app_data, run_id, suppress_locations=True)
             except (OSError, subprocess.CalledProcessError, KubeError) as e:
                 err_msg = ex.format_subprocess_error(e)
                 raise ex.ChsAnalysisException(
@@ -1022,9 +1099,16 @@ def _analyze_action(
 def _show_results(
     app_data: ChsAppData,
     run_id: str | None = None,
-    suppress_boh_uri: bool = False,
+    suppress_locations: bool = False,
 ) -> None:
-    """Shows the Bill of Health summary."""
+    """Shows the Bill of Health summary.
+
+    Args:
+      app_data: CHS application data.
+      run_id: Run to show; defaults to the latest run when omitted.
+      suppress_locations: If True, skips printing the HTML and JSON
+        locations (e.g. when the caller has already printed them).
+    """
     workspaces_dir = pathlib.Path(app_data.get_workspaces_dir())
     if not run_id:
         run_id = app_data.get_latest_run_id()
@@ -1050,20 +1134,6 @@ def _show_results(
                 boh_path = exported_boh
 
     run_provider = StorageProviderFactory.get_provider_for_run(workspace_name)
-
-    boh_uri = None
-    if not suppress_boh_uri:
-        if isinstance(run_data, dict):
-            boh_uri = run_data.get("boh_html_uri") or run_data.get("boh_uri")
-        if not boh_uri and run_provider:
-            html_remote = f"bills_of_health/{workspace_name}.html"
-            json_remote = f"bills_of_health/{workspace_name}.json"
-            if run_provider.exists(html_remote):
-                boh_uri = run_provider.get_uri(html_remote)
-            elif run_provider.exists(json_remote):
-                boh_uri = run_provider.get_uri(json_remote)
-        if boh_uri:
-            boh_uri = _format_local_display_path(boh_uri)
 
     if not boh_path.exists():
         if not run_provider and not app_data.get_storage_config():
@@ -1092,7 +1162,6 @@ def _show_results(
                 provider.download_file(
                     f"bills_of_health/{workspace_name}.json", tmp_file_path
                 )
-                viewer = ResultsViewer(tmp_file_path, boh_uri=boh_uri)
             except ex.StorageObjectNotFoundException as e:
                 logger.debug("Storage object not found: %s", e)
                 raise ex.BillOfHealthNotFoundException(
@@ -1105,8 +1174,35 @@ def _show_results(
                     f"Failed to retrieve Bill of Health for run '{run_id}' "
                     f"from storage: {e}"
                 ) from e
-    else:
-        viewer = ResultsViewer(boh_path, boh_uri=boh_uri)
+
+            locations = (
+                _resolve_result_locations(
+                    run_data, provider, workspace_name, workspaces_dir
+                )
+                if not suppress_locations
+                else ResultLocations()
+            )
+            viewer = ResultsViewer(
+                tmp_file_path,
+                boh_html_uri=locations.boh_html_uri,
+                boh_json_uri=locations.boh_json_uri,
+            )
+            telemetry_reporting.record_test_results(viewer.boh)
+            viewer.show_summary_and_details()
+            return
+
+    locations = (
+        _resolve_result_locations(
+            run_data, run_provider, workspace_name, workspaces_dir
+        )
+        if not suppress_locations
+        else ResultLocations()
+    )
+    viewer = ResultsViewer(
+        boh_path,
+        boh_html_uri=locations.boh_html_uri,
+        boh_json_uri=locations.boh_json_uri,
+    )
 
     telemetry_reporting.record_test_results(viewer.boh)
     viewer.show_summary_and_details()

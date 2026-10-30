@@ -254,7 +254,7 @@ chs cancel --all
 ```
 
 ### `chs results`
-Displays the Bill of Health summary in the terminal and outputs the clickable GCS link to the interactive HTML diagnostic report. If `RUN_ID` is omitted, CHS presents an interactive selector for your recent runs.
+Displays the Bill of Health summary in the terminal, followed by the locations of the run's artifacts: the interactive HTML report and the Bill of Health JSON. For runs uploaded to GCS these are `gs://` links; for local runs they are paths on disk (relative to the current directory when under it). If `RUN_ID` is omitted, CHS presents an interactive selector for your recent runs.
 
 ```bash
 # Select from recent runs interactively
