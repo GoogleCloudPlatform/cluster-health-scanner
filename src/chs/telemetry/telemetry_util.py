@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_ENDPOINT = "https://play.googleapis.com/log?format=json_proto"
 
-_INTERNAL_EMAIL_SUFFIXES = ("@example.com", ".google.com")
+_GOOGLE_DOMAIN = "google.com"
+_INTERNAL_EMAIL_SUFFIXES = (f"@{_GOOGLE_DOMAIN}", f".{_GOOGLE_DOMAIN}")
 _INTERNAL_SERVICE_ACCOUNT_RES = (
     re.compile(
         r"(hpc-toolkit-dev|hpc-toolkit-demo|hpc-toolkit-gsc)"
