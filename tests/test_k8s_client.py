@@ -813,6 +813,19 @@ class ClientFunctionsTest(unittest.TestCase):
                 k8s_client._delete_and_wait(delete, read, ["a"], 1.0)
             self.assertEqual(ctx.exception.status, 500)
 
+        with self.subTest("timeout names the first 10 pending objects"):
+            names = [f"job-{i}-cd" for i in range(79)]
+            delete = mock.Mock(return_value=_FakeResponse({}))
+            read = mock.Mock(return_value=_FakeResponse({}))
+            with self.assertRaises(KubeError) as ctx:
+                k8s_client._delete_and_wait(delete, read, names, 1.0)
+            self.assertEqual(
+                str(ctx.exception),
+                "Timed out waiting for deletion of "
+                + ", ".join(names[:10])
+                + " and 69 others",
+            )
+
     def test_secrets(self) -> None:
         self.sdk.core.list_namespaced_secret.return_value = _FakeResponse(
             {"items": [{"metadata": {"name": "s1"}}]}

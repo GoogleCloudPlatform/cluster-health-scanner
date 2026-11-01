@@ -16,7 +16,6 @@
 schedulers:
 - standalone
 - kubernetes
-- slurm
 variables:
   n_ranks: '{processes_per_node}*{n_nodes}'
   processes_per_node: 1
@@ -37,6 +36,3 @@ kubernetes:
       - key: "google.com/tpu"
         operator: "Exists"
         effect: "NoSchedule"
-slurm:
-  variables:
-    tpu_run_wrapper: srun {srun_args}

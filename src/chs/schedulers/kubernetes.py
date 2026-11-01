@@ -46,6 +46,7 @@ from chs.schedulers.gang_admission import (
     pod_nodes,
 )
 from chs.utils import k8s_client
+from chs.utils.formatting import format_names
 from chs.exceptions import (
     ChsCancellationException,
     ChsSchedulerException,
@@ -210,13 +211,6 @@ def _job_condition(job: dict, condition_type: str) -> dict | None:
         ):
             return condition
     return None
-
-
-def _format_node_list(nodes: list[str], max_display: int = 3) -> str:
-    """Formats a list of node names, truncating with a count if long."""
-    shown = ", ".join(nodes[:max_display])
-    hidden = len(nodes) - max_display
-    return f"{shown} and {hidden} others" if hidden > 0 else shown
 
 
 def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
@@ -1250,7 +1244,7 @@ class KubernetesScheduler(BaseScheduler):
                     "Cannot run multi-host test(s) on slice '%s': the "
                     "following node(s) are busy or unavailable: %s",
                     pool,
-                    _format_node_list(busy),
+                    format_names(busy),
                 )
             valid_nodes = [
                 n
@@ -1278,7 +1272,7 @@ class KubernetesScheduler(BaseScheduler):
                     "provision the Slice CR, but the following node(s) "
                     "are busy or unavailable: %s",
                     pool,
-                    _format_node_list(busy),
+                    format_names(busy),
                 )
                 excluded_nodes.update(topology.pools[pool])
             valid_nodes = [n for n in raw_nodes if n not in excluded_nodes]
@@ -1298,7 +1292,7 @@ class KubernetesScheduler(BaseScheduler):
             logger.warning(
                 "Excluded node(s) %s from testing because their %s TPU "
                 "partition is not HEALTHY or not labelled on the node.",
-                _format_node_list(unhealthy),
+                format_names(unhealthy),
                 DYNAMIC_SINGLE_HOST_TOPOLOGY,
             )
         in_slice = [
@@ -1311,7 +1305,7 @@ class KubernetesScheduler(BaseScheduler):
             logger.warning(
                 "Excluded node(s) %s from testing because they are already "
                 "part of a TPU slice.",
-                _format_node_list(in_slice),
+                format_names(in_slice),
             )
         return set(unhealthy) | set(in_slice)
 
@@ -2175,7 +2169,7 @@ class KubernetesScheduler(BaseScheduler):
                 "Excluded node(s) %s from testing because their %s "
                 "single-host slices could not be provisioned. Tests will "
                 "run on the remaining nodes.",
-                _format_node_list(failed_subslices),
+                format_names(failed_subslices),
                 DYNAMIC_SINGLE_HOST_TOPOLOGY,
             )
 

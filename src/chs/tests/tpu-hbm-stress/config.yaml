@@ -14,9 +14,7 @@
 
 platforms:
 - tpu7x-standard-4t
-- ct6e-standard-4t:
-  - kubernetes
-  - standalone
+- ct6e-standard-4t
 defaults:
   modifiers:
   - name: generic-error-detector

@@ -51,6 +51,24 @@ def format_relative_time(timestamp_iso: str) -> str:
         return "Unknown"
 
 
+def format_names(names: list[str], max_display: int = 3) -> str:
+    """Joins the first names and counts the rest.
+
+    Args:
+        names: The names to list.
+        max_display: How many names to show before counting the rest.
+
+    Returns:
+        The names joined by commas, e.g. 'a, b, c', or the first
+        max_display of them and a count of the rest, e.g. 'a, b and 3 others'.
+    """
+    shown = ", ".join(names[:max_display])
+    hidden = len(names) - max_display
+    if hidden <= 0:
+        return shown
+    return f"{shown} and {hidden} {'other' if hidden == 1 else 'others'}"
+
+
 def format_storage_path(storage_dict: dict | None) -> str:
     """Formats a storage configuration dictionary into a concise string.
 

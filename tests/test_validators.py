@@ -453,20 +453,8 @@ class TestValidators(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
-    def test_tpu_topology_validator_valid_slurm(self):
-        v = validators.topology.TpuTopologyValidator()
-        errors = v.validate(
-            {
-                "machine_type": "ct6e-standard-4t",
-                "scheduler": "slurm",
-                "scheduler_obj": mock.Mock(
-                    nodes_arg=None, nodelists_arg=None, partitions_arg="part1"
-                ),
-            }
-        )
-        self.assertEqual(errors, [])
-
-    def test_tpu_topology_validator_invalid_slurm(self):
+    def test_tpu_topology_validator_leaves_slurm_to_platform_support(self):
+        """TPUs are not supported on Slurm; TestsValidator rejects them."""
         v = validators.topology.TpuTopologyValidator()
         errors = v.validate(
             {
@@ -475,49 +463,11 @@ class TestValidators(unittest.TestCase):
                 "scheduler_obj": mock.Mock(
                     nodes_arg=None,
                     nodelists_arg="node-[1-2]",
-                    partitions_arg="part1",
+                    partitions_arg=None,
                 ),
             }
         )
-        self.assertEqual(len(errors), 1)
-        self.assertIn(
-            "TPU tests need entire slice, please use --partitions.", errors[0]
-        )
-
-    def test_tpu_topology_validator_missing_partitions(self):
-        v = validators.topology.TpuTopologyValidator()
-        errors = v.validate(
-            {
-                "machine_type": "tpu7x-standard-4t",
-                "scheduler": "slurm",
-                "scheduler_obj": mock.Mock(
-                    nodes_arg=None, nodelists_arg=None, partitions_arg=None
-                ),
-            }
-        )
-        self.assertEqual(len(errors), 1)
-        self.assertIn(
-            "TPU tests need entire slice, please use --partitions to target "
-            "specific partitions.",
-            errors[0],
-        )
-
-    def test_tpu_topology_validator_slurm_with_tests_enforces_partitions(self):
-        v = validators.topology.TpuTopologyValidator()
-        errors = v.validate(
-            {
-                "machine_type": "ct6e-standard-4t",
-                "scheduler": "slurm",
-                "scheduler_obj": mock.Mock(
-                    nodes_arg="node1", nodelists_arg=None, partitions_arg=None
-                ),
-            }
-        )
-        self.assertEqual(len(errors), 1)
-        self.assertIn(
-            "TPU tests need entire slice, please use --partitions.",
-            errors[0],
-        )
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

@@ -27,14 +27,6 @@ defaults:
       container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
       job_template: job_standard.yaml.tpl
       mpi_command: ''
-  slurm:
-    modifiers:
-    - name: tpu-node-local-init
-    env_vars:
-      set:
-        PYTHONPATH: /usr/local/lib/python3.10/dist-packages
-    variables:
-      srun_args: --cpu-bind=none --wait=60
   standalone:
     variables:
       runtime: tpu

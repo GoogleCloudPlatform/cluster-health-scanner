@@ -22,11 +22,11 @@ from chs.validators.base import Validator
 class TpuTopologyValidator(Validator):
     """Validates TPU topology requirements.
 
-    On Slurm, all TPU tests require entire partitions, so --partitions must be
-    used instead of --nodes or --nodelists.
-
     On Kubernetes, single-host TPU tests support targeting individual nodes with
     --nodes, while multi-host TPU tests require whole slices via --nodepools.
+
+    TPUs are not supported on Slurm; no TPU platform lists the Slurm scheduler,
+    so TestsValidator rejects TPU tests there.
     """
 
     def validate(self, config: dict[str, Any]) -> list[str]:
@@ -53,14 +53,6 @@ class TpuTopologyValidator(Validator):
                 return [
                     f"TPU multi-host test(s) {names} require an entire "
                     "slice (use --nodepools)."
-                ]
-        elif scheduler_name == "slurm":
-            if nodes_arg or getattr(scheduler_obj, "nodelists_arg", None):
-                return ["TPU tests need entire slice, please use --partitions."]
-            if not getattr(scheduler_obj, "partitions_arg", None):
-                return [
-                    "TPU tests need entire slice, please use "
-                    "--partitions to target specific partitions."
                 ]
 
         return []

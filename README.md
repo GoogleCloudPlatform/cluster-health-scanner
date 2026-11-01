@@ -1,6 +1,6 @@
 # Cluster Health Scanner (CHS)
 
-Cluster Health Scanner (CHS) is a command-line tool designed to validate the health, performance, and infrastructure of GPU and TPU accelerator clusters on Google Kubernetes Engine (GKE) and Slurm.
+Cluster Health Scanner (CHS) is a command-line tool designed to validate the health, performance, and infrastructure of GPU clusters on Google Kubernetes Engine (GKE) and Slurm, and of TPU clusters on GKE.
 
 > **Note:** Looking for the legacy v1 (`cluster_diag` / Helm `health_runner`) implementation? It is preserved under the [`legacy-archive`](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/legacy-archive) tag (`git clone -b legacy-archive https://github.com/GoogleCloudPlatform/cluster-health-scanner.git`).
 
@@ -188,9 +188,9 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 - `--suite`, `-s <SUITE_NAME>`: Pre-configured test suite to run (`lite` or `standard`). Defaults to `lite` when `--tests` is not specified.
 - `--tests`, `-t <TEST_LIST>`: Comma-separated list of individual benchmarks to run instead of a full suite (e.g., `--tests nccl-cluster,gemm`).
 - `--nodepools <NODEPOOL_LIST>`: Comma-separated list of Kubernetes node pools to target (can target single-host benchmarks across entire pools, and required for multi-host TPU benchmarks on Kubernetes).
-- `--nodes <NODE_LIST>`: Comma-separated list of individual nodes to target (on Kubernetes, single-host TPU benchmarks support targeting static pool nodes, while multi-host benchmarks require whole-slice targeting via `--nodepools`; on Slurm, all TPU benchmarks require `--partitions`).
-- `--partitions <PARTITION_LIST>`: Comma-separated list of Slurm partitions to target (required when targeting TPUs on Slurm).
-- `--nodelists <NODE_PATTERN_LIST>`: Slurm nodelist pattern to target, e.g., `node-[1-4]` (not supported for TPUs; use `--partitions`).
+- `--nodes <NODE_LIST>`: Comma-separated list of individual nodes to target (on Kubernetes, single-host TPU benchmarks support targeting static pool nodes, while multi-host benchmarks require whole-slice targeting via `--nodepools`).
+- `--partitions <PARTITION_LIST>`: Comma-separated list of Slurm partitions to target.
+- `--nodelists <NODE_PATTERN_LIST>`: Slurm nodelist pattern to target, e.g., `node-[1-4]`.
 - `--auto-approve`, `-y`: Automatically confirm the execution preview without interactive prompting (useful for CI and scripts).
 - `--run-id <RUN_ID>`: Custom identifier for the run.
 - `--scheduler {kubernetes,slurm,standalone}`: Scheduler to use instead of auto-detection. `standalone` tests the TPU VM CHS runs on; `--nodes`, `--nodelists`, `--nodepools` and `--partitions` don't apply to it.
@@ -312,8 +312,8 @@ Local workspaces are also preserved on the host (or inside the `chs-local-state`
   gcloud auth login --no-browser
   ```
 
-### Targeting TPUs (`--nodepools` / `--partitions`)
-Multi-host TPU benchmarks (such as `tpu-collectives` and `tpu-network-stress`) require an entire slice, so individual node or nodelist targeting (`--nodes`, `--nodelists`) is not supported for them. On Slurm, all TPU benchmarks require whole-partition targeting via `--partitions`. On Kubernetes, single-host TPU benchmarks (such as `tpu-info`, `tpu-gemm`, and `tpu-hbm`) support targeting individual nodes with `--nodes`. On dynamic TPU pools on GKE (version 1.36.0-gke.3712000 or later), CHS provisions a single-host 2x2x1 slice for each targeted node whose 2x2x1 partition is `HEALTHY`, even when the surrounding 4x4x4 partition is degraded, and drops, with a warning, any node whose slice cannot be provisioned. Multi-host benchmarks on dynamic TPU pools require whole-partition provisioning via `--nodepools`. When running suites or mixed benchmarks with `--nodes` on Kubernetes, multi-host benchmarks requiring a full slice are automatically skipped with an informative warning. Additionally, all nodes targeted within a single `chs run` invocation must belong to the same machine type.
+### Targeting TPUs (`--nodepools`)
+TPUs are supported on Kubernetes and, through the `standalone` scheduler, on a single TPU VM; they are not supported on Slurm. Multi-host TPU benchmarks (such as `tpu-collectives` and `tpu-network-stress`) require an entire slice, so individual node targeting (`--nodes`) is not supported for them. On Kubernetes, single-host TPU benchmarks (such as `tpu-info`, `tpu-gemm`, and `tpu-hbm`) support targeting individual nodes with `--nodes`. On dynamic TPU pools on GKE (version 1.36.0-gke.3712000 or later), CHS provisions a single-host 2x2x1 slice for each targeted node whose 2x2x1 partition is `HEALTHY`, even when the surrounding 4x4x4 partition is degraded, and drops, with a warning, any node whose slice cannot be provisioned. Multi-host benchmarks on dynamic TPU pools require whole-partition provisioning via `--nodepools`. When running suites or mixed benchmarks with `--nodes` on Kubernetes, multi-host benchmarks requiring a full slice are automatically skipped with an informative warning. Additionally, all nodes targeted within a single `chs run` invocation must belong to the same machine type.
 
 ### GCS Bucket Creation
 `chs configure storage gcs <bucket-name>` requires an existing GCS bucket with write permissions; CHS does not create new GCS buckets automatically.

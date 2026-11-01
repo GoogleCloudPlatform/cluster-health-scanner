@@ -21,7 +21,7 @@ from chs import main as chs_main
 from chs import telemetry
 from chs.main import _normalize_argv
 from chs.validators.utils import validate_non_empty_string
-from chs.utils.formatting import format_storage_path
+from chs.utils.formatting import format_names, format_storage_path
 
 
 class TestMain(unittest.TestCase):
@@ -214,3 +214,21 @@ class TestFormatting(unittest.TestCase):
     def test_format_storage_path_none(self):
         self.assertEqual(format_storage_path(None), "Local")
         self.assertEqual(format_storage_path({}), "Local")
+
+    def test_format_names_lists_all_names_up_to_the_limit(self):
+        self.assertEqual(format_names([], max_display=2), "")
+        self.assertEqual(format_names(["a", "b"], max_display=2), "a, b")
+
+    def test_format_names_counts_the_names_past_the_limit(self):
+        self.assertEqual(
+            format_names(["a", "b", "c", "d"], max_display=2),
+            "a, b and 2 others",
+        )
+        self.assertEqual(
+            format_names(["a", "b", "c"], max_display=2), "a, b and 1 other"
+        )
+
+    def test_format_names_shows_three_names_by_default(self):
+        self.assertEqual(
+            format_names(["a", "b", "c", "d", "e"]), "a, b, c and 2 others"
+        )

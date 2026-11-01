@@ -1019,39 +1019,35 @@ class TestCli(unittest.TestCase):
             self.assertIn("tpu-collectives", test_names)
 
     @mock.patch("chs.cli._analyze_action")
-    def test_run_tpu_fails_when_no_partition_slurm(self, mock_analyze_action):
-        """Test TPU run on Slurm fails when no partition is provided."""
-        mock_default_dir = "/mocked/workspaces"
-        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+    def test_run_tpu_on_slurm_is_not_supported(self, mock_analyze_action):
+        """A TPU run on Slurm is rejected, even when targeting partitions.
+
+        The catalog mirrors the shipped platform files: TPU tests are listed
+        for Kubernetes only, never for Slurm.
+        """
         self.mock_app_data.get_latest_run_id.return_value = None
-        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         self.mock_scheduler.name = "slurm"
-        self.mock_scheduler.nodes_arg = "node1"
-        self.mock_scheduler.partitions_arg = None
+        self.mock_scheduler.partitions_arg = "v6e"
         self.mock_scheduler.detect_nodes_hardware.return_value = [
-            "tpu7x-standard-4t"
+            "ct6e-standard-4t"
         ]
 
         with (
             mock.patch("chs.cli.detect_scheduler", return_value="slurm"),
             mock.patch(
                 "chs.utils.tests.get_all_supported_machine_types",
-                return_value=["tpu7x-standard-4t"],
+                return_value=["a3-megagpu-8g", "ct6e-standard-4t"],
             ),
             mock.patch(
                 "chs.utils.tests.get_all_supported_tests",
-                return_value=["tpu-info", "tpu-collectives"],
+                return_value=["dcgm", "tpu-info"],
             ),
             mock.patch(
                 "chs.utils.tests.get_tests_map",
                 return_value=_TestsMap(
                     data={
-                        "slurm": {
-                            "tpu7x-standard-4t": [
-                                "tpu-info",
-                                "tpu-collectives",
-                            ],
-                        }
+                        "slurm": {"a3-megagpu-8g": ["dcgm"]},
+                        "kubernetes": {"ct6e-standard-4t": ["tpu-info"]},
                     }
                 ),
             ),
@@ -1061,21 +1057,22 @@ class TestCli(unittest.TestCase):
                 [
                     "run",
                     "--tests",
-                    "tpu-info,tpu-collectives",
-                    "--nodes",
-                    "node1",
+                    "tpu-info",
+                    "--partitions",
+                    "v6e",
                     "--auto-approve",
                 ],
                 standalone_mode=False,
             )
-            self.assertEqual(result.exit_code, 1)
-            self.assertIsInstance(
-                result.exception, exceptions.ChsValidationError
-            )
-            self.assertIn(
-                "TPU tests need entire slice, please use --partitions.",
-                str(result.exception),
-            )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIsInstance(result.exception, exceptions.ChsValidationError)
+        self.assertIn(
+            "not supported for scheduler 'slurm' and machine type "
+            "'ct6e-standard-4t'",
+            str(result.exception),
+        )
+        self.assertNotIn("--partitions", str(result.exception))
+        self.mock_rm_instance.execute_experiments.assert_not_called()
 
     @mock.patch("chs.cli._analyze_action")
     def test_run_tpu_fails_when_only_multi_host_and_no_nodepool(

@@ -18,6 +18,7 @@ import collections
 import pathlib
 import unittest
 
+from chs import resources
 from chs.testkit import build_catalog, build_thresholds
 from chs.testkit import config as chs_config
 from chs.testkit import loader
@@ -89,6 +90,13 @@ class PlatformFilesTest(unittest.TestCase):
         on_disk = {path.stem for path in PLATFORMS_DIR.glob("*.yaml")}
 
         self.assertEqual(on_disk, declared)
+
+    def test_no_tpu_test_runs_on_slurm(self):
+        """TPUs are supported on Kubernetes and standalone, not on Slurm."""
+        for test_name, machine, scheduler in _supported_combinations():
+            with self.subTest(test=test_name, machine=machine):
+                if resources.is_tpu(machine):
+                    self.assertNotEqual(scheduler, "slurm")
 
 
 class TestConfigFilesTest(unittest.TestCase):
@@ -173,7 +181,7 @@ class ResolveShippedFilesTest(unittest.TestCase):
 
     def test_tpu_env_modifier_stays_on_cluster_schedulers(self):
         for test_name, schedulers in (
-            ("tpu-info", ("kubernetes", "slurm")),
+            ("tpu-info", ("kubernetes",)),
             ("tpu-compute-stress", ("kubernetes",)),
             ("tpu-hbm-stress", ("kubernetes",)),
         ):
