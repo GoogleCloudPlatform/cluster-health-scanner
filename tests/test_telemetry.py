@@ -34,6 +34,7 @@ from unittest import mock
 
 from chs import telemetry
 from chs.telemetry import telemetry_util
+from chs.telemetry.supported_metrics import MetricName
 
 # Upper bound for anything that should happen right away.
 _TIMEOUT_S = 5.0
@@ -721,6 +722,15 @@ class GroupingIdTest(_TelemetryTestCase):
         telemetry.set_telemetry_project_id("my-project")
 
         self.assertEqual(telemetry._state.project_id, "my-project")
+
+
+class MetricNameTest(unittest.TestCase):
+    def test_formats_as_value(self):
+        for name in MetricName:
+            with self.subTest(name=name.name):
+                self.assertEqual(str(name), name.value)
+                self.assertEqual(f"{name}", name.value)
+                self.assertEqual(json.dumps(name), f'"{name.value}"')
 
 
 if __name__ == "__main__":

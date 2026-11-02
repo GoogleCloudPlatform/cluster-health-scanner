@@ -24,7 +24,6 @@ import datetime
 import functools
 import logging
 from collections.abc import Callable
-from typing import TypeVar
 
 import click
 from click.core import ParameterSource
@@ -61,10 +60,8 @@ _SUPPORTED_COMMANDS = {"run", "results", "list", "cancel", "history"}
 
 _HELP_AND_VERSION_FLAGS = {"-h", "--help", "--version"}
 
-_R = TypeVar("_R")
 
-
-def _never_raises(f: Callable[..., _R]) -> Callable[..., _R | None]:
+def _never_raises[R](f: Callable[..., R]) -> Callable[..., R | None]:
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         try:
@@ -204,8 +201,8 @@ def record_test_duration(
         logger.debug("Unparseable submission time: %r", submission_time)
         return
     if submitted_at.tzinfo is None:
-        submitted_at = submitted_at.replace(tzinfo=datetime.timezone.utc)
-    now = now or datetime.datetime.now(datetime.timezone.utc)
+        submitted_at = submitted_at.replace(tzinfo=datetime.UTC)
+    now = now or datetime.datetime.now(datetime.UTC)
     duration_ms = int((now - submitted_at).total_seconds() * 1000)
     if duration_ms >= 0:
         telemetry.send_metric(MetricName.TEST_DURATION_MS, duration_ms)

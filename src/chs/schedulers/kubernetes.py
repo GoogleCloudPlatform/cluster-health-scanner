@@ -1609,7 +1609,7 @@ class KubernetesScheduler(BaseScheduler):
             )
             return []
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         unschedulable = set()
         waiting = defaultdict(set)
         for pod in pods:

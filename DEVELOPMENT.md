@@ -7,7 +7,7 @@ All development should be done on the `develop` branch. Main branch is strictly 
 
 ### Prerequisites
 
-*   Python 3.10 or higher
+*   Python 3.12 or higher
 *   `git`
 *   `pip`
 

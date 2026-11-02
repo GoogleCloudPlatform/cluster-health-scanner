@@ -100,6 +100,8 @@ You can run CHS either via the pre-built **Docker container image** (recommended
 
 ### Option B: Python Virtual Environment (Slurm, Kubernetes, or Standalone)
 
+Requires Python 3.12 or newer.
+
 ```bash
 # Create and activate a virtual environment
 python3 -m venv chs-venv

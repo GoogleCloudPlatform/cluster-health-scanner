@@ -34,9 +34,9 @@ def format_relative_time(timestamp_iso: str) -> str:
             timestamp_iso.replace("Z", "+00:00")
         )
         if sub_time.tzinfo is None:
-            sub_time = sub_time.replace(tzinfo=datetime.timezone.utc)
+            sub_time = sub_time.replace(tzinfo=datetime.UTC)
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         diff = now - sub_time
         seconds = max(0, diff.total_seconds())
 

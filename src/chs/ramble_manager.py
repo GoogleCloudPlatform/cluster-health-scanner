@@ -527,7 +527,7 @@ class RambleManager:
                 "workspace_path": self.path,
                 "job_entries": job_entries,
                 "submission_time": (
-                    datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    datetime.datetime.now(datetime.UTC).isoformat()
                 ),
                 "scheduler": self.get_scheduler_type(),
             }

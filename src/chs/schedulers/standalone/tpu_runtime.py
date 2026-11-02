@@ -84,7 +84,6 @@ def ensure_runtime(root: pathlib.Path | None = None) -> pathlib.Path:
             ]
         )
         _run(["git", "-C", code, "checkout", "-q", "FETCH_HEAD"])
-        # jax and jaxlib at AMB_COMMIT require Python 3.12 or newer.
         _run(
             [
                 sys.executable,
@@ -93,7 +92,7 @@ def ensure_runtime(root: pathlib.Path | None = None) -> pathlib.Path:
                 "venv",
                 "--no-cache",
                 "--python",
-                "3.12",
+                sys.executable,
                 venv,
             ]
         )

@@ -2067,9 +2067,7 @@ def run(
         run_id = f"{cluster_name}-{suite}"
     run_id = f"{run_id}-{short_hash}"
 
-    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y%m%d-%H%M%S"
-    )
+    timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
     workspace_name = f"{timestamp}_{run_id}"
     telemetry.set_telemetry_run_id(workspace_name)
     telemetry_reporting.record_run(
@@ -2107,9 +2105,7 @@ def run(
             "run_id": run_id,
             "workspace_name": workspace_name,
             "workspace_path": os.path.join(workspaces_base_dir, workspace_name),
-            "submission_time": datetime.datetime.now(
-                datetime.timezone.utc
-            ).isoformat(),
+            "submission_time": datetime.datetime.now(datetime.UTC).isoformat(),
             "scheduler": scheduler_obj.name,
             "machine_type": machine_type,
             "command_statement": command_statement,

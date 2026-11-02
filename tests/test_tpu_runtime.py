@@ -89,7 +89,7 @@ class EnsureRuntimeTest(unittest.TestCase):
                     "venv",
                     "--no-cache",
                     "--python",
-                    "3.12",
+                    sys.executable,
                     venv,
                 ],
                 [

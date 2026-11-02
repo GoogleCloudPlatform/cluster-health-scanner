@@ -17,7 +17,7 @@
 import enum
 
 
-class MetricName(str, enum.Enum):
+class MetricName(enum.StrEnum):
     PARENT_COMMAND = "PARENT_COMMAND"
     COMMAND_FLAGS = "COMMAND_FLAGS"
     STORAGE_TYPE = "STORAGE_TYPE"

@@ -17,8 +17,6 @@ RUN arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm6
 COPY src/chs/exceptions.py /src/chs/exceptions.py
 COPY src/chs/schedulers/standalone/tpu_runtime.py /src/chs/schedulers/standalone/tpu_runtime.py
 ENV PYTHONPATH=/src
-# The venv must use this image's Python, which the final image also has.
-ENV UV_PYTHON_PREFERENCE=only-system
 RUN arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}"; \
     if [ "$arch" = "amd64" ]; then \
         python -c "from chs.schedulers.standalone.tpu_runtime import IMAGE_ROOT, ensure_runtime; ensure_runtime(IMAGE_ROOT)"; \
