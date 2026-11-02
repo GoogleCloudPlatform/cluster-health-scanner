@@ -149,15 +149,19 @@ class TestTpuErrorDetector(unittest.TestCase):
     def test_bench_fail_regex(self):
         regex = self.bench_fail_regex
         self.assertTrue(
-            re.match(regex, "Benchmark func failed: ResourceExhaustedError")
+            re.match(regex, "Benchmark 'gemm' failed: ResourceExhaustedError")
         )
         self.assertTrue(
             re.match(
                 regex,
-                "Benchmark func failed: 'Failed to initialize PJRT client'",
+                "HOST node-1: Benchmark 'host_to_device' failed:"
+                " 'Failed to initialize PJRT client'",
             )
         )
-        self.assertFalse(re.match(regex, "Benchmark succeeded"))
+        self.assertFalse(
+            re.match(regex, "Benchmark func failed: ResourceExhaustedError")
+        )
+        self.assertFalse(re.match(regex, "Success [1/1] gemm. Metrics: {}"))
 
 
 if __name__ == "__main__":

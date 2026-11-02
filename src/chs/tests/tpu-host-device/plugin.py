@@ -15,6 +15,7 @@
 """Host to TPU transfer bandwidth check."""
 
 from chs.testkit import SlicePlugin
+from chs.testkit.context import load_benchmark_config
 
 
 class Plugin(SlicePlugin):
@@ -35,4 +36,19 @@ class Plugin(SlicePlugin):
     application = "tpu-host-device"
     default_workloads = ("check",)
     workload_in_experiment_name = False
-    benchmark_config = "host_device.yaml"
+    benchmark_config = "host_to_device.yaml"
+    benchmark_config_d2h = "device_to_host.yaml"
+
+    def finalize_context(self, context, workload, request):
+        variables = context["variables"]
+        filename = variables.get("benchmarks_yaml_d2h_file")
+        if not filename:
+            filename = self.benchmark_config_d2h
+            variables["benchmarks_yaml_d2h_file"] = filename
+
+        content = load_benchmark_config(filename, self.benchmarks_dir)
+        variables["benchmarks_yaml_d2h_escaped"] = (
+            content.replace("\\", "\\\\")
+            .replace("'", "'\\''")
+            .replace("\n", "\\n")
+        )

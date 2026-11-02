@@ -769,14 +769,14 @@ class TpuCollectivesTest(unittest.TestCase):
             "variables": {
                 "execution_topology": "2x2x1",
                 "cores_per_chip": 1,
-                "benchmarks_yaml_escaped": "mesh: __MESH__ ici: __ICI__",
+                "benchmarks_yaml_escaped": "mesh: __MESH__",
             }
         }
 
         self.plugin.finalize_context(context, "all_reduce", request())
 
         self.assertEqual(
-            "mesh: 2x2x2 ici: 4",
+            "mesh: 2x2x2",
             context["variables"]["benchmarks_yaml_escaped"],
         )
 
@@ -839,10 +839,10 @@ class TpuCollectivesTest(unittest.TestCase):
         escaped = self.finalize(
             execution_topology="2x2x1",
             cores_per_chip=1,
-            benchmarks_yaml_escaped="__ICI__ __START__",
+            benchmarks_yaml_escaped="__START__",
         )
 
-        self.assertEqual("4 8", escaped)
+        self.assertEqual("8", escaped)
 
     def test_message_sizes_can_be_overridden(self):
         escaped = self.finalize(
@@ -875,8 +875,6 @@ class TpuCollectivesTest(unittest.TestCase):
             self.assertTrue(escaped)
             for token in (
                 "__MESH__",
-                "__SHARDING__",
-                "__ICI__",
                 "__START__",
                 "__END__",
                 "__MULTIPLIER__",
@@ -1003,7 +1001,7 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
         for test_name, expected_file in (
             ("tpu-gemm", "gemm_16384_bf16.yaml"),
             ("tpu-hbm", "hbm_copy_bf16.yaml"),
-            ("tpu-host-device", "host_device.yaml"),
+            ("tpu-host-device", "host_to_device.yaml"),
         ):
             p = plugin(test_name)
             req = request(slices={"slice-0": ["node-1"]})
@@ -1018,6 +1016,19 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
                 self.assertTrue(
                     specs[0].context["variables"]["benchmarks_yaml_escaped"]
                 )
+                if test_name == "tpu-host-device":
+                    self.assertEqual(
+                        "device_to_host.yaml",
+                        specs[0].context["variables"][
+                            "benchmarks_yaml_d2h_file"
+                        ],
+                    )
+                    self.assertIn(
+                        "name: device_to_host",
+                        specs[0].context["variables"][
+                            "benchmarks_yaml_d2h_escaped"
+                        ],
+                    )
 
 
 def _write_topology(root, topology):

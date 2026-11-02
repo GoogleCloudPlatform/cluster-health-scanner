@@ -21,10 +21,11 @@ defaults:
   - name: generic-error-detector
   - name: tpu-error-detector
   variables:
-    benchmarks_yaml_file: tpuv6e/host_device.yaml
+    benchmarks_yaml_file: tpuv6e/host_to_device.yaml
+    benchmarks_yaml_d2h_file: tpuv6e/device_to_host.yaml
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.2.0
       job_template: job_standard.yaml.tpl
       mpi_command: ''
   standalone:
@@ -33,4 +34,5 @@ defaults:
 machines:
   tpu7x-standard-4t:
     variables:
-      benchmarks_yaml_file: tpu7x/host_device.yaml
+      benchmarks_yaml_file: tpu7x/host_to_device.yaml
+      benchmarks_yaml_d2h_file: tpu7x/device_to_host.yaml

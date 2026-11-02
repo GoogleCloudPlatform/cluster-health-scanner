@@ -28,7 +28,7 @@ from chs import exceptions
 logger = logging.getLogger(__name__)
 
 AMB_REPO = "https://github.com/AI-Hypercomputer/accelerator-microbenchmarks.git"
-AMB_COMMIT = "ca2ec4ffd88eb1bd4cc60dc7bc484f2339482308"
+AMB_COMMIT = "027cd628b15e5ede2d0057e0d3c0187b954f42ad"
 IMAGE_ROOT = pathlib.Path("/opt/chs/runtimes")
 _MARKER = ".amb_commit"
 
@@ -107,8 +107,7 @@ def ensure_runtime(root: pathlib.Path | None = None) -> pathlib.Path:
                 "--compile-bytecode",
                 "--python",
                 venv,
-                "-r",
-                code / "requirements.txt",
+                code,
             ]
         )
         (path / _MARKER).write_text(AMB_COMMIT + "\n")

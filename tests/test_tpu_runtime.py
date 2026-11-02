@@ -102,8 +102,7 @@ class EnsureRuntimeTest(unittest.TestCase):
                     "--compile-bytecode",
                     "--python",
                     venv,
-                    "-r",
-                    str(path / "code" / "requirements.txt"),
+                    str(path / "code"),
                 ],
             ],
         )

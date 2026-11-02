@@ -57,7 +57,10 @@ def _benchmarks_named_in(config):
     if isinstance(config, dict):
         names = set()
         for key, value in config.items():
-            if key == "benchmarks_yaml_file" and isinstance(value, str):
+            if key in (
+                "benchmarks_yaml_file",
+                "benchmarks_yaml_d2h_file",
+            ) and isinstance(value, str):
                 names.add(value)
             else:
                 names |= _benchmarks_named_in(value)
@@ -69,12 +72,16 @@ def _benchmarks_named_in(config):
 
 def _benchmarks_chosen_by(plugin):
     names = {plugin.benchmark_config} if plugin.benchmark_config else set()
+    if getattr(plugin, "benchmark_config_d2h", None):
+        names.add(plugin.benchmark_config_d2h)
     request = spec.TestRequest(variables={}, base_prefix="chs-test")
     for workload in plugin.default_workloads:
         variables = {}
         plugin.prepare_variables(variables, workload, request)
         if variables.get("benchmarks_yaml_file"):
             names.add(variables["benchmarks_yaml_file"])
+        if variables.get("benchmarks_yaml_d2h_file"):
+            names.add(variables["benchmarks_yaml_d2h_file"])
     return names
 
 

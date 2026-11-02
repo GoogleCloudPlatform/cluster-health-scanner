@@ -21,10 +21,10 @@ defaults:
   - name: generic-error-detector
   - name: tpu-error-detector
   variables:
-    benchmarks_yaml_file: tpuv6e/gemm_16384_bf16.yaml
+    benchmarks_yaml_file: tpuv6e/gemm_32768x4096x4096_bf16.yaml
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
+      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.2.0
       job_template: job_standard.yaml.tpl
       mpi_command: ''
   standalone:

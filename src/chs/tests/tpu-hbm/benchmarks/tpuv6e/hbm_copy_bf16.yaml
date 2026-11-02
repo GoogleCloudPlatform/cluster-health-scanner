@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-benchmarks:
-- benchmark_name: "single_device_hbm_copy"
-  single_host_tpu_init: True
-  benchmark_sweep_params:
-  - {num_elements_range: {start: 1048576, end: 2147483648, multiplier: 2}, dtype: "bfloat16", num_runs: 20}
-  trace_dir: "../microbenchmarks/hbm_bfloat16"
-  csv_path: "../microbenchmarks/hbm_bfloat16"
-  xlml_metrics_dir: "../microbenchmarks/hbm_bfloat16"
-  xla_dump_dir: "../microbenchmarks/hbm_bfloat16/hlo_graphs"
+benchmark:
+  name: hbm
+  standalone_host_init: true
+  xprof_timing: true
+  params:
+    warmup_tries: 2
+    num_runs: 20
+    dtype: {dtype}
+  sweep:
+    num_elements:
+      start: 1048576
+      end: 2147483648
+      multiplier: 2

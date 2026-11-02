@@ -27,11 +27,6 @@ class TpuHbm(ExecutableApplication):
     tags("diagnostics", "tpu", "hbm")
 
     variable(
-        "run_script",
-        default="Ironwood/src/run_benchmark.py",
-        description="Path to run_benchmark.py relative to $CHS_AMB_DIR",
-    )
-    variable(
         "benchmarks_yaml_file",
         default="hbm_copy_bf16.yaml",
         description="Filename of the benchmarks config in the benchmarks/ directory",
@@ -45,6 +40,11 @@ class TpuHbm(ExecutableApplication):
         "config_file",
         default="{experiment_run_dir}/chs_tpu_hbm.yaml",
         description="Path to config file",
+    )
+    variable(
+        "dtype",
+        default="bfloat16",
+        description="Data type for HBM benchmark",
     )
 
     variable(
@@ -62,7 +62,7 @@ class TpuHbm(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u $\\{CHS_AMB_DIR:-/app/accelerator-microbenchmarks\\}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} env PYTHONUNBUFFERED=1 tpums benchmark run-config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\} ({dtype}): /"',
         ],
         use_mpi=False,
     )
@@ -70,13 +70,13 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit_context(
         "node_params",
-        regex=r"HOST (?P<node>\S+): Running .* with params:.*'num_elements': (?P<num_elements>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
+        regex=r"HOST (?P<node>\S+) \((?P<dtype>\w+)\): Running \[\d+/\d+\] hbm \(\w+_dim_(?P<num_elements>\d+)_dev_\d+\)",
         output_format="{node},{num_elements},{dtype}",
     )
 
     figure_of_merit(
         "Bandwidth (median)",
-        fom_regex=r".*bandwidth.*?:\s*(?P<bandwidth>\d+\.\d+)",
+        fom_regex=r".*Success \[\d+/\d+\] hbm\. Metrics: .*'xprof_bandwidth_per_device_gb_s': (?:np\.float64\()?(?P<bandwidth>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="bandwidth",
         units="GB/s",
         contexts=["node_params"],
@@ -84,7 +84,7 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit(
         "Time Taken (median)",
-        fom_regex=r".*?time taken.*?:\s*(?P<time>\d+\.\d+)",
+        fom_regex=r".*Success \[\d+/\d+\] hbm\. Metrics: .*'xprof_p50_ms': (?:np\.float64\()?(?P<time>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="time",
         units="ms",
         fom_type=FomType.INFO,
@@ -93,9 +93,9 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit(
         "Tensor Size",
-        fom_regex=r".*Tensor size:\s*(?P<tensor_size>\d+(?:\.\d+)?)\s*MB",
+        fom_regex=r".*Success \[\d+/\d+\] hbm\. Metrics: .*'data_size_mib': (?P<tensor_size>\d+(?:\.\d+)?)",
         group_name="tensor_size",
-        units="MB",
+        units="MiB",
         fom_type=FomType.INFO,
         contexts=["node_params"],
     )

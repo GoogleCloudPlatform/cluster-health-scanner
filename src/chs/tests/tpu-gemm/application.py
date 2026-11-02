@@ -27,11 +27,6 @@ class TpuGemm(ExecutableApplication):
     tags("diagnostics", "tpu", "gemm")
 
     variable(
-        "run_script",
-        default="Ironwood/src/run_benchmark.py",
-        description="Path to run_benchmark.py relative to $CHS_AMB_DIR",
-    )
-    variable(
         "benchmarks_yaml_file",
         default="gemm_16384_bf16.yaml",
         description="Filename of the benchmarks config in the benchmarks/ directory",
@@ -62,7 +57,7 @@ class TpuGemm(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u $\\{CHS_AMB_DIR:-/app/accelerator-microbenchmarks\\}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} env PYTHONUNBUFFERED=1 tpums benchmark run-config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )
@@ -70,29 +65,29 @@ class TpuGemm(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"HOST (?P<node>\S+): Running .* with params:.*'m': (?P<m>\d+), 'k': (?P<k>\d+), 'n': (?P<n>\d+),.*'dtype': <class 'jax.numpy.(?P<dtype>\w+)'>",
+        regex=r"HOST (?P<node>\S+): Running \[\d+/\d+\] gemm \(m_(?P<m>\d+)_k_(?P<k>\d+)_n_(?P<n>\d+)_(?P<dtype>\w+?)_to_",
         output_format="{node},{m}x{n}x{k},{dtype}",
     )
 
     figure_of_merit(
         "Throughput",
-        fom_regex=r".*Throughput \(median\): (?P<tflops>\d+\.\d+) TFLOP / second / device",
+        fom_regex=r".*Success \[\d+/\d+\] gemm\. Metrics: .*'xprof_tflops_per_device': (?:np\.float64\()?(?P<tflops>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="tflops",
         units="TFLOP/s/device",
         contexts=["params"],
     )
 
     figure_of_merit(
-        "Total Throughput",
-        fom_regex=r".*TotalThroughput \(median\): (?P<total_tflops>\d+\.\d+) TFLOP / second",
-        group_name="total_tflops",
-        units="TFLOP/s",
+        "Throughput per chip",
+        fom_regex=r".*Success \[\d+/\d+\] gemm\. Metrics: .*'xprof_tflops_per_chip': (?:np\.float64\()?(?P<chip_tflops>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
+        group_name="chip_tflops",
+        units="TFLOP/s/chip",
         contexts=["params"],
     )
 
     figure_of_merit(
         "MFU",
-        fom_regex=r".*MFU: (?P<mfu>\d+\.\d+)%",
+        fom_regex=r".*Success \[\d+/\d+\] gemm\. Metrics: .*'xprof_compute_roofline_efficiency_pct': (?:np\.float64\()?(?P<mfu>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="mfu",
         units="%",
         contexts=["params"],
@@ -100,7 +95,7 @@ class TpuGemm(ExecutableApplication):
 
     figure_of_merit(
         "Step Time",
-        fom_regex=r".*Step Time \(median\): (?P<step_time>\d+\.\d+)",
+        fom_regex=r".*Success \[\d+/\d+\] gemm\. Metrics: .*'xprof_p50_ms': (?:np\.float64\()?(?P<step_time>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="step_time",
         units="ms",
         fom_type=FomType.INFO,
@@ -109,7 +104,7 @@ class TpuGemm(ExecutableApplication):
 
     figure_of_merit(
         "Total FLOPs",
-        fom_regex=r".*Total floating-point ops: (?P<flops>\d+)",
+        fom_regex=r".*Success \[\d+/\d+\] gemm\. Metrics: .*'total_flops': (?P<flops>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
         group_name="flops",
         units="FLOP",
         fom_type=FomType.INFO,

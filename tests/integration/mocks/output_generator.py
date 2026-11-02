@@ -18,11 +18,14 @@ from tests.integration.create_kind_cluster import resolve_config_path
 from tests.integration.mocks.mock_utils import resolve_node_mapping
 
 TPU_HBM_TEMPLATE = (
-    "HOST {node}: Running benchmark with params: 'num_elements': {elements}, "
-    "'dtype': <class 'jax.numpy.bfloat16'>\n"
-    "HOST {node}: bandwidth (median): {bandwidth}\n"
-    "HOST {node}: time taken (median): 0.5\n"
-    "HOST {node}: Tensor size: 128 MB\n"
+    "HOST {node} (bfloat16): Running [12/13] hbm "
+    "(copy_dim_{elements}_dev_0)...\n"
+    "HOST {node} (bfloat16): Success [12/13] hbm. Metrics: "
+    "{'data_size_mib': 8192.0, "
+    "'op_type': 'copy', 'wall_clock_p50_ms': 0.5, "
+    "'wall_clock_bandwidth_per_device_gb_s': {bandwidth}, "
+    "'xprof_p50_ms': 0.5, "
+    "'xprof_bandwidth_per_device_gb_s': {bandwidth}}\n"
 )
 
 TPU_INFO_TEMPLATE = """\
@@ -34,20 +37,21 @@ HOST {node}: Accelerator type: v6e
 """
 
 TPU_GEMM_TEMPLATE = (
-    "HOST {node}: Running benchmark with params: 'm': 16384, 'k': 16384, "
-    "'n': 16384, 'dtype': <class 'jax.numpy.bfloat16'>\n"
-    "HOST {node}: Throughput (median): {tflops} TFLOP / second / device\n"
-    "HOST {node}: TotalThroughput (median): 250.0 TFLOP / second\n"
-    "HOST {node}: MFU: 45.0%\n"
-    "HOST {node}: Step Time (median): 3.5\n"
-    "HOST {node}: Total floating-point ops: 8796093022208\n"
+    "HOST {node}: Running [1/1] gemm (m_16384_k_16384_n_16384_"
+    "bfloat16_to_bfloat16_ta_False_tb_False_alpha_1.0)...\n"
+    "HOST {node}: Success [1/1] gemm. Metrics: {'total_flops': 8796093022208, "
+    "'wall_clock_p50_ms': 4.0, 'wall_clock_tflops_per_device': 200.0, "
+    "'xprof_p50_ms': 3.5, 'xprof_tflops_per_device': {tflops}, "
+    "'xprof_tflops_per_chip': 250.0, "
+    "'xprof_compute_roofline_efficiency_pct': 45.0}\n"
 )
 
 TPU_COLLECTIVES_TEMPLATE = (
-    "HOST {node}: Running benchmark: psum with params: "
-    "{'matrix_dim': 16384, 'dtype': <class 'jax.numpy.bfloat16'>}\n"
-    "HOST {node}: Result metrics: {'achieved_bw (GB/s)_p50': "
-    "np.float64({bandwidth}), 'step_time_ms_p50': np.float64({time})}\n"
+    "HOST {node} (float32): Running [10/10] all_reduce (dim_16384_op_sum)...\n"
+    "HOST {node} (float32): Success [10/10] all_reduce. Metrics: "
+    "{'data_transferred_bytes': 1073741824, "
+    "'xprof_p50_ms': np.float64({time}), "
+    "'xprof_bandwidth_per_chip_gb_s': np.float64({bandwidth})}\n"
 )
 
 TPU_COMPUTE_STRESS_TEMPLATE = (
@@ -61,12 +65,18 @@ TPU_HBM_STRESS_TEMPLATE = (
 )
 
 TPU_HOST_DEVICE_TEMPLATE = (
-    "HOST {node}: Running host_device with params: {'transfer_type': "
-    "'pinned_memory', 'num_devices': 8, 'data_size_mib': 4096, "
-    "'input_type': 'jax', 'dtype': <class 'jax.numpy.float32'>, "
-    "'num_runs': 20}\n"
-    "HOST {node}:   H2D_bw (GiB/s) median: {bandwidth}, P95: {bandwidth}\n"
-    "HOST {node}:   D2H_bw (GiB/s) median: {bandwidth}, P95: {bandwidth}\n"
+    "HOST {node}: Running [1/1] host_to_device "
+    "(tpu_sync_devall_size_4096mib)...\n"
+    "HOST {node}: Success [1/1] host_to_device. Metrics: {'num_devices': 8, "
+    "'wall_clock_p50_ms': 5.0, "
+    "'wall_clock_bandwidth_per_device_gb_s': 25.0, "
+    "'xprof_bandwidth_per_host_gb_s': {bandwidth}}\n"
+    "HOST {node}: Running [1/1] device_to_host "
+    "(tpu_sync_devall_size_4096mib)...\n"
+    "HOST {node}: Success [1/1] device_to_host. Metrics: {'num_devices': 8, "
+    "'wall_clock_p50_ms': 5.0, "
+    "'wall_clock_bandwidth_per_device_gb_s': 25.0, "
+    "'xprof_bandwidth_per_host_gb_s': {bandwidth}}\n"
 )
 
 TPU_NETWORK_STRESS_TEMPLATE = (
@@ -394,7 +404,7 @@ class RambleOutputGenerator:
                 + "\n"
             )
 
-        bandwidth = 210.0
+        bandwidth = 230.0
         if scenario and scenario.get("outcome") == "DEGRADED":
             metrics = scenario.get("metrics", {})
             if "Bandwidth" in metrics or "h2d_bandwidth" in metrics:

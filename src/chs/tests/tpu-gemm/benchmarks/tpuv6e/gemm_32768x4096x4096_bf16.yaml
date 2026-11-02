@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-benchmarks:
-- benchmark_name: host_device
-  single_host_tpu_init: True
-  num_runs: 20
-  benchmark_sweep_params:
-  - transfer_type: "pinned_memory"
-    num_devices_list: [8]
-    data_size_mib_list: [4096]
-    input_type_list: ["jax"]
-    dtype_list: ["float32"]
-  csv_path: "../microbenchmarks/host_device"
-  trace_dir: "../microbenchmarks/host_device/trace"
+benchmark:
+  name: gemm
+  xprof_timing: true
+  xprof_device_timing_aggregation: local_slowest_device
+  standalone_host_init: true
+  params:
+    warmup_tries: 2
+    num_runs: 100
+    in_dtype: bfloat16
+    out_dtype: bfloat16
+    m: 32768
+    k: 4096
+    n: 4096

@@ -29,19 +29,21 @@ _TEST_DIR = os.path.abspath(
 
 _SAMPLE_LOG = "\n".join(
     [
-        "HOST node-1: ===Starting benchmark 'host_device'===",
-        "HOST node-1: Running host_device with params: {"
-        "'transfer_type': 'pinned_memory', 'num_devices': 8, "
-        "'data_size_mib': 4096, 'input_type': 'jax', "
-        "'dtype': <class 'jax.numpy.float32'>, 'num_runs': 20, "
-        "'trace_dir': '../microbenchmarks/host_device/trace/benchmark_0'}",
-        "HOST node-1: Benchmarking Transfer with Data Size: 4096 MB "
-        "for 20 iterations with transfer_type='pinned_memory'",
-        "HOST node-1:   Allocating Pinned Host Data...",
-        "HOST node-1:   H2D_bw (GiB/s) median: 205.0812345, P95: 206.23",
-        "HOST node-1:   D2H_bw (GiB/s) median: 5.457e+01, P95: 54.93",
-        "HOST node-1: Metrics written to CSV at "
-        "../microbenchmarks/host_device/t_host_device_ABC.tsv.",
+        "HOST node-1: standalone_host_init: set TPU_HOST_BOUNDS=1,1,1",
+        "HOST node-1: JAX devices: 8 (e.g. [TpuDevice(id=0, ...)]...)",
+        "HOST node-1: Running [1/1] host_to_device "
+        "(tpu_sync_devall_size_4096mib)...",
+        "HOST node-1: Success [1/1] host_to_device. Metrics: "
+        "{'num_devices': 8, 'wall_clock_p50_ms': 167.4, "
+        "'wall_clock_bandwidth_per_device_gb_s': 25.6351543, "
+        "'xprof_bandwidth_per_host_gb_s': 205.0812345}",
+        "HOST node-1: Running [1/1] device_to_host "
+        "(tpu_sync_devall_size_4096mib)...",
+        "HOST node-1: Success [1/1] device_to_host. Metrics: "
+        "{'num_devices': 8, 'wall_clock_p50_ms': 629.1, "
+        "'wall_clock_bandwidth_per_device_gb_s': np.float64(6.82), "
+        "'xprof_bandwidth_per_host_gb_s': np.float64(5.457e+01)}",
+        "HOST node-1: Summary saved to: /tmp/out/summary.csv",
     ]
 )
 
@@ -96,10 +98,19 @@ class TestTpuHostDeviceApplication(unittest.TestCase):
 
     def test_context_regex(self):
         ctx = self.contexts["params"]
-        m = self._match(ctx["regex"])
-        self.assertEqual(
-            "node-1,4096MiB", ctx["output_format"].format(**m.groupdict())
-        )
+        matches = [
+            m
+            for m in (
+                re.match(ctx["regex"], line)
+                for line in _SAMPLE_LOG.splitlines()
+            )
+            if m
+        ]
+        self.assertEqual(2, len(matches))
+        for m in matches:
+            self.assertEqual(
+                "node-1,4096MiB", ctx["output_format"].format(**m.groupdict())
+            )
 
     def test_fom_regexes(self):
         expected = {
@@ -111,7 +122,7 @@ class TestTpuHostDeviceApplication(unittest.TestCase):
                 fom = self.foms[name]
                 m = self._match(fom["fom_regex"])
                 self.assertEqual(value, m.group(fom["group_name"]))
-                self.assertEqual("GiB/s", fom["units"])
+                self.assertEqual("GB/s", fom["units"])
         self.assertEqual(set(expected), set(self.foms))
 
     def test_threshold_keys_resolve_to_foms(self):
@@ -125,29 +136,72 @@ class TestTpuHostDeviceApplication(unittest.TestCase):
                     self.assertIn(aliases[key], self.foms)
 
     def test_benchmark_configs_use_all_local_devices(self):
-        for rel_path, num_devices in (
-            ("host_device.yaml", 8),
-            ("tpu7x/host_device.yaml", 8),
-            ("tpuv6e/host_device.yaml", 4),
+        tpu_sync_params = {
+            "warmup_tries": 2,
+            "num_runs": 20,
+            "dtype": "float32",
+            "transfer_backend": "tpu_sync",
+        }
+        for rel_path, expected_name, expected_params, expected_sweep in (
+            (
+                "host_to_device.yaml",
+                "host_to_device",
+                {
+                    "warmup_tries": 2,
+                    "num_runs": 20,
+                    "dtype": "float32",
+                    "data_size_mib": 4096,
+                },
+                None,
+            ),
+            (
+                "tpu7x/host_to_device.yaml",
+                "host_to_device",
+                {**tpu_sync_params, "data_size_mib": 16384},
+                None,
+            ),
+            (
+                "tpuv6e/host_to_device.yaml",
+                "host_to_device",
+                {**tpu_sync_params, "data_size_mib": 8192},
+                None,
+            ),
+            (
+                "device_to_host.yaml",
+                "device_to_host",
+                {
+                    "warmup_tries": 2,
+                    "num_runs": 20,
+                    "dtype": "float32",
+                    "data_size_mib": 4096,
+                },
+                None,
+            ),
+            (
+                "tpu7x/device_to_host.yaml",
+                "device_to_host",
+                {**tpu_sync_params, "data_size_mib": 16384},
+                None,
+            ),
+            (
+                "tpuv6e/device_to_host.yaml",
+                "device_to_host",
+                {**tpu_sync_params, "data_size_mib": 8192},
+                None,
+            ),
         ):
             with self.subTest(config=rel_path):
                 with open(os.path.join(_TEST_DIR, "benchmarks", rel_path)) as f:
-                    cfg = yaml.safe_load(f)["benchmarks"][0]
-                self.assertEqual("host_device", cfg["benchmark_name"])
-                self.assertTrue(cfg["single_host_tpu_init"])
-                self.assertEqual(20, cfg["num_runs"])
-                self.assertEqual(
-                    [
-                        {
-                            "transfer_type": "pinned_memory",
-                            "num_devices_list": [num_devices],
-                            "data_size_mib_list": [4096],
-                            "input_type_list": ["jax"],
-                            "dtype_list": ["float32"],
-                        }
-                    ],
-                    cfg["benchmark_sweep_params"],
-                )
+                    cfg = yaml.safe_load(f)["benchmark"]
+                self.assertEqual(expected_name, cfg["name"])
+                self.assertTrue(cfg["standalone_host_init"])
+                self.assertEqual(expected_params, cfg["params"])
+                if expected_sweep is None:
+                    self.assertNotIn("sweep", cfg)
+                else:
+                    self.assertEqual(
+                        {"data_size_mib": expected_sweep}, cfg["sweep"]
+                    )
 
 
 if __name__ == "__main__":

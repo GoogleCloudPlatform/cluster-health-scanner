@@ -67,8 +67,6 @@ def apply_collective_mesh_parameters(variables: dict) -> None:
     content = variables.get("benchmarks_yaml_escaped", "")
     variables["benchmarks_yaml_escaped"] = (
         content.replace("__MESH__", mesh_shape)
-        .replace("__SHARDING__", mesh_shape)
-        .replace("__ICI__", str(interconnect_width))
         .replace(
             "__START__",
             str(

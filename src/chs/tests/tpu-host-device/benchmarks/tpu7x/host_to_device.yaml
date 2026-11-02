@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-benchmarks:
-- benchmark_name: host_device
-  single_host_tpu_init: True
-  num_runs: 20
-  benchmark_sweep_params:
-  - transfer_type: "pinned_memory"
-    num_devices_list: [8]
-    data_size_mib_list: [4096]
-    input_type_list: ["jax"]
-    dtype_list: ["float32"]
-  csv_path: "../microbenchmarks/host_device"
-  trace_dir: "../microbenchmarks/host_device/trace"
+benchmark:
+  name: host_to_device
+  standalone_host_init: true
+  xprof_timing: true
+  params:
+    warmup_tries: 2
+    num_runs: 20
+    dtype: float32
+    transfer_backend: tpu_sync
+    data_size_mib: 16384

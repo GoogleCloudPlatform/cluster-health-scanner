@@ -31,7 +31,7 @@ class TpuGemmParsedResult:
     nodes: str
     sweep_param: str
     throughput: float | None = None
-    total_throughput: float | None = None
+    chip_throughput: float | None = None
     mfu: float | None = None
     step_time: float | None = None
     total_flops: float | None = None
@@ -45,7 +45,11 @@ class TpuGemmRenderer(DefaultRenderer):
             ColumnDef("sweep_param", "Parameters (MxNxK,Dtype)"),
             ColumnDef("nodes", "Nodes"),
             ColumnDef("throughput", "Throughput\n(TFLOP/s/dev)", align="right"),
-            ColumnDef("total_throughput", "Total\n(TFLOPs/s)", align="right"),
+            ColumnDef(
+                "chip_throughput",
+                "Throughput per chip\n(TFLOP/s/chip)",
+                align="right",
+            ),
             ColumnDef("mfu", "MFU (%)", align="right"),
             ColumnDef("step_time", "Step Time (s)", align="right"),
             ColumnDef("total_flops", "Total FLOPs", align="right"),
@@ -119,8 +123,8 @@ class TpuGemmRenderer(DefaultRenderer):
 
                 if m.key == "Throughput":
                     parsed.throughput = val
-                elif m.key == "Total Throughput":
-                    parsed.total_throughput = val
+                elif m.key == "Throughput per chip":
+                    parsed.chip_throughput = val
                 elif m.key == "MFU":
                     parsed.mfu = val
                 elif m.key == "Step Time":
@@ -142,7 +146,7 @@ class TpuGemmRenderer(DefaultRenderer):
                         "sweep_param": context if i == 0 else "",
                         "nodes": item.nodes,
                         "throughput": format_val(item.throughput),
-                        "total_throughput": format_val(item.total_throughput),
+                        "chip_throughput": format_val(item.chip_throughput),
                         "mfu": mfu_str,
                         "step_time": format_val(item.step_time),
                         "total_flops": (
@@ -181,7 +185,11 @@ class TpuGemmRenderer(DefaultRenderer):
         table.add_column(
             "Throughput\n(TFLOP/s/dev)", justify="right", style="green"
         )
-        table.add_column("Total\n(TFLOPs/s)", justify="right", style="green")
+        table.add_column(
+            "Throughput per chip\n(TFLOP/s/chip)",
+            justify="right",
+            style="green",
+        )
         table.add_column("MFU (%)", justify="right", style="magenta")
         table.add_column("Step Time (s)", justify="right", style="blue")
         table.add_column("Total FLOPs", justify="right", style="dim")
@@ -191,7 +199,7 @@ class TpuGemmRenderer(DefaultRenderer):
                 row["sweep_param"],
                 row["nodes"],
                 row["throughput"],
-                row["total_throughput"],
+                row["chip_throughput"],
                 row["mfu"],
                 row["step_time"],
                 row["total_flops"],

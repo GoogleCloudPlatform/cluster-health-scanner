@@ -48,12 +48,48 @@ class TestTpuHostDeviceRenderer(unittest.TestCase):
         output = capture.get()
         print(f"DEBUG OUTPUT:\n{output}")
 
-        self.assertIn("Host-Device I/O Bandwidth Detail (node-1)", output)
+        self.assertIn("Host-Device I/O Bandwidth Detail", output)
+        self.assertIn("node-1", output)
         self.assertIn("1024", output)
         self.assertIn("15.60", output)
         self.assertIn("16.20", output)
-        self.assertIn("H2D Bandwidth (GiB/s)", output)
-        self.assertIn("D2H Bandwidth (GiB/s)", output)
+        self.assertIn("Node", output)
+        self.assertIn("H2D Bandwidth (GB/s)", output)
+        self.assertIn("D2H Bandwidth (GB/s)", output)
+
+    def test_get_detail_data_single_table_for_multiple_nodes(self):
+        renderer = TpuHostDeviceRenderer()
+
+        results = []
+        for idx, (h2d, d2h) in enumerate(
+            [(113.1, 117.5), (113.2, 117.4)], start=1
+        ):
+            node = f"node-{idx}"
+            res = pb.TestResult()
+            res.test_name = "tpu-host-device"
+            res.test_level = "host_device"
+            res.target_resources.add(node_name=node)
+
+            m1 = res.metrics.add()
+            m1.key = "H2D Bandwidth"
+            m1.value.number_value = h2d
+            m1.metadata.fields["context"].string_value = f"{node},256MiB"
+
+            m2 = res.metrics.add()
+            m2.key = "D2H Bandwidth"
+            m2.value.number_value = d2h
+            m2.metadata.fields["context"].string_value = f"{node},256MiB"
+            results.append(res)
+
+        report = renderer.get_detail_data(results)
+        self.assertIsNotNone(report)
+        self.assertEqual(len(report.tables), 1)
+        self.assertEqual(
+            report.tables[0].title, "Host-Device I/O Bandwidth Detail"
+        )
+        self.assertEqual(len(report.tables[0].rows), 2)
+        self.assertEqual(report.tables[0].rows[0]["node"], "node-1")
+        self.assertEqual(report.tables[0].rows[1]["node"], "node-2")
 
 
 if __name__ == "__main__":
