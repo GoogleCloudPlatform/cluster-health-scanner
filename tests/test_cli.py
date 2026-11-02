@@ -22,6 +22,7 @@ import dataclasses
 import datetime
 import os
 import pathlib
+import re
 import shutil
 import signal
 import stat
@@ -1695,8 +1696,8 @@ class TestCli(unittest.TestCase):
         )
 
     @mock.patch("chs.cli._analyze_action")
-    def test_run_command_output_dir_and_storage_path(self, mock_analyze_action):
-        """Test --output-dir and --storage-path flag behavior on chs run."""
+    def test_run_command_storage_path(self, mock_analyze_action):
+        """Test --storage-path flag for local and cloud destinations."""
         self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"
         self.mock_rm_instance.execute_experiments.return_value = ["job1"]
         self.mock_scheduler.name = "slurm"
@@ -1731,8 +1732,15 @@ class TestCli(unittest.TestCase):
                     run_details["storage"],
                     {"type": "gcs", "gcs": {"bucket_name": "test_bucket"}},
                 )
+                self.assertIn(
+                    "Results will be saved locally under "
+                    f"./{constants.DEFAULT_OUTPUT_DIR}/ and uploaded to "
+                    "gs://test_bucket",
+                    result.output,
+                )
 
-            # 2. Custom --output-dir
+            # 2. Custom local --storage-path: exports to a per-run subfolder
+            # and still uploads to the globally configured GCS storage.
             custom_out = os.path.join(cwd, "custom_output")
             with mock.patch(
                 "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
@@ -1746,7 +1754,7 @@ class TestCli(unittest.TestCase):
                         "--run-id",
                         "customrun",
                         "--auto-approve",
-                        "--output-dir",
+                        "--storage-path",
                         custom_out,
                     ],
                     standalone_mode=False,
@@ -1757,12 +1765,26 @@ class TestCli(unittest.TestCase):
                     run_details["export_logs_dir"],
                     os.path.join(custom_out, workspace_name),
                 )
+                self.assertEqual(
+                    run_details["storage"],
+                    {"type": "gcs", "gcs": {"bucket_name": "test_bucket"}},
+                )
+                self.assertIn(
+                    f"Results will be saved locally under {custom_out}/ "
+                    "and uploaded to gs://test_bucket",
+                    result.output,
+                )
 
-            # 3. Unwritable --output-dir fails validation upfront
+            # 3. Unwritable local --storage-path fails validation upfront
+            self.mock_rm_instance.execute_experiments.reset_mock()
             with mock.patch(
-                "chs.cli.pathlib.Path.mkdir",
-                side_effect=PermissionError("Permission denied"),
-            ):
+                "chs.cli.StorageProviderFactory.get_provider"
+            ) as mock_get_provider:
+                mock_get_provider.return_value.validate.side_effect = (
+                    exceptions.ChsValidationError(
+                        "Directory '/forbidden' is not writable."
+                    )
+                )
                 result = self.runner.invoke(
                     cli.cli,
                     [
@@ -1772,28 +1794,30 @@ class TestCli(unittest.TestCase):
                         "--run-id",
                         "customrun",
                         "--auto-approve",
-                        "--output-dir",
-                        "/root/forbidden",
+                        "--storage-path",
+                        "/forbidden",
                     ],
                 )
                 self.assertNotEqual(result.exit_code, 0)
                 self.assertIn(
-                    "Output directory validation failed:", result.output
+                    "Storage path validation failed: Directory '/forbidden' "
+                    "is not writable.",
+                    result.output,
                 )
+                mock_get_provider.assert_called_once_with(
+                    {"type": "path", "path": {"path": "/forbidden"}}
+                )
+                self.mock_rm_instance.execute_experiments.assert_not_called()
 
-            # 4. Custom --storage-path variations (prefix, bare bucket, path)
+            # 4. Custom cloud --storage-path (gs:// URIs)
             storage_cases = [
                 (
                     "gs://my-bucket/custom/prefix",
                     {"bucket_name": "my-bucket", "prefix": "custom/prefix"},
                 ),
                 (
-                    "bare-bucket",
-                    {"bucket_name": "bare-bucket"},
-                ),
-                (
-                    "bare-bucket/sub/path",
-                    {"bucket_name": "bare-bucket", "prefix": "sub/path"},
+                    "gs://my-bucket",
+                    {"bucket_name": "my-bucket"},
                 ),
             ]
             for storage_input, expected_gcs in storage_cases:
@@ -1833,6 +1857,18 @@ class TestCli(unittest.TestCase):
                             "gcs": expected_gcs,
                         },
                     )
+                    expected_default_dir = os.path.join(
+                        cwd, constants.DEFAULT_OUTPUT_DIR, workspace_name
+                    )
+                    self.assertEqual(
+                        run_details["export_logs_dir"], expected_default_dir
+                    )
+                    self.assertIn(
+                        "Results will be saved locally under "
+                        f"./{constants.DEFAULT_OUTPUT_DIR}/ and uploaded to "
+                        f"{storage_input}",
+                        result.output,
+                    )
 
             # 5. Invalid --storage-path with empty bucket
             result = self.runner.invoke(
@@ -1854,6 +1890,48 @@ class TestCli(unittest.TestCase):
                 "empty.",
                 result.output,
             )
+
+            # 6. Unsupported URI scheme rejected upfront
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--run-id",
+                    "customrun",
+                    "--auto-approve",
+                    "--storage-path",
+                    "s3://my-bucket/path",
+                ],
+            )
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn(
+                "Unsupported storage URI scheme 's3://'",
+                result.output,
+            )
+
+            # 6b. Malformed gs: destination without // rejected upfront
+            for bad_gs in ("gs:/my-bucket", "gs:my-bucket", "GS:/bucket"):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                        "--storage-path",
+                        bad_gs,
+                    ],
+                )
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn(
+                    f"Invalid GCS destination format '{bad_gs}'. "
+                    "Did you mean 'gs://'?",
+                    result.output,
+                )
 
             # 7. No storage configured (local-only mode)
             self.mock_app_data.get_storage_config.return_value = None
@@ -1880,13 +1958,136 @@ class TestCli(unittest.TestCase):
                     f"./{constants.DEFAULT_OUTPUT_DIR}/", result.output
                 )
 
+            # 8. No storage configured + local --storage-path
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--run-id",
+                    "customrun",
+                    "--auto-approve",
+                    "--storage-path",
+                    custom_out,
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            _, run_details = self.mock_app_data.update_run.call_args[0]
+            self.assertIsNone(run_details["storage"])
+            self.assertEqual(
+                run_details["export_logs_dir"],
+                os.path.join(custom_out, workspace_name),
+            )
+            self.assertIn(
+                "No GCS storage configured. Results will be saved locally "
+                f"under {custom_out}/",
+                result.output,
+            )
+
+    def test_resolve_and_validate_storage(self):
+        """Only gs:// is remote; every other value is a local directory."""
+        global_config = {"type": "gcs", "gcs": {"bucket_name": "global"}}
+        app_data = mock.Mock()
+        app_data.get_storage_config.return_value = global_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = os.path.realpath(tmp)
+            home = os.path.join(tmp, "home")
+            os.makedirs(home)
+            work = os.path.join(tmp, "work")
+            os.makedirs(work)
+            old_cwd = os.getcwd()
+            os.chdir(work)
+            self.addCleanup(os.chdir, old_cwd)
+
+            # Omitted or blank: global config, default export directory.
+            for value in (None, "", "   "):
+                with self.subTest(storage_path=value):
+                    self.assertEqual(
+                        cli._resolve_and_validate_storage(value, app_data),
+                        (global_config, None),
+                    )
+
+            # Local paths: keep the global config, export to the directory.
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                local_cases = [
+                    ("my-bucket", os.path.join(work, "my-bucket")),
+                    (
+                        "my-bucket/team-a",
+                        os.path.join(work, "my-bucket", "team-a"),
+                    ),
+                    ("./custom-out", os.path.join(work, "custom-out")),
+                    ("../sibling", os.path.join(tmp, "sibling")),
+                    ("~/reports", os.path.join(home, "reports")),
+                    (os.path.join(tmp, "abs"), os.path.join(tmp, "abs")),
+                ]
+                for value, expected_dir in local_cases:
+                    with self.subTest(storage_path=value):
+                        self.assertEqual(
+                            cli._resolve_and_validate_storage(value, app_data),
+                            (global_config, expected_dir),
+                        )
+                        self.assertTrue(os.path.isdir(expected_dir))
+                        # The write-test file is removed after validation.
+                        self.assertEqual(os.listdir(expected_dir), [])
+            os.chdir(old_cwd)
+
+        # gs:// URIs (case-insensitive scheme) replace the global config.
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider"
+        ) as mock_get_provider:
+            self.assertEqual(
+                cli._resolve_and_validate_storage("GS://b/p/", app_data),
+                (
+                    {"type": "gcs", "gcs": {"bucket_name": "b", "prefix": "p"}},
+                    None,
+                ),
+            )
+            mock_get_provider.return_value.validate.assert_called_once()
+
+        # Validation errors keep the underlying exception as the cause.
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider"
+        ) as mock_get_provider:
+            cause = exceptions.ChsValidationError("not writable")
+            mock_get_provider.return_value.validate.side_effect = cause
+            for value in ("/some/dir", "gs://b"):
+                with self.subTest(storage_path=value):
+                    with self.assertRaises(click.ClickException) as ctx:
+                        cli._resolve_and_validate_storage(value, app_data)
+                    self.assertIs(ctx.exception.__cause__, cause)
+
+        # Non-gs:// URI schemes are rejected.
+        with self.assertRaisesRegex(
+            click.ClickException, "Unsupported storage URI scheme 's3://'"
+        ):
+            cli._resolve_and_validate_storage("s3://b", app_data)
+
+        # Malformed gs: prefixes are rejected with a helpful suggestion.
+        for bad_gs in (
+            "gs:/bucket",
+            "gs:bucket",
+            "GS:/bucket",
+            "gs:",
+            "gs:foo/bar",
+        ):
+            with self.subTest(storage_path=bad_gs):
+                with self.assertRaisesRegex(
+                    click.ClickException,
+                    rf"Invalid GCS destination format '{re.escape(bad_gs)}'\. "
+                    r"Did you mean 'gs://'\?",
+                ):
+                    cli._resolve_and_validate_storage(bad_gs, app_data)
+
     def test_resolve_export_logs_dir(self):
         """Resolver always nests results in a per-run subfolder."""
         with tempfile.TemporaryDirectory() as cwd:
             with mock.patch(
                 "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
             ):
-                # Default when output_dir is None
+                # Default when custom_export_dir is None
                 self.assertEqual(
                     cli._resolve_export_logs_dir(None, "ws1"),
                     os.path.join(cwd, constants.DEFAULT_OUTPUT_DIR, "ws1"),

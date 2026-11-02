@@ -196,8 +196,10 @@ Execute a diagnostic suite or custom list of tests on your cluster.
 - `--auto-approve`, `-y`: Automatically confirm the execution preview without interactive prompting (useful for CI and scripts).
 - `--run-id <RUN_ID>`: Custom identifier for the run.
 - `--scheduler {kubernetes,slurm,standalone}`: Scheduler to use instead of auto-detection. `standalone` tests the TPU VM CHS runs on; `--nodes`, `--nodelists`, `--nodepools` and `--partitions` don't apply to it.
-- `--output-dir <DIR>`: Directory where test logs, Bill of Health artifacts, and debug logs are saved, in a per-run `<DIR>/<workspace_name>/` subfolder. Overrides the default `./chs-output/` destination for this run. When running via Docker, use a path under `/workspace/chs-output` (or another bind-mounted directory); other paths exist only inside the container and are lost when it exits.
-- `--storage-path <bucket-or-path>`: GCS destination bucket or path (e.g., `my-bucket`, `gs://my-bucket`, or `gs://my-bucket/prefix`) to upload results for this run, overriding the global storage configuration.
+- `--storage-path <DESTINATION>`: Per-run destination override for health reports and diagnostic logs. Accepts either:
+  - **Cloud Storage URI (`gs://<bucket>/[<prefix>]`):** Uploads the interactive HTML report (`bill_of_health.html`), structured summary (`bill_of_health.json`), and full workspace archive (`<workspace_name>.tar.gz`) to GCS instead of the globally configured bucket. Individual raw test logs and diagnostics remain saved locally under `./chs-output/<workspace_name>/`.
+  - **Local Directory (`/path/to/dir` or `./custom-out`):** Exports the interactive HTML report, Bill of Health JSON, per-node raw benchmark logs (`<test>-<node>.log`), and debug traces (`debug.txt`, `internal.log`) into `<DESTINATION>/<workspace_name>/` instead of `./chs-output/`. Any value without a `gs://` prefix is treated as a local path (relative paths resolve against the current working directory). If global GCS storage is configured, cloud uploads still occur. When running via Docker, target a path within `/workspace/chs-output` or another host bind mount.
+  - All destinations undergo upfront validation before tests are submitted, invalid buckets or unwritable directories fail fast immediately.
 
 #### Supported Suites and Tests
 

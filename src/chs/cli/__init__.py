@@ -31,7 +31,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import uuid
 import warnings
 from contextlib import contextmanager
 from typing import Any
@@ -193,46 +192,80 @@ def _build_gcs_config(path: str) -> dict:
 
 def _resolve_and_validate_storage(
     storage_path: str | None, app_data: ChsAppData
-) -> dict | None:
-    """Validates and resolves storage configuration for the run."""
-    if storage_path:
-        config = _build_gcs_config(storage_path)
+) -> tuple[dict | None, str | None]:
+    """Resolves and validates the per-run storage destination.
+
+    A 'gs://' URI overrides global storage for the run, uploading Bill of
+    Health reports and the workspace tarball to Cloud Storage. Any other
+    path overrides the local export directory, saving uncompressed logs and
+    reports there while retaining configured global GCS storage for upload.
+
+    Returns:
+        tuple[run_storage_config, custom_export_dir]:
+        - (gcs_config, None) for 'gs://' cloud URIs.
+        - (global_storage_config, local_dir) for local filesystem paths.
+        - (global_storage_config, None) if storage_path is omitted.
+
+    Raises:
+        click.ClickException: If the destination uses an unsupported URI
+          scheme, is an invalid GCS destination, or is not accessible/writable.
+    """
+    global_config = app_data.get_storage_config()
+    if not storage_path or not storage_path.strip():
+        return global_config, None
+
+    cleaned = storage_path.strip()
+
+    # Reject malformed GCS destinations early (e.g. gs:/bucket or gs:bucket).
+    if cleaned.lower().startswith("gs:") and not cleaned.lower().startswith(
+        "gs://"
+    ):
+        raise click.ClickException(
+            f"Storage validation failed: Invalid GCS destination format "
+            f"'{cleaned}'. Did you mean 'gs://'?"
+        )
+
+    # 1. Cloud storage URI (e.g., gs://my-bucket/prefix)
+    if "://" in cleaned:
+        if not cleaned.lower().startswith("gs://"):
+            scheme = cleaned.split("://", 1)[0]
+            raise click.ClickException(
+                "Storage validation failed: Unsupported storage URI scheme "
+                f"'{scheme}://'. Only 'gs://' is currently supported for "
+                "cloud storage."
+            )
+        config = _build_gcs_config(cleaned)
         try:
             provider = StorageProviderFactory.get_provider(config)
             provider.validate()
         except Exception as e:
             raise click.ClickException(f"Storage validation failed: {e}") from e
-        return config
+        return config, None
 
-    return app_data.get_storage_config()
-
-
-def _validate_output_dir(output_dir: str | None) -> None:
-    """Validates upfront that the output directory is writable if specified."""
-    if not output_dir:
-        return
-    out_path = pathlib.Path(output_dir).expanduser().resolve()
+    # 2. Anything else is a local directory path.
+    local_config = {"type": "path", "path": {"path": cleaned}}
     try:
-        out_path.mkdir(parents=True, exist_ok=True)
-        test_file = out_path / f".chs_write_test_{uuid.uuid4().hex}"
-        test_file.touch()
-        test_file.unlink()
+        provider = StorageProviderFactory.get_provider(local_config)
+        provider.validate()
     except Exception as e:
-        raise click.ClickException(f"Output directory validation failed: {e}")
+        raise click.ClickException(
+            f"Storage path validation failed: {e}"
+        ) from e
+    return global_config, str(provider.target_path)
 
 
 def _resolve_export_logs_dir(
-    output_dir: str | None,
+    custom_export_dir: str | None,
     workspace_name: str,
 ) -> str:
     """Returns the directory to export logs to.
 
     Results are always saved in a per-run '<workspace_name>' subfolder, under
-    output_dir if provided, otherwise under constants.DEFAULT_OUTPUT_DIR.
+    custom_export_dir if provided, otherwise under constants.DEFAULT_OUTPUT_DIR.
     """
     base_dir = (
-        pathlib.Path(output_dir).expanduser().resolve()
-        if output_dir
+        pathlib.Path(custom_export_dir).expanduser().resolve()
+        if custom_export_dir
         else pathlib.Path.cwd() / constants.DEFAULT_OUTPUT_DIR
     )
     return str(base_dir / workspace_name)
@@ -1646,25 +1679,18 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
     callback=validators.validate_run_id,
 )
 @click.option(
-    "--output-dir",
-    type=click.Path(file_okay=False),
-    help=(
-        "Directory where test logs, Bill of Health artifacts, and debug "
-        "logs are saved, in a per-run '<workspace_name>/' subfolder. "
-        f"Overrides the default './{constants.DEFAULT_OUTPUT_DIR}/' "
-        "destination for this run. "
-        "When running via Docker, use a path under "
-        f"'/workspace/{constants.DEFAULT_OUTPUT_DIR}' or a bind-mounted "
-        "directory."
-        "\n\n "
-    ),
-)
-@click.option(
     "--storage-path",
     help=(
-        "GCS destination bucket or path (e.g., my-bucket, gs://my-bucket, "
-        "or gs://my-bucket/prefix) to upload results for this run, "
-        "overriding the global storage configuration."
+        "Destination for this run's results. A gs:// URI (e.g., "
+        "gs://my-bucket/prefix) uploads Bill of Health reports and the "
+        "workspace tarball there instead of the configured GCS storage. Any "
+        "other value is treated as a local directory (e.g., /path/to/dir or "
+        "./custom-out): reports and uncompressed test logs are saved in a "
+        "per-run '<workspace_name>/' subfolder there instead of "
+        f"'./{constants.DEFAULT_OUTPUT_DIR}/', and are still uploaded to the "
+        "configured GCS storage, if any. When running via Docker, use a "
+        f"local path under '/workspace/{constants.DEFAULT_OUTPUT_DIR}' or a "
+        "bind-mounted directory."
         "\n\n "
     ),
 )
@@ -1691,7 +1717,6 @@ def run(
     partitions: str | None,
     auto_approve: bool = False,
     run_id: str | None = None,
-    output_dir: str | None = None,
     storage_path: str | None = None,
     scheduler: str | None = None,
 ) -> RunExecutionResult:
@@ -1744,8 +1769,7 @@ def run(
             partitions=partitions,
         )
 
-        _validate_output_dir(output_dir)
-        run_storage_config = _resolve_and_validate_storage(
+        run_storage_config, custom_export_dir = _resolve_and_validate_storage(
             storage_path, app_data
         )
 
@@ -2000,17 +2024,27 @@ def run(
     test_names = ", ".join(scheduled_test_names)
     preview_title = "CHS Execution Preview:"
     console = Console()
-    if not run_storage_config:
-        dest_display = os.path.join(
-            output_dir or f"./{constants.DEFAULT_OUTPUT_DIR}", ""
+    local_dest = os.path.join(
+        custom_export_dir or f"./{constants.DEFAULT_OUTPUT_DIR}", ""
+    )
+    if run_storage_config:
+        remote_dest = utils.formatting.format_storage_path(run_storage_config)
+        console.print(
+            f"[Info] Results will be saved locally under {local_dest} "
+            f"and uploaded to {remote_dest}",
+            style=theme.CHS_NEUTRAL_STYLE,
+            markup=False,
+            soft_wrap=True,
         )
+    else:
         console.print(
             f"[Info] No GCS storage configured. Results will be saved "
-            f"locally under {dest_display}\n"
+            f"locally under {local_dest}\n"
             "(To configure remote GCS upload, run "
             "'chs configure storage gcs <bucket-or-path>')",
             style=theme.CHS_NEUTRAL_STYLE,
             markup=False,
+            soft_wrap=True,
         )
     console.print(f"[bold]{preview_title}[/bold]")
     console.print(
@@ -2119,7 +2153,7 @@ def run(
             "active_tier_tests": active_tier_tests,
             "submission_complete": False,
             "export_logs_dir": _resolve_export_logs_dir(
-                output_dir, workspace_name
+                custom_export_dir, workspace_name
             ),
         },
     )
