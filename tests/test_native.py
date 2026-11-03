@@ -73,7 +73,6 @@ class BuildCommandTest(unittest.TestCase):
 
 class BuildEnvTest(unittest.TestCase):
     def setUp(self):
-        self.runtime = Path("/rt/tpu-abc")
         self.base = {
             "HOME": "/home/u",
             "PATH": "/opt/venv/bin:/usr/bin:/opt/venv/bin/:/bin",
@@ -89,11 +88,8 @@ class BuildEnvTest(unittest.TestCase):
         }
 
     def _build(self, chip_count=4):
-        with (
-            mock.patch.object(sys, "prefix", "/opt/venv"),
-            mock.patch.object(sys, "base_prefix", "/usr"),
-        ):
-            return native.build_env(self.base, self.runtime, "vm-1", chip_count)
+        with mock.patch.object(sys, "executable", "/opt/venv/bin/python3"):
+            return native.build_env(self.base, "vm-1", chip_count)
 
     def test_scrubs_and_sets_single_host_tpu_env(self):
         self.assertEqual(
@@ -101,8 +97,8 @@ class BuildEnvTest(unittest.TestCase):
             {
                 "HOME": "/home/u",
                 "MY_TPU": "kept",
-                "PATH": "/rt/tpu-abc/venv/bin:/usr/bin:/bin",
-                "CHS_AMB_DIR": "/rt/tpu-abc/code",
+                "PATH": "/opt/venv/bin:/usr/bin:/bin",
+                "CHS_PYTHON": "/opt/venv/bin/python3",
                 "MY_NODE_NAME": "vm-1",
                 "TPU_SKIP_MDS_QUERY": "true",
                 "TPU_WORKER_ID": "0",
@@ -123,15 +119,10 @@ class BuildEnvTest(unittest.TestCase):
             with self.assertRaises(ChsValidationError):
                 self._build(chip_count=chips)
 
-    def test_keeps_path_when_chs_is_not_in_a_venv(self):
-        with (
-            mock.patch.object(sys, "prefix", "/usr"),
-            mock.patch.object(sys, "base_prefix", "/usr"),
-        ):
-            env = native.build_env(
-                {"PATH": "/usr/bin:/bin"}, self.runtime, "vm-1", 4
-            )
-        self.assertEqual(env["PATH"], "/rt/tpu-abc/venv/bin:/usr/bin:/bin")
+    def test_interpreter_bin_comes_first_when_chs_is_not_in_a_venv(self):
+        with mock.patch.object(sys, "executable", "/usr/bin/python3"):
+            env = native.build_env({"PATH": "/bin:/usr/bin"}, "vm-1", 4)
+        self.assertEqual(env["PATH"], "/usr/bin:/bin")
 
 
 class NativeJobTest(unittest.TestCase):
@@ -146,7 +137,6 @@ class NativeJobTest(unittest.TestCase):
             job_name="tpu-info",
             script=script,
             timeout_seconds=timeout_seconds,
-            runtime_dir=self.dir / "runtime",
             node="vm-1",
             chip_count=4,
             out_path=self.out,
@@ -169,16 +159,13 @@ class NativeJobTest(unittest.TestCase):
         self._assert_reaped(job.pid)
 
     def test_runs_in_own_session_with_tpu_env(self):
-        job = self._start(
-            'ps -o sid= -p $$; echo "$CHS_AMB_DIR $TPU_WORKER_ID $PATH"'
-        )
+        job = self._start('ps -o sid= -p $$; echo "$TPU_WORKER_ID $PATH"')
         self.assertEqual(self._wait(job), 0)
         sid, env_line = self.out.read_text("utf-8").splitlines()
         self.assertEqual(int(sid), job.pid)
-        amb_dir, worker_id, path = env_line.split(" ")
-        self.assertEqual(amb_dir, str(self.dir / "runtime/code"))
+        worker_id, path = env_line.split(" ")
         self.assertEqual(worker_id, "0")
-        self.assertTrue(path.startswith(str(self.dir / "runtime/venv/bin:")))
+        self.assertTrue(path.startswith(os.path.dirname(sys.executable) + ":"))
 
     def test_memlock_is_unlimited(self):
         if (
@@ -264,7 +251,6 @@ class NativeJobTest(unittest.TestCase):
                         job_name="tpu-info",
                         script="sleep 300 & echo $! > {pid_file}; wait",
                         timeout_seconds=600,
-                        runtime_dir=pathlib.Path({str(self.dir / "runtime")!r}),
                         node="vm-1",
                         chip_count=4,
                         out_path=pathlib.Path({str(self.out)!r}),

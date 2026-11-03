@@ -28,14 +28,9 @@ from chs.schedulers.standalone.job_spec import JobSpec
 
 
 class NativeBackend:
-    """Runs job specs natively from a TPU runtime (runner.Backend)."""
+    """Runs job specs as native processes (runner.Backend)."""
 
-    def __init__(
-        self,
-        runtime_dir: pathlib.Path,
-        chip_count: int,
-    ):
-        self._runtime_dir = runtime_dir
+    def __init__(self, chip_count: int):
         self._chip_count = chip_count
         self._out_dir = pathlib.Path(tempfile.mkdtemp(prefix="chs-native-"))
         self._jobs: dict[str, native.NativeJob] = {}
@@ -50,7 +45,6 @@ class NativeBackend:
                 job_name=spec.job_name,
                 script=spec.read_script(),
                 timeout_seconds=spec.timeout,
-                runtime_dir=self._runtime_dir,
                 node=spec.node,
                 chip_count=self._chip_count,
                 out_path=self._out_path(spec),

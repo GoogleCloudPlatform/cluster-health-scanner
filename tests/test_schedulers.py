@@ -51,6 +51,7 @@ from chs.exceptions import ChsSchedulerException
 from chs.utils import k8s_client
 import click
 from chs import exceptions as ex
+from chs import image
 from tests.k8s_fakes import (
     Call,
     install_fake_client,
@@ -2178,6 +2179,32 @@ ramble:
             variables = yaml.safe_load(f)["ramble"]["variables"]
         self.assertEqual(variables["chs_run_id"], "run-a")
         self.assertEqual(variables["worker_service_name"], "chs-run-a")
+        self.assertNotIn("chs_image", variables)
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
+        return_value=[],
+    )
+    def test_write_ramble_config_sets_chs_image_for_tpu(
+        self, mock_filter, mock_logger
+    ):
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+
+        with mock.patch.object(image, "get_version", return_value="0.4.0"):
+            KubernetesScheduler().write_ramble_config(
+                workspace_config_dir,
+                [{"name": "tpu-info"}],
+                "tpu7x-standard-4t",
+                run_id="run-a",
+            )
+
+        with open(os.path.join(workspace_config_dir, "ramble.yaml")) as f:
+            variables = yaml.safe_load(f)["ramble"]["variables"]
+        self.assertEqual(
+            variables["chs_image"],
+            "us-docker.pkg.dev/gce-ai-infra/chs/chs:0.4.0",
+        )
 
     def test_discover_networks_success(self, mock_logger):
         """Test _discover_networks with success and grouping."""

@@ -38,6 +38,7 @@ Install CHS using either the Python package or the container image on the machin
 ### Option 1: Python package
 
 > **Note:** Supported on **Kubernetes**, **Slurm**, and **standalone TPU VMs**. Requires [Python 3.12+](https://www.python.org/downloads/) and [`git`](https://git-scm.com/downloads). If your `python3` is older, see [Troubleshooting](docs/troubleshooting.md#python-312-is-not-available).
+> - Standalone TPU VMs need **Python 3.12** exactly (not 3.13+) on x86_64: on other versions, CHS installs without the TPU test dependencies.
 
 ```bash
 python3 -m venv chs-venv

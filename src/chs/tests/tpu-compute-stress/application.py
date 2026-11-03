@@ -39,7 +39,7 @@ class TpuComputeStress(ExecutableApplication):
         "execute",
         template=[
             f"echo '{_B64_SCRIPT}' | base64 -d > tpu_compute_stress.py",
-            "python3 tpu_compute_stress.py",
+            "$\\{CHS_PYTHON:-python3\\} tpu_compute_stress.py",
         ],
         use_mpi=False,
     )

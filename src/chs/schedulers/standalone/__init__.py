@@ -19,7 +19,6 @@ import importlib.resources as pkg_resources
 import importlib.util
 import logging
 import os
-import shutil
 import signal
 from typing import Any
 
@@ -31,7 +30,7 @@ from chs.exceptions import (
     HostCheckException,
 )
 from chs.schedulers.base import BaseScheduler
-from chs.schedulers.standalone import host, tpu_runtime
+from chs.schedulers.standalone import host
 from chs.schedulers.standalone.job_spec import load_job_spec
 from chs.schedulers.standalone.native_backend import NativeBackend
 from chs.schedulers.standalone.runner import SequentialRunner
@@ -41,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 LOCK_PATH = "/run/lock/chs-standalone.lock"
 TPU_RUNTIME = "tpu"
+BENCHMARKS_PACKAGE = "accelerator_microbenchmarks"
 
 _LOCK_OPEN_FLAGS = os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -166,17 +166,11 @@ class StandaloneScheduler(BaseScheduler):
                 )
             host.check_tpus_idle()
             host.check_tpu_access()
-            if tpu_runtime.find_runtime() is None:
-                missing = []
-                if importlib.util.find_spec("uv") is None:
-                    missing.append("uv")
-                if shutil.which("git") is None:
-                    missing.append("git")
-                if missing:
-                    raise HostCheckException(
-                        "The TPU runtime is missing and can't be built:"
-                        f" {' and '.join(missing)} not found."
-                    )
+            if importlib.util.find_spec(BENCHMARKS_PACKAGE) is None:
+                raise HostCheckException(
+                    "The TPU test dependencies are not installed. CHS installs"
+                    " them only on Linux x86_64 with Python 3.12."
+                )
         except BaseException:
             if self._lock_fd is not None:
                 os.close(self._lock_fd)
@@ -209,7 +203,7 @@ class StandaloneScheduler(BaseScheduler):
         run_id: str | None = None,
         images_dir: str | None = None,
     ) -> None:
-        """Writes the Ramble config and readies the TPU runtime."""
+        """Writes the Ramble config and readies the native backend."""
         self._run_id = run_id
         nodes = self.get_nodes_under_test()
         if nodes:
@@ -219,12 +213,7 @@ class StandaloneScheduler(BaseScheduler):
                 "tpu_chips_per_node"
             ]
             self._runner = SequentialRunner(
-                {
-                    TPU_RUNTIME: NativeBackend(
-                        tpu_runtime.ensure_runtime(),
-                        chip_count=chip_count,
-                    )
-                }
+                {TPU_RUNTIME: NativeBackend(chip_count=chip_count)}
             )
         template_path = pkg_resources.files("chs.schedulers").joinpath(
             "standalone_template.yaml"

@@ -40,7 +40,7 @@ class TpuInfo(ExecutableApplication):
         "execute",
         template=[
             f"echo '{_B64_SCRIPT}' | base64 -d > tpu_inventory.py",
-            "python3 tpu_inventory.py",
+            "$\\{CHS_PYTHON:-python3\\} tpu_inventory.py",
         ],
         use_mpi=True,
     )

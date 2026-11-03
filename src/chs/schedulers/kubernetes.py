@@ -53,7 +53,7 @@ from chs.exceptions import (
     ChsValidationError,
 )
 from chs.utils.lifecycle import JobStatus
-from chs import resources
+from chs import image, resources
 from chs.constants import (
     CHS_NAMESPACE,
     COMPONENT_LABEL,
@@ -1430,6 +1430,9 @@ class KubernetesScheduler(BaseScheduler):
             variables["deadline"] = deadline
 
         variables["kubernetes_namespace"] = CHS_NAMESPACE
+
+        if resources.is_tpu(machine_type):
+            variables["chs_image"] = image.get_image()
 
         if resources.is_tpu(machine_type) and nodes:
             tpu_slices = self._group_nodes_by_slice(nodes)

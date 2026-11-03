@@ -17,7 +17,7 @@
 import fcntl
 import logging
 import os
-import pathlib
+import importlib.util
 import shutil
 import tempfile
 import unittest
@@ -30,7 +30,6 @@ from chs.exceptions import (
     ChsSchedulerException,
     ChsValidationError,
     HostCheckException,
-    TpuRuntimeException,
 )
 from chs.schedulers import standalone
 from chs.schedulers.standalone import job_spec
@@ -47,7 +46,7 @@ _INSTANCE = GceInstance(
 
 
 class StandaloneSchedulerTestCase(unittest.TestCase):
-    """Fakes the VM: metadata, lock, host checks, and runtime."""
+    """Fakes the VM: metadata, lock, host checks, and TPU dependencies."""
 
     def setUp(self):
         logging.disable(logging.NOTSET)
@@ -63,8 +62,6 @@ class StandaloneSchedulerTestCase(unittest.TestCase):
             (standalone.host, "check_host_access", None),
             (standalone.host, "check_tpus_idle", None),
             (standalone.host, "check_tpu_access", None),
-            (standalone.tpu_runtime, "find_runtime", pathlib.Path("/rt")),
-            (standalone.tpu_runtime, "ensure_runtime", pathlib.Path("/rt")),
         ):
             self.host[name] = self._patch(
                 target, name, mock.Mock(return_value=value)
@@ -74,9 +71,18 @@ class StandaloneSchedulerTestCase(unittest.TestCase):
             "host_path",
             mock.Mock(side_effect=lambda p: self.tmp + p),
         )
-        self.which = self._patch(
-            standalone.shutil, "which", mock.Mock(return_value="/usr/bin/x")
+        self.tpu_dependencies_installed = True
+        self._real_find_spec = importlib.util.find_spec
+        self._patch(
+            standalone.importlib.util,
+            "find_spec",
+            mock.Mock(side_effect=self._find_spec),
         )
+
+    def _find_spec(self, name, *args):
+        if name != standalone.BENCHMARKS_PACKAGE:
+            return self._real_find_spec(name, *args)
+        return mock.sentinel.spec if self.tpu_dependencies_installed else None
 
     def _patch(self, target, name, value):
         patcher = mock.patch.object(target, name, value)
@@ -167,23 +173,12 @@ class NodeCheckTest(StandaloneSchedulerTestCase):
         self.assertIn("no TPU devices", self._skip_reason())
         self.host["check_tpus_idle"].assert_not_called()
 
-    def test_runtime_missing_and_unbuildable_skips_the_node(self):
-        self.host["find_runtime"].return_value = None
-        self.assertEqual(self._nodes(), ["tpu-vm-1"])
-        self.which.return_value = None
-        self.assertIn("can't be built: git not found", self._skip_reason())
-        with mock.patch.object(
-            standalone.importlib.util, "find_spec", return_value=None
-        ):
-            self.assertIn(
-                "can't be built: uv and git not found", self._skip_reason()
-            )
-        self.host["find_runtime"].return_value = pathlib.Path("/rt")
-        self.assertEqual(self._nodes(), ["tpu-vm-1"])
-
-    def test_uv_is_found_in_the_chs_environment_not_on_path(self):
-        self.host["find_runtime"].return_value = None
-        self.which.side_effect = lambda tool: None if tool == "uv" else "/x"
+    def test_missing_tpu_dependencies_skip_the_node(self):
+        self.tpu_dependencies_installed = False
+        self.assertIn(
+            "The TPU test dependencies are not installed", self._skip_reason()
+        )
+        self.tpu_dependencies_installed = True
         self.assertEqual(self._nodes(), ["tpu-vm-1"])
 
     def test_new_lock_file_is_writable_by_everyone(self):
@@ -304,7 +299,7 @@ class RunTest(StandaloneSchedulerTestCase):
         with open(self.tmp + standalone.LOCK_PATH) as f:
             self.assertEqual(f.read(), "run-1\n")
 
-    def test_write_ramble_config_readies_the_runtime(self):
+    def test_write_ramble_config_readies_the_backend(self):
         os.remove(f"{self.tmp}/dev/vfio/3")
         scheduler = self._started_scheduler()
         variables = self._variables()
@@ -323,28 +318,18 @@ class RunTest(StandaloneSchedulerTestCase):
             },
         )
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "topology.json")))
-        self.backend_cls.assert_called_once_with(
-            pathlib.Path("/rt"),
-            chip_count=4,
-        )
+        self.backend_cls.assert_called_once_with(chip_count=4)
         self.assertIsNotNone(scheduler._runner)
 
-    def test_skipped_vm_builds_no_runtime(self):
+    def test_skipped_vm_creates_no_backend(self):
         self.host["check_tpus_idle"].side_effect = HostCheckException("busy")
         with self.assertLogs(standalone.logger, "WARNING"):
             scheduler = self._started_scheduler()
-        self.host["ensure_runtime"].assert_not_called()
+        self.backend_cls.assert_not_called()
         self.assertIsNone(scheduler._runner)
         variables = self._variables()
         self.assertEqual(variables["nodes"], [])
         self.assertNotIn("node", variables)
-
-    def test_runtime_build_failure_fails_the_run(self):
-        self.host["ensure_runtime"].side_effect = TpuRuntimeException(
-            "no network"
-        )
-        with self.assertRaisesRegex(TpuRuntimeException, "no network"):
-            self._started_scheduler()
 
     def test_submit_and_poll_run_jobs_in_order(self):
         scheduler = self._started_scheduler()

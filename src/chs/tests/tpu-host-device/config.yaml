@@ -25,7 +25,7 @@ defaults:
     benchmarks_yaml_d2h_file: tpuv6e/device_to_host.yaml
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.2.0
+      container_image: '{chs_image}'
       job_template: job_standard.yaml.tpl
       mpi_command: ''
   standalone:

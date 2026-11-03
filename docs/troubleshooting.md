@@ -44,9 +44,9 @@ source chs-venv/bin/activate
 uv-venv/bin/uv pip install git+https://github.com/GoogleCloudPlatform/cluster-health-scanner.git
 ```
 
-## The TPU runtime is missing and can't be built: git not found
+## The TPU test dependencies are not installed
 
-In standalone mode on a TPU VM, the Python package builds a TPU runtime on first run and needs `git`. Install `git`, or use the container image, which ships the runtime preloaded.
+In standalone mode on a TPU VM, CHS runs the TPU tests from its own Python environment, and installs their dependencies only on Linux x86_64 with Python 3.12. Reinstall CHS in a Python 3.12 environment (see [Python 3.12 is not available](#python-312-is-not-available)), or use the container image.
 
 ## chs configure storage gcs fails
 

@@ -54,7 +54,7 @@ class TpuNetworkStress(ExecutableApplication):
         "execute",
         template=[
             f"echo '{_B64_SCRIPT}' | base64 -d > tpu_network_stress.py",
-            "PAYLOAD_SIZE_MB={payload_size_mb} NUM_ITERATIONS={num_iters} python3 tpu_network_stress.py",
+            "PAYLOAD_SIZE_MB={payload_size_mb} NUM_ITERATIONS={num_iters} $\\{CHS_PYTHON:-python3\\} tpu_network_stress.py",
         ],
         use_mpi=False,
     )

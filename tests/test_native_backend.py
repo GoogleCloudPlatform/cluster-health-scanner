@@ -15,7 +15,6 @@
 """Unit tests for chs.schedulers.standalone.native_backend."""
 
 import os
-import pathlib
 import shutil
 import tempfile
 import time
@@ -30,12 +29,7 @@ class NativeBackendTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp)
-        self.runtime = pathlib.Path(self.tmp, "tpu")
-        (self.runtime / "venv" / "bin").mkdir(parents=True)
-        self.backend = NativeBackend(
-            self.runtime,
-            chip_count=4,
-        )
+        self.backend = NativeBackend(chip_count=4)
 
     def _spec(self, script, name="job-1"):
         path = os.path.join(self.tmp, f"{name}.sh")
@@ -52,15 +46,13 @@ class NativeBackendTest(unittest.TestCase):
         self.fail("job did not exit")
 
     def test_runs_the_script_natively_with_the_tpu_env(self):
-        spec = self._spec(
-            'echo "$CHS_AMB_DIR $TPU_CHIPS_PER_HOST_BOUNDS"; exit 3'
-        )
+        spec = self._spec('echo "$TPU_CHIPS_PER_HOST_BOUNDS"; exit 3')
         self.backend.start(spec)
         self.assertEqual(self._wait(spec), 3)
         log = os.path.join(self.tmp, "out.log")
         self.backend.fetch_log(spec, log)
         with open(log) as f:
-            self.assertEqual(f.read(), f"{self.runtime}/code 2,2,1\n")
+            self.assertEqual(f.read(), "2,2,1\n")
         self.backend.remove(spec)
         self.assertFalse(os.path.exists(self.backend._out_path(spec)))
 
@@ -77,7 +69,7 @@ class NativeBackendTest(unittest.TestCase):
 
     def test_invalid_job_fails_to_start(self):
         spec = self._spec("true")
-        backend = NativeBackend(self.runtime, chip_count=3)
+        backend = NativeBackend(chip_count=3)
         with self.assertRaises(ChsSchedulerException):
             backend.start(spec)
 

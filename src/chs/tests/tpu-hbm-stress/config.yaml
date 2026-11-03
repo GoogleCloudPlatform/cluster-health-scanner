@@ -26,4 +26,4 @@ defaults:
     modifiers:
     - name: tpu-node-local-init
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.2.0
+      container_image: '{chs_image}'

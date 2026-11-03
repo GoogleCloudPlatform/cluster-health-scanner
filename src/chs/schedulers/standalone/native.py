@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runs standalone TPU tests as native processes from a TPU runtime."""
+"""Runs standalone TPU tests as native processes."""
 
 import logging
 import os
@@ -63,11 +63,15 @@ def build_command(
 
 def build_env(
     base_env: Mapping[str, str],
-    runtime_dir: Path,
     node: str,
     chip_count: int,
 ) -> dict[str, str]:
-    """Returns the environment for a native TPU job."""
+    """Returns the environment for a native TPU job.
+
+    CHS_PYTHON is the interpreter running CHS, and its bin directory comes
+    first on PATH, so the job runs the Python and the TPU tools installed
+    with CHS.
+    """
     if chip_count not in _CHIPS_PER_HOST_BOUNDS:
         raise ChsValidationError(
             f"Unsupported TPU chip count per host: {chip_count}."
@@ -78,20 +82,16 @@ def build_env(
         if key not in _SCRUBBED_ENV_VARS
         and not key.startswith(_SCRUBBED_ENV_PREFIXES)
     }
-    chs_venv_bin = (
-        os.path.normpath(os.path.join(sys.prefix, "bin"))
-        if sys.prefix != sys.base_prefix
-        else None
-    )
+    interpreter_bin = os.path.normpath(os.path.dirname(sys.executable))
     path = [
         entry
         for entry in env.get("PATH", "").split(os.pathsep)
-        if entry and os.path.normpath(entry) != chs_venv_bin
+        if entry and os.path.normpath(entry) != interpreter_bin
     ]
     env.update(
         {
-            "PATH": os.pathsep.join([str(runtime_dir / "venv" / "bin"), *path]),
-            "CHS_AMB_DIR": str(runtime_dir / "code"),
+            "PATH": os.pathsep.join([interpreter_bin, *path]),
+            "CHS_PYTHON": sys.executable,
             "MY_NODE_NAME": node,
             "TPU_SKIP_MDS_QUERY": "true",
             "TPU_WORKER_ID": "0",
@@ -143,13 +143,12 @@ class NativeJob:
         job_name: str,
         script: str,
         timeout_seconds: int,
-        runtime_dir: Path,
         node: str,
         chip_count: int,
         out_path: Path,
     ) -> "NativeJob":
         """Starts a test in its own session that stops when CHS exits."""
-        env = build_env(os.environ, runtime_dir, node, chip_count)
+        env = build_env(os.environ, node, chip_count)
         read_fd, write_fd = os.pipe()
         try:
             command = build_command(script, timeout_seconds, read_fd)

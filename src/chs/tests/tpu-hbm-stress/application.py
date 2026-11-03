@@ -39,7 +39,7 @@ class TpuHbmStress(ExecutableApplication):
         "execute",
         template=[
             "echo '" + _B64_SCRIPT + "' | base64 -d > tpu_hbm_stress.py",
-            "ACCELERATOR_TYPE={machine_type} python3 tpu_hbm_stress.py",
+            "ACCELERATOR_TYPE={machine_type} $\\{CHS_PYTHON:-python3\\} tpu_hbm_stress.py",
         ],
         use_mpi=False,
     )

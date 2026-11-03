@@ -32,7 +32,7 @@ repos:
     hooks:
     -   id: pip-compile
         name: pip-compile requirements.txt
-        args: [pyproject.toml, requirements-build.in, --universal, --python-version=3.12, --generate-hashes, --no-emit-package=ramble, --quiet, --output-file=requirements.txt]
+        args: [pyproject.toml, requirements-build.in, --universal, --python-version=3.12, --generate-hashes, --no-emit-package=ramble, --no-emit-package=accelerator-microbenchmarks, --quiet, --output-file=requirements.txt]
         files: ^(pyproject\.toml|requirements-build\.in|requirements\.txt)$
         pass_filenames: false
     -   id: pip-compile

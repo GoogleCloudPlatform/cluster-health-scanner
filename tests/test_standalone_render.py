@@ -14,6 +14,7 @@
 
 """Renders a real standalone Ramble workspace on a faked TPU VM."""
 
+import importlib.util
 import os
 import pathlib
 import shutil
@@ -35,7 +36,7 @@ class StandaloneRenderTest(unittest.TestCase):
         self.tmp = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
         (self.tmp / "run/lock").mkdir(parents=True)
-        runtime = self.tmp / "tpu"
+        real_find_spec = importlib.util.find_spec
         patches = [
             mock.patch.dict(
                 os.environ,
@@ -68,10 +69,13 @@ class StandaloneRenderTest(unittest.TestCase):
                 side_effect=lambda p: str(self.tmp) + p,
             ),
             mock.patch.object(
-                standalone.tpu_runtime, "find_runtime", return_value=runtime
-            ),
-            mock.patch.object(
-                standalone.tpu_runtime, "ensure_runtime", return_value=runtime
+                standalone.importlib.util,
+                "find_spec",
+                side_effect=lambda name, *args: (
+                    mock.sentinel.spec
+                    if name == standalone.BENCHMARKS_PACKAGE
+                    else real_find_spec(name, *args)
+                ),
             ),
             mock.patch.object(standalone, "NativeBackend"),
         ]
