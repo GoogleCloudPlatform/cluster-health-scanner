@@ -199,7 +199,7 @@ machines:
           OMPI_MCA_btl_tcp_if_include: '{tcp_interfaces}'
       variables:
         container_name: nccl-plugin-gib-diagnostic-v1.1.0
-        container_uri: docker://us-docker.pkg.dev#kernel-net-team/clouda4-nccl-dev/nccl-plugin-gib-diagnostic-arm64:v1.1.0
+        container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic-arm64:v1.1.0
         srun_args: --mpi=pmix --container-workdir {nccl-tests_path} --container-env {container_env_vars} --container-image {container_path} --container-mounts "/usr/local/gib,/var/tmp" --container-writable --wait=60 --kill-on-bad-exit=1
   a4x-maxgpu-4g-metal:
     modifiers:
