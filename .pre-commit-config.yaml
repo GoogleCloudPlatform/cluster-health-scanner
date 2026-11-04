@@ -49,6 +49,11 @@ repos:
         additional_dependencies: [github.com/google/addlicense@v1.1.1]
         args: [-c, "Google LLC"]
         types_or: [python, yaml, shell]
+    -   id: verify-lockfile-hashes
+        name: lockfile hashes match pinned versions
+        entry: python3 .github/scripts/verify_lockfile_hashes.py
+        language: python
+        files: ^requirements(-system)?\.txt$
     -   id: coverage
         name: unit tests and coverage
         entry: bash -c 'env PYTHONPATH=src coverage run -m unittest discover tests && coverage report --fail-under=65'

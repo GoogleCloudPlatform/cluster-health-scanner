@@ -16,11 +16,19 @@ name: release-image
 on:
   push:
     tags: ["v*"]
+
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify no internal files in build context
         run: |
           for p in .agents .gemini helm bin cloudbuild.yaml cloudbuild-integration.yaml; do

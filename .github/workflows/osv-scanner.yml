@@ -17,10 +17,13 @@ name: OSV-Scanner
 on:
   pull_request:
     branches: [develop]
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [develop]
 
 concurrency:
-  group: osv-scanner-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: osv-scanner-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -38,3 +41,4 @@ jobs:
         with:
           scan-args: |-
             --lockfile=requirements.txt
+            --lockfile=requirements-system.txt
