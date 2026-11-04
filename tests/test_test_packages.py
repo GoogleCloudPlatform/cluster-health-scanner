@@ -31,7 +31,6 @@ from unittest import mock
 
 from chs.testkit import NodeGrouping
 from chs.testkit import TestRequest, available_tests, load_plugin
-from chs.testkit import config as chs_config
 from chs.testkit import context
 from chs.utils import topology as topology_utils
 
@@ -880,70 +879,6 @@ class TpuCollectivesTest(unittest.TestCase):
                 "__MULTIPLIER__",
             ):
                 self.assertNotIn(token, escaped)
-
-
-class TpuCollectivesSingleNodeTest(unittest.TestCase):
-    """The same application, pinned to one node."""
-
-    def setUp(self):
-        self.plugin = plugin("tpu-collectives-single-node")
-
-    def test_it_renders_the_multi_node_application(self):
-        self.assertEqual("tpu-collectives", self.plugin.application)
-
-    def test_its_settings_are_kept_apart_from_the_multi_node_ones(self):
-        self.assertTrue(chs_config.load_test_config(self.plugin.name))
-        self.assertNotEqual(self.plugin.name, self.plugin.application)
-
-    def test_the_collective_is_held_to_a_single_slice(self):
-        """So the measurement never crosses the links between hosts."""
-        variables = {}
-
-        self.plugin.prepare_variables(variables, "all_reduce", request())
-
-        self.assertEqual("2x2x1", variables["execution_topology"])
-        self.assertEqual(
-            "collectives_all_reduce.yaml", variables["benchmarks_yaml_file"]
-        )
-
-    def test_the_mesh_matches_the_single_host_topology(self):
-        context = {
-            "variables": {
-                "execution_topology": "2x2x1",
-                "cores_per_chip": 1,
-                "benchmarks_yaml_escaped": "mesh: __MESH__",
-            }
-        }
-
-        self.plugin.finalize_context(context, "all_gather", request())
-
-        self.assertEqual(
-            "mesh: 2x2x2", context["variables"]["benchmarks_yaml_escaped"]
-        )
-
-    def test_an_unlisted_topology_and_invalid_topologies_are_handled(self):
-        context = {
-            "variables": {
-                "execution_topology": "3x3x3",
-                "cores_per_chip": 1,
-                "benchmarks_yaml_escaped": "__MESH__ __START__",
-            }
-        }
-        self.plugin.finalize_context(context, "all_gather", request())
-        self.assertEqual(
-            "3x3x3 27", context["variables"]["benchmarks_yaml_escaped"]
-        )
-
-        for bad_vars in (
-            {"cores_per_chip": 1},
-            {"execution_topology": "2x2x1"},
-            {"execution_topology": "two-by-two", "cores_per_chip": 1},
-        ):
-            with self.subTest(variables=bad_vars):
-                with self.assertRaises(ValueError):
-                    self.plugin.finalize_context(
-                        {"variables": dict(bad_vars)}, "all_gather", request()
-                    )
 
 
 class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):

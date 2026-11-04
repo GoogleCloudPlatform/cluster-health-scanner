@@ -232,10 +232,7 @@ class RambleOutputGenerator:
             return self.populate_hbm_logs(scenario)
         elif test_name == "tpu-gemm":
             return self.populate_tpu_gemm_logs(scenario)
-        elif (
-            test_name == "tpu-collectives"
-            or test_name == "tpu-collectives-single-node"
-        ):
+        elif test_name == "tpu-collectives":
             return self.populate_tpu_collectives_logs(scenario)
         elif test_name == "tpu-compute-stress":
             return self.populate_tpu_compute_stress_logs(scenario)
