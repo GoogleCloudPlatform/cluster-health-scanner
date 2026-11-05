@@ -83,13 +83,6 @@ TPU_NETWORK_STRESS_TEMPLATE = (
     "HOST {node}: Host: {node} | Axis: X | {bandwidth} GB/s\n"
 )
 
-GPU_SMI_TEMPLATE = (
-    "0, NVIDIA A4X, 535.104, P0, 00000000:00:04.0, 0000000000000, "
-    "00000000-0000-0000-0000-000000000000, 100.0, 200.0, 1000, 1000\n"
-    "GPU Count: 4\n"
-    "CUDA Version: 12.2\n"
-)
-
 GPU_DCGM_TEMPLATE = """\
 | Diagnostic Test | Pass |
 | | GPU0: Pass |

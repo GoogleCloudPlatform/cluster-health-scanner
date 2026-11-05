@@ -17,7 +17,6 @@ lib/
 tests/
 docs/
 scratch/
-examples/
 .agents/
 .gemini/
 

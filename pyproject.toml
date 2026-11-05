@@ -70,9 +70,6 @@ exclude = [
 
     # Auto-generated files
     "*_pb2.py",
-
-    # Test snapshots
-    "tests/integration/goldens",
 ]
 
 # Same as Black.

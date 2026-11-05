@@ -71,46 +71,6 @@ def resolve_config_path(input_path: str) -> Path:
             return candidate_yaml
 
 
-def resolve_node_scenario(
-    scenarios: list[dict[str, Any]],
-    nodepool_name: str,
-    node_index: int,
-    test_name: str | None = None,
-) -> dict[str, Any] | None:
-    """Resolves test scenario matching a node with pool-wide fallback.
-
-    Args:
-        scenarios: List of test_scenario dicts from blueprint config.
-        nodepool_name: Name of target nodepool.
-        node_index: 0-based index of worker node within the nodepool.
-        test_name: Optional test name filter (e.g. 'tpu-hbm').
-
-    Returns:
-        Matching scenario dict or None if no matching scenario exists.
-    """
-    pool_wide_fallback = None
-
-    for s in scenarios:
-        if not isinstance(s, dict):
-            continue
-        if s.get("nodepool") != nodepool_name:
-            continue
-        if test_name and s.get("test") != test_name:
-            continue
-
-        s_index = s.get("node_index")
-
-        # Tier 1: Exact node_index match (e.g. node_index: 0)
-        if s_index == node_index:
-            return s
-
-        # Tier 2: Pool-wide fallback (node_index omitted, None, or "all")
-        if s_index is None or s_index == "all":
-            pool_wide_fallback = s
-
-    return pool_wide_fallback
-
-
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
