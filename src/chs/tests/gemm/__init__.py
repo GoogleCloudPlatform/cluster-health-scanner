@@ -59,7 +59,7 @@ class GemmPlugin(GemmRenderer, GemmExtractor, TestPlugin):
                     if all_success
                     else pb.RESULT_STATUS_FAILED
                 )
-            else:
+            elif filtered_result.result_status == pb.RESULT_STATUS_SUCCESS:
                 filtered_result.result_status = pb.RESULT_STATUS_UNKNOWN
 
             filtered_results.append(filtered_result)
