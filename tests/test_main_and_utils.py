@@ -20,7 +20,10 @@ import click
 from chs import main as chs_main
 from chs import telemetry
 from chs.main import _normalize_argv
-from chs.validators.utils import validate_non_empty_string
+from chs.validators.utils import (
+    validate_name_list,
+    validate_non_empty_string,
+)
 from chs.utils.formatting import format_names, format_storage_path
 
 
@@ -157,6 +160,21 @@ class TestValidatorsUtils(unittest.TestCase):
         self.assertEqual(
             validate_non_empty_string(self.ctx, self.param, " abc "), "abc"
         )
+
+    def test_validate_name_list_drops_blank_names(self):
+        self.assertEqual(
+            validate_name_list(self.ctx, self.param, (" a, ,b ", "c")),
+            "a,b,c",
+        )
+
+    def test_validate_name_list_rejects_no_names(self):
+        for value in ("", ",", " , ,", (",",)):
+            with self.subTest(value=value):
+                with self.assertRaises(click.BadParameter):
+                    validate_name_list(self.ctx, self.param, value)
+
+    def test_validate_name_list_none(self):
+        self.assertIsNone(validate_name_list(self.ctx, self.param, None))
 
     def test_validate_non_empty_string_tuple_empty(self):
         self.assertIsNone(validate_non_empty_string(self.ctx, self.param, ()))

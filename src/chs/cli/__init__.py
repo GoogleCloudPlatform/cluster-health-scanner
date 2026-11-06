@@ -864,6 +864,7 @@ def run_action(
     deadline: int | None = None,
     run_id: str | None = None,
     active_tests: list[str] | None = None,
+    verbose: bool = False,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -876,6 +877,8 @@ def run_action(
       machine_type: The machine type of the cluster nodes (e.g., a3-high).
       dry_run: Set up the workspace but do not execute experiments.
       deadline: The deadline for the job in seconds.
+      verbose: Whether `chs -v` was given; it also turns on debug logging
+        while setting up, running and analyzing the tests.
 
     Returns:
       A list of submitted job IDs.
@@ -892,7 +895,7 @@ def run_action(
     )
 
     ramble_manager = RambleManager(
-        workspaces_base_dir, workspace_name, run_id=run_id
+        workspaces_base_dir, workspace_name, run_id=run_id, debug=verbose
     )
 
     with _setup_workspace_logger(ramble_manager.path):
@@ -942,12 +945,15 @@ def run_action(
 def _analyze_action(
     app_data: ChsAppData,
     run_id: str,
+    verbose: bool = False,
 ) -> str:
     """Analyzes results from a specific test run.
 
     Args:
       app_data: ChsAppData instance.
       run_id: The ID of the test run to analyze.
+      verbose: Whether `chs -v` was given; it also turns on debug logging
+        while setting up, running and analyzing the tests.
 
     Returns:
       The run_id of the analyzed test run.
@@ -961,7 +967,7 @@ def _analyze_action(
     workspace_name = app_data.resolve_run_id(run_id)
     telemetry.set_telemetry_run_id(workspace_name)
     ramble_manager = RambleManager(
-        workspaces_base_dir, workspace_name, run_id=run_id
+        workspaces_base_dir, workspace_name, run_id=run_id, debug=verbose
     )
 
     with _setup_workspace_logger(ramble_manager.path):
@@ -1401,6 +1407,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
     """
     ctx.ensure_object(dict)
     ctx.obj["app_data"] = ChsAppData()
+    ctx.obj["verbose"] = verbose
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
         for handler in logging.getLogger().handlers:
@@ -1644,7 +1651,7 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
         "also target single-host benchmarks across entire pools."
         "\n\n "
     ),
-    callback=validators.validate_non_empty_string,
+    callback=validators.validate_name_list,
 )
 @click.option(
     "--partitions",
@@ -2187,6 +2194,7 @@ def run(
                 deadline=deadline,
                 run_id=run_id,
                 active_tests=active_tier_tests if is_tiered else None,
+                verbose=obj.get("verbose", False),
             )
 
         if not job_ids:
@@ -2220,7 +2228,7 @@ def run(
             )
 
         # Automatically trigger analysis
-        _analyze_action(app_data, run_id)
+        _analyze_action(app_data, run_id, verbose=obj.get("verbose", False))
 
     return result
 

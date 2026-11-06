@@ -27,6 +27,7 @@ from chs.validators.thresholds import ThresholdsValidator
 from chs.validators.topology import TpuTopologyValidator
 from chs.validators.utils import (
     validate_existing_run_id,
+    validate_name_list,
     validate_non_empty_string,
     validate_run_id,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "ThresholdsValidator",
     "TpuTopologyValidator",
     "validate_existing_run_id",
+    "validate_name_list",
     "validate_non_empty_string",
     "validate_run_id",
 ]

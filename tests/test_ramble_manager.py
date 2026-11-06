@@ -187,15 +187,65 @@ class TestRambleManager(unittest.TestCase):
         self.assertEqual(kwargs["check"], False)
         self.assertTrue(kwargs["capture_output"])
         cmd = args[0]
-        self.assertIn("ramble", cmd)
-        self.assertIn("workspace", cmd)
-        self.assertIn("setup", cmd)
+        self.assertEqual(
+            cmd[6:], ["ramble", "-w", manager.path, "workspace", "setup"]
+        )
         self.assertIn(f"source {expected_script_path}", cmd[4])
         # Verify env contains TQDM_DISABLE
         self.assertEqual(kwargs["env"]["TQDM_DISABLE"], "1")
         _, kwargs = self.mock_run.call_args
         self.assertEqual(kwargs["env"].get("TQDM_DISABLE"), "1")
         self.assertEqual(kwargs["env"].get("TERM"), "dumb")
+
+    def _run_ramble_commands(self, manager):
+        """Runs create, repo add, setup and analyze; returns their argv."""
+        manager.create_workspace()
+        manager.add_custom_repository()
+        manager.setup_workspace()
+        with mock.patch("os.path.exists", return_value=True):
+            manager.analyze_experiments()
+        return [call.args[0][6:] for call in self.mock_run.call_args_list]
+
+    def test_ramble_commands_omit_debug_flag_by_default(self):
+        """Test no Ramble command gets -d (debug logging) by default."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+
+        cmds = self._run_ramble_commands(manager)
+
+        # This -d is `workspace create`'s directory option, not debug.
+        self.assertEqual(
+            cmds[0],
+            ["ramble", "workspace", "create", "-a", "-d", manager.path],
+        )
+        self.assertEqual(
+            [cmd[:5] for cmd in cmds[1:]],
+            [
+                ["ramble", "-w", manager.path, "repo", "add"],
+                ["ramble", "-w", manager.path, "repo", "add"],
+                ["ramble", "-w", manager.path, "workspace", "setup"],
+                ["ramble", "-w", manager.path, "workspace", "analyze"],
+            ],
+        )
+
+    def test_ramble_commands_pass_debug_flag_with_debug(self):
+        """Test every Ramble command gets -d with debug=True (`chs -v`)."""
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run, debug=True)
+
+        cmds = self._run_ramble_commands(manager)
+
+        self.assertEqual(
+            cmds[0],
+            ["ramble", "-d", "workspace", "create", "-a", "-d", manager.path],
+        )
+        self.assertEqual(
+            [cmd[:6] for cmd in cmds[1:]],
+            [
+                ["ramble", "-d", "-w", manager.path, "repo", "add"],
+                ["ramble", "-d", "-w", manager.path, "repo", "add"],
+                ["ramble", "-d", "-w", manager.path, "workspace", "setup"],
+                ["ramble", "-d", "-w", manager.path, "workspace", "analyze"],
+            ],
+        )
 
     def test_setup_workspace_with_scheduler_env(self):
         """Test setup_workspace merges extra env from scheduler."""

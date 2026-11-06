@@ -78,6 +78,7 @@ class RambleManager:
             ..., subprocess.CompletedProcess[str]
         ] = subprocess.run,
         run_id: str | None = None,
+        debug: bool = False,
     ) -> None:
         """Initializes the RambleManager.
 
@@ -87,6 +88,9 @@ class RambleManager:
           run_command: The function to use for running subprocess commands.
             Defaults to `subprocess.run`.
           run_id: The user-facing run ID.
+          debug: Whether to pass `-d` (debug logging) to every Ramble
+            command. It slows Ramble down considerably at scale, so it is
+            only on with `chs -v`; Ramble's errors are reported without it.
 
         Raises:
           click.UsageError: If the Ramble setup script is not found.
@@ -97,6 +101,7 @@ class RambleManager:
         self._workspace_name = workspace_name
         self._run_id = run_id
         self._run_command = run_command
+        self._debug_flag = ["-d"] if debug else []
         self._app_data = ChsAppData()
         self._path = os.path.join(self._base_dir, self._workspace_name)
 
@@ -253,7 +258,7 @@ class RambleManager:
         """Runs a Ramble subcommand in the workspace context.
 
         This is a wrapper around _execute_shell_command that prepends
-        'ramble -d -w self.path' to the command and sets cwd to self.path.
+        'ramble [-d] -w self.path' to the command and sets cwd to self.path.
 
         Args:
           subcommand: The Ramble subcommand to execute (e.g., 'workspace',
@@ -273,7 +278,7 @@ class RambleManager:
         Raises:
           ex.ChsException: If the Ramble command fails.
         """
-        cmd = ["ramble", "-d", "-w", self.path, subcommand] + args
+        cmd = ["ramble", *self._debug_flag, "-w", self.path, subcommand] + args
         exec_cmd = self._prepare_ramble_command(cmd)
 
         merged_env = env.copy() if env else {}
@@ -296,7 +301,16 @@ class RambleManager:
           click.ClickException: If the workspace creation command fails.
         """
         logger.debug("Creating workspace at: %s", self.path)
-        cmd = ["ramble", "-d", "workspace", "create", "-a", "-d", self.path]
+        # The second `-d` is `workspace create`'s directory option.
+        cmd = [
+            "ramble",
+            *self._debug_flag,
+            "workspace",
+            "create",
+            "-a",
+            "-d",
+            self.path,
+        ]
         exec_cmd = self._prepare_ramble_command(cmd)
         self._execute_shell_command(
             exec_cmd,

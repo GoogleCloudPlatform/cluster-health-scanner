@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import os
 import re
 import subprocess
 
 import tempfile
 import textwrap
-import uuid
 
 import yaml
 
@@ -47,6 +47,7 @@ _CONTAINER_INDENT = 8
 _CONTAINER_FIELD_INDENT = 10
 _GPU_RESOURCE = NVIDIA_GPU_RESOURCE
 _JOB_DEADLINE_MARGIN_SEC = 60
+_MPI_JOB_TEMPLATE = "job_mpi.yaml.tpl"
 
 
 def _job_deadline(timeout: str) -> str:
@@ -480,7 +481,10 @@ class KubernetesJob(WorkflowManagerBase):
         # K8S resource names can be max 63 chars and no `_` is supported
         sanitized_job_name = raw_job_name.replace("_", "-").lower()
 
-        u = uuid.uuid4().hex[:6]
+        # job_name is shared by the experiments of a test, e.g. one per node,
+        # so the suffix comes from the experiment's unique run directory.
+        experiment_run_dir = expander.expand_var_name("experiment_run_dir")
+        u = hashlib.sha256(experiment_run_dir.encode()).hexdigest()[:10]
         max_base_len = 40
 
         if len(sanitized_job_name) > max_base_len:
@@ -493,7 +497,6 @@ class KubernetesJob(WorkflowManagerBase):
         raw_cmd = expander.expand_var_name("command")
         raw_cmd = re.sub(r'>>\s*"[^"]+"\s*2>&1', "", raw_cmd)
 
-        experiment_run_dir = expander.expand_var_name("experiment_run_dir")
         app_workdir = expander.expand_var_name("app_workdir")
 
         container_image = expander.expand_var_name("container_image")
@@ -579,7 +582,10 @@ class KubernetesJob(WorkflowManagerBase):
             "extra_volume_mounts_yaml", _CONTAINER_INDENT
         )
 
-        priv_key, pub_key = self._generate_ssh_keys()
+        # Only the MPI template mounts the keys, as a per-Job Secret.
+        priv_key, pub_key = "", ""
+        if expander.expand_var_name("job_template") == _MPI_JOB_TEMPLATE:
+            priv_key, pub_key = self._generate_ssh_keys()
         suspend = expander.expand_var_name("suspend_job")
         suspend_section = "suspend: true" if suspend == "true" else ""
 

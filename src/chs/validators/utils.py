@@ -54,6 +54,30 @@ def validate_non_empty_string(
     return stripped_value
 
 
+def validate_name_list(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: tuple[str, ...] | str | None,
+) -> str | None:
+    """Validates a comma-separated list that names at least one item.
+
+    Returns:
+        The names joined by commas without blanks, or None if input is None.
+
+    Raises:
+        click.BadParameter: If no name is given, e.g. "" or ",".
+    """
+    joined = validate_non_empty_string(ctx, param, value)
+    if joined is None:
+        return None
+    names = [name.strip() for name in joined.split(",") if name.strip()]
+    if not names:
+        raise click.BadParameter(
+            "must name at least one item.", ctx=ctx, param=param
+        )
+    return ",".join(names)
+
+
 def validate_run_id(
     ctx: click.Context, param: click.Parameter, value: str | None
 ) -> str | None:

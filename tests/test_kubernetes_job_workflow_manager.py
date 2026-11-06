@@ -70,6 +70,7 @@ _POD_LABELS = {**_WORKER_LABELS, "team": "infra"}
 _JOB_VARS_INPUTS = {
     "job_name": "chs-run1-nccl-tests-all-gather",
     "timeout": "3600",
+    "job_template": "job_mpi.yaml.tpl",
     "command": "mpirun -n 16 all_gather_perf",
     "experiment_run_dir": "/workspace/experiments/nccl/all-gather/exp1",
     "container_image": "image:latest",
@@ -226,6 +227,39 @@ class KubernetesJobTest(unittest.TestCase):
             second["ssh_private_key_indented"],
         )
 
+    def test_single_node_experiments_of_a_test_get_distinct_names(self):
+        """Names differ per experiment and are stable for the same one.
+
+        All experiments of a single-node test share job_name; only their run
+        directory, which holds the node name, tells them apart.
+        """
+        var_map = dict(_JOB_VARS_INPUTS)
+        names = []
+        for node in ("node-0", "node-1", "node-2", "node-0"):
+            var_map["experiment_run_dir"] = (
+                f"/workspace/experiments/nccl/all-gather/exp-{node}"
+            )
+            names.append(
+                _workflow_manager(var_map)._job_vars()["sanitized_job_name"]
+            )
+
+        self.assertEqual(len(set(names[:3])), 3)
+        self.assertEqual(names[0], names[3])
+        self.assertTrue(names[0].startswith("chs-run1-nccl-tests-all-gather-"))
+
+    def test_job_names_fit_kubernetes_limits(self):
+        """Job names and the names derived from them stay valid at 63."""
+        var_map = {
+            **_JOB_VARS_INPUTS,
+            "job_name": "chs-" + "a" * 37 + "-_-" + "b" * 40,
+        }
+        name = _workflow_manager(var_map)._job_vars()["sanitized_job_name"]
+
+        self.assertEqual(len(name), 51)
+        for derived in (f"{name}-ssh", f"{name}-cdc", f"{name}-999"):
+            self.assertLessEqual(len(derived), 63)
+            self.assertRegex(derived, r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
     def test_returned_job_vars_do_not_alias_the_cache(self):
         """Mutating returned variables does not leak into later templates."""
         wm = _workflow_manager(dict(_JOB_VARS_INPUTS))
@@ -235,9 +269,25 @@ class KubernetesJobTest(unittest.TestCase):
 
         self.assertEqual(wm._job_vars()["sanitized_job_name"], job_name)
 
+    def test_only_the_mpi_template_generates_ssh_keys(self):
+        """Keys are generated for the MPI template's Secret, not otherwise."""
+        standard_vars, standard_docs = self._render(
+            "job_standard.yaml.tpl", dict(_JOB_VARS_INPUTS)
+        )
+        self.generate_ssh_keys.assert_not_called()
+        self.assertEqual(standard_vars["ssh_private_key_indented"], "")
+        self.assertEqual(standard_vars["ssh_public_key_indented"], "")
+        self.assertEqual([d["kind"] for d in standard_docs], ["Job"])
+
+        mpi_vars, _ = self._render("job_mpi.yaml.tpl", dict(_JOB_VARS_INPUTS))
+        self.generate_ssh_keys.assert_called_once()
+        self.assertEqual(
+            mpi_vars["ssh_private_key_indented"], "    private-key"
+        )
+
     def _render(self, template_name, var_map, **extra_vars):
         """Renders a kubernetes-job template like Ramble does."""
-        wm = _workflow_manager(var_map)
+        wm = _workflow_manager({**var_map, "job_template": template_name})
         template_vars = {
             "kubernetes_namespace": "chs",
             "n_nodes": var_map.get("n_nodes", "2"),

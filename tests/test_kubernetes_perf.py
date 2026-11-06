@@ -42,6 +42,23 @@ _BETA_INSTANCE_TYPE = "beta.kubernetes.io/instance-type"
 _INSTANCE_ID = "container.googleapis.com/instance_id"
 _CLUSTER_NAME = "container.googleapis.com/cluster_name"
 _NODEPOOL = "cloud.google.com/gke-nodepool"
+_LIST_ALL_NODES = Call("list_nodes", {"resource_version": "0"})
+_LIST_CHS_JOBS = Call("list_jobs", {"namespace": CHS_NAMESPACE})
+
+
+def _list_pool_nodes(*pools):
+    """Returns the node LIST call that selects the nodes of the pools."""
+    return Call(
+        "list_nodes",
+        {
+            "label_selector": (
+                f"cloud.google.com/gke-nodepool in ({','.join(pools)})"
+            ),
+            "resource_version": "0",
+        },
+    )
+
+
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
 _CHS_SELECTOR = "app.kubernetes.io/managed-by=chs"
@@ -91,11 +108,6 @@ def _node(name, labels=None, annotations=None, provider_id=None):
     if provider_id is not None:
         node["spec"] = {"providerID": provider_id}
     return node
-
-
-def _node_pools_selector(*pools):
-    """Returns the node label selector of `--nodepools`."""
-    return f"{_NODEPOOL} in ({','.join(pools)})"
 
 
 class _KubernetesTestBase(unittest.TestCase):
@@ -551,7 +563,7 @@ class TestNodeObjectCache(_KubernetesTestBase):
         self.assertEqual(self.kube.calls, [])
 
     def test_cold_cache_lists_nodes_once(self):
-        """Without a cached list, the label-selected list is fetched once."""
+        """Without a cached list, nodes are listed once and filtered."""
         node_1 = self.kube.add_object("", "nodes", _node("node1"))
         node_2 = self.kube.add_object("", "nodes", _node("node2"))
         self.kube.add_object(
@@ -562,10 +574,7 @@ class TestNodeObjectCache(_KubernetesTestBase):
             self.scheduler._get_node_objects(["node1", "node2"]),
             [node_1, node_2],
         )
-        self.assertEqual(
-            self.kube.calls,
-            [Call("list_nodes", {"label_selector": f"{_NODEPOOL}!=system"})],
-        )
+        self.assertEqual(self.kube.calls, [_LIST_ALL_NODES])
         self.assertEqual(
             self.scheduler._resolved_node_resources, [node_1, node_2]
         )
@@ -655,17 +664,7 @@ class TestNodeObjectCache(_KubernetesTestBase):
         with self.assertRaisesRegex(ChsValidationError, "missing-pool"):
             scheduler._get_node_objects(["node1"])
         self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "list_nodes",
-                    {
-                        "label_selector": _node_pools_selector(
-                            "pool-a", "missing-pool"
-                        )
-                    },
-                )
-            ],
+            self.kube.calls, [_list_pool_nodes("pool-a", "missing-pool")]
         )
         self.assertIsNone(scheduler._resolved_node_resources)
 
@@ -923,17 +922,7 @@ class TestDetectNodesHardwareFromNodeObjects(_KubernetesTestBase):
         with self.assertRaisesRegex(ChsValidationError, "missing-pool"):
             scheduler.detect_nodes_hardware(["node1"])
         self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "list_nodes",
-                    {
-                        "label_selector": _node_pools_selector(
-                            "pool-a", "missing-pool"
-                        )
-                    },
-                )
-            ],
+            self.kube.calls, [_list_pool_nodes("pool-a", "missing-pool")]
         )
         self.mock_query_gce.assert_not_called()
         self.assertIsNone(scheduler._resolved_node_resources)
@@ -1040,7 +1029,7 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
         )
         self.assertEqual(
             self.kube.calls,
-            [Call("list_jobs", {"namespace": CHS_NAMESPACE})],
+            [_LIST_CHS_JOBS],
         )
         self.assertNotIn("unrelated-job", statuses)
         self.assertEqual(
@@ -1055,7 +1044,7 @@ class TestDynamicSliceCleanupDedup(_KubernetesTestBase):
         self.scheduler.get_job_statuses(["chs-run-job1"])
         self.assertEqual(
             self.kube.calls,
-            [Call("list_jobs", {"namespace": CHS_NAMESPACE})],
+            [_LIST_CHS_JOBS],
         )
 
     def test_apply_never_deletes_existing_slices(self):

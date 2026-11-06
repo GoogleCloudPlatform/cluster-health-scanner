@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from concurrent.futures import ThreadPoolExecutor
 import functools
 import logging
+import threading
 from typing import Any
 from chs.resources import normalize_machine_type
 from chs.exceptions import ChsSchedulerException
 
 logger = logging.getLogger(__name__)
+
+_BATCH_SIZE = 50
+_MAX_CONCURRENT_BATCHES = 8
 
 
 @functools.cache
@@ -53,23 +58,24 @@ def query_gce_instances_info(
     from google.auth.exceptions import GoogleAuthError
     from google.cloud import compute_v1
 
-    try:
-        client = compute_v1.InstancesClient()
-    except (GoogleAPICallError, GoogleAuthError) as e:
-        raise ChsSchedulerException(f"Failed to query GCE API: {e}") from e
+    # The client talks REST through a requests.Session, which isn't
+    # thread-safe, so each worker thread creates its own client.
+    local = threading.local()
 
-    info_map = {}
+    def thread_client() -> Any:
+        if not hasattr(local, "client"):
+            local.client = compute_v1.InstancesClient()
+        return local.client
 
-    # Batch requests in chunks of 50 to avoid URL length limits
-    for i in range(0, len(nodes), 50):
-        batch = nodes[i : i + 50]
+    def query_batch(batch: list[str]) -> dict[str, dict[str, Any]]:
         filter_str = " OR ".join([f'name = "{name}"' for name in batch])
+        batch_info = {}
         try:
             request = compute_v1.AggregatedListInstancesRequest(
                 project=project,
                 filter=filter_str,
             )
-            page_result = client.aggregated_list(request=request)
+            page_result = thread_client().aggregated_list(request=request)
 
             for zone, instances_in_zone in page_result:
                 if not instances_in_zone.instances:
@@ -95,8 +101,25 @@ def query_gce_instances_info(
                                     topo.subblock, str
                                 ):
                                     instance_info["subblock"] = topo.subblock
-                        info_map[instance.name] = instance_info
+                        batch_info[instance.name] = instance_info
         except (GoogleAPICallError, GoogleAuthError) as e:
             raise ChsSchedulerException(f"Failed to query GCE API: {e}") from e
+        return batch_info
 
+    # Batch requests in chunks of 50 to avoid URL length limits, and send a
+    # few batches at a time.
+    batches = [
+        nodes[i : i + _BATCH_SIZE] for i in range(0, len(nodes), _BATCH_SIZE)
+    ]
+    if not batches:
+        return {}
+    info_map = {}
+    executor = ThreadPoolExecutor(
+        max_workers=min(len(batches), _MAX_CONCURRENT_BATCHES)
+    )
+    try:
+        for batch_info in executor.map(query_batch, batches):
+            info_map.update(batch_info)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
     return info_map

@@ -18,6 +18,7 @@ import inspect
 import io
 import json
 import os
+import threading
 from types import SimpleNamespace
 from typing import Any
 import unittest
@@ -499,6 +500,117 @@ class ClientFunctionsTest(unittest.TestCase):
             )
             self.assertEqual(k8s_client.list_pods(), [])
 
+    def test_retries_throttling_and_server_errors(self) -> None:
+        for status in (429, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                self.clock.sleeps.clear()
+                method = mock.Mock(
+                    side_effect=[_api_error(status), _FakeResponse({})]
+                )
+                with mock.patch.object(
+                    k8s_client.random, "uniform", return_value=0.25
+                ) as mock_uniform:
+                    k8s_client._request(method)
+                self.assertEqual(method.call_count, 2)
+                mock_uniform.assert_called_once_with(0, 0.5)
+                self.assertEqual(self.clock.sleeps, [0.25])
+
+    def test_retries_transport_errors_with_jittered_backoff(self) -> None:
+        method = mock.Mock(
+            side_effect=[urllib3.exceptions.HTTPError("reset")] * 7
+            + [_FakeResponse({})]
+        )
+        with mock.patch.object(
+            k8s_client.random, "uniform", side_effect=lambda a, b: b
+        ):
+            k8s_client._request(method)
+        self.assertEqual(self.clock.sleeps, [0.5, 1, 2, 4, 8, 10, 10])
+
+    def test_retries_errors_while_reading_the_response(self) -> None:
+        method = mock.Mock(
+            side_effect=[
+                _FakeResponse(
+                    data_error=urllib3.exceptions.HTTPError("read timed out")
+                ),
+                _FakeResponse({"items": []}),
+            ]
+        )
+        self.assertEqual(k8s_client._get(method), {"items": []})
+        self.assertEqual(method.call_count, 2)
+
+    def test_waits_for_retry_after(self) -> None:
+        cases = [
+            ("5", 5.0),
+            ("0.5", 0.5),
+            ("3600", 30.0),
+            ("0", None),
+            ("-1", None),
+            ("soon", None),
+            ("Wed, 21 Oct 2026 07:28:00 GMT", None),
+            ("nan", None),
+        ]
+        for retry_after, expected in cases:
+            with self.subTest(retry_after=retry_after):
+                self.clock.sleeps.clear()
+                error = _api_error(429, "TooManyRequests", "shutting down")
+                error.headers = {"Retry-After": retry_after}
+                method = mock.Mock(side_effect=[error, _FakeResponse({})])
+                with mock.patch.object(
+                    k8s_client.random, "uniform", return_value=0.1
+                ):
+                    k8s_client._request(method)
+                self.assertEqual(
+                    self.clock.sleeps, [0.1 if expected is None else expected]
+                )
+
+    def test_does_not_retry_other_errors(self) -> None:
+        for status in (400, 401, 403, 404, 409, 410, 422, 501):
+            with self.subTest(status=status):
+                error = _api_error(status)
+                error.headers = {"Retry-After": "1"}
+                method = mock.Mock(side_effect=error)
+                with self.assertRaises(KubeError) as ctx:
+                    k8s_client._request(method)
+                self.assertEqual(ctx.exception.status, status)
+                method.assert_called_once()
+        self.assertEqual(self.clock.sleeps, [])
+
+    def test_raises_the_last_error_once_the_retry_budget_is_spent(
+        self,
+    ) -> None:
+        errors = []
+
+        def unavailable(**_kwargs: Any) -> Any:
+            error = _api_error(503, "ServiceUnavailable", "try later")
+            error.headers = {"Retry-After": "30"}
+            errors.append(error)
+            raise error
+
+        with self.assertRaises(KubeError) as ctx:
+            k8s_client._request(unavailable)
+
+        # Retries at 30, 60, 90 and 120 s; the next would end after 120 s.
+        self.assertEqual(self.clock.sleeps, [30, 30, 30, 30])
+        self.assertIs(ctx.exception.__cause__, errors[-1])
+        self.assertEqual(str(ctx.exception), "try later")
+        self.assertEqual(ctx.exception.status, 503)
+        self.assertEqual(ctx.exception.retry_after, 30)
+
+    def test_create_namespace_retries_api_server_shutdown(self) -> None:
+        # GKE answers 429 while it resizes the control plane.
+        error = _api_error(429, "TooManyRequests", "apiserver is shutting down")
+        error.headers = {"Retry-After": "5"}
+        self.sdk.core.create_namespace.side_effect = [
+            error,
+            error,
+            _FakeResponse({}),
+        ]
+
+        k8s_client.create_namespace_if_not_exists(name="chs")
+
+        self.assertEqual(self.sdk.core.create_namespace.call_count, 3)
+        self.assertEqual(self.clock.sleeps, [5, 5])
+
     def test_context_and_nodes(self) -> None:
         self.assertEqual(k8s_client.current_context(), "gke_proj_zone_cluster")
 
@@ -679,6 +791,33 @@ class ClientFunctionsTest(unittest.TestCase):
                 self.sdk.core.read_namespaced_pod_log.call_count, 2
             )
 
+    def test_stream_pod_log_open_errors_are_not_retried_twice(self) -> None:
+        pod = {
+            "metadata": {"name": "p1", "namespace": "chs"},
+            "spec": {"containers": [{"name": "main"}]},
+        }
+        with self.subTest("open retried once by the request retries"):
+            self.sdk.core.read_namespaced_pod_log.side_effect = [
+                _api_error(503),
+                _FakeResponse(chunks=[b"ok\n"]),
+            ]
+            out = io.BytesIO()
+            with mock.patch.object(
+                k8s_client.random, "uniform", return_value=0.25
+            ):
+                k8s_client.stream_pod_log(pod=pod, out=out)
+            self.assertEqual(out.getvalue(), b"ok\n")
+            self.assertEqual(self.clock.sleeps, [0.25])
+
+        with self.subTest("open that keeps failing raises once"):
+            self.sdk.core.read_namespaced_pod_log.reset_mock()
+            self.sdk.core.read_namespaced_pod_log.side_effect = _api_error(
+                404, "NotFound", 'pods "p1" not found'
+            )
+            with self.assertRaisesRegex(KubeError, 'pods "p1" not found'):
+                k8s_client.stream_pod_log(pod=pod, out=io.BytesIO())
+            self.sdk.core.read_namespaced_pod_log.assert_called_once()
+
     def test_create_and_delete_namespace(self) -> None:
         create_resp = _FakeResponse({})
         self.sdk.core.create_namespace.return_value = create_resp
@@ -742,7 +881,7 @@ class ClientFunctionsTest(unittest.TestCase):
             read.assert_not_called()
             self.assertEqual(self.clock.sleeps, [])
 
-        with self.subTest("computes deadline before deletes"):
+        with self.subTest("starts the deadline after the deletes"):
 
             def slow_delete(**_kwargs: Any) -> Any:
                 self.clock.now += 2.0
@@ -754,10 +893,9 @@ class ClientFunctionsTest(unittest.TestCase):
                 KubeError, "Timed out waiting for deletion of a, b"
             ):
                 k8s_client._delete_and_wait(delete, read, ["a", "b"], 1.0)
-            # Because the deadline was computed before slow_delete advanced the
-            # clock by 4s (> 1.0s), the first poll immediately times out
-            # without sleeping.
-            self.assertEqual(self.clock.sleeps, [])
+            # The deletes took 4s, longer than the 1s timeout, yet the
+            # objects are still polled for 1s after them.
+            self.assertEqual(self.clock.sleeps, [0.5, 0.5, 0.5])
 
         with self.subTest("does not wait for objects that returned 404"):
             delete = mock.Mock(
@@ -776,6 +914,7 @@ class ClientFunctionsTest(unittest.TestCase):
             )
 
         with self.subTest("all deletes returned 404 skips polling"):
+            self.clock.sleeps.clear()
             delete = mock.Mock(
                 side_effect=_api_error(404, "NotFound", "not found")
             )
@@ -825,6 +964,46 @@ class ClientFunctionsTest(unittest.TestCase):
                 + ", ".join(names[:10])
                 + " and 69 others",
             )
+
+    def test_delete_and_wait_makes_calls_concurrently(self) -> None:
+        names = [f"job-{i}" for i in range(4)]
+        barrier = threading.Barrier(len(names), timeout=5)
+
+        def together(**_kwargs: Any) -> Any:
+            barrier.wait()
+            return _FakeResponse({})
+
+        def gone_together(**_kwargs: Any) -> Any:
+            barrier.wait()
+            raise _api_error(404, "NotFound", "not found")
+
+        delete = mock.Mock(side_effect=together)
+        read = mock.Mock(side_effect=gone_together)
+
+        k8s_client._delete_and_wait(delete, read, names, 1.0)
+
+        self.assertEqual(delete.call_count, 4)
+        self.assertEqual(read.call_count, 4)
+
+    def test_map_concurrently(self) -> None:
+        with self.subTest("keeps item order"):
+            self.assertEqual(
+                k8s_client.map_concurrently(lambda x: x * 2, [3, 1, 2]),
+                [6, 2, 4],
+            )
+
+        with self.subTest("no items"):
+            self.assertEqual(k8s_client.map_concurrently(str, []), [])
+
+        with self.subTest("raises the error of the first failed item"):
+
+            def fail_on_odd(item: int) -> int:
+                if item % 2:
+                    raise KubeError(f"failed {item}")
+                return item
+
+            with self.assertRaisesRegex(KubeError, "^failed 1$"):
+                k8s_client.map_concurrently(fail_on_odd, [0, 1, 2, 3])
 
     def test_secrets(self) -> None:
         self.sdk.core.list_namespaced_secret.return_value = _FakeResponse(

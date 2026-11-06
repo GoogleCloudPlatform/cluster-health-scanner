@@ -20,6 +20,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from typing import Any
 import unittest
 import yaml
@@ -33,7 +34,6 @@ from chs.constants import (
 )
 from chs.schedulers.base import TpuSliceSummary
 from chs.schedulers.kubernetes import (
-    _APPLY_ATTEMPTS,
     KubernetesScheduler,
     SliceSpec,
     TpuSliceData,
@@ -45,7 +45,6 @@ from chs.schedulers.kubernetes import (
     _record_subslice_node,
     _requests_accelerator,
     _slice_name,
-    _with_retries,
 )
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import kubernetes
@@ -120,6 +119,23 @@ def _gpu_resource_claim(
 def _statuses(states: dict[str, JobState]) -> dict[str, str]:
     """Returns the status of each job state."""
     return {job_id: state.status for job_id, state in states.items()}
+
+
+_LIST_ALL_NODES = Call("list_nodes", {"resource_version": "0"})
+_LIST_CHS_JOBS = Call("list_jobs", {"namespace": CHS_NAMESPACE})
+
+
+def _list_pool_nodes(*pools):
+    """Returns the node LIST call that selects the nodes of the pools."""
+    return Call(
+        "list_nodes",
+        {
+            "label_selector": (
+                f"cloud.google.com/gke-nodepool in ({','.join(pools)})"
+            ),
+            "resource_version": "0",
+        },
+    )
 
 
 _LIST_CHS_SLICES = Call(
@@ -749,6 +765,7 @@ class TestKubernetesScheduler(unittest.TestCase):
                             "spec.nodeName=node1,"
                             "status.phase!=Succeeded,status.phase!=Failed"
                         ),
+                        "resource_version": "0",
                     },
                 )
             ],
@@ -856,17 +873,50 @@ class TestKubernetesScheduler(unittest.TestCase):
                 )
                 self.assertTrue(scheduler._is_node_busy("node1"))
 
-    @mock.patch("time.sleep", return_value=None)
-    def test_is_node_busy_error_retries(self, mock_sleep, mock_logger):
-        """Test _is_node_busy raises exception after API retries fail."""
+    def test_is_node_busy_error(self, mock_logger):
+        """Test _is_node_busy raises once k8s_client gives up on the call."""
         scheduler = KubernetesScheduler()
         self.kube.fail_always(
             "list_pods", k8s_client.KubeError("boom", status=500)
         )
-        with self.assertRaises(ChsSchedulerException):
+        with self.assertRaisesRegex(
+            ChsSchedulerException,
+            "^Failed to communicate with API server for node node1. "
+            "Error: boom$",
+        ):
             scheduler._is_node_busy("node1")
-        self.assertEqual(len(self.kube.calls_to("list_pods")), 3)
-        self.assertEqual(mock_sleep.call_count, 2)
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 1)
+
+    def test_get_busy_nodes_checks_thousands_of_nodes(self, mock_logger):
+        """Test thousands of nodes are checked, each with one pod list."""
+        scheduler = KubernetesScheduler()
+        nodes = [f"node{i}" for i in range(2000)]
+
+        self.assertEqual(scheduler._get_busy_nodes(nodes), set())
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 2000)
+
+    def test_get_busy_nodes_rejects_more_than_the_node_limit(self, mock_logger):
+        """Test more than 4500 nodes are rejected before any API call."""
+        scheduler = KubernetesScheduler()
+        nodes = [f"node{i}" for i in range(4501)]
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "Targeting 4501 nodes exceeds .* 4500"
+        ):
+            scheduler._get_busy_nodes(nodes)
+        self.assertEqual(self.kube.calls_to("list_pods"), [])
+
+    def test_get_busy_nodes_fails_if_a_node_cannot_be_checked(
+        self, mock_logger
+    ):
+        """Test a node check that k8s_client gave up on fails the check."""
+        scheduler = KubernetesScheduler()
+        self.kube.fail_next(
+            "list_pods", k8s_client.KubeError("Too Many Requests", status=429)
+        )
+
+        with self.assertRaisesRegex(ChsSchedulerException, "Too Many Requests"):
+            scheduler._get_busy_nodes(["node1", "node2"])
 
     @mock.patch("chs.schedulers.kubernetes.KubernetesScheduler._is_node_busy")
     def test_get_busy_nodes(self, mock_is_node_busy, mock_logger):
@@ -1289,9 +1339,13 @@ class TestKubernetesScheduler(unittest.TestCase):
         )
 
     def test_get_not_ready_nodes_with_nodepools(self, mock_logger):
-        """Test _get_not_ready_nodes sends nodepools filter to API."""
+        """Test _get_not_ready_nodes keeps only the nodes of the nodepools."""
         scheduler = KubernetesScheduler(nodepools="pool1,pool2")
-        for name, pool in (("node1", "pool1"), ("node2", "pool2")):
+        for name, pool in (
+            ("node1", "pool1"),
+            ("node2", "pool2"),
+            ("node3", "pool3"),
+        ):
             self.kube.add_object(
                 "",
                 "nodes",
@@ -1304,21 +1358,8 @@ class TestKubernetesScheduler(unittest.TestCase):
                 },
             )
 
-        scheduler._get_not_ready_nodes()
-
-        self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "list_nodes",
-                    {
-                        "label_selector": (
-                            "cloud.google.com/gke-nodepool in (pool1,pool2)"
-                        )
-                    },
-                )
-            ],
-        )
+        self.assertEqual(scheduler._get_not_ready_nodes(), {"node1", "node2"})
+        self.assertEqual(self.kube.calls, [_list_pool_nodes("pool1", "pool2")])
 
     def test_get_not_ready_nodes_list_kind_null_items(self, mock_logger):
         """Test empty node list in _get_not_ready_nodes."""
@@ -1329,7 +1370,7 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(not_ready, set())
 
     def test_fetch_raw_node_resources(self, mock_logger):
-        """Test _fetch_raw_node_resources lists non-system nodes."""
+        """Test _fetch_raw_node_resources keeps non-system nodes."""
         scheduler = KubernetesScheduler()
         stored = self.kube.add_object(
             "",
@@ -1339,19 +1380,22 @@ class TestKubernetesScheduler(unittest.TestCase):
                 "status": {"allocatable": {"nvidia.com/gpu": "8"}},
             },
         )
+        self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {
+                    "name": "sys-node",
+                    "labels": {"cloud.google.com/gke-nodepool": "system"},
+                },
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        )
 
         resources = scheduler._fetch_raw_node_resources()
 
         self.assertEqual(resources, [stored])
-        self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "list_nodes",
-                    {"label_selector": "cloud.google.com/gke-nodepool!=system"},
-                )
-            ],
-        )
+        self.assertEqual(self.kube.calls, [_LIST_ALL_NODES])
 
     def test_fetch_raw_node_resources_missing_nodepool(self, mock_logger):
         """Test _fetch_raw_node_resources raises error for missing nodepool."""
@@ -2061,7 +2105,7 @@ class TestKubernetesScheduler(unittest.TestCase):
             [_LIST_RUN_A_SLICES, _LIST_RUN_A_SLICES],
         )
 
-    def test_is_own_slice_is_false_if_slices_cannot_be_listed(
+    def test_is_own_slice_is_unknown_if_slices_cannot_be_listed(
         self, mock_logger
     ):
         self.kube.add_object(
@@ -2071,7 +2115,7 @@ class TestKubernetesScheduler(unittest.TestCase):
         scheduler = KubernetesScheduler()
         scheduler._run_id = "run-a"
 
-        self.assertFalse(scheduler._is_own_slice("chs-slice-mine"))
+        self.assertIsNone(scheduler._is_own_slice("chs-slice-mine"))
         mock_logger.warning.assert_called_once()
 
     @mock.patch(
@@ -2332,19 +2376,7 @@ class TestKubernetesScheduler(unittest.TestCase):
         nodes = scheduler.resolve_raw_nodes()
 
         self.assertEqual(nodes, ["node-1", "node-2"])
-        self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "list_nodes",
-                    {
-                        "label_selector": (
-                            "cloud.google.com/gke-nodepool in (pool-1)"
-                        )
-                    },
-                )
-            ],
-        )
+        self.assertEqual(self.kube.calls, [_list_pool_nodes("pool-1")])
 
     def test_resolve_raw_nodes_precedence(self, mock_logger):
         """Test nodes arg overrides nodepools, and executes validation."""
@@ -2357,8 +2389,25 @@ class TestKubernetesScheduler(unittest.TestCase):
         self.assertEqual(nodes, ["node-1"])
         self.assertEqual(
             self.kube.calls,
-            [Call("list_nodes", {})],
+            [_LIST_ALL_NODES],
         )
+
+    def test_targeted_nodes_are_resolved_with_one_node_list(self, mock_logger):
+        """Test the existence check and node resources share a node list."""
+        scheduler = KubernetesScheduler(nodes="node-1")
+        node = self.kube.add_object(
+            "",
+            "nodes",
+            {
+                "metadata": {"name": "node-1"},
+                "status": {"allocatable": {"nvidia.com/gpu": "8"}},
+            },
+        )
+
+        self.assertEqual(scheduler.resolve_raw_nodes(), ["node-1"])
+        self.assertEqual(scheduler._fetch_raw_node_resources(), [node])
+        self.assertEqual(scheduler.find_runs_targeting_nodes(["node-1"]), {})
+        self.assertEqual(self.kube.calls_to("list_nodes"), [_LIST_ALL_NODES])
 
     def test_resolve_raw_nodes_invalid(self, mock_logger):
         """Test resolve_raw_nodes errors if provided nodes don't exist."""
@@ -3137,6 +3186,40 @@ ramble:
         )
         self.assertEqual(topology["block2"]["default-subblock"], ["node2"])
 
+    @mock.patch(
+        "chs.utils.gcp.query_gce_instances_info",
+        side_effect=ChsSchedulerException("Failed to query GCE API"),
+    )
+    def test_get_topology_queries_gce_once_even_if_it_fails(
+        self, mock_query_info, mock_logger
+    ):
+        """Test unlabeled nodes share one GCE lookup, even a failed one."""
+        names = [f"node{i}" for i in range(3)]
+        scheduler = KubernetesScheduler(nodes=",".join(names))
+        self.mock_adc.return_value = (mock.Mock(), "adc-project")
+        for name in names:
+            self.kube.add_object(
+                "",
+                "nodes",
+                {
+                    "metadata": {"name": name, "labels": {}},
+                    "status": {
+                        "allocatable": {"nvidia.com/gpu": "8"},
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                },
+            )
+
+        with mock.patch.object(
+            scheduler, "get_nodes_under_test", return_value=names
+        ):
+            topology = scheduler.get_topology()
+
+        self.assertEqual(
+            topology, {"default-block": {"default-subblock": names}}
+        )
+        mock_query_info.assert_called_once_with("adc-project", names)
+
     @mock.patch("chs.utils.gcp.query_gce_instances_info")
     def test_get_topology_falls_back_to_gce_physical_host_topology(
         self, mock_query_info, mock_logger
@@ -3728,15 +3811,7 @@ ramble:
                 scheduler.node_to_instance_id,
                 {"node1": "12345", "node2": "node2"},
             )
-        self.assertEqual(
-            self.kube.calls,
-            [
-                Call(
-                    "list_nodes",
-                    {"label_selector": "cloud.google.com/gke-nodepool!=system"},
-                )
-            ],
-        )
+        self.assertEqual(self.kube.calls, [_LIST_ALL_NODES])
 
     @mock.patch(
         "builtins.open",
@@ -4885,9 +4960,7 @@ ramble:
         ):
             scheduler._provision_dynamic_slices({"dynpool": ["d1"]})
         mock_wait.assert_not_called()
-        self.assertEqual(
-            len(self.kube.calls_to("create_custom_object")), _APPLY_ATTEMPTS
-        )
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 1)
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._group_nodes_by_slice",
@@ -4979,56 +5052,6 @@ ramble:
         self.assertEqual(scheduler._resolved_nodes, [])
         self.assertEqual(scheduler._subslice_nodes, set())
 
-    @mock.patch("time.sleep")
-    def test_with_retries_retries_throttling_and_server_errors(
-        self, mock_sleep, mock_logger
-    ):
-        call = mock.Mock(
-            side_effect=[
-                k8s_client.KubeError("Too Many Requests", status=429),
-                k8s_client.KubeError("Internal Server Error", status=500),
-                k8s_client.KubeError("connection reset"),
-                None,
-            ]
-        )
-
-        _with_retries(call, "Slice 'chs-slice-d1'")
-
-        self.assertEqual(call.call_count, 4)
-        self.assertEqual(
-            [c.args[0] for c in mock_sleep.call_args_list], [1, 2, 4]
-        )
-
-    @mock.patch("time.sleep")
-    def test_with_retries_does_not_retry_client_errors(
-        self, mock_sleep, mock_logger
-    ):
-        for status in (409, 403, 422):
-            with self.subTest(status=status):
-                error = k8s_client.KubeError("rejected", status=status)
-                call = mock.Mock(side_effect=error)
-
-                with self.assertRaises(k8s_client.KubeError) as cm:
-                    _with_retries(call, "Slice 'chs-slice-d1'")
-
-                self.assertIs(cm.exception, error)
-                call.assert_called_once_with()
-        mock_sleep.assert_not_called()
-
-    @mock.patch("time.sleep")
-    def test_with_retries_gives_up_after_the_last_attempt(
-        self, mock_sleep, mock_logger
-    ):
-        error = k8s_client.KubeError("Service Unavailable", status=503)
-        call = mock.Mock(side_effect=error)
-
-        with self.assertRaises(k8s_client.KubeError) as cm:
-            _with_retries(call, "Slice 'chs-slice-d1'")
-
-        self.assertIs(cm.exception, error)
-        self.assertEqual(call.call_count, _APPLY_ATTEMPTS)
-        self.assertEqual(mock_sleep.call_count, _APPLY_ATTEMPTS - 1)
-
     def _slice_manifests(self, *keys: str) -> dict[str, dict]:
         return {
             key: {
@@ -5039,54 +5062,38 @@ ramble:
             for key in keys
         }
 
-    @mock.patch("time.sleep")
-    def test_create_slice_retries_throttled_creates(
-        self, mock_sleep, mock_logger
-    ):
-        self.kube.fail_next(
-            "create_custom_object",
-            k8s_client.KubeError("Too Many Requests", status=429),
-        )
+    def test_create_slice(self, mock_logger):
         manifest = self._slice_manifests("d1")["d1"]
 
         KubernetesScheduler()._create_slice(manifest, "d1")
 
-        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 2)
-        mock_sleep.assert_called_once_with(1)
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 1)
         self.assertEqual(
             self.kube.stored_names("accelerator.gke.io", "slices"),
             ["chs-slice-d1"],
         )
 
-    @mock.patch("time.sleep")
     def test_create_slice_accepts_a_conflict_with_its_own_retried_create(
-        self, mock_sleep, mock_logger
+        self, mock_logger
     ):
+        # A create that k8s_client retried after the first attempt's
+        # response was lost gets 409 on the Slice this run created.
         _add_chs_slice(self.kube, "d1", "run-a", ["sub-d1"])
-        self.kube.fail_next(
-            "create_custom_object",
-            k8s_client.KubeError("connection reset", status=500),
-        )
         scheduler = KubernetesScheduler()
         scheduler._run_id = "run-a"
 
         scheduler._create_slice(self._slice_manifests("d1")["d1"], "d1")
 
-        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 2)
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 1)
         self.assertEqual(
             self.kube.calls_to("list_custom_objects"), [_LIST_RUN_A_SLICES]
         )
         mock_logger.warning.assert_not_called()
 
-    @mock.patch("time.sleep")
     def test_create_slice_rejects_a_conflict_with_another_runs_slice(
-        self, mock_sleep, mock_logger
+        self, mock_logger
     ):
         _add_chs_slice(self.kube, "d1", "run-b", ["sub-d1"])
-        self.kube.fail_next(
-            "create_custom_object",
-            k8s_client.KubeError("connection reset", status=500),
-        )
         scheduler = KubernetesScheduler()
         scheduler._run_id = "run-a"
 
@@ -5097,11 +5104,28 @@ ramble:
         ):
             scheduler._create_slice(self._slice_manifests("d1")["d1"], "d1")
 
-        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 2)
+        self.assertEqual(len(self.kube.calls_to("create_custom_object")), 1)
         stored = self.kube.objects[
             ("accelerator.gke.io", "slices", None, "chs-slice-d1")
         ]
         self.assertEqual(stored["metadata"]["labels"][_INSTANCE], "run-b")
+
+    def test_create_slice_does_not_blame_another_run_if_it_cannot_check(
+        self, mock_logger
+    ):
+        # 409 on a retried create, but the Slices can't be listed: the Slice
+        # may be this run's, so the error must not name another run.
+        _add_chs_slice(self.kube, "d1", "run-a", ["sub-d1"])
+        self.kube.fail_next("list_custom_objects", k8s_client.KubeError("boom"))
+        scheduler = KubernetesScheduler()
+        scheduler._run_id = "run-a"
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException,
+            "^Dynamic slice 'chs-slice-d1' already exists, and CHS could not "
+            "list the Slices to check whether this run created it\\.",
+        ):
+            scheduler._create_slice(self._slice_manifests("d1")["d1"], "d1")
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler._existing_slice_states",
@@ -5111,15 +5135,10 @@ ramble:
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
         return_value=(["d1"], []),
     )
-    @mock.patch("time.sleep")
     def test_provision_dynamic_slices_waits_on_its_own_retried_slice(
-        self, mock_sleep, mock_wait, mock_existing_states, mock_logger
+        self, mock_wait, mock_existing_states, mock_logger
     ):
         _add_chs_slice(self.kube, "d1", "run-a", ["sub-d1"])
-        self.kube.fail_next(
-            "create_custom_object",
-            k8s_client.KubeError("connection reset", status=500),
-        )
         scheduler = self._subslice_scheduler("d1")
 
         success, failed = scheduler._provision_dynamic_slices({"d1": ["d1"]})
@@ -5137,15 +5156,10 @@ ramble:
         "chs.schedulers.kubernetes.KubernetesScheduler._wait_for_slices_active",
         return_value=([], []),
     )
-    @mock.patch("time.sleep")
     def test_provision_dynamic_slices_reports_conflicts_with_other_runs(
-        self, mock_sleep, mock_wait, mock_existing_states, mock_logger
+        self, mock_wait, mock_existing_states, mock_logger
     ):
         _add_chs_slice(self.kube, "d1", "run-b", ["sub-d1"])
-        self.kube.fail_next(
-            "create_custom_object",
-            k8s_client.KubeError("connection reset", status=500),
-        )
         scheduler = self._subslice_scheduler("d1")
 
         success, failed = scheduler._provision_dynamic_slices({"d1": ["d1"]})
@@ -5882,10 +5896,7 @@ ramble:
                 self.assertEqual(statuses, {"job1": "DEADLINE"})
                 self.assertEqual(kube.calls_to("patch_job"), [])
 
-    @mock.patch("time.sleep", return_value=None)
-    def test_poll_jobs_starts_jobs_if_node_check_fails(
-        self, mock_sleep, mock_logger
-    ):
+    def test_poll_jobs_starts_jobs_if_node_check_fails(self, mock_logger):
         """Test a node check that fails after retries never blocks a test."""
         self.kube.add_object(
             "batch",
@@ -5893,8 +5904,9 @@ ramble:
             _job_object("job1", ["node1"]),
             namespace=CHS_NAMESPACE,
         )
-        error = k8s_client.KubeError("Too Many Requests", status=429)
-        self.kube.fail_next("list_pods", error, error, error)
+        self.kube.fail_next(
+            "list_pods", k8s_client.KubeError("Too Many Requests", status=429)
+        )
         scheduler = KubernetesScheduler()
 
         statuses = _statuses(scheduler.poll_jobs(["job1"]))
@@ -5904,39 +5916,13 @@ ramble:
             [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
             ["job1"],
         )
-        self.assertEqual(len(self.kube.calls_to("list_pods")), 3)
-        self.assertEqual(mock_sleep.call_count, 2)
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 1)
         mock_logger.warning.assert_not_called()
         self.assertIn(
             "Failed to check node '%s' for other workloads, so it is "
             "treated as free. Error: %s",
             [call.args[0] for call in mock_logger.debug.call_args_list],
         )
-
-    @mock.patch("time.sleep", return_value=None)
-    def test_poll_jobs_retries_failed_node_check(self, mock_sleep, mock_logger):
-        """Test a failed node check is retried before the Job starts."""
-        self.kube.add_object(
-            "batch",
-            "jobs",
-            _job_object("job1", ["node1"]),
-            namespace=CHS_NAMESPACE,
-        )
-        self.kube.add_object(
-            "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
-        )
-        self.kube.fail_next(
-            "list_pods",
-            k8s_client.KubeError("Too Many Requests", status=429),
-        )
-        scheduler = KubernetesScheduler()
-
-        statuses = _statuses(scheduler.poll_jobs(["job1"]))
-
-        self.assertEqual(statuses, {"job1": "DEADLINE"})
-        self.assertEqual(self.kube.calls_to("patch_job"), [])
-        self.assertEqual(len(self.kube.calls_to("list_pods")), 2)
-        mock_sleep.assert_called_once()
 
     def test_poll_jobs_checks_nodes_only_when_starting_jobs(self, mock_logger):
         """Test polls that start nothing make no node checks."""
@@ -6005,9 +5991,8 @@ ramble:
         self.assertEqual(scheduler.get_start_failures(["job1"]), {})
         mock_logger.warning.assert_not_called()
 
-    @mock.patch("time.sleep", return_value=None)
     def test_get_start_failures_unschedulable_waits_if_node_check_fails(
-        self, mock_sleep, mock_logger
+        self, mock_logger
     ):
         """Test a failed node check falls back to the normal timeout."""
         self.kube.add_object(
@@ -6019,12 +6004,15 @@ ramble:
         self.kube.add_object(
             "", "pods", _accelerator_pod("train", "node1"), namespace="team-a"
         )
-        error = k8s_client.KubeError("Too Many Requests", status=429)
-        self.kube.fail_next("list_pods", None, None, error, error, error)
+        self.kube.fail_next(
+            "list_pods",
+            None,
+            None,
+            k8s_client.KubeError("Too Many Requests", status=429),
+        )
         scheduler = KubernetesScheduler()
 
         self.assertEqual(scheduler.get_start_failures(["job1"]), {})
-        self.assertEqual(mock_sleep.call_count, 2)
         mock_logger.warning.assert_not_called()
         self.assertIn(
             "Failed to check node '%s' for other workloads, so it is "
@@ -6105,6 +6093,71 @@ ramble:
             [
                 "spec.nodeName=node3,status.phase!=Succeeded,status.phase!=Failed"
             ],
+        )
+
+    def test_nodes_without_job_pods_uses_a_bounded_selector(self, mock_logger):
+        """Test the pod list selector does not grow with the Job count."""
+        for job, node in (("job1", "node1"), ("other", "node2")):
+            self.kube.add_object(
+                "",
+                "pods",
+                _accelerator_pod(
+                    f"{job}-0",
+                    node,
+                    {"batch.kubernetes.io/job-name": job, **_WORKER_LABELS},
+                ),
+                namespace=CHS_NAMESPACE,
+            )
+        waiting = {f"job{i}": {"node1", "node2"} for i in range(1, 3001)}
+        scheduler = KubernetesScheduler()
+
+        free = scheduler._nodes_without_job_pods(waiting)
+
+        self.assertEqual(free["job1"], {"node2"})
+        self.assertEqual(free["job2"], {"node1", "node2"})
+        self.assertNotIn("other", free)
+        self.assertEqual(
+            self.kube.calls_to("list_pods"),
+            [
+                Call(
+                    "list_pods",
+                    {
+                        "namespace": CHS_NAMESPACE,
+                        "label_selector": (
+                            "app.kubernetes.io/managed-by=chs,"
+                            "app.kubernetes.io/component=worker"
+                        ),
+                        "field_selector": (
+                            "status.phase!=Succeeded,status.phase!=Failed"
+                        ),
+                    },
+                )
+            ],
+        )
+
+    def test_cancel_jobs_deletes_ssh_secrets_concurrently(self, mock_logger):
+        """Test the SSH Secrets of many Jobs are deleted in parallel."""
+        names = [f"job{i}" for i in range(4)]
+        for name in names:
+            self.kube.add_object(
+                "",
+                "secrets",
+                {"metadata": {"name": f"{name}-ssh"}},
+                namespace=CHS_NAMESPACE,
+            )
+        barrier = threading.Barrier(len(names), timeout=5)
+        delete_secret = k8s_client.delete_secret
+
+        def together(**kwargs):
+            barrier.wait()
+            return delete_secret(**kwargs)
+
+        scheduler = KubernetesScheduler()
+        with mock.patch.object(k8s_client, "delete_secret", together):
+            scheduler.cancel_jobs(names)
+
+        self.assertEqual(
+            self.kube.stored_names("", "secrets", CHS_NAMESPACE), []
         )
 
     def test_poll_jobs_keeps_failure_of_job_that_waited_briefly(
@@ -6257,37 +6310,8 @@ ramble:
         ):
             scheduler.submit_experiments(experiment_dirs)
 
-    @mock.patch("time.sleep")
-    def test_submit_experiments_retries_transient_errors(
-        self, mock_sleep, mock_logger
-    ):
-        """Test throttled or dropped creates are retried with backoff."""
-        experiment_dir = self._write_experiment(
-            "exp1", _job_manifest("job1", "node1")
-        )
-        self.kube.fail_next(
-            "apply_job",
-            k8s_client.KubeError("Too Many Requests", status=429),
-            k8s_client.KubeError("Kubernetes API request failed: reset"),
-        )
-        scheduler = KubernetesScheduler()
-
-        scheduler.submit_experiments([experiment_dir])
-
-        self.assertEqual(len(self.kube.calls_to("apply_job")), 3)
-        self.assertEqual(
-            [call.args[0] for call in mock_sleep.call_args_list], [1, 2]
-        )
-        self.assertIn(
-            ("batch", "jobs", CHS_NAMESPACE, "job1"),
-            self.kube.objects,
-        )
-
-    @mock.patch("time.sleep")
-    def test_submit_experiments_gives_up_after_repeated_errors(
-        self, mock_sleep, mock_logger
-    ):
-        """Test a create that keeps failing raises after five tries."""
+    def test_submit_experiments_fails_if_a_create_fails(self, mock_logger):
+        """Test a create that k8s_client gave up on fails the submission."""
         experiment_dir = self._write_experiment(
             "exp1", _job_manifest("job1", "node1")
         )
@@ -6302,10 +6326,22 @@ ramble:
         ):
             scheduler.submit_experiments([experiment_dir])
 
-        self.assertEqual(len(self.kube.calls_to("apply_job")), 5)
-        self.assertEqual(
-            [call.args[0] for call in mock_sleep.call_args_list], [1, 2, 4, 8]
-        )
+        self.assertEqual(len(self.kube.calls_to("apply_job")), 1)
+
+    def test_submit_experiments_rejects_duplicate_job_names(self, mock_logger):
+        """Test experiments sharing a Job name fail before any API call."""
+        experiment_dirs = [
+            self._write_experiment("exp1", _job_manifest("job1", "node1")),
+            self._write_experiment("exp2", _job_manifest("job1", "node2")),
+            self._write_experiment("exp3", _job_manifest("job3", "node3")),
+        ]
+        scheduler = KubernetesScheduler()
+
+        with self.assertRaisesRegex(
+            ChsSchedulerException, "^Experiments share the Job names job1$"
+        ):
+            scheduler.submit_experiments(experiment_dirs)
+        self.assertEqual(self.kube.calls, [])
 
     def test_submit_experiments_empty(self, mock_logger):
         """Test submitting nothing makes no API calls."""

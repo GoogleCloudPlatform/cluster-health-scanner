@@ -749,6 +749,7 @@ class TestCli(unittest.TestCase):
                     mock_default_dir,
                     case.expected_return.workspace_name,
                     run_id=f"mockcluster-{case.expected_return.suite}-mockhash",
+                    debug=True,
                 )
                 self.mock_rm_instance.create_workspace.assert_called_once()
                 self.mock_rm_instance.configure_workspace.assert_called_once()
@@ -779,6 +780,7 @@ class TestCli(unittest.TestCase):
                 mock_analyze_action.assert_called_once_with(
                     self.mock_app_data,
                     f"mockcluster-{case.expected_return.suite}-mockhash",
+                    verbose=True,
                 )
                 mock_manager.reset_mock()
 
@@ -1511,6 +1513,51 @@ class TestCli(unittest.TestCase):
         self.assertIs(ctx.exception.__cause__, err)
         self.mock_rm_instance.create_workspace.assert_not_called()
 
+    def test_run_action_turns_on_ramble_debug_only_when_verbose(self):
+        """Test run_action passes `chs -v` to RambleManager as debug."""
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, **kwargs: tests
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        for verbose in (False, True):
+            with self.subTest(verbose=verbose):
+                self.mock_rm_cls.reset_mock()
+
+                cli.run_action(
+                    suite="custom",
+                    scheduler_obj=mock_scheduler,
+                    tests=[{"name": "tpu-info"}],
+                    workspace_name="test_ws",
+                    workspaces_base_dir="/tmp/test_ws",
+                    machine_type="tpu7x-standard-4t",
+                    verbose=verbose,
+                )
+
+                self.mock_rm_cls.assert_called_once_with(
+                    "/tmp/test_ws", "test_ws", run_id=None, debug=verbose
+                )
+
+    def test_analyze_action_turns_on_ramble_debug_only_when_verbose(self):
+        """Test _analyze_action passes `chs -v` to RambleManager as debug."""
+        self.mock_app_data.get_workspaces_dir.return_value = "/tmp/workspaces"
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = "test_ws"
+        for verbose in (False, True):
+            with self.subTest(verbose=verbose):
+                self.mock_rm_cls.reset_mock()
+
+                # The mocked workspace is not on disk, so analysis stops early.
+                with self.assertRaises(exceptions.WorkspaceNotFoundException):
+                    cli._analyze_action(
+                        self.mock_app_data, "run1", verbose=verbose
+                    )
+
+                self.mock_rm_cls.assert_called_once_with(
+                    "/tmp/workspaces", "test_ws", run_id="run1", debug=verbose
+                )
+
     def test_format_subprocess_error_helper(self):
         """Test format_subprocess_error formats command & output."""
         err_with_stderr = subprocess.CalledProcessError(
@@ -1695,9 +1742,10 @@ class TestCli(unittest.TestCase):
             mock_default_dir,
             expected_workspace_name,
             run_id=expected_run_id,
+            debug=True,
         )
         mock_analyze_action.assert_called_once_with(
-            self.mock_app_data, expected_run_id
+            self.mock_app_data, expected_run_id, verbose=True
         )
 
     @mock.patch("chs.cli._analyze_action")
@@ -2531,7 +2579,9 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance.execute_experiments.side_effect = (
             lambda **kwargs: calls.append("submit") or ["job1"]
         )
-        mock_analyze_action.side_effect = lambda *args: calls.append("analyze")
+        mock_analyze_action.side_effect = lambda *args, **kwargs: calls.append(
+            "analyze"
+        )
 
         result = self.runner.invoke(
             cli.cli,
@@ -2547,7 +2597,9 @@ class TestCli(unittest.TestCase):
             ],
             run_id,
         )
-        mock_analyze_action.assert_called_once_with(self.mock_app_data, run_id)
+        mock_analyze_action.assert_called_once_with(
+            self.mock_app_data, run_id, verbose=False
+        )
 
     def test_run_command_failure_tears_down_only_its_own_run(self):
         """Test a failed submission tears down nothing but its own run."""

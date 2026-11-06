@@ -15,9 +15,13 @@
 """Kubernetes API access for CHS, built on the kubernetes Python SDK."""
 
 import atexit
+from concurrent.futures import ThreadPoolExecutor
 import functools
+import itertools
 import json
+import logging
 import os
+import random
 
 # Imported before lazy SDK load so socket outlives _sdk at shutdown.
 import socket  # noqa: F401
@@ -30,7 +34,19 @@ import urllib.request
 from chs.exceptions import ChsException
 from chs.utils.formatting import format_names
 
+logger = logging.getLogger(__name__)
+
 _REQUEST_TIMEOUT_SECONDS = 120
+# Throttled (429), failed (5xx) and dropped requests are retried until this
+# much time has passed since the first attempt, waiting for the server's
+# Retry-After if it sends one, else for a random backoff (full jitter) so
+# that concurrent callers spread out.
+_RETRY_BUDGET_SECONDS = 120
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRY_BASE_DELAY_SECONDS = 0.5
+_RETRY_MAX_DELAY_SECONDS = 10
+_RETRY_AFTER_MAX_SECONDS = 30
+_MAX_CONCURRENCY = 32
 _DELETE_POLL_INTERVAL_SECONDS = 0.5
 # Objects still pending after a delete timeout that the error names; the
 # rest are counted, so a large run doesn't print every object.
@@ -43,9 +59,15 @@ _INCLUSTER_NAMESPACE_PATH = (
 class KubeError(ChsException):
     """Raised when a Kubernetes API request fails."""
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after
 
 
 def has_kubeconfig() -> bool:
@@ -145,21 +167,67 @@ def _close_response(response: Any) -> None:
     response.release_conn()
 
 
-def _open(method: Callable[..., Any], **query: Any) -> Any:
-    """Calls an SDK method with _preload_content=False; caller must close."""
+def _retry_after(error: Any) -> float | None:
+    """Returns the error's Retry-After in seconds, if it has a valid one."""
+    try:
+        seconds = float((error.headers or {})["Retry-After"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not seconds > 0:
+        return None
+    return min(seconds, _RETRY_AFTER_MAX_SECONDS)
+
+
+def _send(method: Callable[..., Any], query: dict) -> Any:
+    """Makes one request with _preload_content=False; caller must close."""
     sdk = _sdk()
     query.setdefault("_request_timeout", _REQUEST_TIMEOUT_SECONDS)
     try:
         return method(_preload_content=False, **query)
     except sdk.api_error as e:
-        raise KubeError(_error_message(e), status=e.status) from e
+        raise KubeError(
+            _error_message(e), status=e.status, retry_after=_retry_after(e)
+        ) from e
     except sdk.transport_error as e:
         raise KubeError(f"Kubernetes API request failed: {e}") from e
 
 
-def _request(method: Callable[..., Any], **query: Any) -> Any:
-    """Calls an SDK method and reads the full response body."""
-    response = _open(method, **query)
+def _with_retries(call: Callable[[], Any]) -> Any:
+    """Runs call, retrying throttling, server and transport errors.
+
+    Raises:
+      KubeError: The last error, once it is not retryable or the retry
+        budget is spent.
+    """
+    deadline = time.monotonic() + _RETRY_BUDGET_SECONDS
+    for attempt in itertools.count():
+        try:
+            return call()
+        except KubeError as e:
+            if e.status is not None and e.status not in _RETRYABLE_STATUSES:
+                raise
+            delay = e.retry_after
+            if delay is None:
+                delay = random.uniform(
+                    0,
+                    min(
+                        _RETRY_MAX_DELAY_SECONDS,
+                        _RETRY_BASE_DELAY_SECONDS * 2**attempt,
+                    ),
+                )
+            if time.monotonic() + delay > deadline:
+                raise
+            logger.debug("Retrying in %.1f seconds. Error: %s", delay, e)
+            time.sleep(delay)
+
+
+def _open(method: Callable[..., Any], **query: Any) -> Any:
+    """Calls an SDK method with _preload_content=False; caller must close."""
+    return _with_retries(lambda: _send(method, query))
+
+
+def _read(response: Any) -> Any:
+    """Reads and closes the response."""
     try:
         _ = response.data
     except _sdk().transport_error as e:
@@ -167,6 +235,11 @@ def _request(method: Callable[..., Any], **query: Any) -> Any:
     finally:
         _close_response(response)
     return response
+
+
+def _request(method: Callable[..., Any], **query: Any) -> Any:
+    """Calls an SDK method and reads the full response body."""
+    return _with_retries(lambda: _read(_send(method, query)))
 
 
 def _get(method: Callable[..., Any], **query: Any) -> Any:
@@ -202,6 +275,32 @@ def _list(
     return body.get("items") or []
 
 
+def map_concurrently(fn: Callable[[Any], Any], items: list[Any]) -> list[Any]:
+    """Returns [fn(item) for item in items], making up to 32 calls at once.
+
+    Raises:
+      Exception: The first exception that fn raised, in item order.
+    """
+    if not items:
+        return []
+    executor = ThreadPoolExecutor(max_workers=min(len(items), _MAX_CONCURRENCY))
+    try:
+        return list(executor.map(fn, items))
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _exists_after(call: Callable[[], Any]) -> bool:
+    """Runs call and returns False if it failed with 404 Not Found."""
+    try:
+        call()
+    except KubeError as e:
+        if e.status != 404:
+            raise
+        return False
+    return True
+
+
 def _delete_and_wait(
     delete: Callable[..., Any],
     read: Callable[..., Any],
@@ -211,26 +310,22 @@ def _delete_and_wait(
 ) -> None:
     if not object_names:
         return
+    deleting = map_concurrently(
+        lambda name: _exists_after(
+            lambda: _request(delete, name=name, **query)
+        ),
+        object_names,
+    )
+    pending = [name for name, d in zip(object_names, deleting) if d]
+    # Deleting thousands of objects takes a while, so the wait starts after.
     deadline = time.monotonic() + wait_timeout_seconds
-    pending = []
-    for name in object_names:
-        try:
-            _request(delete, name=name, **query)
-            pending.append(name)
-        except KubeError as e:
-            if e.status != 404:
-                raise
 
     while True:
-        remaining = []
-        for name in pending:
-            try:
-                _request(read, name=name)
-                remaining.append(name)
-            except KubeError as e:
-                if e.status != 404:
-                    raise
-        pending = remaining
+        present = map_concurrently(
+            lambda name: _exists_after(lambda: _request(read, name=name)),
+            pending,
+        )
+        pending = [name for name, p in zip(pending, present) if p]
         if not pending:
             return
         if time.monotonic() > deadline:
@@ -269,26 +364,12 @@ _LOG_STREAM_MAX_RETRIES = 4
 _LOG_STREAM_INITIAL_BACKOFF = 1.0
 
 
-def _stream_once(
-    sdk: SimpleNamespace, name: str, namespace: str, out: BinaryIO, query: dict
-) -> None:
-    response = _open(
-        sdk.core.read_namespaced_pod_log,
-        name=name,
-        namespace=namespace,
-        **query,
-    )
-    try:
-        for chunk in response.stream():
-            out.write(chunk)
-    except sdk.transport_error as e:
-        raise KubeError(f"Failed to read log of pod {name}: {e}") from e
-    finally:
-        _close_response(response)
-
-
 def stream_pod_log(*, pod: dict, out: BinaryIO, **query: Any) -> None:
-    """Writes the log of the pod's default (or specified) container to out."""
+    """Writes the log of the pod's default (or specified) container to out.
+
+    Opening the stream is retried like any request. A stream that breaks
+    midway is reopened and written again from the start, a few times.
+    """
     metadata = pod["metadata"]
     if "container" not in query:
         query["container"] = (metadata.get("annotations") or {}).get(
@@ -302,14 +383,21 @@ def stream_pod_log(*, pod: dict, out: BinaryIO, **query: Any) -> None:
         if attempt > 0 and start_pos is not None:
             out.seek(start_pos)
             out.truncate()
+        response = _open(
+            sdk.core.read_namespaced_pod_log,
+            name=name,
+            namespace=namespace,
+            **query,
+        )
         try:
-            _stream_once(sdk, name, namespace, out, query)
+            for chunk in response.stream():
+                out.write(chunk)
             return
-        except KubeError as e:
-            if attempt == _LOG_STREAM_MAX_RETRIES or (
-                e.status is not None and e.status < 500 and e.status != 429
-            ):
-                raise
+        except sdk.transport_error as e:
+            if attempt == _LOG_STREAM_MAX_RETRIES:
+                raise KubeError(f"Failed to read log of pod {name}: {e}") from e
+        finally:
+            _close_response(response)
         time.sleep(_LOG_STREAM_INITIAL_BACKOFF * (2**attempt))
 
 

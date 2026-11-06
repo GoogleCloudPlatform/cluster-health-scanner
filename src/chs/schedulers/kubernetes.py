@@ -28,10 +28,9 @@ import shutil
 import tempfile
 import threading
 import yaml
-import random
 
 
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
@@ -77,8 +76,7 @@ from chs.constants import (
 )
 
 _BUSY_NODES_BATCH_SIZE = 32
-_BUSY_NODES_MAX_RETRIES = 3
-_MAX_NODES_UNDER_TEST = 500
+_MAX_NODES_UNDER_TEST = 4500
 
 _IMAGE_PULL_ERROR_GRACE_SECONDS = 60
 _IMAGE_PULL_ERROR_REASONS = frozenset(
@@ -98,6 +96,12 @@ _UNUSABLE_SLICE_STATES = _FAILED_SLICE_STATES | {
     "INCOMPLETE",
 }
 _CHS_SELECTOR = f"{MANAGED_BY_LABEL}={MANAGED_BY_CHS}"
+_WORKER_SELECTOR = f"{_CHS_SELECTOR},{COMPONENT_LABEL}={WORKER_COMPONENT}"
+_NODEPOOL_LABEL = "cloud.google.com/gke-nodepool"
+# Lists with resourceVersion "0" are served from the API server's watch
+# cache instead of etcd: they do not scan every object in the cluster (pods
+# are indexed by spec.nodeName), and may lag by well under a second.
+_FROM_WATCH_CACHE = {"resource_version": "0"}
 _TOPOLOGY_MODE_LABEL = "cloud.google.com/gke-accelerator-topology-mode"
 _TPU_ACCELERATOR_LABEL = "cloud.google.com/gke-tpu-accelerator"
 _TPU_TOPOLOGY_LABEL = "cloud.google.com/gke-tpu-topology"
@@ -127,7 +131,6 @@ _COMPUTE_DOMAIN_VERSION = "v1beta1"
 _GCE_PROVIDER_ID_RE = re.compile(r"^gce://([^/]+)/([^/]+)/([^/]+)$")
 
 _API_MAX_CONCURRENCY = 32
-_APPLY_ATTEMPTS = 5
 _CUSTOM_RESOURCE_PLURALS = {
     "ComputeDomain": "computedomains",
     "ResourceClaimTemplate": "resourceclaimtemplates",
@@ -189,32 +192,9 @@ def _apply_object(obj: dict) -> None:
         )
 
 
-def _is_retryable(error: k8s_client.KubeError) -> bool:
-    return error.status is None or error.status == 429 or error.status >= 500
-
-
-def _with_retries(call: Callable[[], None], description: str) -> None:
-    """Runs the Kubernetes API call, retrying throttling and server errors."""
-    for attempt in range(1, _APPLY_ATTEMPTS + 1):
-        try:
-            call()
-            return
-        except k8s_client.KubeError as e:
-            if attempt == _APPLY_ATTEMPTS or not _is_retryable(e):
-                raise
-            delay = 2 ** (attempt - 1)
-            logger.debug(
-                "Retrying %s in %d seconds. Error: %s", description, delay, e
-            )
-            time.sleep(delay)
-
-
 def _apply_objects(objects: list[dict]) -> None:
     for obj in objects:
-        _with_retries(
-            lambda: _apply_object(obj),
-            f"{obj['kind']} '{obj['metadata']['name']}'",
-        )
+        _apply_object(obj)
 
 
 def _has_started(pod: dict) -> bool:
@@ -460,6 +440,13 @@ def _holds_partitions(tpu_slice: dict) -> bool:
     return _slice_state(tpu_slice) not in _FAILED_SLICE_STATES
 
 
+def _nodepool(node: dict) -> str | None:
+    """Returns the name of the GKE node pool the node is in."""
+    return ((node.get("metadata") or {}).get("labels") or {}).get(
+        _NODEPOOL_LABEL
+    )
+
+
 def _partition_ids(node: dict) -> set[str]:
     """Returns the IDs of every TPU partition, of any shape, the node is in."""
     labels = node.get("metadata", {}).get("labels") or {}
@@ -659,6 +646,7 @@ class KubernetesScheduler(BaseScheduler):
         self._gpu_dra_mode: tuple[frozenset[str], bool] | None = None
         self._caching_dra_holders = False
         self._dra_holders_cache: dict[str, str] | None = None
+        self._all_nodes: list[dict] | None = None
         self._cluster_name: str | None = None
         self._tpu_slice_data: TpuSliceData | None = None
         self._subslice_nodes: set[str] = set()
@@ -872,8 +860,9 @@ class KubernetesScheduler(BaseScheduler):
 
     def _delete_job_dependents(self, job_ids: list[str]) -> None:
         """Deletes SSH Secrets, ComputeDomains, and ResourceClaimTemplates."""
-        for job_id in job_ids:
-            self._delete_secret(f"{job_id}-ssh")
+        k8s_client.map_concurrently(
+            self._delete_secret, [f"{job_id}-ssh" for job_id in job_ids]
+        )
         self._delete_compute_domains_by_name(
             [f"{job_id}-cd" for job_id in job_ids]
         )
@@ -908,8 +897,11 @@ class KubernetesScheduler(BaseScheduler):
                 e,
             )
             return False
-        results = [self._delete_secret(name) for name in _object_names(secrets)]
-        return all(results)
+        return all(
+            k8s_client.map_concurrently(
+                self._delete_secret, _object_names(secrets)
+            )
+        )
 
     def _delete_compute_domains_by_name(self, names: list[str]) -> bool:
         """Deletes the named ComputeDomains; returns whether it succeeded."""
@@ -1120,29 +1112,20 @@ class KubernetesScheduler(BaseScheduler):
 
     @staticmethod
     def _list_pods_on_node(node_name: str) -> list[dict]:
-        """Lists the unfinished pods on a node, retrying failed calls."""
+        """Lists the unfinished pods on a node."""
         field_selector = (
             f"spec.nodeName={node_name},"
             "status.phase!=Succeeded,status.phase!=Failed"
         )
-
-        for attempt in range(_BUSY_NODES_MAX_RETRIES):
-            try:
-                pods = k8s_client.list_pods(field_selector=field_selector)
-                break
-            except k8s_client.KubeError as e:
-                if attempt == _BUSY_NODES_MAX_RETRIES - 1:
-                    raise ChsSchedulerException(
-                        "Failed to communicate with API server for "
-                        f"node {node_name} "
-                        f"after {_BUSY_NODES_MAX_RETRIES} attempts. Error: {e}"
-                    ) from e
-
-                # Exponential backoff with jitter to prevent thundering herd
-                backoff = (2**attempt) + random.uniform(0, 1)
-                time.sleep(backoff)
-
-        return pods
+        try:
+            return k8s_client.list_pods(
+                field_selector=field_selector, **_FROM_WATCH_CACHE
+            )
+        except k8s_client.KubeError as e:
+            raise ChsSchedulerException(
+                "Failed to communicate with API server for "
+                f"node {node_name}. Error: {e}"
+            ) from e
 
     def _get_dra_gpu_pool_nodes(self) -> dict[str, str]:
         """Maps each NVIDIA GPU ResourceSlice pool to the node it is on.
@@ -1287,7 +1270,7 @@ class KubernetesScheduler(BaseScheduler):
             raise ChsSchedulerException(
                 f"Targeting {len(target_nodes)} nodes exceeds the maximum "
                 f"allowed batch size of {_MAX_NODES_UNDER_TEST}. "
-                f"Please narrow the test scope to less than "
+                f"Please narrow the test scope to at most "
                 f"{_MAX_NODES_UNDER_TEST} nodes at a time."
             )
 
@@ -1362,28 +1345,35 @@ class KubernetesScheduler(BaseScheduler):
                 return f"{metadata.get('namespace')}/{metadata.get('name')}"
         return None
 
+    def _list_all_nodes(self) -> list[dict]:
+        """Lists every node of the cluster once per scheduler."""
+        if self._all_nodes is None:
+            self._all_nodes = k8s_client.list_nodes(**_FROM_WATCH_CACHE)
+        return self._all_nodes
+
     def _fetch_raw_node_resources(self) -> list[dict]:
         """Fetches raw node resource dictionaries from the Kubernetes API."""
         if self._resolved_node_resources is not None:
             return self._resolved_node_resources
 
-        label_selector = None
-        if self.nodepools_arg:
-            pools = [
-                p.strip() for p in self.nodepools_arg.split(",") if p.strip()
-            ]
-            if pools:
-                pools_str = ",".join(pools)
-                label_selector = (
-                    f"cloud.google.com/gke-nodepool in ({pools_str})"
-                )
-        else:
-            label_selector = "cloud.google.com/gke-nodepool!=system"
-
+        pools = [
+            p.strip()
+            for p in (self.nodepools_arg or "").split(",")
+            if p.strip()
+        ]
         try:
-            node_resources = k8s_client.list_nodes(
-                label_selector=label_selector
-            )
+            if pools:
+                # Only the requested pools' nodes, selected by the API server.
+                node_resources = k8s_client.list_nodes(
+                    label_selector=f"{_NODEPOOL_LABEL} in ({','.join(pools)})",
+                    **_FROM_WATCH_CACHE,
+                )
+            else:
+                node_resources = [
+                    node
+                    for node in self._list_all_nodes()
+                    if _nodepool(node) != "system"
+                ]
         except k8s_client.KubeError as e:
             raise ChsSchedulerException(
                 f"Failed to get nodes to determine availability: {e}"
@@ -1409,17 +1399,9 @@ class KubernetesScheduler(BaseScheduler):
                     NVIDIA_GPU_DRA_DRIVER,
                 )
 
-        if self.nodepools_arg:
-            requested_pools = {
-                p.strip() for p in self.nodepools_arg.split(",") if p.strip()
-            }
-            found_pools = set()
-            for node in resolved_resources:
-                labels = (node.get("metadata") or {}).get("labels") or {}
-                pool = labels.get("cloud.google.com/gke-nodepool")
-                if pool:
-                    found_pools.add(pool)
-            missing_pools = requested_pools - found_pools
+        if pools:
+            found_pools = {_nodepool(node) for node in resolved_resources}
+            missing_pools = set(pools) - found_pools
             if missing_pools:
                 missing_str = ", ".join(sorted(missing_pools))
                 raise ChsValidationError(
@@ -1531,7 +1513,7 @@ class KubernetesScheduler(BaseScheduler):
             try:
                 cluster_nodes = {
                     node.get("metadata", {}).get("name")
-                    for node in k8s_client.list_nodes()
+                    for node in self._list_all_nodes()
                 }
             except k8s_client.KubeError as e:
                 raise ChsSchedulerException(
@@ -1734,6 +1716,7 @@ class KubernetesScheduler(BaseScheduler):
         try:
             items = self._get_node_objects(nodes)
             topology = defaultdict(lambda: defaultdict(list))
+            instances_info = None
             for item in items:
                 metadata = item.get("metadata", {})
                 name = metadata.get("name")
@@ -1741,9 +1724,9 @@ class KubernetesScheduler(BaseScheduler):
                 block = labels.get("cloud.google.com/gce-topology-block")
                 subblock = labels.get("cloud.google.com/gce-topology-subblock")
                 if not (block and subblock):
-                    instance_info = self._get_instances_info(nodes).get(
-                        name, {}
-                    )
+                    if instances_info is None:
+                        instances_info = self._get_instances_info(nodes)
+                    instance_info = instances_info.get(name, {})
                     block = block or instance_info.get("block")
                     subblock = subblock or instance_info.get("subblock")
 
@@ -2292,9 +2275,7 @@ class KubernetesScheduler(BaseScheduler):
         try:
             pods = k8s_client.list_pods(
                 namespace=CHS_NAMESPACE,
-                label_selector=(
-                    f"{_JOB_NAME_LABEL} in ({','.join(sorted(waiting))})"
-                ),
+                label_selector=_WORKER_SELECTOR,
                 field_selector="status.phase!=Succeeded,status.phase!=Failed",
             )
         except k8s_client.KubeError as e:
@@ -2418,6 +2399,17 @@ class KubernetesScheduler(BaseScheduler):
             d: _find_job(objects, d) for d, objects in objects_by_dir.items()
         }
         jobs = list(job_by_dir.values())
+        duplicates = [
+            name
+            for name, count in Counter(
+                job["metadata"]["name"] for job in jobs
+            ).items()
+            if count > 1
+        ]
+        if duplicates:
+            raise ChsSchedulerException(
+                f"Experiments share the Job names {format_names(duplicates)}"
+            )
         for job in jobs:
             job["spec"]["suspend"] = True
         try:
@@ -2601,16 +2593,21 @@ class KubernetesScheduler(BaseScheduler):
         """
         name = slice_manifest.get("metadata", {}).get("name")
         try:
-            _with_retries(
-                lambda: k8s_client.create_custom_object(
-                    plural="slices", body=slice_manifest
-                ),
-                f"Slice '{name}'",
+            k8s_client.create_custom_object(
+                plural="slices", body=slice_manifest
             )
         except k8s_client.KubeError as e:
             if e.status == 409:
-                if self._is_own_slice(name):
+                created_by_this_run = self._is_own_slice(name)
+                if created_by_this_run:
                     return
+                if created_by_this_run is None:
+                    raise ChsSchedulerException(
+                        f"Dynamic slice '{name}' already exists, and CHS "
+                        "could not list the Slices to check whether this run "
+                        "created it. Run `chs cancel` for this run and try "
+                        "again."
+                    ) from e
                 raise ChsSchedulerException(
                     f"Dynamic slice '{name}' already exists; another CHS run "
                     f"may be using {slice_key}. Wait for that run to "
@@ -2620,15 +2617,20 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to create dynamic slice '{name}': {e}"
             ) from e
 
-    def _is_own_slice(self, name: str) -> bool:
-        """Returns True if this run already created the named Slice.
+    def _is_own_slice(self, name: str) -> bool | None:
+        """Returns whether this run already created the named Slice.
 
         Creating a Slice is not idempotent: if a retried create's first
         attempt reached the API server but its response was lost, the next
         attempt gets 409 on the Slice this run just created.
+
+        Returns:
+          None if the Slices cannot be listed, so it is unknown.
         """
         own_slices = self._list_slice_names(_run_selector(self._run_id))
-        return name in (own_slices or [])
+        if own_slices is None:
+            return None
+        return name in own_slices
 
     def _dynamic_slice_spec(self, slice_key: str) -> SliceSpec | None:
         """Returns the Slice that the slice key needs, if it is dynamic."""
@@ -2880,7 +2882,7 @@ class KubernetesScheduler(BaseScheduler):
             return targeted
         node_objects = self._resolved_node_resources
         if node_objects is None:
-            node_objects = k8s_client.list_nodes()
+            node_objects = self._list_all_nodes()
         for node in node_objects:
             node_name = node.get("metadata", {}).get("name")
             if node_name not in requested:

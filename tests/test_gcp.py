@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 import unittest
 from unittest import mock
 from chs.utils.gcp import query_gce_instances_info
@@ -150,6 +151,56 @@ class TestGcpUtils(unittest.TestCase):
             ChsSchedulerException, "Failed to query GCE API"
         ):
             query_gce_instances_info("my-project", ["node1"])
+
+    @mock.patch("google.cloud.compute_v1.InstancesClient")
+    def test_query_gce_instances_info_queries_batches_concurrently(
+        self, mock_client_class
+    ):
+        nodes = [f"node{i}" for i in range(400)]
+        barrier = threading.Barrier(8, timeout=5)
+        threads_by_client = {}
+
+        def aggregated_list(client, request):
+            threads_by_client.setdefault(id(client), set()).add(
+                threading.get_ident()
+            )
+            # Each of the 8 batches waits here until all 8 are in flight.
+            barrier.wait()
+            instances = []
+            for name in nodes:
+                if f'name = "{name}"' in request.filter:
+                    instance = mock.MagicMock()
+                    instance.name = name
+                    instance.machine_type = "machineTypes/a3-megagpu-8g"
+                    instance.id = int(name.removeprefix("node"))
+                    instance.resource_status = None
+                    instances.append(instance)
+            return [("zones/z", mock.MagicMock(instances=instances))]
+
+        def new_client():
+            client = mock.MagicMock()
+            client.aggregated_list.side_effect = (
+                lambda request: aggregated_list(client, request)
+            )
+            return client
+
+        mock_client_class.side_effect = new_client
+
+        result = query_gce_instances_info("my-project", nodes)
+
+        # requests.Session isn't thread-safe: one client per worker thread.
+        self.assertEqual(mock_client_class.call_count, 8)
+        self.assertEqual(len(threads_by_client), 8)
+        self.assertTrue(
+            all(len(threads) == 1 for threads in threads_by_client.values())
+        )
+        self.assertEqual(sorted(result), sorted(nodes))
+        self.assertEqual(result["node399"]["instance_id"], "399")
+
+    @mock.patch("google.cloud.compute_v1.InstancesClient")
+    def test_query_gce_instances_info_without_nodes(self, mock_client_class):
+        self.assertEqual(query_gce_instances_info("my-project", []), {})
+        mock_client_class.return_value.aggregated_list.assert_not_called()
 
 
 if __name__ == "__main__":
