@@ -36,6 +36,7 @@ Pass/fail thresholds are defined per machine type in each test's
 
 - [`tpu-info`](../tests/tpu-info/thresholds.yaml)
 - [`tpu-gemm`](../tests/tpu-gemm/thresholds.yaml)
+- [`tpu-gemm-pulse`](../tests/tpu-gemm-pulse/thresholds.yaml)
 - [`tpu-hbm`](../tests/tpu-hbm/thresholds.yaml)
 - [`tpu-host-device`](../tests/tpu-host-device/thresholds.yaml)
 - [`tpu-collectives`](../tests/tpu-collectives/thresholds.yaml)

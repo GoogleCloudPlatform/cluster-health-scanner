@@ -935,6 +935,7 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
     def test_tpu_packages_with_benchmark_inputs_inline_them(self):
         for test_name, expected_file in (
             ("tpu-gemm", "gemm_16384_bf16.yaml"),
+            ("tpu-gemm-pulse", "gemm_pulse_16384_bf16.yaml"),
             ("tpu-hbm", "hbm_copy_bf16.yaml"),
             ("tpu-host-device", "host_to_device.yaml"),
         ):

@@ -20,6 +20,7 @@ from chs.core.nccl_base_extractor import NcclBaseExtractor
 from chs.tests.nvidia_smi.extractor import NvidiaSmiExtractor
 from chs.tests.tpu_collectives.extractor import TpuCollectivesExtractor
 from chs.tests.tpu_gemm.extractor import TpuGemmExtractor
+from chs.tests.tpu_gemm_pulse.extractor import TpuGemmPulseExtractor
 from chs.tests.tpu_hbm.extractor import TpuHbmExtractor
 from chs.tests.tpu_host_device.extractor import TpuHostDeviceExtractor
 from chs.tests.tpu_network_stress.extractor import (
@@ -59,6 +60,19 @@ def test_tpu_gemm_extractor():
     assert meta["matrix_shape"] == "1024x1024x1024"
     assert meta["dtype"] == "bfloat16"
     assert meta["sweep_param"] == "1024x1024x1024,bfloat16"
+
+
+def test_tpu_gemm_pulse_extractor():
+    extractor = TpuGemmPulseExtractor()
+    meta = extractor.parse_context_metadata(
+        "node-1,16384x16384x16384,bfloat16,chain=100,cycles=100"
+    )
+    assert meta["node"] == "node-1"
+    assert meta["matrix_shape"] == "16384x16384x16384"
+    assert meta["dtype"] == "bfloat16"
+    assert (
+        meta["sweep_param"] == "16384x16384x16384,bfloat16,chain=100,cycles=100"
+    )
 
 
 def test_tpu_hbm_extractor():

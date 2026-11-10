@@ -276,6 +276,7 @@ class BOHGenerator:
                 # rounding logic requirements.
                 if (
                     isinstance(threshold_value, (int, float))
+                    and not isinstance(threshold_value, bool)
                     and comp_type == "min"
                 ):
                     reduced_value = float(threshold_value) * 0.95
@@ -379,7 +380,9 @@ class BOHGenerator:
                         ):
                             continue
                         validation = pb.ValidationCriteria(name=th_key)
-                        if comp_type == "min":
+                        if isinstance(th_val, bool):
+                            validation.comparator = pb.Comparator.COMPARATOR_EQ
+                        elif comp_type == "min":
                             validation.comparator = pb.Comparator.COMPARATOR_GTE
                         elif comp_type == "scalar":
                             validation.comparator = pb.Comparator.COMPARATOR_EQ
@@ -394,8 +397,10 @@ class BOHGenerator:
                             validation.expected_value.string_value = str(th_val)
 
                         is_pass = False
-                        if metric.value.HasField("number_value") and isinstance(
-                            th_val, (int, float)
+                        if (
+                            metric.value.HasField("number_value")
+                            and isinstance(th_val, (int, float))
+                            and not isinstance(th_val, bool)
                         ):
                             obs_val = metric.value.number_value
                             if comp_type == "min":
@@ -407,7 +412,9 @@ class BOHGenerator:
                         ):
                             obs_val = metric.value.bool_value
                             is_pass = obs_val == th_val
-                        elif metric.value.HasField("string_value"):
+                        elif metric.value.HasField(
+                            "string_value"
+                        ) and not isinstance(th_val, bool):
                             obs_val = metric.value.string_value
                             is_pass = obs_val.lower() == str(th_val).lower()
 

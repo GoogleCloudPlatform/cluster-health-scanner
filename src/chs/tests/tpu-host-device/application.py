@@ -82,7 +82,7 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"HOST (?P<node>\S+): Running \[\d+/\d+\] (?:host_to_device|device_to_host) \(\w+_dev\w+_size_(?P<size_mib>\d+)mib\)",
+        regex=r"HOST (?P<node>\S+): Running \[\d+/\d+\] (?:host_to_device|device_to_host) \(\w+_(?:scope_\w+_idx_\d+|dev\w+)_size_(?P<size_mib>\d+)mib\)",
         output_format="{node},{size_mib}MiB",
     )
 

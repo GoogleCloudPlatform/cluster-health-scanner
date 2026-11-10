@@ -19,7 +19,7 @@ from tests.integration.mocks.mock_utils import resolve_node_mapping
 
 TPU_HBM_TEMPLATE = (
     "HOST {node} (bfloat16): Running [12/13] hbm "
-    "(copy_dim_{elements}_dev_0)...\n"
+    "(copy_dim_{elements}_scope_device_idx_0)...\n"
     "HOST {node} (bfloat16): Success [12/13] hbm. Metrics: "
     "{'data_size_mib': 8192.0, "
     "'op_type': 'copy', 'wall_clock_p50_ms': 0.5, "
@@ -46,6 +46,19 @@ TPU_GEMM_TEMPLATE = (
     "'xprof_compute_roofline_efficiency_pct': 45.0}\n"
 )
 
+TPU_GEMM_PULSE_TEMPLATE = (
+    "HOST {node}: Running [1/1] gemm_pulse (m_16384_k_16384_"
+    "bfloat16_to_bfloat16_chain_100_cycles_100_idle_0.02_dur_0.0_"
+    "checksum_True)...\n"
+    "HOST {node}: Success [1/1] gemm_pulse. Metrics: "
+    "{'total_flops': 879609302220800.0, 'xprof_p50_ms': 874.24, "
+    "'xprof_tflops_per_device': {tflops}, 'xprof_tflops_per_chip': 2012.36, "
+    "'xprof_slowdown_ratio': 1.0, "
+    "'xprof_compute_roofline_efficiency_pct': 87.23, "
+    "'all_devices_valid_checksum': {valid_checksum}, "
+    "'intra_host_checksum_match': {checksum_match}}\n"
+)
+
 TPU_COLLECTIVES_TEMPLATE = (
     "HOST {node} (float32): Running [10/10] all_reduce (dim_16384_op_sum)...\n"
     "HOST {node} (float32): Success [10/10] all_reduce. Metrics: "
@@ -66,13 +79,13 @@ TPU_HBM_STRESS_TEMPLATE = (
 
 TPU_HOST_DEVICE_TEMPLATE = (
     "HOST {node}: Running [1/1] host_to_device "
-    "(tpu_sync_devall_size_4096mib)...\n"
+    "(tpu_sync_scope_host_idx_0_size_4096mib)...\n"
     "HOST {node}: Success [1/1] host_to_device. Metrics: {'num_devices': 8, "
     "'wall_clock_p50_ms': 5.0, "
     "'wall_clock_bandwidth_per_device_gb_s': 25.0, "
     "'xprof_bandwidth_per_host_gb_s': {bandwidth}}\n"
     "HOST {node}: Running [1/1] device_to_host "
-    "(tpu_sync_devall_size_4096mib)...\n"
+    "(tpu_sync_scope_host_idx_0_size_4096mib)...\n"
     "HOST {node}: Success [1/1] device_to_host. Metrics: {'num_devices': 8, "
     "'wall_clock_p50_ms': 5.0, "
     "'wall_clock_bandwidth_per_device_gb_s': 25.0, "
@@ -225,6 +238,8 @@ class RambleOutputGenerator:
             return self.populate_hbm_logs(scenario)
         elif test_name == "tpu-gemm":
             return self.populate_tpu_gemm_logs(scenario)
+        elif test_name == "tpu-gemm-pulse":
+            return self.populate_tpu_gemm_pulse_logs(scenario)
         elif test_name == "tpu-collectives":
             return self.populate_tpu_collectives_logs(scenario)
         elif test_name == "tpu-compute-stress":
@@ -288,6 +303,29 @@ class RambleOutputGenerator:
             tflops = metrics.get("Throughput", tflops)
 
         return TPU_GEMM_TEMPLATE.replace("{tflops}", str(tflops))
+
+    def populate_tpu_gemm_pulse_logs(self, scenario: dict | None) -> str:
+        if scenario and scenario.get("outcome") == "FAILED":
+            return (
+                "HOST {node}: "
+                + str(scenario.get("stderr", "GEMM pulse crash"))
+                + "\n"
+            )
+
+        tflops = self.HEALTHY_TFLOPS
+        valid_checksum = True
+        checksum_match = True
+        if scenario and scenario.get("outcome") == "DEGRADED":
+            metrics = scenario.get("metrics", {})
+            tflops = metrics.get("Throughput", tflops)
+            valid_checksum = metrics.get("Valid Checksum", valid_checksum)
+            checksum_match = metrics.get("Checksum Match", checksum_match)
+
+        return (
+            TPU_GEMM_PULSE_TEMPLATE.replace("{tflops}", str(tflops))
+            .replace("{valid_checksum}", str(valid_checksum))
+            .replace("{checksum_match}", str(checksum_match))
+        )
 
     def populate_hbm_logs(self, scenario: dict | None) -> str:
         if scenario and scenario.get("outcome") == "FAILED":
