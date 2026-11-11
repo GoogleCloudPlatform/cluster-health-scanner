@@ -124,21 +124,12 @@ class TestPathStorageProvider(unittest.TestCase):
 
     def test_validate_cleanup_on_write_failure(self):
         """Test validate cleans up created directories if write test fails."""
-        # Create a directory path that we cannot write to (simulated by making a
-        # parent read-only)
         parent_dir = os.path.join(self.temp_dir.name, "readonly_parent")
         os.makedirs(parent_dir)
 
         target_path = os.path.join(parent_dir, "new_dir", "results")
         provider = PathStorageProvider({"path": target_path})
 
-        # Make parent read-only before validation attempt
-        # Wait, if we make parent read-only, directory creation might fail.
-        # We want to test case where directory creation succeeds but write
-        # fails.
-        # This is harder to simulate portably without permission tricks.
-        # Alternative: Mock mkdir to succeed but mock NamedTemporaryFile to
-        # fail.
         with mock.patch("tempfile.NamedTemporaryFile") as mock_tempfile:
             mock_tempfile.side_effect = OSError("No space left on device")
 
