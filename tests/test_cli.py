@@ -223,7 +223,6 @@ class TestCli(unittest.TestCase):
                 "chs.cli.utils.generate_random_suffix", return_value="mockhash"
             )
         )
-        # Keep telemetry run tagging from leaking between tests.
         self.enterContext(
             mock.patch.object(telemetry, "_state", telemetry._State())
         )
