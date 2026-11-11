@@ -80,7 +80,7 @@ class Chs(ExecutableApplication):
         "scheduler",
         default="slurm",
         description="Scheduler for the suite",
-        values=["slurm", "kubernetes"],
+        values=["slurm", "kubernetes", "standalone"],
     )
 
     variable(

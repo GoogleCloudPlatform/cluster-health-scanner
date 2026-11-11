@@ -533,6 +533,26 @@ class SliceContextTest(StubbedConfigTestCase):
         )
         self.assertEqual(contexts[1][1]["variables"]["node_selector_yaml"], "")
 
+    def test_a_single_host_pool_annotates_shape_without_sharing_a_slice(self):
+        contexts = self.build(
+            variables(
+                tpu_slices={"subpool": ["node-1", "node-2"]},
+                tpu_slice_topologies={"subpool": "2x2x1"},
+                tpu_single_host_pools=["subpool"],
+            )
+        )
+
+        self.assertEqual(len(contexts), 1)
+        single_host = contexts[0][1]["variables"]
+        self.assertIn(
+            'cloud.google.com/gke-tpu-slice-topology: "2x2x1"',
+            single_host["pod_annotations_yaml"],
+        )
+        self.assertNotIn("podAffinity", single_host["affinity_yaml"])
+        self.assertIn("node-1", single_host["affinity_yaml"])
+        self.assertIn("node-2", single_host["affinity_yaml"])
+        self.assertNotIn(ctx.EXCLUSIVE_SLICE_KEY, single_host)
+
     def test_a_dynamic_slice_asks_for_exclusive_hardware(self):
         contexts = self.build(
             variables(
@@ -543,7 +563,7 @@ class SliceContextTest(StubbedConfigTestCase):
         )
 
         static, dynamic = (c[1]["variables"] for c in contexts)
-        self.assertNotIn("jobset_annotations_yaml", dynamic)
+        self.assertNotIn("job_annotations_yaml", dynamic)
         self.assertNotIn("podAffinity", static["affinity_yaml"])
         self.assertIn("2x2x2", dynamic["pod_annotations_yaml"])
         for ctx_vars in (static, dynamic):
@@ -611,12 +631,12 @@ class SliceContextTest(StubbedConfigTestCase):
             variables(
                 tpu_slices={"b": ["node-2"]},
                 tpu_dynamic_pools=["b"],
-                jobset_annotations_yaml="keep: me",
+                job_annotations_yaml="keep: me",
             )
         )
 
         self.assertEqual(
-            contexts[0][1]["variables"]["jobset_annotations_yaml"], "keep: me"
+            contexts[0][1]["variables"]["job_annotations_yaml"], "keep: me"
         )
 
     def test_slurm_collapses_to_a_single_node_matrix(self):

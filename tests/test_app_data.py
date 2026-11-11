@@ -220,6 +220,45 @@ class TestChsAppData(unittest.TestCase):
         self.app_data.update_run("run-2", {"run_id": "run-2"})
         self.assertIn("run-2", self.app_data.get_all_runs())
 
+    def test_telemetry_enabled_by_default(self):
+        self.assertTrue(self.app_data.is_telemetry_enabled())
+
+    def test_telemetry_preference_is_kept_with_storage_config(self):
+        config = {"type": "gcs", "gcs": {"bucket_name": "b"}}
+        self.app_data.set_storage_config(config)
+
+        self.app_data.set_telemetry_enabled(False)
+
+        self.assertFalse(self.app_data.is_telemetry_enabled())
+        self.assertEqual(self.app_data.get_storage_config(), config)
+
+        self.app_data.set_telemetry_enabled(True)
+
+        self.assertTrue(self.app_data.is_telemetry_enabled())
+
+    def test_env_vars_can_disable_telemetry(self):
+        for env, enabled, override in (
+            ({"CHS_TELEMETRY": "0"}, False, "CHS_TELEMETRY=0"),
+            ({"CHS_TELEMETRY": "False"}, False, "CHS_TELEMETRY=False"),
+            ({"DO_NOT_TRACK": "1"}, False, "DO_NOT_TRACK=1"),
+            ({"DO_NOT_TRACK": "true"}, False, "DO_NOT_TRACK=true"),
+            ({"CHS_TELEMETRY": "1"}, True, None),
+            ({"DO_NOT_TRACK": "0"}, True, None),
+            ({}, True, None),
+        ):
+            with self.subTest(env=env):
+                with mock.patch.dict(os.environ, env, clear=True):
+                    self.assertIs(self.app_data.is_telemetry_enabled(), enabled)
+                    self.assertEqual(
+                        self.app_data.telemetry_env_override(), override
+                    )
+
+    def test_env_var_wins_over_the_saved_setting(self):
+        self.app_data.set_telemetry_enabled(True)
+
+        with mock.patch.dict(os.environ, {"CHS_TELEMETRY": "0"}, clear=True):
+            self.assertFalse(self.app_data.is_telemetry_enabled())
+
 
 if __name__ == "__main__":
     unittest.main()

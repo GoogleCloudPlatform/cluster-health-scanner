@@ -21,6 +21,8 @@ routing, and error handling for various valid and invalid inputs.
 import dataclasses
 import datetime
 import os
+import pathlib
+import re
 import shutil
 import signal
 import stat
@@ -34,9 +36,13 @@ import click
 from click import testing
 
 from chs import cli
+from chs import constants
 from chs import exceptions
+from chs import telemetry
 from chs.cli import background_cleanup
 from chs.cli import list_formatting
+from chs.protos import bill_of_health_pb2 as pb
+from chs.ramble_manager import RambleManager
 from chs.utils.k8s_client import KubeError
 from chs.utils.tests import TestsMap as _TestsMap
 
@@ -46,6 +52,9 @@ CliRunner = testing.CliRunner
 MOCK_DATETIME = datetime.datetime(2023, 1, 1, 12, 0, 0, 436888)
 MOCK_WORKSPACE_NAME = "20230101-120000_mockcluster-suite1-mockhash"
 MOCK_CUSTOM_WORKSPACE_NAME = "20230101-120000_mockcluster-custom-mockhash"
+# A workspace name with a real 4-char suffix, and its telemetry run ID.
+MOCK_TELEMETRY_WORKSPACE_NAME = "20230101-120000_mockcluster-lite-a3f9"
+MOCK_TELEMETRY_RUN_ID = "20230101-120000-a3f9"
 
 
 def _analyze_in_guard(app_data, run_id, scheduler):
@@ -126,6 +135,7 @@ class TestCli(unittest.TestCase):
         self.mock_rm_instance = self.mock_rm_cls.return_value
         self.mock_rm_instance.workspace_name = MOCK_WORKSPACE_NAME
         self.mock_rm_instance.path = f"/mocked/workspaces/{MOCK_WORKSPACE_NAME}"
+        self.mock_rm_instance.export_logs_dir = None
         self.mock_rm_instance.execute_experiments.return_value = []
         self.mock_rm_instance.archive.return_value = (
             "mock_ws_path",
@@ -150,6 +160,11 @@ class TestCli(unittest.TestCase):
         self.mock_scheduler.name = "mock_scheduler"
         self.mock_scheduler.nodes_arg = None
         self.mock_scheduler.nodelists_arg = None
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.partitions_arg = None
+        self.mock_scheduler.require_whole_slices = False
+        self.mock_scheduler.partially_busy_slices = {}
+        self.mock_scheduler.get_tpu_slice_summary.return_value = None
         self.mock_scheduler.get_nodes_under_test.return_value = ["node1"]
         self.mock_scheduler.find_runs_targeting_nodes.return_value = {}
         self.mock_scheduler.cancel_run.return_value = True
@@ -207,6 +222,10 @@ class TestCli(unittest.TestCase):
             mock.patch(
                 "chs.cli.utils.generate_random_suffix", return_value="mockhash"
             )
+        )
+        # Keep telemetry run tagging from leaking between tests.
+        self.enterContext(
+            mock.patch.object(telemetry, "_state", telemetry._State())
         )
 
         # Mock suites utilities to return test dummy values
@@ -876,6 +895,560 @@ class TestCli(unittest.TestCase):
                 result.output,
             )
 
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_skips_multi_host_when_no_nodepool(
+        self, mock_analyze_action
+    ):
+        """Test multi-host TPU tests are skipped when no nodepool is passed."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.logger.warning") as mock_warning,
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            mock_warning.assert_any_call(
+                "Multi-host TPU test(s) %s need entire slice, skipping "
+                "them (please use --nodepools flag to run them).",
+                "tpu-collectives",
+            )
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertNotIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_full_cluster_runs_multi_host(self, mock_analyze_action):
+        """Test full-cluster TPU run schedules multi-host tests w/o flags."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_on_slurm_is_not_supported(self, mock_analyze_action):
+        """A TPU run on Slurm is rejected, even when targeting partitions.
+
+        The catalog mirrors the shipped platform files: TPU tests are listed
+        for Kubernetes only, never for Slurm.
+        """
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "slurm"
+        self.mock_scheduler.partitions_arg = "v6e"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "ct6e-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="slurm"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["a3-megagpu-8g", "ct6e-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["dcgm", "tpu-info"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "slurm": {"a3-megagpu-8g": ["dcgm"]},
+                        "kubernetes": {"ct6e-standard-4t": ["tpu-info"]},
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info",
+                    "--partitions",
+                    "v6e",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIsInstance(result.exception, exceptions.ChsValidationError)
+        self.assertIn(
+            "not supported for scheduler 'slurm' and machine type "
+            "'ct6e-standard-4t'",
+            str(result.exception),
+        )
+        self.assertNotIn("--partitions", str(result.exception))
+        self.mock_rm_instance.execute_experiments.assert_not_called()
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_fails_when_only_multi_host_and_no_nodepool(
+        self, mock_analyze_action
+    ):
+        """Test error raised when only multi-host TPU tests without nodepool."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-collectives",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIsInstance(
+                result.exception, exceptions.ChsValidationError
+            )
+            self.assertIn(
+                "TPU multi-host test(s) 'tpu-collectives' require an entire "
+                "slice (use --nodepools).",
+                str(result.exception),
+            )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_skips_multi_host_when_slice_partially_busy(
+        self, mock_analyze_action
+    ):
+        """Test multi-host tests skipped on partially busy mixed run."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = "pool1"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        def mock_get_nodes():
+            self.mock_scheduler.partially_busy_slices = {"pool1": ["node2"]}
+            if self.mock_scheduler.require_whole_slices:
+                return []
+            return ["node1"]
+
+        self.mock_scheduler.get_nodes_under_test.side_effect = mock_get_nodes
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+            mock.patch("chs.cli.logger") as mock_cli_logger,
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodepools",
+                    "pool1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.mock_scheduler.get_nodes_under_test.assert_called_once_with()
+            mock_cli_logger.warning.assert_any_call(
+                "Slice '%s' is partially busy. Multi-host test(s) %s "
+                "require full slices and were omitted from this run.",
+                "pool1",
+                "'tpu-collectives'",
+            )
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertNotIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_skips_multi_host_in_tiered_suite_when_slice_partially_busy(
+        self, mock_analyze_action
+    ):
+        """Test later-tier multi-host tests skipped on partially busy slice."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = "pool1"
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        def mock_get_nodes():
+            self.mock_scheduler.partially_busy_slices = {"pool1": ["node2"]}
+            if self.mock_scheduler.require_whole_slices:
+                return []
+            return ["node1"]
+
+        self.mock_scheduler.get_nodes_under_test.side_effect = mock_get_nodes
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.cli.load_suite",
+                return_value={
+                    "name": "tiered-tpu-suite",
+                    "tests": [
+                        {"name": "tpu-info"},
+                        {
+                            "name": "tpu-collectives",
+                            "trigger_condition": {"HEALTHY": ["tpu-info"]},
+                        },
+                    ],
+                },
+            ),
+            mock.patch(
+                "chs.utils.suites.get_all_suites",
+                return_value=["tiered-tpu-suite"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+            mock.patch("chs.cli.logger") as mock_cli_logger,
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "tiered-tpu-suite",
+                    "--nodepools",
+                    "pool1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0)
+            mock_cli_logger.warning.assert_any_call(
+                "Slice '%s' is partially busy. Multi-host test(s) %s "
+                "require full slices and were omitted from this run.",
+                "pool1",
+                "'tpu-collectives'",
+            )
+            self.mock_rm_instance.configure_workspace.assert_called_once()
+            configured_tests = (
+                self.mock_rm_instance.configure_workspace.call_args[0][1]
+            )
+            test_names = [t.get("name") for t in configured_tests]
+            self.assertIn("tpu-info", test_names)
+            self.assertNotIn("tpu-collectives", test_names)
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_tiered_suite_multi_host_first_tier_rejects_nodes(
+        self, mock_analyze_action
+    ):
+        """Test --nodes fails fast when the initial tier is multi-host only.
+
+        Without the guard, pruning empties active_tier_tests and Ramble
+        would treat `[]` as "no filter", running every tier at once.
+        """
+        self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = "node1"
+        self.mock_scheduler.nodepools_arg = None
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.cli.load_suite",
+                return_value={
+                    "name": "tiered-multi-host-first",
+                    "tests": [
+                        {"name": "tpu-collectives"},
+                        {
+                            "name": "tpu-info",
+                            "trigger_condition": {
+                                "UNHEALTHY": ["tpu-collectives"]
+                            },
+                        },
+                    ],
+                },
+            ),
+            mock.patch(
+                "chs.utils.suites.get_all_suites",
+                return_value=["tiered-multi-host-first"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "tiered-multi-host-first",
+                    "--nodes",
+                    "node1",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+
+        self.assertIsInstance(result.exception, exceptions.ChsValidationError)
+        self.assertIn("Initial tier", str(result.exception))
+        self.assertIn("--nodepools", str(result.exception))
+        self.mock_rm_instance.configure_workspace.assert_not_called()
+        self.mock_rm_instance.execute_experiments.assert_not_called()
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_tpu_does_not_log_multi_host_skip_on_dynamic_pool(
+        self, mock_analyze_action
+    ):
+        """Test no multi-host fallback log for partially busy dynamic pool."""
+        mock_default_dir = "/mocked/workspaces"
+        self.mock_app_data.get_workspaces_dir.return_value = mock_default_dir
+        self.mock_app_data.get_latest_run_id.return_value = None
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.nodes_arg = None
+        self.mock_scheduler.nodepools_arg = "dynpool"
+        self.mock_scheduler.partially_busy_slices = {"dynpool": ["node2"]}
+        self.mock_scheduler.get_nodes_under_test.return_value = []
+        self.mock_scheduler.detect_nodes_hardware.return_value = [
+            "tpu7x-standard-4t"
+        ]
+
+        with (
+            mock.patch("chs.cli.detect_scheduler", return_value="kubernetes"),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_machine_types",
+                return_value=["tpu7x-standard-4t"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_all_supported_tests",
+                return_value=["tpu-info", "tpu-collectives"],
+            ),
+            mock.patch(
+                "chs.utils.tests.get_tests_map",
+                return_value=_TestsMap(
+                    data={
+                        "kubernetes": {
+                            "tpu7x-standard-4t": [
+                                "tpu-info",
+                                "tpu-collectives",
+                            ],
+                        }
+                    }
+                ),
+            ),
+            mock.patch("chs.cli.logger") as mock_cli_logger,
+        ):
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--tests",
+                    "tpu-info,tpu-collectives",
+                    "--nodepools",
+                    "dynpool",
+                    "--auto-approve",
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertIsInstance(
+                result.exception, exceptions.NoNodesProvidedException
+            )
+            for call in mock_cli_logger.warning.call_args_list:
+                self.assertNotIn(
+                    "require full slices and were omitted from this run",
+                    str(call),
+                )
+
     def test_run_action_called_process_error_includes_stderr(self):
         """Test run_action formats CalledProcessError with stderr."""
         mock_scheduler = mock.Mock()
@@ -1059,6 +1632,34 @@ class TestCli(unittest.TestCase):
                 ],
             )
 
+    def test_run_command_uses_the_given_scheduler(self):
+        """Test 'run --scheduler' skips detection."""
+        self.mock_get_scheduler.side_effect = exceptions.ChsSchedulerException(
+            "stop here"
+        )
+        self.runner.invoke(
+            cli.cli,
+            [
+                "run",
+                "--suite",
+                "suite1",
+                "--auto-approve",
+                "--scheduler",
+                "standalone",
+            ],
+        )
+        self.assertEqual(
+            self.mock_get_scheduler.call_args.args, ("standalone",)
+        )
+        self.mock_detect_scheduler.assert_not_called()
+
+    def test_run_command_rejects_unknown_scheduler(self):
+        result = self.runner.invoke(
+            cli.cli, ["run", "--scheduler", "pbs", "--auto-approve"]
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.mock_get_scheduler.assert_not_called()
+
     @mock.patch("chs.cli._analyze_action")
     def test_run_command_custom_run_id(self, mock_analyze_action):
         """Test 'run' command with a custom run ID."""
@@ -1086,11 +1687,784 @@ class TestCli(unittest.TestCase):
         expected_workspace_name = f"20230101-120000_{expected_run_id}"
 
         self.mock_rm_cls.assert_any_call(
-            mock_default_dir, expected_workspace_name, run_id=expected_run_id
+            mock_default_dir,
+            expected_workspace_name,
+            run_id=expected_run_id,
         )
         mock_analyze_action.assert_called_once_with(
             self.mock_app_data, expected_run_id
         )
+
+    @mock.patch("chs.cli._analyze_action")
+    def test_run_command_storage_path(self, mock_analyze_action):
+        """Test --storage-path flag for local and cloud destinations."""
+        self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "slurm"
+        workspace_name = "20230101-120000_customrun-mockhash"
+
+        with tempfile.TemporaryDirectory() as cwd:
+            # 1. Default run: saves to ./<DEFAULT_OUTPUT_DIR>/<workspace_name>
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                    ],
+                    standalone_mode=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                expected_default_dir = os.path.join(
+                    cwd, constants.DEFAULT_OUTPUT_DIR, workspace_name
+                )
+                self.assertEqual(
+                    run_details["export_logs_dir"], expected_default_dir
+                )
+                self.assertEqual(
+                    run_details["storage"],
+                    {"type": "gcs", "gcs": {"bucket_name": "test_bucket"}},
+                )
+                self.assertIn(
+                    "Results will be saved locally under "
+                    f"./{constants.DEFAULT_OUTPUT_DIR}/ and uploaded to "
+                    "gs://test_bucket",
+                    result.output,
+                )
+
+            # 2. Custom local --storage-path: exports to a per-run subfolder
+            # and still uploads to the globally configured GCS storage.
+            custom_out = os.path.join(cwd, "custom_output")
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                        "--storage-path",
+                        custom_out,
+                    ],
+                    standalone_mode=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                self.assertEqual(
+                    run_details["export_logs_dir"],
+                    os.path.join(custom_out, workspace_name),
+                )
+                self.assertEqual(
+                    run_details["storage"],
+                    {"type": "gcs", "gcs": {"bucket_name": "test_bucket"}},
+                )
+                self.assertIn(
+                    f"Results will be saved locally under {custom_out}/ "
+                    "and uploaded to gs://test_bucket",
+                    result.output,
+                )
+
+            # 3. Unwritable local --storage-path fails validation upfront
+            self.mock_rm_instance.execute_experiments.reset_mock()
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider"
+            ) as mock_get_provider:
+                mock_get_provider.return_value.validate.side_effect = (
+                    exceptions.ChsValidationError(
+                        "Directory '/forbidden' is not writable."
+                    )
+                )
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                        "--storage-path",
+                        "/forbidden",
+                    ],
+                )
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn(
+                    "Storage path validation failed: Directory '/forbidden' "
+                    "is not writable.",
+                    result.output,
+                )
+                mock_get_provider.assert_called_once_with(
+                    {"type": "path", "path": {"path": "/forbidden"}}
+                )
+                self.mock_rm_instance.execute_experiments.assert_not_called()
+
+            # 4. Custom cloud --storage-path (gs:// URIs)
+            storage_cases = [
+                (
+                    "gs://my-bucket/custom/prefix",
+                    {"bucket_name": "my-bucket", "prefix": "custom/prefix"},
+                ),
+                (
+                    "gs://my-bucket",
+                    {"bucket_name": "my-bucket"},
+                ),
+            ]
+            for storage_input, expected_gcs in storage_cases:
+                with (
+                    self.subTest(storage_input=storage_input),
+                    mock.patch(
+                        "chs.cli.pathlib.Path.cwd",
+                        return_value=pathlib.Path(cwd),
+                    ),
+                    mock.patch(
+                        "chs.cli.StorageProviderFactory.get_provider"
+                    ) as mock_get_provider,
+                ):
+                    mock_provider = mock.Mock()
+                    mock_get_provider.return_value = mock_provider
+                    result = self.runner.invoke(
+                        cli.cli,
+                        [
+                            "run",
+                            "--suite",
+                            "suite1",
+                            "--run-id",
+                            "customrun",
+                            "--auto-approve",
+                            "--storage-path",
+                            storage_input,
+                        ],
+                        standalone_mode=False,
+                    )
+                    self.assertEqual(result.exit_code, 0, result.output)
+                    mock_provider.validate.assert_called_once()
+                    _, run_details = self.mock_app_data.update_run.call_args[0]
+                    self.assertEqual(
+                        run_details["storage"],
+                        {
+                            "type": "gcs",
+                            "gcs": expected_gcs,
+                        },
+                    )
+                    expected_default_dir = os.path.join(
+                        cwd, constants.DEFAULT_OUTPUT_DIR, workspace_name
+                    )
+                    self.assertEqual(
+                        run_details["export_logs_dir"], expected_default_dir
+                    )
+                    self.assertIn(
+                        "Results will be saved locally under "
+                        f"./{constants.DEFAULT_OUTPUT_DIR}/ and uploaded to "
+                        f"{storage_input}",
+                        result.output,
+                    )
+
+            # 5. Invalid --storage-path with empty bucket
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--run-id",
+                    "customrun",
+                    "--auto-approve",
+                    "--storage-path",
+                    "gs://",
+                ],
+            )
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn(
+                "Storage validation failed: GCS bucket name cannot be "
+                "empty.",
+                result.output,
+            )
+
+            # 6. Unsupported URI scheme rejected upfront
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--run-id",
+                    "customrun",
+                    "--auto-approve",
+                    "--storage-path",
+                    "s3://my-bucket/path",
+                ],
+            )
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn(
+                "Unsupported storage URI scheme 's3://'",
+                result.output,
+            )
+
+            # 6b. Malformed gs: destination without // rejected upfront
+            for bad_gs in ("gs:/my-bucket", "gs:my-bucket", "GS:/bucket"):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                        "--storage-path",
+                        bad_gs,
+                    ],
+                )
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn(
+                    f"Invalid GCS destination format '{bad_gs}'. "
+                    "Did you mean 'gs://'?",
+                    result.output,
+                )
+
+            # 7. No storage configured (local-only mode)
+            self.mock_app_data.get_storage_config.return_value = None
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                    ],
+                    standalone_mode=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                self.assertIsNone(run_details["storage"])
+                self.assertIn("No GCS storage configured", result.output)
+                self.assertIn(
+                    f"./{constants.DEFAULT_OUTPUT_DIR}/", result.output
+                )
+
+            # 8. No storage configured + local --storage-path
+            result = self.runner.invoke(
+                cli.cli,
+                [
+                    "run",
+                    "--suite",
+                    "suite1",
+                    "--run-id",
+                    "customrun",
+                    "--auto-approve",
+                    "--storage-path",
+                    custom_out,
+                ],
+                standalone_mode=False,
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            _, run_details = self.mock_app_data.update_run.call_args[0]
+            self.assertIsNone(run_details["storage"])
+            self.assertEqual(
+                run_details["export_logs_dir"],
+                os.path.join(custom_out, workspace_name),
+            )
+            self.assertIn(
+                "No GCS storage configured. Results will be saved locally "
+                f"under {custom_out}/",
+                result.output,
+            )
+
+    def test_resolve_and_validate_storage(self):
+        """Only gs:// is remote; every other value is a local directory."""
+        global_config = {"type": "gcs", "gcs": {"bucket_name": "global"}}
+        app_data = mock.Mock()
+        app_data.get_storage_config.return_value = global_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = os.path.realpath(tmp)
+            home = os.path.join(tmp, "home")
+            os.makedirs(home)
+            work = os.path.join(tmp, "work")
+            os.makedirs(work)
+            old_cwd = os.getcwd()
+            os.chdir(work)
+            self.addCleanup(os.chdir, old_cwd)
+
+            # Omitted or blank: global config, default export directory.
+            for value in (None, "", "   "):
+                with self.subTest(storage_path=value):
+                    self.assertEqual(
+                        cli._resolve_and_validate_storage(value, app_data),
+                        (global_config, None),
+                    )
+
+            # Local paths: keep the global config, export to the directory.
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                local_cases = [
+                    ("my-bucket", os.path.join(work, "my-bucket")),
+                    (
+                        "my-bucket/team-a",
+                        os.path.join(work, "my-bucket", "team-a"),
+                    ),
+                    ("./custom-out", os.path.join(work, "custom-out")),
+                    ("../sibling", os.path.join(tmp, "sibling")),
+                    ("~/reports", os.path.join(home, "reports")),
+                    (os.path.join(tmp, "abs"), os.path.join(tmp, "abs")),
+                ]
+                for value, expected_dir in local_cases:
+                    with self.subTest(storage_path=value):
+                        self.assertEqual(
+                            cli._resolve_and_validate_storage(value, app_data),
+                            (global_config, expected_dir),
+                        )
+                        self.assertTrue(os.path.isdir(expected_dir))
+                        # The write-test file is removed after validation.
+                        self.assertEqual(os.listdir(expected_dir), [])
+            os.chdir(old_cwd)
+
+        # gs:// URIs (case-insensitive scheme) replace the global config.
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider"
+        ) as mock_get_provider:
+            self.assertEqual(
+                cli._resolve_and_validate_storage("GS://b/p/", app_data),
+                (
+                    {"type": "gcs", "gcs": {"bucket_name": "b", "prefix": "p"}},
+                    None,
+                ),
+            )
+            mock_get_provider.return_value.validate.assert_called_once()
+
+        # Validation errors keep the underlying exception as the cause.
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider"
+        ) as mock_get_provider:
+            cause = exceptions.ChsValidationError("not writable")
+            mock_get_provider.return_value.validate.side_effect = cause
+            for value in ("/some/dir", "gs://b"):
+                with self.subTest(storage_path=value):
+                    with self.assertRaises(click.ClickException) as ctx:
+                        cli._resolve_and_validate_storage(value, app_data)
+                    self.assertIs(ctx.exception.__cause__, cause)
+
+        # Non-gs:// URI schemes are rejected.
+        with self.assertRaisesRegex(
+            click.ClickException, "Unsupported storage URI scheme 's3://'"
+        ):
+            cli._resolve_and_validate_storage("s3://b", app_data)
+
+        # Malformed gs: prefixes are rejected with a helpful suggestion.
+        for bad_gs in (
+            "gs:/bucket",
+            "gs:bucket",
+            "GS:/bucket",
+            "gs:",
+            "gs:foo/bar",
+        ):
+            with self.subTest(storage_path=bad_gs):
+                with self.assertRaisesRegex(
+                    click.ClickException,
+                    rf"Invalid GCS destination format '{re.escape(bad_gs)}'\. "
+                    r"Did you mean 'gs://'\?",
+                ):
+                    cli._resolve_and_validate_storage(bad_gs, app_data)
+
+    def test_resolve_export_logs_dir(self):
+        """Resolver always nests results in a per-run subfolder."""
+        with tempfile.TemporaryDirectory() as cwd:
+            with mock.patch(
+                "chs.cli.pathlib.Path.cwd", return_value=pathlib.Path(cwd)
+            ):
+                # Default when custom_export_dir is None
+                self.assertEqual(
+                    cli._resolve_export_logs_dir(None, "ws1"),
+                    os.path.join(cwd, constants.DEFAULT_OUTPUT_DIR, "ws1"),
+                )
+
+                # Custom absolute path gets a per-run subfolder too
+                custom_abs = os.path.join(cwd, "my_custom_dir")
+                self.assertEqual(
+                    cli._resolve_export_logs_dir(custom_abs, "ws1"),
+                    os.path.join(custom_abs, "ws1"),
+                )
+
+    @mock.patch("chs.cli.logger", autospec=True)
+    def test_export_logs_hook(self, mock_logger):
+        """_export_logs exports, or falls back to workspace on OSError."""
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/mocked/workspaces/ws1"
+
+        rm.export_logs_dir = None
+        cli._export_logs(rm)
+        rm.export_logs.assert_not_called()
+        mock_logger.debug.assert_not_called()
+
+        export_dir = f"/custom/{constants.DEFAULT_OUTPUT_DIR}/ws1"
+        rm.export_logs_dir = export_dir
+        rm.export_logs.return_value = [f"{export_dir}/a.log"]
+        cli._export_logs(rm)
+        rm.export_logs.assert_called_once_with(export_dir)
+        rm.update_run_entry.assert_not_called()
+
+        # OSError: warn, do NOT copy into the workspace, and keep the
+        # configured export location so later retries can still export there.
+        rm.export_logs.reset_mock()
+        rm.export_logs.side_effect = PermissionError(13, "Permission denied")
+        with mock.patch("chs.cli.Console", autospec=True) as mock_console:
+            cli._export_logs(rm)
+        rm.export_logs.assert_called_once_with(export_dir)
+        rm.update_run_entry.assert_not_called()
+        warning = mock_console.return_value.print.call_args[0][0]
+        self.assertIn(f"Could not export results to '{export_dir}'", warning)
+        self.assertIn("Permission denied", warning)
+        self.assertIn(
+            "Results preserved in workspace: /mocked/workspaces/ws1", warning
+        )
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_exports_after_archiving(self, mock_export):
+        """_archive_and_log triggers the export hook after archiving."""
+        calls = []
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/nonexistent/ws1"
+        rm.export_logs_dir = None
+        rm.has_bill_of_health.return_value = False
+        mock_export.side_effect = lambda _: calls.append("export")
+        rm.archive.side_effect = lambda: calls.append("archive") or (
+            None,
+            None,
+            None,
+            False,
+        )
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider_for_run",
+            return_value=None,
+        ):
+            cli._archive_and_log(rm)
+        self.assertEqual(calls, ["archive", "export"])
+        mock_export.assert_called_once_with(rm)
+        rm.update_run_entry.assert_not_called()
+
+    def test_archive_and_log_still_archives_when_export_crashes(self):
+        """An unexpected export error never blocks the GCS upload."""
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/nonexistent/ws1"
+        rm.export_logs_dir = "/out/ws1"
+        rm.has_bill_of_health.return_value = False
+        rm.export_logs.side_effect = AttributeError("bad run metadata")
+        rm.archive.return_value = (None, None, None, False)
+        with (
+            mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ),
+            mock.patch("chs.cli.Console", autospec=True) as mock_console,
+        ):
+            cli._archive_and_log(rm)
+        rm.archive.assert_called_once()
+        printed = [
+            c.args[0] for c in mock_console.return_value.print.call_args_list
+        ]
+        self.assertTrue(
+            any("Could not export results to '/out/ws1'" in p for p in printed)
+        )
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_gcs_upload_failure_warns(self, mock_export):
+        """GCS upload failure names the destination and shows local paths."""
+        with tempfile.TemporaryDirectory() as export_dir:
+            for name in ("bill_of_health.html", "bill_of_health.json"):
+                pathlib.Path(export_dir, name).write_text("{}")
+            rm = mock.create_autospec(RambleManager, instance=True)
+            rm.workspace_name = "ws1"
+            rm.path = "/nonexistent/ws1"
+            rm.export_logs_dir = export_dir
+            rm.has_bill_of_health.return_value = True
+            rm.archive.return_value = (None, None, None, False)
+            provider = mock.Mock()
+            provider.get_uri.return_value = "gs://my-bucket/team-a/"
+            with (
+                mock.patch(
+                    "chs.cli.StorageProviderFactory.get_provider_for_run",
+                    return_value=provider,
+                ),
+                mock.patch("chs.cli.Console", autospec=True) as mock_console,
+            ):
+                cli._archive_and_log(rm)
+
+        printed = [
+            c.args[0] for c in mock_console.return_value.print.call_args_list
+        ]
+        self.assertIn(
+            "[Warning] Failed to upload results to GCS (gs://my-bucket/team-a)."
+            " Results are preserved locally:",
+            printed[0],
+        )
+        self.assertIn(
+            os.path.join(export_dir, "bill_of_health.html"), printed[1]
+        )
+        self.assertIn(
+            os.path.join(export_dir, "bill_of_health.json"), printed[2]
+        )
+        rm.update_run_entry.assert_called_once_with(
+            {
+                "boh_html_uri": os.path.join(export_dir, "bill_of_health.html"),
+                "boh_uri": os.path.join(export_dir, "bill_of_health.json"),
+            }
+        )
+
+    def test_format_local_display_path(self):
+        """_format_local_display_path formats paths relative to cwd."""
+        cwd = pathlib.Path.cwd().resolve()
+        subpath = str(cwd / "chs-output" / "ws1" / "bill_of_health.html")
+        self.assertEqual(
+            cli._format_local_display_path(subpath),
+            "./chs-output/ws1/bill_of_health.html",
+        )
+
+        # Path outside cwd remains unchanged
+        outside = "/tmp/somewhere/outside/bill_of_health.html"
+        self.assertEqual(cli._format_local_display_path(outside), outside)
+
+        # Remote URIs remain unchanged
+        gcs_uri = "gs://bucket/path/bill_of_health.html"
+        self.assertEqual(cli._format_local_display_path(gcs_uri), gcs_uri)
+
+        # None remains None
+        self.assertIsNone(cli._format_local_display_path(None))
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_formats_local_paths_relative_to_cwd(
+        self, mock_export
+    ):
+        """_archive_and_log prints local paths as ./chs-output/..."""
+        cwd = pathlib.Path.cwd().resolve()
+        rel_export_dir = "chs-output/ws1"
+        export_dir = str(cwd / rel_export_dir)
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/workspace/ws1"
+        rm.export_logs_dir = export_dir
+        rm.has_bill_of_health.return_value = True
+        rm.archive.return_value = (None, None, None, False)
+
+        with (
+            mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ),
+            mock.patch("chs.cli.Console", autospec=True) as mock_console,
+            mock.patch(
+                "chs.cli._find_local_artifact",
+                side_effect=lambda name, *dirs: os.path.join(export_dir, name),
+            ),
+        ):
+            cli._archive_and_log(rm)
+
+        printed = [
+            c.args[0] for c in mock_console.return_value.print.call_args_list
+        ]
+        expected_html = f"./{rel_export_dir}/bill_of_health.html"
+        expected_json = f"./{rel_export_dir}/bill_of_health.json"
+        self.assertIn(expected_html, printed[0])
+        self.assertIn(expected_json, printed[1])
+        # Local paths must not be OSC 8 hyperlinks (no file-scheme handler).
+        self.assertNotIn("[link=", printed[0])
+        self.assertNotIn("[link=", printed[1])
+        rm.update_run_entry.assert_called_once_with(
+            {
+                "boh_html_uri": os.path.join(export_dir, "bill_of_health.html"),
+                "boh_uri": os.path.join(export_dir, "bill_of_health.json"),
+            }
+        )
+
+    @mock.patch("chs.cli._export_logs", autospec=True)
+    def test_archive_and_log_links_gcs_locations(self, mock_export):
+        """_archive_and_log hyperlinks GCS locations to the Cloud console."""
+        rm = mock.create_autospec(RambleManager, instance=True)
+        rm.workspace_name = "ws1"
+        rm.path = "/nonexistent/ws1"
+        rm.export_logs_dir = None
+        rm.has_bill_of_health.return_value = True
+        rm.archive.return_value = (
+            "gs://bucket/p/workspaces/ws1.tar.gz",
+            "gs://bucket/p/bills_of_health/ws1.json",
+            "gs://bucket/p/bills_of_health/ws1.html",
+            True,
+        )
+        with (
+            mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=mock.Mock(),
+            ),
+            mock.patch("chs.cli.Console", autospec=True) as mock_console,
+        ):
+            cli._archive_and_log(rm)
+
+        calls = mock_console.return_value.print.call_args_list
+        printed = [c.args[0] for c in calls]
+        self.assertIn(
+            "[link=https://storage.cloud.google.com/bucket/p/bills_of_health/"
+            "ws1.html]gs://bucket/p/bills_of_health/ws1.html[/link]",
+            printed[0],
+        )
+        self.assertIn(
+            "[link=https://storage.cloud.google.com/bucket/p/bills_of_health/"
+            "ws1.json]gs://bucket/p/bills_of_health/ws1.json[/link]",
+            printed[1],
+        )
+        for call in calls:
+            self.assertTrue(call.kwargs.get("soft_wrap"))
+
+    def test_show_results_when_boh_missing_and_no_storage_configured(self):
+        """When BoH is missing and storage unconfigured, raise clear error."""
+        app_data = mock.Mock()
+        app_data.get_workspaces_dir.return_value = "/tmp/nonexistent-workspaces"
+        app_data.resolve_run_id.return_value = "ws_test"
+        app_data.get_run.return_value = {}
+        app_data.get_storage_config.return_value = {}
+
+        with mock.patch(
+            "chs.cli.StorageProviderFactory.get_provider_for_run",
+            return_value=None,
+        ):
+            with self.assertRaises(
+                exceptions.BillOfHealthNotFoundException
+            ) as ctx:
+                cli._show_results(app_data, "ws_test")
+
+        msg = str(ctx.exception)
+        self.assertIn("Results not found for run 'ws_test'.", msg)
+        self.assertNotIn("No storage provider configured", msg)
+        self.assertNotIn("chs configure storage", msg)
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_show_results_local_run_passes_uris_to_viewer(
+        self, mock_viewer_cls
+    ):
+        """Test _show_results passes local html and json URIs."""
+        mock_viewer = mock_viewer_cls.return_value
+        mock_viewer.boh = pb.BillOfHealth()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws_name = "test-ws-local"
+            ws_path = pathlib.Path(tmp_dir) / "workspaces" / ws_name
+            ws_path.mkdir(parents=True)
+            boh_json = ws_path / "bill_of_health.json"
+            boh_html = ws_path / "bill_of_health.html"
+            boh_json.write_text("{}")
+            boh_html.write_text("<html></html>")
+
+            app_data = mock.Mock()
+            app_data.get_workspaces_dir.return_value = str(
+                pathlib.Path(tmp_dir) / "workspaces"
+            )
+            app_data.resolve_run_id.return_value = ws_name
+            app_data.get_run.return_value = {
+                "workspace_path": str(ws_path),
+                "boh_html_uri": str(boh_html),
+                "boh_uri": str(boh_json),
+            }
+
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ):
+                cli._show_results(app_data, ws_name)
+
+            expected_html = cli._format_local_display_path(str(boh_html))
+            expected_json = cli._format_local_display_path(str(boh_json))
+
+            mock_viewer_cls.assert_called_once_with(
+                boh_json,
+                boh_html_uri=expected_html,
+                boh_json_uri=expected_json,
+            )
+            mock_viewer.show_summary_and_details.assert_called_once()
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_show_results_gcs_run_passes_uris_to_viewer(self, mock_viewer_cls):
+        """Test _show_results passes GCS html and json URIs."""
+        mock_viewer = mock_viewer_cls.return_value
+        mock_viewer.boh = pb.BillOfHealth()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws_name = "test-ws-gcs"
+            ws_path = pathlib.Path(tmp_dir) / "workspaces" / ws_name
+            ws_path.mkdir(parents=True)
+            boh_json = ws_path / "bill_of_health.json"
+            boh_json.write_text("{}")
+
+            app_data = mock.Mock()
+            app_data.get_workspaces_dir.return_value = str(
+                pathlib.Path(tmp_dir) / "workspaces"
+            )
+            app_data.resolve_run_id.return_value = ws_name
+            app_data.get_run.return_value = {
+                "boh_html_uri": f"gs://my-bucket/prefix/bills_of_health/{ws_name}.html",
+                "boh_uri": f"gs://my-bucket/prefix/bills_of_health/{ws_name}.json",
+            }
+
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ):
+                cli._show_results(app_data, ws_name)
+
+            mock_viewer_cls.assert_called_once_with(
+                boh_json,
+                boh_html_uri=f"gs://my-bucket/prefix/bills_of_health/{ws_name}.html",
+                boh_json_uri=f"gs://my-bucket/prefix/bills_of_health/{ws_name}.json",
+            )
+            mock_viewer.show_summary_and_details.assert_called_once()
+
+    @mock.patch("chs.cli.ResultsViewer", autospec=True)
+    def test_show_results_skips_stale_local_paths(self, mock_viewer_cls):
+        """Deleted export paths fall back to the internal workspace."""
+        mock_viewer = mock_viewer_cls.return_value
+        mock_viewer.boh = pb.BillOfHealth()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws_name = "test-ws-stale"
+            workspaces = pathlib.Path(tmp_dir) / "workspaces"
+            boh_json = workspaces / ws_name / "bill_of_health.json"
+            boh_json.parent.mkdir(parents=True)
+            boh_json.write_text("{}")
+            deleted_export = pathlib.Path(tmp_dir) / "chs-output" / ws_name
+
+            app_data = mock.Mock()
+            app_data.get_workspaces_dir.return_value = str(workspaces)
+            app_data.resolve_run_id.return_value = ws_name
+            app_data.get_run.return_value = {
+                "boh_html_uri": str(deleted_export / "bill_of_health.html"),
+                "boh_uri": str(deleted_export / "bill_of_health.json"),
+            }
+
+            with mock.patch(
+                "chs.cli.StorageProviderFactory.get_provider_for_run",
+                return_value=None,
+            ):
+                cli._show_results(app_data, ws_name)
+            mock_viewer_cls.assert_called_once_with(
+                boh_json,
+                boh_html_uri=None,
+                boh_json_uri=cli._format_local_display_path(str(boh_json)),
+            )
 
     @mock.patch("chs.cli._analyze_action", autospec=True)
     def test_run_command_rechecks_targeted_nodes_before_submitting(
@@ -1275,6 +2649,40 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cancellation failed", result.output)
+
+    def test_cancel_uses_the_scheduler_the_run_ran_on(self):
+        """A local run is cancelled on its recorded scheduler."""
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = "ws-run1"
+        self.mock_app_data.get_run.return_value = {"scheduler": "standalone"}
+
+        result = self.runner.invoke(cli.cli, ["cancel", "run1", "-y"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.get_run.assert_called_once_with("ws-run1")
+        self.mock_get_scheduler.assert_called_once_with("standalone")
+        self.mock_detect_scheduler.assert_not_called()
+        self.mock_scheduler.cancel_run.assert_called_once_with("run1")
+
+    def test_cancel_auto_detects_without_a_recorded_scheduler(self):
+        """Unknown runs and runs without a recorded scheduler auto-detect."""
+        for resolve, entry in (
+            (exceptions.WorkspaceNotFoundException("missing"), None),
+            (None, {}),
+            (None, {"scheduler": "bogus"}),
+        ):
+            with self.subTest(entry=entry):
+                self.mock_get_scheduler.reset_mock()
+                self.mock_detect_scheduler.reset_mock()
+                self.mock_app_data.resolve_run_id.side_effect = resolve
+                self.mock_app_data.resolve_run_id.return_value = "ws-run1"
+                self.mock_app_data.get_run.return_value = entry
+
+                result = self.runner.invoke(cli.cli, ["cancel", "run1", "-y"])
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.mock_detect_scheduler.assert_called_once_with()
+                self.mock_get_scheduler.assert_called_once_with("slurm")
 
     def test_cancel_action_kube_error_raises_cancellation_exception(self):
         """Test cancel_action wraps a Kubernetes API error of any step."""
@@ -1682,17 +3090,24 @@ class TestCli(unittest.TestCase):
             self.assertNotEqual(result.exit_code, 0)
             self.assertIn("failed to resolve storage provider", result.output)
 
+    @mock.patch("chs.storage.StorageProviderFactory.get_active_provider")
     @mock.patch("chs.storage.StorageProviderFactory.get_provider_for_run")
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_results_command_download_success(
-        self, mock_viewer, mock_get_provider_for_run
+        self, mock_viewer, mock_get_provider_for_run, mock_get_active_provider
     ):
         """Test results command downloads BoH from storage if missing."""
+        mock_viewer.return_value.boh = pb.BillOfHealth()
         self.mock_app_data.get_latest_run_id.return_value = "latest_run"
         self.mock_app_data.get_run.return_value = None
 
+        # Simulate get_provider_for_run returning None (because get_run is None)
+        # and falling back to get_active_provider()
+        mock_get_provider_for_run.return_value = None
         mock_provider = mock.Mock()
-        mock_get_provider_for_run.return_value = mock_provider
+        mock_provider.get_uri.side_effect = lambda p: f"gs://bucket/{p}"
+        mock_provider.exists.side_effect = lambda p: True
+        mock_get_active_provider.return_value = mock_provider
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self.mock_app_data.get_workspaces_dir.return_value = tmpdir
@@ -1704,10 +3119,242 @@ class TestCli(unittest.TestCase):
             args, _ = mock_provider.download_file.call_args
             self.assertEqual(args[0], "bills_of_health/latest_run.json")
             mock_viewer.assert_called_once()
+            self.assertEqual(
+                mock_viewer.call_args.kwargs["boh_html_uri"],
+                "gs://bucket/bills_of_health/latest_run.html",
+            )
+            self.assertEqual(
+                mock_viewer.call_args.kwargs["boh_json_uri"],
+                "gs://bucket/bills_of_health/latest_run.json",
+            )
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_sets_telemetry_run(self, mock_analyze_action):
+        """Test 'run' tags telemetry with the new run."""
+        self.enterContext(
+            mock.patch(
+                "chs.cli.utils.generate_random_suffix", return_value="a3f9"
+            )
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_analyze_action.assert_called_once()
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_sends_run_metrics(self, mock_analyze_action):
+        """Test 'run' reports the command, cluster and scheduled tests."""
+        send = self.enterContext(
+            mock.patch.object(telemetry, "send_metric", autospec=True)
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.get_nodes_under_test.return_value = ["n1", "n2"]
+        self.mock_scheduler.name = "kubernetes"
+        self.mock_scheduler.project_id = "my-project"
+        self.mock_scheduler.node_to_zone = {
+            "n1": "us-central1-a",
+            "n2": "us-central1-a",
+        }
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_analyze_action.assert_called_once()
+        sent = {c.args[0]: c.args[1] for c in send.call_args_list}
+        M = telemetry.MetricName
+        self.assertEqual(sent[M.PARENT_COMMAND], "run")
+        self.assertEqual(sent[M.COMMAND_FLAGS], "auto-approve,suite")
+        self.assertEqual(sent[M.CLUSTER_TYPE], "GKE")
+        self.assertEqual(sent[M.STORAGE_TYPE], "GCS")
+        self.assertEqual(sent[M.MACHINE_TYPE], "a3-megagpu-8g")
+        self.assertEqual(sent[M.NODE_COUNT], 2)
+        self.assertEqual(sent[M.ZONE], "us-central1-a")
+        self.assertEqual(sent[M.IS_TEST_DATA], "false")
+        self.assertEqual(sent[M.TEST_SUITE], "suite1")
+        test_names = sent[M.TEST_NAME].split(",")
+        self.assertTrue(test_names)
+        self.assertEqual(test_names, sorted(test_names))
+        self.assertEqual(telemetry._state.project_id, "my-project")
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_records_run_after_run_id_is_set(
+        self, mock_analyze_action
+    ):
+        """Test 'run' reports its metrics only once the run has an ID."""
+        run_ids_when_recorded = []
+        self.enterContext(
+            mock.patch.object(
+                cli.telemetry_reporting,
+                "record_run",
+                side_effect=lambda *_: run_ids_when_recorded.append(
+                    telemetry._state.run_id
+                ),
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "chs.cli.utils.generate_random_suffix", return_value="a3f9"
+            )
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+
+        result = self.runner.invoke(
+            cli.cli,
+            ["run", "--suite", "suite1", "--auto-approve"],
+            standalone_mode=False,
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(run_ids_when_recorded, [MOCK_TELEMETRY_RUN_ID])
+
+    @mock.patch("chs.cli._analyze_action", autospec=True)
+    def test_run_command_declined_at_prompt_sends_no_run_metrics(
+        self, mock_analyze_action
+    ):
+        """Test a run the user declines at the prompt reports no run."""
+        record_run = self.enterContext(
+            mock.patch.object(cli.telemetry_reporting, "record_run")
+        )
+        # A mock sys makes stdin look like a terminal, so the prompts show.
+        self.enterContext(mock.patch.object(cli, "sys"))
+        self.enterContext(
+            mock.patch.object(
+                cli.click,
+                "confirm",
+                side_effect=lambda prompt, **_: (
+                    prompt != "Proceed with execution?"
+                ),
+            )
+        )
+
+        result = self.runner.invoke(cli.cli, ["run", "--suite", "suite1"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        mock_analyze_action.assert_not_called()
+        record_run.assert_not_called()
+        self.assertIsNone(telemetry._state.run_id)
+
+    def test_run_command_reports_ctrl_c(self):
+        """Test Ctrl+C in 'run' is reported as an interrupt, exit code 130."""
+        send = self.enterContext(
+            mock.patch.object(telemetry, "send_metric", autospec=True)
+        )
+        self.mock_detect_scheduler.side_effect = KeyboardInterrupt
+
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
+
+        self.assertEqual(result.exit_code, 130)
+        send.assert_any_call(
+            telemetry.MetricName.ERROR_CATEGORY, "KeyboardInterrupt"
+        )
+        send.assert_called_with(telemetry.MetricName.EXIT_CODE, 130)
+
+    def test_run_command_reports_scheduler_error(self):
+        """Test 'run' reports the error when scheduler detection fails."""
+        send = self.enterContext(
+            mock.patch.object(telemetry, "send_metric", autospec=True)
+        )
+        self.mock_detect_scheduler.side_effect = (
+            exceptions.ChsSchedulerException("no scheduler")
+        )
+
+        result = self.runner.invoke(cli.cli, ["run", "--auto-approve"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        send.assert_any_call(
+            telemetry.MetricName.ERROR_CATEGORY, "ChsSchedulerException"
+        )
+
+    def test_analyze_action_sets_telemetry_run(self):
+        """Test _analyze_action tags telemetry, even if analysis fails."""
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = (
+            MOCK_TELEMETRY_WORKSPACE_NAME
+        )
+
+        # The mocked workspace is not on disk, so analysis fails after tagging.
+        with self.assertRaises(exceptions.WorkspaceNotFoundException):
+            cli._analyze_action(self.mock_app_data, "mockcluster-lite-a3f9")
+
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    def test_show_results_sets_telemetry_run(self):
+        """Test _show_results tags telemetry with a registered run."""
+        self.enterContext(
+            mock.patch("chs.cli.StorageProviderFactory", autospec=True)
+        )
+        mock_viewer = self.enterContext(
+            mock.patch("chs.cli.ResultsViewer", autospec=True)
+        )
+        mock_viewer.return_value.boh = pb.BillOfHealth()
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = (
+            MOCK_TELEMETRY_WORKSPACE_NAME
+        )
+
+        cli._show_results(self.mock_app_data, "mockcluster-lite-a3f9")
+
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    def test_show_results_skips_telemetry_run_for_unregistered_run(self):
+        """Test _show_results skips runs missing from the local registry."""
+        self.enterContext(
+            mock.patch("chs.cli.StorageProviderFactory", autospec=True)
+        )
+        mock_viewer = self.enterContext(
+            mock.patch("chs.cli.ResultsViewer", autospec=True)
+        )
+        mock_viewer.return_value.boh = pb.BillOfHealth()
+        self.mock_app_data.resolve_run_id.side_effect = (
+            exceptions.WorkspaceNotFoundException("not found")
+        )
+
+        # Not tagged even when the raw run_id looks like a workspace name.
+        cli._show_results(self.mock_app_data, MOCK_TELEMETRY_WORKSPACE_NAME)
+
+        self.assertIsNone(telemetry._state.run_id)
+
+    def test_cancel_command_sets_telemetry_run(self):
+        """Test 'cancel' tags telemetry with the latest run."""
+        self.mock_app_data.resolve_run_id.side_effect = None
+        self.mock_app_data.resolve_run_id.return_value = (
+            MOCK_TELEMETRY_WORKSPACE_NAME
+        )
+
+        result = self.runner.invoke(cli.cli, ["cancel", "--auto-approve"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(telemetry._state.run_id, MOCK_TELEMETRY_RUN_ID)
+
+    def test_cancel_command_skips_telemetry_run_for_unregistered_run(self):
+        """Test 'cancel' of a run not in the local registry sets no run."""
+        self.mock_app_data.resolve_run_id.side_effect = (
+            exceptions.WorkspaceNotFoundException("not found")
+        )
+
+        result = self.runner.invoke(
+            cli.cli, ["cancel", "other-user-run-ab12", "--auto-approve"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(telemetry._state.run_id)
 
     def test_archive_workspace_context_manager_success(self):
         """Test archive_workspace calling archival on success."""
         mock_rm = mock.Mock()
+        mock_rm.path = "/mock/workspace"
+        mock_rm.export_logs_dir = None
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
@@ -1721,6 +3368,8 @@ class TestCli(unittest.TestCase):
     def test_archive_workspace_context_manager_failure(self):
         """Test archive_workspace calling archival on failure."""
         mock_rm = mock.Mock()
+        mock_rm.path = "/mock/workspace"
+        mock_rm.export_logs_dir = None
         mock_rm.archive.return_value = (
             "/mock/workspace.tar.gz",
             "/mock/boh.json",
@@ -2052,6 +3701,7 @@ class TestCli(unittest.TestCase):
     @mock.patch("chs.cli.ResultsViewer", autospec=True)
     def test_results_command(self, mock_results_viewer):
         """Test 'results' command."""
+        mock_results_viewer.return_value.boh = pb.BillOfHealth()
         # Create temp workspace
         workspaces_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workspaces_dir)
@@ -2307,6 +3957,66 @@ class TestCli(unittest.TestCase):
         self.mock_app_data.set_storage_config.assert_called_once_with(
             {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
         )
+
+    def test_configure_telemetry_enable(self):
+        self.mock_app_data.telemetry_env_override.return_value = None
+
+        result = self.runner.invoke(
+            cli.cli, ["configure", "telemetry", "enable"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.set_telemetry_enabled.assert_called_once_with(True)
+        self.assertEqual(result.output, "Telemetry enabled.\n")
+
+    def test_configure_telemetry_enable_says_env_var_keeps_it_off(self):
+        self.mock_app_data.telemetry_env_override.return_value = (
+            "CHS_TELEMETRY=0"
+        )
+
+        result = self.runner.invoke(
+            cli.cli, ["configure", "telemetry", "enable"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.set_telemetry_enabled.assert_called_once_with(True)
+        self.assertEqual(
+            result.output,
+            "Telemetry enabled, but it stays off while CHS_TELEMETRY=0 is "
+            "set.\n",
+        )
+
+    def test_configure_telemetry_disable(self):
+        result = self.runner.invoke(
+            cli.cli, ["configure", "telemetry", "disable"]
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.mock_app_data.set_telemetry_enabled.assert_called_once_with(False)
+        self.assertEqual(result.output, "Telemetry disabled.\n")
+
+    def test_configure_telemetry_status(self):
+        for env_override, enabled, expected in (
+            (None, True, "Telemetry is enabled."),
+            (None, False, "Telemetry is disabled."),
+            (
+                "DO_NOT_TRACK=1",
+                False,
+                "Telemetry is disabled because DO_NOT_TRACK=1 is set.",
+            ),
+        ):
+            with self.subTest(env_override=env_override, enabled=enabled):
+                self.mock_app_data.telemetry_env_override.return_value = (
+                    env_override
+                )
+                self.mock_app_data.is_telemetry_enabled.return_value = enabled
+
+                result = self.runner.invoke(
+                    cli.cli, ["configure", "telemetry", "status"]
+                )
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertEqual(result.output, f"{expected}\n")
 
 
 class TestCliHistory(unittest.TestCase):

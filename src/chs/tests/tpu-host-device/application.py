@@ -14,14 +14,6 @@
 
 from ramble.appkit import *
 
-_BW_VALUE = r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
-_H2D_MEDIAN_REGEX = (
-    r".*H2D_bw \(GiB/s\) median:\s*(?P<h2d_bandwidth>" + _BW_VALUE + r")"
-)
-_D2H_MEDIAN_REGEX = (
-    r".*D2H_bw \(GiB/s\) median:\s*(?P<d2h_bandwidth>" + _BW_VALUE + r")"
-)
-
 
 class TpuHostDevice(ExecutableApplication):
     """TPU JAX Host-Device I/O benchmark for cluster health scanner.
@@ -35,29 +27,34 @@ class TpuHostDevice(ExecutableApplication):
     tags("diagnostics", "tpu", "host-device")
 
     variable(
-        "container_app_dir",
-        default="/app/accelerator-microbenchmarks",
-        description="Directory of accelerator-microbenchmarks inside the container",
-    )
-    variable(
-        "run_script",
-        default="Ironwood/src/run_benchmark.py",
-        description="Path to run_benchmark.py relative to container_app_dir",
-    )
-    variable(
         "benchmarks_yaml_file",
-        default="host_device.yaml",
-        description="Filename of the benchmarks config in the benchmarks/ directory",
+        default="host_to_device.yaml",
+        description="Filename of the host_to_device config in the benchmarks/ directory",
     )
     variable(
         "benchmarks_yaml_escaped",
         default="",
-        description="YAML content for benchmarks configuration (escaped for printf)",
+        description="YAML content for host_to_device configuration (escaped for printf)",
+    )
+    variable(
+        "benchmarks_yaml_d2h_file",
+        default="device_to_host.yaml",
+        description="Filename of the device_to_host config in the benchmarks/ directory",
+    )
+    variable(
+        "benchmarks_yaml_d2h_escaped",
+        default="",
+        description="YAML content for device_to_host configuration (escaped for printf)",
     )
     variable(
         "config_file",
-        default="{experiment_run_dir}/chs_tpu_host_device.yaml",
-        description="Path to config file",
+        default="{experiment_run_dir}/chs_tpu_host_to_device.yaml",
+        description="Path to the host_to_device config file",
+    )
+    variable(
+        "config_file_d2h",
+        default="{experiment_run_dir}/chs_tpu_device_to_host.yaml",
+        description="Path to the device_to_host config file",
     )
 
     variable(
@@ -75,7 +72,9 @@ class TpuHostDevice(ExecutableApplication):
         "execute",
         template=[
             "printf '%b' '{benchmarks_yaml_escaped}' | tee {config_file}",
-            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} python3 -u {container_app_dir}/{run_script} --config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
+            "printf '%b' '{benchmarks_yaml_d2h_escaped}' | tee {config_file_d2h}",
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} env PYTHONUNBUFFERED=1 tpums benchmark run-config {config_file} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
+            'set -o pipefail; {driver_escape_overrides} {tpu_run_wrapper} env PYTHONUNBUFFERED=1 tpums benchmark run-config {config_file_d2h} 2>&1 | sed "s/^/HOST $\\{MY_NODE_NAME:-$(hostname)\\}: /"',
         ],
         use_mpi=False,
     )
@@ -83,22 +82,22 @@ class TpuHostDevice(ExecutableApplication):
 
     figure_of_merit_context(
         "params",
-        regex=r"HOST (?P<node>\S+): Running host_device with params:.*?'data_size_mib':\s*(?P<size>\d+)",
-        output_format="{node},{size}MiB",
+        regex=r"HOST (?P<node>\S+): Running \[\d+/\d+\] (?:host_to_device|device_to_host) \(\w+_dev\w+_size_(?P<size_mib>\d+)mib\)",
+        output_format="{node},{size_mib}MiB",
     )
 
     figure_of_merit(
         "H2D Bandwidth",
-        fom_regex=_H2D_MEDIAN_REGEX,
+        fom_regex=r".*Success \[\d+/\d+\] host_to_device\. Metrics: .*'xprof_bandwidth_per_host_gb_s': (?:np\.float64\()?(?P<h2d_bandwidth>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="h2d_bandwidth",
-        units="GiB/s",
+        units="GB/s",
         contexts=["params"],
     )
 
     figure_of_merit(
         "D2H Bandwidth",
-        fom_regex=_D2H_MEDIAN_REGEX,
+        fom_regex=r".*Success \[\d+/\d+\] device_to_host\. Metrics: .*'xprof_bandwidth_per_host_gb_s': (?:np\.float64\()?(?P<d2h_bandwidth>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\)?",
         group_name="d2h_bandwidth",
-        units="GiB/s",
+        units="GB/s",
         contexts=["params"],
     )

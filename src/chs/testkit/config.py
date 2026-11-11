@@ -19,7 +19,7 @@ from collections.abc import Iterator, Mapping
 
 import yaml
 
-SCHEDULERS = ("kubernetes", "slurm")
+SCHEDULERS = ("kubernetes", "slurm", "standalone")
 
 PLATFORMS_ROOT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

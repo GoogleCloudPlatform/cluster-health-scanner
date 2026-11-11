@@ -48,6 +48,7 @@ from chs.utils import file_utils
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
 from chs.storage import StorageProviderFactory
+from chs.telemetry import reporting as telemetry_reporting
 from chs.utils import theme
 from chs.utils.app_data import ChsAppData
 from chs.utils.lifecycle import JobStatus
@@ -57,6 +58,13 @@ logger = logging.getLogger(__name__)
 
 _JOB_POLL_INTERVAL_SECONDS = 5
 _MAX_POLL_OUTAGE_SECONDS = 180
+
+
+def _file_size(path: str | os.PathLike[str] | None) -> int:
+    try:
+        return os.path.getsize(path) if path else 0
+    except Exception:
+        return 0
 
 
 class RambleManager:
@@ -519,7 +527,7 @@ class RambleManager:
                 "workspace_path": self.path,
                 "job_entries": job_entries,
                 "submission_time": (
-                    datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    datetime.datetime.now(datetime.UTC).isoformat()
                 ),
                 "scheduler": self.get_scheduler_type(),
             }
@@ -1129,13 +1137,19 @@ class RambleManager:
 
         workspace_dir = pathlib.Path(self._path)
 
-        storage_config = self._app_data.get_storage_config()
+        run_entry = self._app_data.get_run(self._workspace_name)
+        storage_config = (
+            run_entry.get("storage") if isinstance(run_entry, dict) else None
+        )
         gcs_base_path = None
         if storage_config and storage_config.get("type") == "gcs":
-            bucket_name = storage_config.get("gcs", {}).get("bucket_name")
+            gcs_dict = storage_config.get("gcs", {})
+            bucket_name = gcs_dict.get("bucket_name", "").strip("/")
+            prefix = gcs_dict.get("prefix", "").strip("/")
             if bucket_name:
+                gcs_root = f"{bucket_name}/{prefix}" if prefix else bucket_name
                 gcs_base_path = (
-                    f"gs://{bucket_name}/workspaces/{self._workspace_name}"
+                    f"gs://{gcs_root}/workspaces/{self._workspace_name}"
                 )
 
         boh_generator = BOHGenerator(
@@ -1322,6 +1336,82 @@ class RambleManager:
         """Returns True if bill_of_health.json exists in the workspace."""
         return os.path.exists(os.path.join(self.path, "bill_of_health.json"))
 
+    @property
+    def export_logs_dir(self) -> str | None:
+        """Directory this run's logs are exported to, or None if disabled."""
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        value = run_entry.get("export_logs_dir")
+        return value if isinstance(value, str) and value else None
+
+    def update_run_entry(self, updates: dict[str, Any]) -> None:
+        """Merges `updates` into this run's entry in the local registry."""
+        self._app_data.update_run(self._workspace_name, updates)
+
+    def export_logs(self, target_dir: str | os.PathLike[str]) -> list[str]:
+        """Copies the run's logs into a single flat directory.
+
+        Each test log is copied as ``<experiment>.log`` where ``<experiment>``
+        is the experiment directory name without its ``chs-<run_id>-`` prefix.
+        ``bill_of_health.html``, ``bill_of_health.json``, ``debug.txt``, and
+        ``internal.log`` are copied as-is when present.
+
+        Args:
+          target_dir: Directory to copy the logs into. Created if missing.
+
+        Returns:
+          The paths of the files that were copied.
+
+        Raises:
+          OSError: If ``target_dir`` cannot be created or any file fails to
+            copy. Files that could be copied are still exported.
+        """
+        target = pathlib.Path(target_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        exported: list[str] = []
+        failures: list[OSError] = []
+
+        def copy(src: pathlib.Path, dest_name: str) -> None:
+            dest = target / dest_name
+            try:
+                shutil.copy2(src, dest)
+            except OSError as e:
+                logger.debug("Failed to export %s to %s: %s", src, dest, e)
+                failures.append(e)
+                return
+            exported.append(str(dest))
+
+        prefix = f"chs-{self._run_id}-" if self._run_id else ""
+        run_entry = self._app_data.get_run(self._workspace_name) or {}
+        for job_id, info in run_entry.get("job_entries", {}).items():
+            exp_dir = info.get("experiment_dir")
+            if not exp_dir:
+                continue
+            exp_name = os.path.basename(exp_dir)
+            src = pathlib.Path(exp_dir) / f"{exp_name}.out"
+            if not src.is_file():
+                logger.debug("No log to export for job %s at %s", job_id, src)
+                continue
+            copy(src, exp_name.removeprefix(prefix) + ".log")
+
+        for name in (
+            "bill_of_health.html",
+            "bill_of_health.json",
+            "debug.txt",
+            "internal.log",
+        ):
+            src = pathlib.Path(self.path) / name
+            if src.is_file():
+                copy(src, name)
+
+        if failures:
+            first = failures[0]
+            raise OSError(
+                first.errno,
+                f"{len(failures)} file(s) failed to copy: "
+                f"{first.strerror or first}",
+            )
+        return exported
+
     def is_archived(self) -> bool:
         """Returns True if workspace has been archived.
 
@@ -1396,6 +1486,7 @@ class RambleManager:
             logger.debug("Failed to upload Bill of Health.")
             all_uploads_succeeded = False
 
+        archive_size = _file_size(archive_file)
         ws_dest = (
             self._upload_workspace_archive(provider, archive_file)
             if archive_file
@@ -1404,6 +1495,21 @@ class RambleManager:
         if not ws_dest:
             logger.debug("Failed to upload workspace archive.")
             all_uploads_succeeded = False
+
+        uploads = {"workspace": (bool(ws_dest), archive_size)}
+        if boh_json_dest or not boh_success:
+            uploads["bill_of_health"] = (
+                boh_success,
+                sum(
+                    _file_size(path)
+                    for path, dest in (
+                        (local_json_path, boh_json_dest),
+                        (local_html_path, boh_html_dest),
+                    )
+                    if dest
+                ),
+            )
+        telemetry_reporting.record_uploads(provider, uploads)
 
         return (
             provider.get_uri(ws_dest)

@@ -40,7 +40,7 @@ class TpuInfo(ExecutableApplication):
         "execute",
         template=[
             f"echo '{_B64_SCRIPT}' | base64 -d > tpu_inventory.py",
-            "python3 tpu_inventory.py",
+            "$\\{CHS_PYTHON:-python3\\} tpu_inventory.py",
         ],
         use_mpi=True,
     )
@@ -54,7 +54,7 @@ class TpuInfo(ExecutableApplication):
 
     figure_of_merit(
         "JAX Devices",
-        fom_regex=r"(?i)HOST \S+: JAX Devices: (?P<tpu_count>\d+)",
+        fom_regex=r"(?i)HOST [\w.-]+: JAX Devices: (?P<tpu_count>\d+)",
         group_name="tpu_count",
         units="",
         contexts=["node"],
@@ -62,7 +62,7 @@ class TpuInfo(ExecutableApplication):
 
     figure_of_merit(
         "Host Info",
-        fom_regex=r"(?i)HOST \S+: Host Info: (?P<host_info>[^;\n]+)",
+        fom_regex=r"(?i)HOST [\w.-]+: Host Info: (?P<host_info>[^;\n]+)",
         group_name="host_info",
         units="",
         fom_type=FomType.INFO,
@@ -71,7 +71,7 @@ class TpuInfo(ExecutableApplication):
 
     figure_of_merit(
         "Libtpu version",
-        fom_regex=r"(?i)HOST \S+: Libtpu version: (?P<libtpu_version>[^\n]+)",
+        fom_regex=r"(?i)HOST [\w.-]+: Libtpu version: (?P<libtpu_version>[^\n]+)",
         group_name="libtpu_version",
         units="",
         fom_type=FomType.INFO,
@@ -80,7 +80,7 @@ class TpuInfo(ExecutableApplication):
 
     figure_of_merit(
         "Accelerator type",
-        fom_regex=r"(?i)HOST \S+: Accelerator type: (?P<accelerator_type>[^\n]+)",
+        fom_regex=r"(?i)HOST [\w.-]+: Accelerator type: (?P<accelerator_type>[^\n]+)",
         group_name="accelerator_type",
         units="",
         fom_type=FomType.INFO,

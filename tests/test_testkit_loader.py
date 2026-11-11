@@ -124,6 +124,17 @@ class LoaderTest(unittest.TestCase):
 
         self.assertNotIn(loader._module_name("dcgm"), sys.modules)
 
+    def test_requires_whole_slice(self):
+        self.assertTrue(loader.requires_whole_slice("tpu-collectives"))
+        self.assertTrue(
+            loader.requires_whole_slice({"name": "tpu-collectives"})
+        )
+        self.assertFalse(loader.requires_whole_slice("tpu-info"))
+        self.assertFalse(loader.requires_whole_slice({"name": "tpu-info"}))
+        self.assertFalse(loader.requires_whole_slice({}))
+        self.assertFalse(loader.requires_whole_slice({"name": None}))
+        self.assertFalse(loader.requires_whole_slice(""))
+
 
 if __name__ == "__main__":
     unittest.main()

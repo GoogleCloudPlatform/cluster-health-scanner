@@ -28,7 +28,7 @@ defaults:
     - name: gpu-persistence-mode
     variables:
       container_image: nvidia/cuda:11.0.3-runtime-ubuntu20.04
-      jobset_template: jobset_standard.yaml.tpl
+      job_template: job_standard.yaml.tpl
       mpi_command: ''
 machines:
   a4x-highgpu-4g:

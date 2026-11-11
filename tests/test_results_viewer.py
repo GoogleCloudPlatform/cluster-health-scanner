@@ -14,6 +14,7 @@
 
 """Unit tests for the ResultsViewer class."""
 
+import io
 import json
 import logging
 import os
@@ -202,6 +203,132 @@ class TestResultsViewer(unittest.TestCase):
         self.assertTrue(
             valid_passed, "render_detail should be called with valid results"
         )
+
+    @mock.patch.object(Console, "print")
+    def test_show_summary_and_details_local_links(self, mock_print):
+        """Test show_summary_and_details displays local links."""
+        html_path = "./chs-output/run1/bill_of_health.html"
+        json_path = "./chs-output/run1/bill_of_health.json"
+        viewer = ResultsViewer(
+            self.valid_json_path,
+            boh_html_uri=html_path,
+            boh_json_uri=json_path,
+        )
+        viewer._aggregate_summary_data = mock.Mock(
+            return_value=mock.Mock(
+                run_id="run1",
+                submission_time="2026-10-29 09:00:00",
+                total_nodes=3,
+                test_summaries=[],
+            )
+        )
+        viewer.show_summary_and_details()
+
+        printed_text = "\n".join(
+            str(call[0][0])
+            for call in mock_print.call_args_list
+            if len(call[0]) > 0
+        )
+        self.assertIn("Check the interactive health report in", printed_text)
+        self.assertIn(html_path, printed_text)
+        self.assertIn("Bill of Health (JSON):", printed_text)
+        self.assertIn(json_path, printed_text)
+        self.assertNotIn("[link=", printed_text)
+        self.assertIn(f"[cyan]{html_path}[/cyan]", printed_text)
+
+    @mock.patch.object(Console, "print")
+    def test_show_summary_and_details_gcs_links(self, mock_print):
+        """Test show_summary_and_details formats GCS URIs for cloud storage."""
+        html_gcs = "gs://bucket/prefix/bills_of_health/run1.html"
+        json_gcs = "gs://bucket/prefix/bills_of_health/run1.json"
+        viewer = ResultsViewer(
+            self.valid_json_path,
+            boh_html_uri=html_gcs,
+            boh_json_uri=json_gcs,
+        )
+        viewer._aggregate_summary_data = mock.Mock(
+            return_value=mock.Mock(
+                run_id="run1",
+                submission_time="2026-10-29 09:00:00",
+                total_nodes=3,
+                test_summaries=[],
+            )
+        )
+        viewer.show_summary_and_details()
+
+        printed_text = "\n".join(
+            str(call[0][0])
+            for call in mock_print.call_args_list
+            if len(call[0]) > 0
+        )
+        self.assertIn("Check the interactive health report in", printed_text)
+        self.assertIn(html_gcs, printed_text)
+        self.assertIn(
+            "https://storage.cloud.google.com/bucket/prefix/bills_of_health/run1.html",
+            printed_text,
+        )
+        self.assertIn("Bill of Health (JSON):", printed_text)
+        self.assertIn(json_gcs, printed_text)
+        self.assertIn(
+            "https://storage.cloud.google.com/bucket/prefix/bills_of_health/run1.json",
+            printed_text,
+        )
+
+    @mock.patch.object(Console, "print")
+    def test_show_summary_and_details_omits_missing_locations(self, mock_print):
+        """Only the locations that were resolved are printed."""
+        json_uri = "./chs-output/run1/bill_of_health.json"
+        viewer = ResultsViewer(self.valid_json_path, boh_json_uri=json_uri)
+        viewer._aggregate_summary_data = mock.Mock(
+            return_value=mock.Mock(
+                run_id="run1",
+                submission_time="2026-10-29 09:00:00",
+                total_nodes=3,
+                test_summaries=[],
+            )
+        )
+        viewer.show_summary_and_details()
+
+        printed_text = "\n".join(
+            str(call[0][0])
+            for call in mock_print.call_args_list
+            if len(call[0]) > 0
+        )
+        self.assertNotIn("Check the interactive health report in", printed_text)
+        self.assertIn("Bill of Health (JSON):", printed_text)
+        self.assertIn(json_uri, printed_text)
+
+    def _render_locations(self, width: int, **locations) -> str:
+        """Renders show_summary_and_details() to a fixed-width console."""
+        viewer = ResultsViewer(self.valid_json_path, **locations)
+        buf = io.StringIO()
+        viewer.console = Console(file=buf, width=width)
+        viewer._aggregate_summary_data = mock.Mock(
+            return_value=mock.Mock(
+                run_id="run1",
+                submission_time="2026-10-29 09:00:00",
+                total_nodes=3,
+                test_summaries=[],
+            )
+        )
+        viewer.show_summary_and_details()
+        return buf.getvalue()
+
+    def test_show_summary_and_details_does_not_split_long_paths(self):
+        """Long locations stay on one line so they remain copyable."""
+        json_path = (
+            "/usr/local/home/user/.local/share/chs/outputs/"
+            + ("x" * 80)
+            + "/bill_of_health.json"
+        )
+        output = self._render_locations(40, boh_json_uri=json_path)
+        self.assertIn(f"Bill of Health (JSON):\n{json_path}\n", output)
+
+    def test_show_summary_and_details_escapes_markup_in_paths(self):
+        """Paths containing square brackets are printed verbatim."""
+        html_path = "/tmp/out/[run]/bill_of_health.html"
+        output = self._render_locations(200, boh_html_uri=html_path)
+        self.assertIn(html_path, output)
 
 
 if __name__ == "__main__":

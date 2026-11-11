@@ -14,6 +14,7 @@
 
 
 schedulers:
+- standalone
 - kubernetes
 variables:
   n_ranks: '{processes_per_node}*{n_nodes}'

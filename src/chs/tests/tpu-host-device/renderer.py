@@ -39,8 +39,8 @@ class TpuHostDeviceRenderer(DefaultRenderer):
         return [
             ColumnDef("node", "Node", align="left"),
             ColumnDef("size_mib", "Size (MiB)", align="right"),
-            ColumnDef("h2d", "H2D Bandwidth (GiB/s)", align="right"),
-            ColumnDef("d2h", "D2H Bandwidth (GiB/s)", align="right"),
+            ColumnDef("h2d", "H2D Bandwidth (GB/s)", align="right"),
+            ColumnDef("d2h", "D2H Bandwidth (GB/s)", align="right"),
         ]
 
     def get_detail_data(
@@ -54,11 +54,9 @@ class TpuHostDeviceRenderer(DefaultRenderer):
         if not node_data:
             return None
 
-        tables = []
+        rows = []
         for node in sorted(node_data.keys()):
-            node_results = node_data[node]
-            rows = []
-            for r in node_results:
+            for r in node_data[node]:
                 h2d_str = format_val(r.h2d)
                 d2h_str = format_val(r.d2h)
                 rows.append(
@@ -69,13 +67,12 @@ class TpuHostDeviceRenderer(DefaultRenderer):
                         "d2h": d2h_str,
                     }
                 )
-            tables.append(
-                TableDataModel(
-                    title=f"Host-Device I/O Bandwidth Detail ({node})",
-                    headers=self.get_column_schema(),
-                    rows=rows,
-                )
-            )
+
+        table_model = TableDataModel(
+            title="Host-Device I/O Bandwidth Detail",
+            headers=self.get_column_schema(),
+            rows=rows,
+        )
 
         test_name = test_results[0].test_name
         test_level = test_results[0].test_level
@@ -83,28 +80,28 @@ class TpuHostDeviceRenderer(DefaultRenderer):
         return PluginDetailReport(
             test_name=test_name,
             test_level=test_level,
-            tables=tables,
+            tables=[table_model],
         )
 
     def render_detail(self, test_results: list[pb.TestResult]) -> Group | Text:
-        """Renders detail tables for host-device tests per node and size."""
+        """Renders detail table for host-device tests across all nodes."""
         report = self.get_detail_data(test_results)
         if not report or not report.tables:
             return Text("No detailed metrics available.", style="yellow")
 
+        table_model = report.tables[0]
         elements = [
-            Text("\nHost-Device I/O Bandwidth Detail", style="bold cyan")
+            Text(f"\n{table_model.title}", style="bold cyan"),
         ]
-        for table_model in report.tables:
-            elements.append(Text(f"\n{table_model.title}", style="bold yellow"))
-            table = create_styled_table(expand=False)
-            table.add_column("Size (MiB)", justify="right")
-            table.add_column("H2D Bandwidth (GiB/s)", justify="right")
-            table.add_column("D2H Bandwidth (GiB/s)", justify="right")
+        table = create_styled_table(expand=False)
+        table.add_column("Node", justify="left")
+        table.add_column("Size (MiB)", justify="right")
+        table.add_column("H2D Bandwidth (GB/s)", justify="right")
+        table.add_column("D2H Bandwidth (GB/s)", justify="right")
 
-            for r in table_model.rows:
-                table.add_row(r["size_mib"], r["h2d"], r["d2h"])
-            elements.append(table)
+        for r in table_model.rows:
+            table.add_row(r["node"], r["size_mib"], r["h2d"], r["d2h"])
+        elements.append(table)
 
         val_table = self.render_validation_results(test_results)
         if val_table:

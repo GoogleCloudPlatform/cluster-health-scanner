@@ -14,7 +14,7 @@
 
 """Generates Bill of Health from Ramble JSON results."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import json
 import logging
 import os
@@ -100,7 +100,7 @@ class BOHGenerator:
 
     def _get_timestamp(self) -> Timestamp:
         ts = Timestamp()
-        ts.FromDatetime(datetime.now(timezone.utc))
+        ts.FromDatetime(datetime.now(UTC))
         return ts
 
     def _parse_foms(self, foms: list[dict[str, Any]]) -> list[pb.Metric]:

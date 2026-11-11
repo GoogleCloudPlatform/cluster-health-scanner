@@ -258,6 +258,7 @@ class SlurmScheduler(BaseScheduler):
         return self._resolved_raw_nodes
 
     def get_nodes_under_test(self) -> list[str]:
+        """Returns idle nodes not targeted by other CHS runs."""
         if self._resolved_nodes is not None:
             return self._resolved_nodes
 

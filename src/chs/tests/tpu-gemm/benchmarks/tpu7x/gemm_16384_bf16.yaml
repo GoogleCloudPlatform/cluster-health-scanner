@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-benchmarks:
-- benchmark_name: gemm_multiple_run
-  single_host_tpu_init: True
-  trace_dir: "../microbenchmarks/gemm_multiple_run_bf16"
-  csv_path: "../microbenchmarks/gemm_multiple_run_bf16"
-  xlml_metrics_dir: "../microbenchmarks/gemm_multiple_run_bf16"
-  xla_dump_dir: "../microbenchmarks/gemm_multiple_run_bf16/hlo_graphs"
-  benchmark_sweep_params:
-  - {m: 16384, k: 16384, n: 16384, num_runs: 100, dtype: 'bfloat16', run_on_local_node: True}
+benchmark:
+  name: gemm
+  xprof_timing: true
+  xprof_device_timing_aggregation: local_slowest_device
+  standalone_host_init: true
+  params:
+    warmup_tries: 2
+    num_runs: 100
+    in_dtype: bfloat16
+    out_dtype: bfloat16
+    m: 16384
+    k: 16384
+    n: 16384

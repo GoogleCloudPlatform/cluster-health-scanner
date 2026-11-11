@@ -14,11 +14,11 @@
 
 """Lifecycle Manager for CHS Jobs."""
 
-from enum import Enum
+from enum import StrEnum
 from chs.protos import bill_of_health_pb2 as pb
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"

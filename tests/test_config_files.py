@@ -18,6 +18,7 @@ import collections
 import pathlib
 import unittest
 
+from chs import resources
 from chs.testkit import build_catalog, build_thresholds
 from chs.testkit import config as chs_config
 from chs.testkit import loader
@@ -56,7 +57,10 @@ def _benchmarks_named_in(config):
     if isinstance(config, dict):
         names = set()
         for key, value in config.items():
-            if key == "benchmarks_yaml_file" and isinstance(value, str):
+            if key in (
+                "benchmarks_yaml_file",
+                "benchmarks_yaml_d2h_file",
+            ) and isinstance(value, str):
                 names.add(value)
             else:
                 names |= _benchmarks_named_in(value)
@@ -68,12 +72,16 @@ def _benchmarks_named_in(config):
 
 def _benchmarks_chosen_by(plugin):
     names = {plugin.benchmark_config} if plugin.benchmark_config else set()
+    if getattr(plugin, "benchmark_config_d2h", None):
+        names.add(plugin.benchmark_config_d2h)
     request = spec.TestRequest(variables={}, base_prefix="chs-test")
     for workload in plugin.default_workloads:
         variables = {}
         plugin.prepare_variables(variables, workload, request)
         if variables.get("benchmarks_yaml_file"):
             names.add(variables["benchmarks_yaml_file"])
+        if variables.get("benchmarks_yaml_d2h_file"):
+            names.add(variables["benchmarks_yaml_d2h_file"])
     return names
 
 
@@ -89,6 +97,13 @@ class PlatformFilesTest(unittest.TestCase):
         on_disk = {path.stem for path in PLATFORMS_DIR.glob("*.yaml")}
 
         self.assertEqual(on_disk, declared)
+
+    def test_no_tpu_test_runs_on_slurm(self):
+        """TPUs are supported on Kubernetes and standalone, not on Slurm."""
+        for test_name, machine, scheduler in _supported_combinations():
+            with self.subTest(test=test_name, machine=machine):
+                if resources.is_tpu(machine):
+                    self.assertNotEqual(scheduler, "slurm")
 
 
 class TestConfigFilesTest(unittest.TestCase):
@@ -148,6 +163,43 @@ class ResolveShippedFilesTest(unittest.TestCase):
                 ):
                     chs_config.resolve_test(
                         test_name, machine, scheduler, domain_type
+                    )
+
+    def test_standalone_tests_run_natively_without_an_image(self):
+        for test_name, machine, scheduler in _supported_combinations():
+            if scheduler != "standalone":
+                continue
+            resolved = chs_config.resolve_test(test_name, machine, scheduler)
+            with self.subTest(test=test_name, machine=machine):
+                self.assertEqual(resolved["variables"].get("runtime"), "tpu")
+                self.assertIsNone(resolved["variables"].get("container_image"))
+
+    def test_standalone_gets_no_tpu_env_modifier(self):
+        """The native runner sets a standalone test's TPU environment."""
+        for test_name, machine, scheduler in _supported_combinations():
+            if scheduler != "standalone":
+                continue
+            resolved = chs_config.resolve_test(test_name, machine, scheduler)
+            with self.subTest(test=test_name, machine=machine):
+                self.assertNotIn(
+                    "tpu-node-local-init",
+                    {m["name"] for m in resolved.get("modifiers", [])},
+                )
+
+    def test_tpu_env_modifier_stays_on_cluster_schedulers(self):
+        for test_name, schedulers in (
+            ("tpu-info", ("kubernetes",)),
+            ("tpu-compute-stress", ("kubernetes",)),
+            ("tpu-hbm-stress", ("kubernetes",)),
+        ):
+            for scheduler in schedulers:
+                resolved = chs_config.resolve_test(
+                    test_name, "tpu7x-standard-4t", scheduler
+                )
+                with self.subTest(test=test_name, scheduler=scheduler):
+                    self.assertIn(
+                        "tpu-node-local-init",
+                        {m["name"] for m in resolved.get("modifiers", [])},
                     )
 
     def test_scheduler_only_modifiers_stay_on_their_scheduler(self):

@@ -38,7 +38,7 @@ class TestTpuGemmRenderer(unittest.TestCase):
         ].string_value = "node-1,16384x16384x16384,bfloat16"
 
         m2 = res.metrics.add()
-        m2.key = "Total Throughput"
+        m2.key = "Throughput per chip"
         m2.value.number_value = 482.0
         m2.metadata.fields[
             "context"

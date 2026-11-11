@@ -14,8 +14,8 @@
 
 type: min
 tpu7x-standard-4t:
-  h2d_bandwidth: 192
-  d2h_bandwidth: 50
+  h2d_bandwidth: 214
+  d2h_bandwidth: 211
 ct6e-standard-4t:
-  h2d_bandwidth: 98
-  d2h_bandwidth: 40
+  h2d_bandwidth: 107
+  d2h_bandwidth: 111

@@ -213,8 +213,11 @@ class SlicePlugin(BaseTestPlugin):
     """A test that runs across a TPU slice.
 
     On Kubernetes this creates one experiment per slice; on Slurm it creates a
-    single node-templated experiment.
+    single node-templated experiment. Multi-host plugins that need an entire
+    slice set `requires_whole_slice = True`.
     """
+
+    requires_whole_slice: ClassVar[bool] = False
 
     def build_contexts(self, variables, experiment_name, request):
         return build_slice_contexts(

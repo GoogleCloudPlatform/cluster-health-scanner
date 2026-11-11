@@ -13,10 +13,15 @@
 # limitations under the License.
 
 import unittest
+from unittest import mock
+
 import click
 
+from chs import main as chs_main
+from chs import telemetry
 from chs.main import _normalize_argv
 from chs.validators.utils import validate_non_empty_string
+from chs.utils.formatting import format_names, format_storage_path
 
 
 class TestMain(unittest.TestCase):
@@ -85,6 +90,55 @@ class TestMain(unittest.TestCase):
         self.assertEqual(_normalize_argv(argv), expected)
 
 
+class TestMainEntryPoint(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(
+            mock.patch.object(telemetry, "_state", telemetry._State())
+        )
+        self.enterContext(mock.patch.object(chs_main.logging, "basicConfig"))
+        self.mock_app_data = self.enterContext(
+            mock.patch.object(chs_main, "ChsAppData")
+        ).return_value
+        self.mock_app_data.is_telemetry_enabled.return_value = True
+
+    def _run_main(self, args: list[str]) -> list[bool]:
+        enabled_when_cli_ran = []
+        with (
+            mock.patch.object(chs_main.sys, "argv", ["chs", *args]),
+            mock.patch.object(
+                chs_main.cli,
+                "main",
+                side_effect=lambda **_: enabled_when_cli_ran.append(
+                    telemetry._state.enabled
+                ),
+            ) as mock_cli_main,
+        ):
+            chs_main.main()
+
+        mock_cli_main.assert_called_once_with(args=args)
+        return enabled_when_cli_ran
+
+    def test_main_enables_telemetry_before_running_cli(self):
+        self.assertEqual(self._run_main(["list"]), [True])
+
+    def test_main_leaves_telemetry_off_when_user_opted_out(self):
+        self.mock_app_data.is_telemetry_enabled.return_value = False
+
+        self.assertEqual(self._run_main(["list"]), [False])
+
+    def test_main_leaves_telemetry_off_for_unsupported_commands(self):
+        for args in (
+            ["--help"],
+            ["--version"],
+            ["configure", "storage", "show"],
+            ["configure", "telemetry", "--help"],
+            ["configure", "telemetry", "status"],
+        ):
+            with self.subTest(args=args):
+                self.assertEqual(self._run_main(args), [False])
+
+
 class TestValidatorsUtils(unittest.TestCase):
     def setUp(self):
         self.ctx = click.Context(click.Command("test"))
@@ -137,3 +191,44 @@ class TestValidatorsUtils(unittest.TestCase):
     def test_validate_non_empty_string_tuple_only_empty_strings(self):
         with self.assertRaises(click.BadParameter):
             validate_non_empty_string(self.ctx, self.param, ("", "  "))
+
+
+class TestFormatting(unittest.TestCase):
+    def test_format_storage_path_gcs_without_prefix(self):
+        config = {"type": "gcs", "gcs": {"bucket_name": "my-bucket"}}
+        self.assertEqual(format_storage_path(config), "gs://my-bucket")
+
+    def test_format_storage_path_gcs_with_prefix(self):
+        config = {
+            "type": "gcs",
+            "gcs": {"bucket_name": "my-bucket", "prefix": "sub/folder"},
+        }
+        self.assertEqual(
+            format_storage_path(config), "gs://my-bucket/sub/folder"
+        )
+
+    def test_format_storage_path_path(self):
+        config = {"type": "path", "path": {"path": "/local/path"}}
+        self.assertEqual(format_storage_path(config), "/local/path")
+
+    def test_format_storage_path_none(self):
+        self.assertEqual(format_storage_path(None), "Local")
+        self.assertEqual(format_storage_path({}), "Local")
+
+    def test_format_names_lists_all_names_up_to_the_limit(self):
+        self.assertEqual(format_names([], max_display=2), "")
+        self.assertEqual(format_names(["a", "b"], max_display=2), "a, b")
+
+    def test_format_names_counts_the_names_past_the_limit(self):
+        self.assertEqual(
+            format_names(["a", "b", "c", "d"], max_display=2),
+            "a, b and 2 others",
+        )
+        self.assertEqual(
+            format_names(["a", "b", "c"], max_display=2), "a, b and 1 other"
+        )
+
+    def test_format_names_shows_three_names_by_default(self):
+        self.assertEqual(
+            format_names(["a", "b", "c", "d", "e"]), "a, b, c and 2 others"
+        )

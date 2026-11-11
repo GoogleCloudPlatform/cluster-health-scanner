@@ -128,7 +128,7 @@ class TpuInfoRenderer(DefaultRenderer):
                 context = m.metadata.fields["context"].string_value or ""
                 key = m.key
 
-                node_match = re.search(r"Node ([a-zA-Z0-9-]+)", context)
+                node_match = re.search(r"Node ([\w.-]+)", context)
                 nodes = node_match.group(1) if node_match else default_nodes
 
                 if nodes not in node_data:

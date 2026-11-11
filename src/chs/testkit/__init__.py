@@ -19,7 +19,12 @@ from chs.testkit.base import (
     SlicePlugin,
 )
 from chs.testkit.catalog import build_catalog
-from chs.testkit.loader import available_tests, clear_cache, load_plugin
+from chs.testkit.loader import (
+    available_tests,
+    clear_cache,
+    load_plugin,
+    requires_whole_slice,
+)
 from chs.testkit.spec import (
     STRIPPED_WORKSPACE_KEYS,
     ExperimentSpec,
@@ -44,4 +49,5 @@ __all__ = [
     "build_thresholds",
     "clear_cache",
     "load_plugin",
+    "requires_whole_slice",
 ]

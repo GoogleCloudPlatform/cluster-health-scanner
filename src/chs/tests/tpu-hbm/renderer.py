@@ -41,7 +41,7 @@ class TpuHbmRenderer(DefaultRenderer):
         return [
             ColumnDef("node", "Node", align="left"),
             ColumnDef("num_elements", "Elements", align="right"),
-            ColumnDef("tensor_size", "Tensor Size (MB)", align="right"),
+            ColumnDef("tensor_size", "Tensor Size (MiB)", align="right"),
             ColumnDef("dtype", "Dtype", align="left"),
             ColumnDef("bandwidth", "Bandwidth (median) (GB/s)", align="right"),
             ColumnDef("time_ms", "Time Taken (median) (ms)", align="right"),
@@ -101,7 +101,7 @@ class TpuHbmRenderer(DefaultRenderer):
         for table_data in report.tables:
             table = create_styled_table(expand=False)
             table.add_column("Elements", justify="right")
-            table.add_column("Tensor Size (MB)", justify="right")
+            table.add_column("Tensor Size (MiB)", justify="right")
             table.add_column("Dtype", justify="left")
             table.add_column("Bandwidth (median) (GB/s)", justify="right")
             table.add_column("Time Taken (median) (ms)", justify="right")

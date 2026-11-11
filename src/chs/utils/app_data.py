@@ -124,6 +124,33 @@ class ChsAppData:
             self._save_json(self._metadata_file, metadata)
         logger.debug("AppData: Removed storage config")
 
+    def set_telemetry_enabled(self, enabled: bool) -> None:
+        """Persists whether telemetry is enabled."""
+        with file_utils.exclusive_lock(self._lock_file):
+            metadata = self._load_json(self._metadata_file)
+            metadata["telemetry_enabled"] = enabled
+            self._save_json(self._metadata_file, metadata)
+        logger.debug("AppData: Set telemetry_enabled to %s", enabled)
+
+    @staticmethod
+    def telemetry_env_override() -> str | None:
+        """The environment variable that turns telemetry off, if one does."""
+        for name, off_values in (
+            ("CHS_TELEMETRY", ("0", "false")),
+            ("DO_NOT_TRACK", ("1", "true")),
+        ):
+            value = os.environ.get(name, "")
+            if value.lower() in off_values:
+                return f"{name}={value}"
+        return None
+
+    def is_telemetry_enabled(self) -> bool:
+        """Returns False only if the user disabled telemetry."""
+        if self.telemetry_env_override():
+            return False
+        metadata = self._load_json(self._metadata_file)
+        return metadata.get("telemetry_enabled") is not False
+
     def update_run(self, run_id: str, run_data: dict[str, Any]) -> None:
         """Updates or adds a run entry in the app data."""
         with file_utils.exclusive_lock(self._lock_file):

@@ -45,7 +45,7 @@ class BuildTestRequestTest(unittest.TestCase):
             "n_nodes": 1,
             "n_ranks": 1,
             "processes_per_node": 1,
-            "jobset_template": "wrapper",
+            "job_template": "wrapper",
             "mpi_command": "mpirun",
             "container_image": "wrapper-image",
             "srun_args": "--exclusive",

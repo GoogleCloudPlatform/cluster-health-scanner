@@ -164,6 +164,7 @@ def aggregate_boh_summary(
     test_summaries = []
 
     for (canonical_name, test_level), results in grouped_results.items():
+        unfiltered_results = results
         plugin = pm.get_plugin(canonical_name)
         if plugin and hasattr(plugin, "_filter_validation_results"):
             sorted_nodes = sorted(
@@ -196,6 +197,7 @@ def aggregate_boh_summary(
             for t in res.target_resources:
                 test_nodes.add(t.node_name)
 
+        for res in unfiltered_results:
             for m in res.metrics:
                 if (
                     m.key.endswith("Error Detected")

@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 from collections.abc import Iterator
+from typing import Any
 
 from chs.testkit import config as chs_config
 from chs.testkit.base import BaseTestPlugin
@@ -120,3 +121,10 @@ def _import_module(test_name: str, path: str):
 
 def _module_name(test_name: str) -> str:
     return f"{_MODULE_NAMESPACE}.{test_name.replace('-', '_')}"
+
+
+def requires_whole_slice(test: dict[str, Any] | str) -> bool:
+    """Returns True if the given test requires an entire TPU slice."""
+    name = test.get("name") if isinstance(test, dict) else str(test)
+    plugin = load_plugin(name) if name else None
+    return bool(getattr(plugin, "requires_whole_slice", False))

@@ -39,7 +39,7 @@ class TpuComputeStress(ExecutableApplication):
         "execute",
         template=[
             f"echo '{_B64_SCRIPT}' | base64 -d > tpu_compute_stress.py",
-            "python3 tpu_compute_stress.py",
+            "$\\{CHS_PYTHON:-python3\\} tpu_compute_stress.py",
         ],
         use_mpi=False,
     )
@@ -48,7 +48,7 @@ class TpuComputeStress(ExecutableApplication):
 
     figure_of_merit_context(
         "node",
-        regex=r"(?i).*NODE:(?P<node>[a-zA-Z0-9_-]+) EVENT:MEASURE_END.*",
+        regex=r"(?i).*NODE:(?P<node>[\w.-]+) EVENT:MEASURE_END.*",
         output_format="{node}",
     )
 

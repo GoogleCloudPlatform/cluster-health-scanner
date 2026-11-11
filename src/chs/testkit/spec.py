@@ -66,7 +66,7 @@ STRIPPED_WORKSPACE_KEYS = frozenset(
         "n_ranks",
         "processes_per_node",
         "n_nodes",
-        "jobset_template",
+        "job_template",
         "mpi_command",
         "container_image",
         "srun_args",

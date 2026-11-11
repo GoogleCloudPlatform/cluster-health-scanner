@@ -103,22 +103,22 @@ class NcclLinker(BasicModifier):
         if machine_type == "a3-megagpu-8g":
             if executable_name == "all-to-all-execute":
                 executable.template = [
-                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH; ./alltoall_perf {additional_args}"'
+                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\\$LD_LIBRARY_PATH; ./alltoall_perf {additional_args}"'
                 ]
             if executable_name == "all-reduce-execute":
                 executable.template = [
-                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH; ./all_reduce_perf {additional_args}"'
+                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\\$LD_LIBRARY_PATH; ./all_reduce_perf {additional_args}"'
                 ]
             if executable_name == "all-gather-execute":
                 executable.template = [
-                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH; ./all_gather_perf {additional_args}"'
+                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\\$LD_LIBRARY_PATH; ./all_gather_perf {additional_args}"'
                 ]
             if executable_name == "reduce-scatter-execute":
                 executable.template = [
-                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH; ./reduce_scatter_perf {additional_args}"'
+                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\\$LD_LIBRARY_PATH; ./reduce_scatter_perf {additional_args}"'
                 ]
             if executable_name == "send-recv-execute":
                 executable.template = [
-                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\$LD_LIBRARY_PATH; ./sendrecv_perf {additional_args}"'
+                    'bash -eo pipefail -c "export LD_LIBRARY_PATH=/var/lib/tcpxo/lib64:/usr/lib/x86_64-linux-gnu:\\$LD_LIBRARY_PATH; ./sendrecv_perf {additional_args}"'
                 ]
         return prepend_execs, append_execs

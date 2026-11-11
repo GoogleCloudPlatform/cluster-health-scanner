@@ -77,7 +77,7 @@ class TpuErrorDetector(BasicModifier):
 
     figure_of_merit(
         "TPU Benchmark Failure Detected",
-        fom_regex=r"(?i)(?P<bench_fail>.*Benchmark func failed.*)",
+        fom_regex=r"(?i)(?P<bench_fail>.*Benchmark '[^']+' failed:.*)",
         group_name="bench_fail",
         units="",
         fom_type=FomType.INFO,

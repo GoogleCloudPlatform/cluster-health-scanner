@@ -379,6 +379,7 @@ def build_slice_contexts(
 
     slice_topologies = variables.get("tpu_slice_topologies", {})
     dynamic_pools = variables.get("tpu_dynamic_pools", [])
+    single_host_pools = variables.get("tpu_single_host_pools", [])
 
     contexts = []
     for slice_id, slice_nodes in tpu_slices.items():
@@ -391,6 +392,8 @@ def build_slice_contexts(
 
         if slice_id in dynamic_pools:
             apply_dynamic_slice_annotations(slice_vars)
+        elif slice_id in single_host_pools:
+            annotate_slice_topology(slice_vars)
 
         if len(tpu_slices) == 1:
             slice_experiment_name = experiment_name
@@ -415,7 +418,11 @@ def build_slice_contexts(
 def apply_dynamic_slice_annotations(slice_vars: dict) -> None:
     """Requests an exclusive, correctly shaped dynamic TPU slice."""
     mark_exclusive_tpu_slice(slice_vars)
+    annotate_slice_topology(slice_vars)
 
+
+def annotate_slice_topology(slice_vars: dict) -> None:
+    """Tells GKE the shape of the dynamic TPU slice the pods run on."""
     topology = slice_vars.get("tpu_topology")
     shape = f'cloud.google.com/gke-tpu-slice-topology: "{topology}"'
     existing = slice_vars.get("pod_annotations_yaml", "").strip()

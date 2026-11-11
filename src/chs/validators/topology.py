@@ -14,45 +14,45 @@
 
 
 from typing import Any
+
+from chs import resources, testkit
 from chs.validators.base import Validator
 
 
 class TpuTopologyValidator(Validator):
+    """Validates TPU topology requirements.
+
+    On Kubernetes, single-host TPU tests support targeting individual nodes with
+    --nodes, while multi-host TPU tests require whole slices via --nodepools.
+
+    TPUs are not supported on Slurm; no TPU platform lists the Slurm scheduler,
+    so TestsValidator rejects TPU tests there.
+    """
+
     def validate(self, config: dict[str, Any]) -> list[str]:
-        machine_type = config.get("machine_type", "")
         scheduler_obj = config.get("scheduler_obj")
+        if not scheduler_obj or not resources.is_tpu(
+            config.get("machine_type", "")
+        ):
+            return []
+
         scheduler_name = config.get("scheduler")
+        tests = config.get("tests") or []
+        nodes_arg = getattr(scheduler_obj, "nodes_arg", None)
 
-        is_tpu = machine_type.startswith("tpu") or machine_type.startswith("ct")
-
-        if is_tpu and scheduler_obj:
-            error_msg = []
-
-            if scheduler_name == "kubernetes":
-                if getattr(scheduler_obj, "nodes_arg", None):
-                    error_msg.append(
-                        "TPU tests need entire slice, please use --nodepools."
-                    )
-                elif not getattr(scheduler_obj, "nodepools_arg", None):
-                    error_msg.append(
-                        "TPU tests need entire slice, please use "
-                        "--nodepools to target specific nodepools."
-                    )
-
-            elif scheduler_name == "slurm":
-                if getattr(scheduler_obj, "nodes_arg", None) or getattr(
-                    scheduler_obj, "nodelists_arg", None
-                ):
-                    error_msg.append(
-                        "TPU tests need entire slice, please use --partitions."
-                    )
-                elif not getattr(scheduler_obj, "partitions_arg", None):
-                    error_msg.append(
-                        "TPU tests need entire slice, please use "
-                        "--partitions to target specific partitions."
-                    )
-
-            if error_msg:
-                return ["\n".join(error_msg)]
+        if scheduler_name == "kubernetes":
+            if (
+                nodes_arg
+                and tests
+                and all(testkit.requires_whole_slice(t) for t in tests)
+            ):
+                names = ", ".join(
+                    f"'{t.get('name') if isinstance(t, dict) else t}'"
+                    for t in tests
+                )
+                return [
+                    f"TPU multi-host test(s) {names} require an entire "
+                    "slice (use --nodepools)."
+                ]
 
         return []

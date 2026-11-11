@@ -41,11 +41,19 @@ class ResultsViewer:
     def __init__(
         self,
         boh_path: str | os.PathLike[str],
-        boh_uri: str | None = None,
+        boh_html_uri: str | None = None,
+        boh_json_uri: str | None = None,
     ):
-        """Initializes the viewer with the path to the Bill of Health JSON."""
+        """Initializes the viewer with the path to the Bill of Health JSON.
+
+        Args:
+          boh_path: Local path of the Bill of Health JSON to render.
+          boh_html_uri: Display location of the interactive HTML report.
+          boh_json_uri: Display location of the Bill of Health JSON.
+        """
         self.boh_path = boh_path
-        self.boh_uri = boh_uri
+        self.boh_html_uri = boh_html_uri
+        self.boh_json_uri = boh_json_uri
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
@@ -122,18 +130,19 @@ class ResultsViewer:
             f"Nodes under test: {summary_data.total_nodes} nodes"
         )
 
-        if self.boh_uri:
-            href = (
-                self.boh_uri.replace(
-                    "gs://", "https://storage.cloud.google.com/", 1
+        locations = (
+            ("Check the interactive health report in", self.boh_html_uri),
+            ("Bill of Health (JSON):", self.boh_json_uri),
+        )
+        for label, location in locations:
+            if location:
+                # soft_wrap keeps long paths on one logical line so they stay
+                # copyable and clickable instead of being split by a newline.
+                self.console.print(
+                    f"{label}\n[cyan]{rendering.format_location(location)}"
+                    "[/cyan]",
+                    soft_wrap=True,
                 )
-                if self.boh_uri.startswith("gs://")
-                else self.boh_uri
-            )
-            self.console.print(
-                "Check the interactive health report in\n"
-                f"[link={href}][cyan]{self.boh_uri}[/cyan][/link]"
-            )
 
     def show_details(
         self, tests: list[str] | None = None, resources: list[str] | None = None

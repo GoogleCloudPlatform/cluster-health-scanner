@@ -31,7 +31,6 @@ from unittest import mock
 
 from chs.testkit import NodeGrouping
 from chs.testkit import TestRequest, available_tests, load_plugin
-from chs.testkit import config as chs_config
 from chs.testkit import context
 from chs.utils import topology as topology_utils
 
@@ -769,14 +768,14 @@ class TpuCollectivesTest(unittest.TestCase):
             "variables": {
                 "execution_topology": "2x2x1",
                 "cores_per_chip": 1,
-                "benchmarks_yaml_escaped": "mesh: __MESH__ ici: __ICI__",
+                "benchmarks_yaml_escaped": "mesh: __MESH__",
             }
         }
 
         self.plugin.finalize_context(context, "all_reduce", request())
 
         self.assertEqual(
-            "mesh: 2x2x2 ici: 4",
+            "mesh: 2x2x2",
             context["variables"]["benchmarks_yaml_escaped"],
         )
 
@@ -839,10 +838,10 @@ class TpuCollectivesTest(unittest.TestCase):
         escaped = self.finalize(
             execution_topology="2x2x1",
             cores_per_chip=1,
-            benchmarks_yaml_escaped="__ICI__ __START__",
+            benchmarks_yaml_escaped="__START__",
         )
 
-        self.assertEqual("4 8", escaped)
+        self.assertEqual("8", escaped)
 
     def test_message_sizes_can_be_overridden(self):
         escaped = self.finalize(
@@ -875,77 +874,11 @@ class TpuCollectivesTest(unittest.TestCase):
             self.assertTrue(escaped)
             for token in (
                 "__MESH__",
-                "__SHARDING__",
-                "__ICI__",
                 "__START__",
                 "__END__",
                 "__MULTIPLIER__",
             ):
                 self.assertNotIn(token, escaped)
-
-
-class TpuCollectivesSingleNodeTest(unittest.TestCase):
-    """The same application, pinned to one node."""
-
-    def setUp(self):
-        self.plugin = plugin("tpu-collectives-single-node")
-
-    def test_it_renders_the_multi_node_application(self):
-        self.assertEqual("tpu-collectives", self.plugin.application)
-
-    def test_its_settings_are_kept_apart_from_the_multi_node_ones(self):
-        self.assertTrue(chs_config.load_test_config(self.plugin.name))
-        self.assertNotEqual(self.plugin.name, self.plugin.application)
-
-    def test_the_collective_is_held_to_a_single_slice(self):
-        """So the measurement never crosses the links between hosts."""
-        variables = {}
-
-        self.plugin.prepare_variables(variables, "all_reduce", request())
-
-        self.assertEqual("2x2x1", variables["execution_topology"])
-        self.assertEqual(
-            "collectives_all_reduce.yaml", variables["benchmarks_yaml_file"]
-        )
-
-    def test_the_mesh_matches_the_single_host_topology(self):
-        context = {
-            "variables": {
-                "execution_topology": "2x2x1",
-                "cores_per_chip": 1,
-                "benchmarks_yaml_escaped": "mesh: __MESH__",
-            }
-        }
-
-        self.plugin.finalize_context(context, "all_gather", request())
-
-        self.assertEqual(
-            "mesh: 2x2x2", context["variables"]["benchmarks_yaml_escaped"]
-        )
-
-    def test_an_unlisted_topology_and_invalid_topologies_are_handled(self):
-        context = {
-            "variables": {
-                "execution_topology": "3x3x3",
-                "cores_per_chip": 1,
-                "benchmarks_yaml_escaped": "__MESH__ __START__",
-            }
-        }
-        self.plugin.finalize_context(context, "all_gather", request())
-        self.assertEqual(
-            "3x3x3 27", context["variables"]["benchmarks_yaml_escaped"]
-        )
-
-        for bad_vars in (
-            {"cores_per_chip": 1},
-            {"execution_topology": "2x2x1"},
-            {"execution_topology": "two-by-two", "cores_per_chip": 1},
-        ):
-            with self.subTest(variables=bad_vars):
-                with self.assertRaises(ValueError):
-                    self.plugin.finalize_context(
-                        {"variables": dict(bad_vars)}, "all_gather", request()
-                    )
 
 
 class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
@@ -1003,7 +936,7 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
         for test_name, expected_file in (
             ("tpu-gemm", "gemm_16384_bf16.yaml"),
             ("tpu-hbm", "hbm_copy_bf16.yaml"),
-            ("tpu-host-device", "host_device.yaml"),
+            ("tpu-host-device", "host_to_device.yaml"),
         ):
             p = plugin(test_name)
             req = request(slices={"slice-0": ["node-1"]})
@@ -1018,6 +951,19 @@ class GpuAndTpuPackageDeclarationsTest(unittest.TestCase):
                 self.assertTrue(
                     specs[0].context["variables"]["benchmarks_yaml_escaped"]
                 )
+                if test_name == "tpu-host-device":
+                    self.assertEqual(
+                        "device_to_host.yaml",
+                        specs[0].context["variables"][
+                            "benchmarks_yaml_d2h_file"
+                        ],
+                    )
+                    self.assertIn(
+                        "name: device_to_host",
+                        specs[0].context["variables"][
+                            "benchmarks_yaml_d2h_escaped"
+                        ],
+                    )
 
 
 def _write_topology(root, topology):

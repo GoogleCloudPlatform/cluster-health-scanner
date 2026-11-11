@@ -12,16 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 platforms:
 - tpu7x-standard-4t
-- ct6e-standard-4t: [kubernetes]
+- ct6e-standard-4t
 defaults:
   modifiers:
   - name: generic-error-detector
   - name: tpu-error-detector
-  - name: tpu-node-local-init
-  variables:
-    container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
-    jobset_template: jobset_standard.yaml.tpl
-    mpi_command: ''
+  standalone:
+    variables:
+      runtime: tpu
+  kubernetes:
+    modifiers:
+    - name: tpu-node-local-init
+    variables:
+      container_image: '{chs_image}'

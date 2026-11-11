@@ -35,7 +35,7 @@ defaults:
     variables:
       app_workdir: /workspace/microbenchmarks
       container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
-      jobset_template: jobset_standard.yaml.tpl
+      job_template: job_standard.yaml.tpl
       mpi_command: mpirun --allow-run-as-root -n {n_ranks} -x CUDA_VISIBLE_DEVICES
   slurm:
     modifiers:

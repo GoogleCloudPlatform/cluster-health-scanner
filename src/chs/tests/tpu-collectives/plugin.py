@@ -21,6 +21,7 @@ from chs.testkit import SlicePlugin
 class Plugin(SlicePlugin):
     name = "tpu-collectives"
     category = "Network & Collectives"
+    requires_whole_slice = True
     description = "Cluster collectives testing"
     long_description = (
         "Times distributed cross-chip operations (like All-Reduce and "
@@ -66,8 +67,6 @@ def apply_collective_mesh_parameters(variables: dict) -> None:
     content = variables.get("benchmarks_yaml_escaped", "")
     variables["benchmarks_yaml_escaped"] = (
         content.replace("__MESH__", mesh_shape)
-        .replace("__SHARDING__", mesh_shape)
-        .replace("__ICI__", str(interconnect_width))
         .replace(
             "__START__",
             str(

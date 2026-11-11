@@ -18,6 +18,7 @@ from chs.ramble_manager import RambleManager
 from chs.results_viewer import ResultsViewer
 from chs.schedulers import get_scheduler, BaseScheduler, detect_scheduler
 from chs.utils import ChsAppData, load_suite, is_suite_tiered
+from chs import constants
 from chs import exceptions
 from chs import preflights
 from chs import resources
@@ -36,6 +37,7 @@ __all__ = [
     "ChsAppData",
     "load_suite",
     "is_suite_tiered",
+    "constants",
     "exceptions",
     "preflights",
     "resources",

@@ -34,9 +34,9 @@ def format_relative_time(timestamp_iso: str) -> str:
             timestamp_iso.replace("Z", "+00:00")
         )
         if sub_time.tzinfo is None:
-            sub_time = sub_time.replace(tzinfo=datetime.timezone.utc)
+            sub_time = sub_time.replace(tzinfo=datetime.UTC)
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         diff = now - sub_time
         seconds = max(0, diff.total_seconds())
 
@@ -51,19 +51,44 @@ def format_relative_time(timestamp_iso: str) -> str:
         return "Unknown"
 
 
-def format_storage_path(storage_dict: dict) -> str:
+def format_names(names: list[str], max_display: int = 3) -> str:
+    """Joins the first names and counts the rest.
+
+    Args:
+        names: The names to list.
+        max_display: How many names to show before counting the rest.
+
+    Returns:
+        The names joined by commas, e.g. 'a, b, c', or the first
+        max_display of them and a count of the rest, e.g. 'a, b and 3 others'.
+    """
+    shown = ", ".join(names[:max_display])
+    hidden = len(names) - max_display
+    if hidden <= 0:
+        return shown
+    return f"{shown} and {hidden} {'other' if hidden == 1 else 'others'}"
+
+
+def format_storage_path(storage_dict: dict | None) -> str:
     """Formats a storage configuration dictionary into a concise string.
 
     Args:
         storage_dict: The storage dictionary from the run metadata.
 
     Returns:
-        A concise path representation (e.g. 'gs://bucket/prefix' or local path).
+        A concise path representation (e.g. 'gs://bucket/prefix' or local path),
+        or 'Local' if no remote storage is configured.
     """
+    if not storage_dict:
+        return "Local"
     storage_type = storage_dict.get("type", "unknown").upper()
     if storage_type == "GCS":
-        bucket = storage_dict.get("gcs", {}).get("bucket_name", "")
-        return f"gs://{bucket.rstrip('/')}"
+        gcs_config = storage_dict.get("gcs", {})
+        bucket = gcs_config.get("bucket_name", "").strip("/")
+        prefix = gcs_config.get("prefix", "").strip("/")
+        if prefix:
+            return f"gs://{bucket}/{prefix}"
+        return f"gs://{bucket}"
     elif storage_type == "PATH":
         return storage_dict.get("path", {}).get("path", "")
     return "Unknown"

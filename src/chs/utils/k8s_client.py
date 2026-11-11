@@ -28,9 +28,13 @@ import urllib.parse
 import urllib.request
 
 from chs.exceptions import ChsException
+from chs.utils.formatting import format_names
 
 _REQUEST_TIMEOUT_SECONDS = 120
 _DELETE_POLL_INTERVAL_SECONDS = 0.5
+# Objects still pending after a delete timeout that the error names; the
+# rest are counted, so a large run doesn't print every object.
+_MAX_PENDING_NAMES_SHOWN = 10
 _INCLUSTER_NAMESPACE_PATH = (
     "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 )
@@ -231,7 +235,8 @@ def _delete_and_wait(
             return
         if time.monotonic() > deadline:
             raise KubeError(
-                f"Timed out waiting for deletion of {', '.join(pending)}"
+                "Timed out waiting for deletion of "
+                f"{format_names(pending, max_display=_MAX_PENDING_NAMES_SHOWN)}"
             )
         time.sleep(_DELETE_POLL_INTERVAL_SECONDS)
 

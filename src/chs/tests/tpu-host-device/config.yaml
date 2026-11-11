@@ -21,24 +21,18 @@ defaults:
   - name: generic-error-detector
   - name: tpu-error-detector
   variables:
-    benchmarks_yaml_file: tpuv6e/host_device.yaml
+    benchmarks_yaml_file: tpuv6e/host_to_device.yaml
+    benchmarks_yaml_d2h_file: tpuv6e/device_to_host.yaml
   kubernetes:
     variables:
-      container_image: us-docker.pkg.dev/gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
-      jobset_template: jobset_standard.yaml.tpl
+      container_image: '{chs_image}'
+      job_template: job_standard.yaml.tpl
       mpi_command: ''
-  slurm:
-    env_vars:
-      set:
-        ENROOT_RUNTIME_PATH: $HOME/.enroot/run
-        XDG_RUNTIME_DIR: $HOME/.enroot
-    modifiers:
-    - name: pyxis-enroot
+  standalone:
     variables:
-      container_name: accelerator-microbenchmarks:1.1.1
-      container_uri: docker://us-docker.pkg.dev#gce-ai-infra/chs/accelerator-microbenchmarks:1.1.1
-      srun_args: --cpu-bind=none --container-workdir /app/accelerator-microbenchmarks --container-image {container_path} --container-writable --container-mounts /dev/vfio:/dev/vfio,{experiment_run_dir}:{experiment_run_dir} --wait=60
+      runtime: tpu
 machines:
   tpu7x-standard-4t:
     variables:
-      benchmarks_yaml_file: tpu7x/host_device.yaml
+      benchmarks_yaml_file: tpu7x/host_to_device.yaml
+      benchmarks_yaml_d2h_file: tpu7x/device_to_host.yaml

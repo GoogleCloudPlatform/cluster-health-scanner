@@ -15,8 +15,10 @@
 """Kubernetes scheduler implementation for Cluster Health Scanner."""
 
 import datetime
+import hashlib
 import importlib.resources as pkg_resources
 import json
+import math
 import time
 import logging
 import os
@@ -28,29 +30,35 @@ import yaml
 import random
 
 
-from typing import Any
-from collections import defaultdict
+from typing import Any, Callable
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 
-from chs.schedulers.base import CHS_JOB_PREFIX, BaseScheduler
+from chs.schedulers.base import (
+    CHS_JOB_PREFIX,
+    BaseScheduler,
+    TpuSliceSummary,
+)
 from chs.schedulers.gang_admission import (
     pinned_nodes,
     plan_admissions,
     pod_nodes,
 )
 from chs.utils import k8s_client
+from chs.utils.formatting import format_names
 from chs.exceptions import (
     ChsCancellationException,
     ChsSchedulerException,
     ChsValidationError,
 )
 from chs.utils.lifecycle import JobStatus
-from chs import resources
+from chs import image, resources
 from chs.constants import (
     CHS_NAMESPACE,
     COMPONENT_LABEL,
     DELETE_WAIT_TIMEOUT_SEC,
+    DYNAMIC_SINGLE_HOST_TOPOLOGY,
     INSTANCE_LABEL,
     MANAGED_BY_CHS,
     MANAGED_BY_LABEL,
@@ -69,12 +77,40 @@ _JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
 _JOB_COMPLETION_INDEX_LABEL = "batch.kubernetes.io/job-completion-index"
 _SLICE_GROUP = "accelerator.gke.io"
 _SLICE_VERSION = "v1beta1"
+_MAX_SLICE_NAME_LENGTH = 49
+_FAILED_SLICE_STATES = frozenset({"FAILED", "SliceCreationFailed"})
+_UNUSABLE_SLICE_STATES = _FAILED_SLICE_STATES | {
+    "ACTIVE_DEGRADED",
+    "INCOMPLETE",
+}
 _CHS_SELECTOR = f"{MANAGED_BY_LABEL}={MANAGED_BY_CHS}"
-_PARTITION_ID_LABEL = (
-    f"cloud.google.com/gke-tpu-partition-{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
+_TOPOLOGY_MODE_LABEL = "cloud.google.com/gke-accelerator-topology-mode"
+_TPU_ACCELERATOR_LABEL = "cloud.google.com/gke-tpu-accelerator"
+_TPU_TOPOLOGY_LABEL = "cloud.google.com/gke-tpu-topology"
+_PARTITION_LABEL_PREFIX = "cloud.google.com/gke-tpu-partition-"
+_TPU7X_PARTITION_TOPOLOGIES = ("2x2x1", "2x2x2", "2x2x4", "2x4x4", "4x4x4")
+_PARTITION_ID_LABELS = tuple(
+    f"{_PARTITION_LABEL_PREFIX}{topology}-id"
+    for topology in _TPU7X_PARTITION_TOPOLOGIES
 )
+_POOL_PARTITION_ID_LABEL = (
+    f"{_PARTITION_LABEL_PREFIX}{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-id"
+)
+_POOL_PARTITION_STATE_LABEL = (
+    f"{_PARTITION_LABEL_PREFIX}{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
+)
+_SINGLE_HOST_PARTITION_ID_LABEL = (
+    f"{_PARTITION_LABEL_PREFIX}{DYNAMIC_SINGLE_HOST_TOPOLOGY}-id"
+)
+_SINGLE_HOST_PARTITION_STATE_LABEL = (
+    f"{_PARTITION_LABEL_PREFIX}{DYNAMIC_SINGLE_HOST_TOPOLOGY}-state"
+)
+_MIN_SUBSLICE_GKE_VERSION = "1.36.0-gke.3712000"
+_GKE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)-gke\.(\d+)")
 _COMPUTE_DOMAIN_GROUP = "resource.nvidia.com"
 _COMPUTE_DOMAIN_VERSION = "v1beta1"
+
+_GCE_PROVIDER_ID_RE = re.compile(r"^gce://([^/]+)/([^/]+)/([^/]+)$")
 
 _API_MAX_CONCURRENCY = 32
 _APPLY_ATTEMPTS = 5
@@ -101,7 +137,7 @@ def _get_log_fetch_executor() -> ThreadPoolExecutor:
 
 
 def _read_manifests(experiment_dir: str) -> list[dict]:
-    manifest_path = os.path.join(experiment_dir, "jobset.yaml")
+    manifest_path = os.path.join(experiment_dir, "job.yaml")
     try:
         with open(manifest_path, "r") as f:
             objects = [obj for obj in yaml.safe_load_all(f) if obj]
@@ -123,7 +159,7 @@ def _find_job(objects: list[dict], experiment_dir: str) -> dict:
         if obj["kind"] == "Job" and obj.get("metadata", {}).get("name"):
             return obj
     raise ChsSchedulerException(
-        f"Job kind not found in {experiment_dir}/jobset.yaml"
+        f"Job kind not found in {experiment_dir}/job.yaml"
     )
 
 
@@ -142,24 +178,28 @@ def _is_retryable(error: k8s_client.KubeError) -> bool:
     return error.status is None or error.status == 429 or error.status >= 500
 
 
+def _with_retries(call: Callable[[], None], description: str) -> None:
+    """Runs the Kubernetes API call, retrying throttling and server errors."""
+    for attempt in range(1, _APPLY_ATTEMPTS + 1):
+        try:
+            call()
+            return
+        except k8s_client.KubeError as e:
+            if attempt == _APPLY_ATTEMPTS or not _is_retryable(e):
+                raise
+            delay = 2 ** (attempt - 1)
+            logger.debug(
+                "Retrying %s in %d seconds. Error: %s", description, delay, e
+            )
+            time.sleep(delay)
+
+
 def _apply_objects(objects: list[dict]) -> None:
     for obj in objects:
-        for attempt in range(1, _APPLY_ATTEMPTS + 1):
-            try:
-                _apply_object(obj)
-                break
-            except k8s_client.KubeError as e:
-                if attempt == _APPLY_ATTEMPTS or not _is_retryable(e):
-                    raise
-                delay = 2 ** (attempt - 1)
-                logger.debug(
-                    "Retrying %s '%s' in %d seconds. Error: %s",
-                    obj["kind"],
-                    obj["metadata"]["name"],
-                    delay,
-                    e,
-                )
-                time.sleep(delay)
+        _with_retries(
+            lambda: _apply_object(obj),
+            f"{obj['kind']} '{obj['metadata']['name']}'",
+        )
 
 
 def _job_condition(job: dict, condition_type: str) -> dict | None:
@@ -179,6 +219,16 @@ def _has_accelerator(resources_map: dict | None, accelerator_type: str) -> bool:
         accelerator_type in key.lower() and quantity not in (0, "0", None, "")
         for key, quantity in (resources_map or {}).items()
     )
+
+
+def _is_single_host_slice(
+    topology: str | None, allocatable: dict | None
+) -> bool:
+    try:
+        chips = math.prod(int(dim) for dim in (topology or "").split("x"))
+        return chips <= int((allocatable or {}).get("google.com/tpu", 0))
+    except Exception:
+        return False
 
 
 def _is_accelerator_node(node: dict) -> bool:
@@ -230,8 +280,131 @@ def _object_names(objects: list[dict]) -> list[str]:
     return [name for name in names if name]
 
 
-def _slice_name(pool_name: str) -> str:
-    return f"chs-slice-{pool_name}"[:63].rstrip("-.")
+def _slice_name(slice_key: str) -> str:
+    """Returns a unique Slice name within the GKE Slice name length limit.
+
+    Long keys keep their tail, which tells nodes of one pool apart.
+    """
+    prefix = "chs-slice-"
+    name = f"{prefix}{slice_key}"
+    if len(name) <= _MAX_SLICE_NAME_LENGTH:
+        return name
+    digest = hashlib.sha256(slice_key.encode()).hexdigest()[:8]
+    room = _MAX_SLICE_NAME_LENGTH - len(prefix) - len(digest) - 1
+    return f"{prefix}{slice_key[-room:].strip('-.')}-{digest}"
+
+
+def _slice_state(tpu_slice: dict) -> str | None:
+    """Returns the lifecycle state GKE reports in the Slice's Ready reason."""
+    conditions = (tpu_slice.get("status") or {}).get("conditions") or []
+    ready = next((c for c in conditions if c.get("type") == "Ready"), {})
+    return ready.get("reason")
+
+
+def _holds_partitions(tpu_slice: dict) -> bool:
+    """Returns True unless the Slice failed to form and left its hardware."""
+    return _slice_state(tpu_slice) not in _FAILED_SLICE_STATES
+
+
+def _partition_ids(node: dict) -> set[str]:
+    """Returns the IDs of every TPU partition, of any shape, the node is in."""
+    labels = node.get("metadata", {}).get("labels") or {}
+    return {labels[label] for label in _PARTITION_ID_LABELS if label in labels}
+
+
+def _gke_version(version: str) -> tuple[int, ...]:
+    """Returns the comparable parts of a GKE version, or () if unparsable."""
+    match = _GKE_VERSION_RE.match(version)
+    return tuple(int(part) for part in match.groups()) if match else ()
+
+
+def _record_subslice_node(
+    data: "TpuSliceData", node_name: str, labels: dict[str, str]
+) -> None:
+    """Records a dynamic node that --nodes tests on its own sub-slice.
+
+    Only the node's own 2x2x1 partition health matters, so the healthy
+    hosts of a degraded 4x4x4 cube can still be tested.
+    """
+    data.provision_only_nodes.add(node_name)
+    partition_id = labels.get(_SINGLE_HOST_PARTITION_ID_LABEL)
+    if (
+        partition_id
+        and labels.get(_SINGLE_HOST_PARTITION_STATE_LABEL) == "HEALTHY"
+    ):
+        data.single_host_slices[node_name] = SliceSpec(
+            accelerator=labels.get(_TPU_ACCELERATOR_LABEL, ""),
+            topology=DYNAMIC_SINGLE_HOST_TOPOLOGY,
+            partition_id=partition_id,
+        )
+
+
+def _record_pool_node(
+    data: "TpuSliceData",
+    unhealthy_pools: set[str],
+    node_name: str,
+    labels: dict[str, str],
+) -> None:
+    """Records a node that is tested as part of its whole node pool."""
+    nodepool = labels.get("cloud.google.com/gke-nodepool")
+    if not nodepool:
+        return
+    tpu_type = labels.get(_TPU_ACCELERATOR_LABEL)
+    topology = labels.get(_TPU_TOPOLOGY_LABEL)
+
+    if labels.get(_TOPOLOGY_MODE_LABEL) == "PROVISION_ONLY":
+        matched_state = labels.get(_POOL_PARTITION_STATE_LABEL)
+
+        if matched_state == "HEALTHY":
+            if nodepool not in unhealthy_pools:
+                data.pools[nodepool].append(node_name)
+                data.node_to_pool[node_name] = nodepool
+                data.pool_to_topology[nodepool] = (
+                    SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
+                )
+                partition_id = labels.get(_POOL_PARTITION_ID_LABEL)
+                if partition_id:
+                    data.dynamic_slice_partitions[nodepool] = partition_id
+                if tpu_type:
+                    data.pool_to_accelerator[nodepool] = tpu_type
+        else:
+            if nodepool not in unhealthy_pools:
+                if matched_state is None:
+                    logger.warning(
+                        "Skipping nodepool '%s' because the %s "
+                        "topology is unsupported.",
+                        nodepool,
+                        SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+                    )
+                else:
+                    logger.warning(
+                        "Skipping nodepool '%s' because the %s "
+                        "topology is currently unhealthy.",
+                        nodepool,
+                        SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
+                    )
+            unhealthy_pools.add(nodepool)
+            data.purge_pool(nodepool)
+    elif not topology:
+        unhealthy_pools.add(nodepool)
+        data.purge_pool(nodepool)
+    elif nodepool not in unhealthy_pools:
+        data.pools[nodepool].append(node_name)
+        data.node_to_pool[node_name] = nodepool
+        if nodepool not in data.pool_to_topology:
+            data.pool_to_topology[nodepool] = topology
+
+
+def _read_slice_template() -> str:
+    template_path = pkg_resources.files("chs.schedulers").joinpath(
+        "slice.yaml.tpl"
+    )
+    try:
+        with pkg_resources.as_file(template_path) as p:
+            with open(p, "r") as f:
+                return f.read()
+    except OSError as e:
+        raise ChsSchedulerException(f"Failed to read slice template: {e}")
 
 
 def worker_service_name(run_id: str) -> str:
@@ -259,6 +432,15 @@ def _worker_service(run_id: str) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class SliceSpec:
+    """The Slice CR that makes the nodes of a slice key schedulable."""
+
+    accelerator: str
+    topology: str
+    partition_id: str
+
+
 @dataclass
 class TpuSliceData:
     pools: dict[str, list[str]] = field(
@@ -269,6 +451,18 @@ class TpuSliceData:
     dynamic_slice_partitions: dict[str, str] = field(default_factory=dict)
     pool_to_accelerator: dict[str, str] = field(default_factory=dict)
     all_tpu_nodes: set[str] = field(default_factory=set)
+    provision_only_nodes: set[str] = field(default_factory=set)
+    single_host_slices: dict[str, SliceSpec] = field(default_factory=dict)
+    single_host_pools: set[str] = field(default_factory=set)
+
+    def purge_pool(self, pool: str) -> None:
+        """Forgets the pool and its nodes so that no test targets them."""
+        for node in self.pools.pop(pool, []):
+            self.node_to_pool.pop(node, None)
+        self.pool_to_topology.pop(pool, None)
+        self.dynamic_slice_partitions.pop(pool, None)
+        self.pool_to_accelerator.pop(pool, None)
+        self.single_host_pools.discard(pool)
 
 
 def boolean_representer(dumper, data):
@@ -308,6 +502,7 @@ class KubernetesScheduler(BaseScheduler):
         self._resolved_node_resources: list[dict] | None = None
         self._cluster_name: str | None = None
         self._tpu_slice_data: TpuSliceData | None = None
+        self._subslice_nodes: set[str] = set()
         self._run_id: str | None = None
         self.workspace_config_dir: str | None = None
 
@@ -328,7 +523,7 @@ class KubernetesScheduler(BaseScheduler):
                 provider_id = node_obj.get("spec", {}).get("providerID", "")
             provider_id = provider_id.strip()
             # providerID format: gce://project-id/zone/instance-name
-            match = re.match(r"^gce://([^/]+)/([^/]+)/([^/]+)$", provider_id)
+            match = _GCE_PROVIDER_ID_RE.match(provider_id)
             if not match:
                 raise ValueError(f"Unexpected providerID format: {provider_id}")
             return match.group(1)
@@ -366,7 +561,13 @@ class KubernetesScheduler(BaseScheduler):
         label_types = {}
         gce_nodes = []
         for node in nodes:
-            metadata = objects_by_name.get(node, {}).get("metadata", {})
+            node_object = objects_by_name.get(node, {})
+            provider_id = node_object.get("spec", {}).get("providerID", "")
+            gce_instance = _GCE_PROVIDER_ID_RE.match(provider_id.strip())
+            if gce_instance:
+                self.project_id = gce_instance.group(1)
+                self.node_to_zone[node] = gce_instance.group(2)
+            metadata = node_object.get("metadata", {})
             labels = metadata.get("labels", {})
             annotations = metadata.get("annotations", {})
             machine_type = labels.get(
@@ -406,6 +607,38 @@ class KubernetesScheduler(BaseScheduler):
                 unique_types.add("unknown")
 
         return sorted(unique_types)
+
+    def run_preflight_checks(
+        self,
+        tests: list[dict[str, Any]] | None = None,
+        workspace_name: str | None = None,
+        run_id: str | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Fails fast if --nodes targets dynamic nodes that cannot sub-slice.
+
+        Raises:
+          ChsValidationError: If a targeted node of a provision-only TPU node
+            pool runs a GKE version older than dynamic sub-slicing.
+        """
+        if not self.nodes_arg:
+            return tests
+        minimum = _gke_version(_MIN_SUBSLICE_GKE_VERSION)
+        for node in self._get_node_objects(self.resolve_raw_nodes()):
+            labels = node["metadata"].get("labels") or {}
+            node_info = (node.get("status") or {}).get("nodeInfo") or {}
+            version = node_info.get("kubeletVersion", "")
+            if (
+                labels.get(_TOPOLOGY_MODE_LABEL) == "PROVISION_ONLY"
+                and _gke_version(version) < minimum
+            ):
+                raise ChsValidationError(
+                    f"Node '{node['metadata']['name']}' of a provision-only "
+                    f"TPU node pool runs GKE '{version}', but --nodes needs "
+                    f"GKE {_MIN_SUBSLICE_GKE_VERSION} or later to "
+                    "create single-host slices. Upgrade its node pool, or "
+                    "test the whole pool with --nodepools."
+                )
+        return tests
 
     def setup_scheduler_resources(
         self,
@@ -572,7 +805,7 @@ class KubernetesScheduler(BaseScheduler):
     def _group_nodes_by_slice(
         self, node_names: list[str]
     ) -> dict[str, list[str]]:
-        """Groups TPU nodes into slices using placement policy or node pool."""
+        """Groups TPU nodes by their node pool."""
         if not node_names:
             return {}
 
@@ -850,22 +1083,6 @@ class KubernetesScheduler(BaseScheduler):
         node_resources = self._fetch_raw_node_resources()
         return self._classify_unhealthy_nodes(node_resources)
 
-    def _purge_unhealthy_pool_data(
-        self,
-        unhealthy_nodepool: str,
-        tpu_nodepools: dict,
-        node_to_nodepool: dict,
-        pool_to_topology: dict,
-        dynamic_slice_partitions: dict,
-        pool_to_accelerator: dict,
-    ) -> None:
-        """Purges unhealthy pool data from dictionaries."""
-        for node in tpu_nodepools.pop(unhealthy_nodepool, []):
-            node_to_nodepool.pop(node, None)
-        pool_to_topology.pop(unhealthy_nodepool, None)
-        dynamic_slice_partitions.pop(unhealthy_nodepool, None)
-        pool_to_accelerator.pop(unhealthy_nodepool, None)
-
     def _get_tpu_slices(self) -> TpuSliceData:
         """Returns TPU pools mapping and node-to-pool mapping."""
         if self._tpu_slice_data:
@@ -878,98 +1095,37 @@ class KubernetesScheduler(BaseScheduler):
                 f"Failed to get node labels for TPU topology: {e}"
             ) from e
 
-        all_tpu_nodes = set()
-        tpu_nodepools: dict[str, list[str]] = defaultdict(list)
-        node_to_nodepool: dict[str, str] = {}
-        pool_to_topology: dict[str, str] = {}
-        dynamic_slice_partitions: dict[str, str] = {}
-        pool_to_accelerator: dict[str, str] = {}
-
+        data = TpuSliceData()
         unhealthy_pools = set()
 
         for node in nodes:
-            node_name = node.get("metadata", {}).get("name")
-            if not node_name:
-                continue
-
-            labels = node.get("metadata", {}).get("labels", {})
-            tpu_type = labels.get("cloud.google.com/gke-tpu-accelerator")
+            metadata = node.get("metadata", {})
+            node_name = metadata.get("name")
+            labels = metadata.get("labels", {})
             allocatable = (node.get("status") or {}).get("allocatable")
-            if not tpu_type and not _has_accelerator(allocatable, "tpu"):
-                continue
-
-            all_tpu_nodes.add(node_name)
-
-            nodepool = labels.get("cloud.google.com/gke-nodepool")
-            if not nodepool:
-                continue
-
-            accelerator_mode = labels.get(
-                "cloud.google.com/gke-accelerator-topology-mode"
+            is_tpu = labels.get(_TPU_ACCELERATOR_LABEL) or _has_accelerator(
+                allocatable, "tpu"
             )
-            topology = labels.get("cloud.google.com/gke-tpu-topology")
+            if not node_name or not is_tpu:
+                continue
 
-            if accelerator_mode == "PROVISION_ONLY":
-                state_label = (
-                    "cloud.google.com/gke-tpu-partition-"
-                    f"{SUPPORTED_DYNAMIC_SLICE_TOPOLOGY}-state"
-                )
-                matched_state = labels.get(state_label)
-
-                if matched_state == "HEALTHY":
-                    if nodepool not in unhealthy_pools:
-                        tpu_nodepools[nodepool].append(node_name)
-                        node_to_nodepool[node_name] = nodepool
-                        pool_to_topology[nodepool] = (
-                            SUPPORTED_DYNAMIC_SLICE_TOPOLOGY
-                        )
-                        partition_id = labels.get(_PARTITION_ID_LABEL)
-                        if partition_id:
-                            dynamic_slice_partitions[nodepool] = partition_id
-                        if tpu_type:
-                            pool_to_accelerator[nodepool] = tpu_type
-                else:
-                    if nodepool not in unhealthy_pools:
-                        if matched_state is None:
-                            logger.warning(
-                                "Skipping nodepool '%s' because the %s "
-                                "topology is unsupported.",
-                                nodepool,
-                                SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
-                            )
-                        else:
-                            logger.warning(
-                                "Skipping nodepool '%s' because the %s "
-                                "topology is currently unhealthy.",
-                                nodepool,
-                                SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
-                            )
-                    unhealthy_pools.add(nodepool)
-                    self._purge_unhealthy_pool_data(
-                        nodepool,
-                        tpu_nodepools,
-                        node_to_nodepool,
-                        pool_to_topology,
-                        dynamic_slice_partitions,
-                        pool_to_accelerator,
-                    )
+            data.all_tpu_nodes.add(node_name)
+            is_provision_only = (
+                labels.get(_TOPOLOGY_MODE_LABEL) == "PROVISION_ONLY"
+            )
+            if self.nodes_arg and is_provision_only:
+                _record_subslice_node(data, node_name, labels)
             else:
-                if not topology:
-                    unhealthy_pools.add(nodepool)
-                    self._purge_unhealthy_pool_data(
-                        nodepool,
-                        tpu_nodepools,
-                        node_to_nodepool,
-                        pool_to_topology,
-                        dynamic_slice_partitions,
-                        pool_to_accelerator,
+                _record_pool_node(data, unhealthy_pools, node_name, labels)
+                pool = data.node_to_pool.get(node_name)
+                if (
+                    pool
+                    and not is_provision_only
+                    and _is_single_host_slice(
+                        labels.get(_TPU_TOPOLOGY_LABEL), allocatable
                     )
-                else:
-                    if nodepool not in unhealthy_pools:
-                        tpu_nodepools[nodepool].append(node_name)
-                        node_to_nodepool[node_name] = nodepool
-                        if topology and nodepool not in pool_to_topology:
-                            pool_to_topology[nodepool] = topology
+                ):
+                    data.single_host_pools.add(pool)
 
         if unhealthy_pools:
             logger.warning(
@@ -978,14 +1134,7 @@ class KubernetesScheduler(BaseScheduler):
                 ", ".join(unhealthy_pools),
             )
 
-        self._tpu_slice_data = TpuSliceData(
-            pools=tpu_nodepools,
-            node_to_pool=node_to_nodepool,
-            pool_to_topology=pool_to_topology,
-            dynamic_slice_partitions=dynamic_slice_partitions,
-            pool_to_accelerator=pool_to_accelerator,
-            all_tpu_nodes=all_tpu_nodes,
-        )
+        self._tpu_slice_data = data
         return self._tpu_slice_data
 
     def resolve_raw_nodes(self) -> list[str]:
@@ -1043,33 +1192,10 @@ class KubernetesScheduler(BaseScheduler):
             self._resolved_nodes = []
             return []
 
-        topology = self._get_tpu_slices()
         busy_nodes = self._get_busy_nodes(target_nodes=raw_nodes)
-        not_ready_nodes = self._get_not_ready_nodes()
-        excluded_nodes = busy_nodes.union(not_ready_nodes)
-
-        gpu_nodes = set()
-        requested_tpu_slices = defaultdict(set)
-
-        for node in raw_nodes:
-            pool = topology.node_to_pool.get(node)
-            if pool:
-                requested_tpu_slices[pool].add(node)
-            elif node in topology.all_tpu_nodes:
-                logger.warning(
-                    "Excluded TPU node '%s' from testing because "
-                    "its parent slice is unhealthy.",
-                    node,
-                )
-                continue
-            else:
-                gpu_nodes.add(node)
-
-        candidate_nodes = set(gpu_nodes)
-        for pool_name in requested_tpu_slices:
-            candidate_nodes.update(topology.pools[pool_name])
+        excluded_nodes = busy_nodes | self._get_not_ready_nodes()
         for run_id, run_nodes in sorted(
-            self.find_runs_targeting_nodes(sorted(candidate_nodes)).items()
+            self.find_runs_targeting_nodes(raw_nodes).items()
         ):
             excluded_nodes.update(run_nodes)
             logger.warning(
@@ -1078,53 +1204,139 @@ class KubernetesScheduler(BaseScheduler):
                 run_id,
             )
 
-        valid_nodes = []
-        if gpu_nodes:
-            excluded_gpus = gpu_nodes.intersection(excluded_nodes)
-            if excluded_gpus:
-                logger.info(
-                    "Identified %d active GPU node(s) with "
-                    "existing workloads. These nodes "
-                    "will be skipped to avoid disrupting running tasks.",
-                    len(excluded_gpus),
-                )
+        topology = self._get_tpu_slices()
+        dynamic_pools = set(topology.dynamic_slice_partitions)
+        requested_pools: list[str] = []
+        subslice_candidates: list[str] = []
+        self.partially_busy_slices = {}
 
-            valid_nodes.extend(
-                [
-                    node
-                    for node in raw_nodes
-                    if node in gpu_nodes and node not in excluded_nodes
-                ]
-            )
-
-        for pool_name, requested_slice_nodes in requested_tpu_slices.items():
-            expected_slice_nodes = set(topology.pools[pool_name])
-
-            excluded_in_slice = list(
-                expected_slice_nodes.intersection(excluded_nodes)
-            )
-
-            if excluded_in_slice:
-                if len(excluded_in_slice) > 3:
-                    formatted_nodes = (
-                        f"{', '.join(excluded_in_slice[:3])} and "
-                        f"{len(excluded_in_slice) - 3} others"
-                    )
-                else:
-                    formatted_nodes = ", ".join(excluded_in_slice)
-
+        for node in raw_nodes:
+            pool = topology.node_to_pool.get(node)
+            if self.nodes_arg and node in topology.provision_only_nodes:
+                subslice_candidates.append(node)
+            elif pool:
+                if pool not in requested_pools:
+                    requested_pools.append(pool)
+            elif node in topology.all_tpu_nodes:
+                excluded_nodes.add(node)
                 logger.warning(
-                    "Skipping TPU slice '%s': TPU tests require the entire "
-                    "slice to be available and idle, but the following node(s) "
-                    "are currently busy or unavailable: %s",
-                    pool_name,
-                    formatted_nodes,
+                    "Excluded TPU node '%s' from testing because "
+                    "its parent slice is unhealthy.",
+                    node,
                 )
-            else:
-                valid_nodes.extend(expected_slice_nodes)
+
+        if subslice_candidates:
+            excluded_nodes |= self._nodes_unfit_for_subslice(
+                [n for n in subslice_candidates if n not in excluded_nodes]
+            )
+            self._subslice_nodes = {
+                n for n in subslice_candidates if n not in excluded_nodes
+            }
+
+        for pool in requested_pools:
+            busy = sorted(set(topology.pools[pool]) & excluded_nodes)
+            if busy:
+                self.partially_busy_slices[pool] = busy
+
+        if self.require_whole_slices:
+            for pool, busy in self.partially_busy_slices.items():
+                logger.warning(
+                    "Cannot run multi-host test(s) on slice '%s': the "
+                    "following node(s) are busy or unavailable: %s",
+                    pool,
+                    format_names(busy),
+                )
+            valid_nodes = [
+                n
+                for n in raw_nodes
+                if n not in excluded_nodes
+                and topology.node_to_pool.get(n)
+                not in self.partially_busy_slices
+            ]
+        else:
+            if busy_nodes:
+                logger.info(
+                    "Identified %d active node(s) with existing workloads. "
+                    "These nodes will be skipped to avoid disrupting running "
+                    "tasks.",
+                    len(busy_nodes),
+                )
+            busy_dynamic_pools = [
+                p for p in self.partially_busy_slices if p in dynamic_pools
+            ]
+            for pool in busy_dynamic_pools:
+                busy = self.partially_busy_slices.pop(pool)
+                logger.warning(
+                    "Cannot run tests on dynamic TPU pool '%s': dynamic "
+                    "slicing requires the entire pool to be available to "
+                    "provision the Slice CR, but the following node(s) "
+                    "are busy or unavailable: %s",
+                    pool,
+                    format_names(busy),
+                )
+                excluded_nodes.update(topology.pools[pool])
+            valid_nodes = [n for n in raw_nodes if n not in excluded_nodes]
 
         self._resolved_nodes = valid_nodes
         return self._resolved_nodes
+
+    def _nodes_unfit_for_subslice(self, nodes: list[str]) -> set[str]:
+        """Returns the dynamic nodes that cannot get their own sub-slice.
+
+        A node is unfit if its 2x2x1 partition is not HEALTHY, or if it is
+        already in a Slice, which GKE marks with the TPU topology label.
+        """
+        single_host_slices = self._get_tpu_slices().single_host_slices
+        unhealthy = [n for n in nodes if n not in single_host_slices]
+        if unhealthy:
+            logger.warning(
+                "Excluded node(s) %s from testing because their %s TPU "
+                "partition is not HEALTHY or not labelled on the node.",
+                format_names(unhealthy),
+                DYNAMIC_SINGLE_HOST_TOPOLOGY,
+            )
+        in_slice = [
+            node["metadata"]["name"]
+            for node in self._get_node_objects(nodes)
+            if node["metadata"]["name"] in single_host_slices
+            and _TPU_TOPOLOGY_LABEL in (node["metadata"].get("labels") or {})
+        ]
+        if in_slice:
+            logger.warning(
+                "Excluded node(s) %s from testing because they are already "
+                "part of a TPU slice.",
+                format_names(in_slice),
+            )
+        return set(unhealthy) | set(in_slice)
+
+    def get_tpu_slice_summary(self, nodes: list[str]) -> TpuSliceSummary | None:
+        slices = self._tpu_slice_data
+        if not slices:
+            return None
+        tested = set(nodes)
+        subslice_nodes = tested & self._subslice_nodes
+        pools = {
+            slices.node_to_pool[n] for n in tested if n in slices.node_to_pool
+        }
+        if not pools and not subslice_nodes:
+            return None
+        topologies = Counter()
+        if subslice_nodes:
+            topologies[DYNAMIC_SINGLE_HOST_TOPOLOGY] += len(subslice_nodes)
+        for pool in pools:
+            topology = slices.pool_to_topology.get(pool, "unknown")
+            if pool in slices.single_host_pools:
+                topologies[topology] += len(tested & set(slices.pools[pool]))
+            else:
+                topologies[topology] += 1
+        is_dynamic = bool(subslice_nodes) or not pools.isdisjoint(
+            slices.dynamic_slice_partitions
+        )
+        return TpuSliceSummary(
+            slice_type="dynamic" if is_dynamic else "static",
+            topologies=dict(sorted(topologies.items())),
+            nodepool_count=None if self.nodes_arg else len(pools),
+        )
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
         """Discovers network topology from the labels of the node objects."""
@@ -1219,6 +1431,9 @@ class KubernetesScheduler(BaseScheduler):
 
         variables["kubernetes_namespace"] = CHS_NAMESPACE
 
+        if resources.is_tpu(machine_type):
+            variables["chs_image"] = image.get_image()
+
         if resources.is_tpu(machine_type) and nodes:
             tpu_slices = self._group_nodes_by_slice(nodes)
             variables["tpu_slices"] = tpu_slices
@@ -1230,6 +1445,13 @@ class KubernetesScheduler(BaseScheduler):
                 for pool in tpu_slices
                 if pool in slice_data.pool_to_topology
             }
+            single_host_pools = [
+                pool
+                for pool, pool_nodes in tpu_slices.items()
+                if self._subslice_nodes.issuperset(pool_nodes)
+            ]
+            for pool in single_host_pools:
+                slice_topologies[pool] = DYNAMIC_SINGLE_HOST_TOPOLOGY
             variables["tpu_slice_topologies"] = slice_topologies
 
             dynamic_pools = [
@@ -1238,6 +1460,7 @@ class KubernetesScheduler(BaseScheduler):
                 if pool in slice_data.dynamic_slice_partitions
             ]
             variables["tpu_dynamic_pools"] = dynamic_pools
+            variables["tpu_single_host_pools"] = single_host_pools
 
         logger.debug("Configuration: %r", config)
 
@@ -1389,7 +1612,7 @@ class KubernetesScheduler(BaseScheduler):
             )
             return []
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         unschedulable = set()
         waiting = defaultdict(set)
         for pod in pods:
@@ -1649,6 +1872,8 @@ class KubernetesScheduler(BaseScheduler):
         Returns:
           Whether the deletion succeeded.
         """
+        if not names:
+            return True
         try:
             k8s_client.delete_custom_objects(
                 group=_SLICE_GROUP,
@@ -1667,18 +1892,14 @@ class KubernetesScheduler(BaseScheduler):
         return True
 
     def _wait_for_slices_active(
-        self, expected_nodepools: list[str], timeout_sec: int = 300
+        self, slice_keys: list[str], timeout_sec: int = 300
     ) -> tuple[list[str], list[str]]:
         """Waits for dynamically provisioned slices to reach terminal states."""
+        if not slice_keys:
+            return [], []
         start_time = time.time()
-        pool_of_slice = {_slice_name(pool): pool for pool in expected_nodepools}
+        key_of_slice = {_slice_name(key): key for key in slice_keys}
         slice_terminal_statuses = {}
-        failed_reasons = {
-            "FAILED",
-            "SliceCreationFailed",
-            "ACTIVE_DEGRADED",
-            "INCOMPLETE",
-        }
 
         while time.time() - start_time < timeout_sec:
             try:
@@ -1688,202 +1909,272 @@ class KubernetesScheduler(BaseScheduler):
                     continue
 
                 for tpu_slice in slices:
-                    nodepool = pool_of_slice.get(
+                    slice_key = key_of_slice.get(
                         tpu_slice.get("metadata", {}).get("name")
                     )
-                    if not nodepool:
+                    if not slice_key:
                         continue
 
-                    conditions = (
-                        tpu_slice.get("status", {}).get("conditions", [])
-                        if tpu_slice.get("status")
-                        else []
-                    )
-                    ready_cond = next(
-                        (c for c in conditions if c.get("type") == "Ready"),
-                        {},
-                    )
-                    reason = ready_cond.get("reason")
+                    state = _slice_state(tpu_slice)
+                    if state == "ACTIVE" or state in _UNUSABLE_SLICE_STATES:
+                        slice_terminal_statuses[slice_key] = state
 
-                    if reason == "ACTIVE" or reason in failed_reasons:
-                        slice_terminal_statuses[nodepool] = reason
-
-                if len(slice_terminal_statuses) >= len(expected_nodepools):
+                if len(slice_terminal_statuses) >= len(slice_keys):
                     break
 
             except ChsSchedulerException as e:
                 logger.debug("Failed to check status for dynamic slices: %s", e)
             time.sleep(10)
 
-        success_nodepools = [
-            pool
-            for pool, status in slice_terminal_statuses.items()
+        active = [
+            key
+            for key, status in slice_terminal_statuses.items()
             if status == "ACTIVE"
         ]
-        failed_nodepools = [
-            pool for pool in expected_nodepools if pool not in success_nodepools
-        ]
-        return success_nodepools, failed_nodepools
+        failed = [key for key in slice_keys if key not in active]
+        return active, failed
 
-    def _get_already_fulfilled_partitions(self) -> set[str]:
-        """Returns partition IDs of existing slices, except other runs'."""
-        fulfilled = set()
+    def _existing_slice_states(self) -> dict[str, str | None]:
+        """Maps partitions held by Slices this run may reuse to their state.
+
+        Slices being deleted and Slices of other CHS runs are left out.
+        """
+        states = {}
         try:
             slices = self._list_slices()
-            for tpu_slice in slices:
-                metadata = tpu_slice.get("metadata", {})
-                labels = metadata.get("labels") or {}
-                owned_by_other_run = (
-                    labels.get(MANAGED_BY_LABEL) == MANAGED_BY_CHS
-                    and labels.get(INSTANCE_LABEL) != self._run_id
-                )
-                if metadata.get("deletionTimestamp") or owned_by_other_run:
-                    continue
-                for pid in tpu_slice.get("spec", {}).get("partitionIds", []):
-                    fulfilled.add(pid)
         except ChsSchedulerException as e:
             logger.debug("Could not retrieve existing slices: %s", e)
-        return fulfilled
+            return states
+        for tpu_slice in filter(_holds_partitions, slices):
+            metadata = tpu_slice.get("metadata", {})
+            labels = metadata.get("labels") or {}
+            owned_by_other_run = (
+                labels.get(MANAGED_BY_LABEL) == MANAGED_BY_CHS
+                and labels.get(INSTANCE_LABEL) != self._run_id
+            )
+            if metadata.get("deletionTimestamp") or owned_by_other_run:
+                continue
+            for partition_id in tpu_slice.get("spec", {}).get(
+                "partitionIds", []
+            ):
+                states[partition_id] = _slice_state(tpu_slice)
+        return states
 
-    def _create_slice(self, slice_manifest: dict, pool_name: str) -> None:
-        """Creates the Slice of the nodepool.
+    def _create_slice(self, slice_manifest: dict, slice_key: str) -> None:
+        """Creates the Slice of the slice key.
 
         Raises:
           ChsSchedulerException: If the Slice exists or cannot be created.
         """
         name = slice_manifest.get("metadata", {}).get("name")
         try:
-            k8s_client.create_custom_object(
-                plural="slices", body=slice_manifest
+            _with_retries(
+                lambda: k8s_client.create_custom_object(
+                    plural="slices", body=slice_manifest
+                ),
+                f"Slice '{name}'",
             )
         except k8s_client.KubeError as e:
             if e.status == 409:
+                if self._is_own_slice(name):
+                    return
                 raise ChsSchedulerException(
                     f"Dynamic slice '{name}' already exists; another CHS run "
-                    f"may be using nodepool {pool_name}. Wait for that run to "
+                    f"may be using {slice_key}. Wait for that run to "
                     "finish or cancel it with `chs cancel <run_id>`."
                 ) from e
             raise ChsSchedulerException(
                 f"Failed to create dynamic slice '{name}': {e}"
             ) from e
 
+    def _is_own_slice(self, name: str) -> bool:
+        """Returns True if this run already created the named Slice.
+
+        Creating a Slice is not idempotent: if a retried create's first
+        attempt reached the API server but its response was lost, the next
+        attempt gets 409 on the Slice this run just created.
+        """
+        own_slices = self._list_slice_names(_run_selector(self._run_id))
+        return name in (own_slices or [])
+
+    def _dynamic_slice_spec(self, slice_key: str) -> SliceSpec | None:
+        """Returns the Slice that the slice key needs, if it is dynamic."""
+        data = self._get_tpu_slices()
+        if slice_key in self._subslice_nodes:
+            return data.single_host_slices[slice_key]
+        if slice_key in data.dynamic_slice_partitions:
+            return SliceSpec(
+                accelerator=data.pool_to_accelerator.get(slice_key, ""),
+                topology=data.pool_to_topology.get(slice_key, ""),
+                partition_id=data.dynamic_slice_partitions[slice_key],
+            )
+        return None
+
+    def _slice_manifest(
+        self, template: str, slice_key: str, spec: SliceSpec
+    ) -> dict:
+        manifest = yaml.safe_load(
+            template.format(
+                slice_name=_slice_name(slice_key),
+                tpu_type=spec.accelerator,
+                shape=spec.topology,
+                partition_id=spec.partition_id,
+            )
+        )
+        manifest["metadata"]["labels"] = _run_labels(self._run_id)
+        return manifest
+
+    def _create_slices(self, manifests: dict[str, dict]) -> list[str]:
+        """Creates the Slices and returns the sub-slice keys that failed.
+
+        Raises:
+          ChsSchedulerException: If the Slice of a node pool cannot be
+            created.
+        """
+        failed_subslices = set()
+        executor = ThreadPoolExecutor(
+            max_workers=min(len(manifests), _API_MAX_CONCURRENCY)
+        )
+        try:
+            futures = {
+                executor.submit(self._create_slice, manifest, slice_key): (
+                    slice_key
+                )
+                for slice_key, manifest in manifests.items()
+            }
+            for future in as_completed(futures):
+                slice_key = futures[future]
+                try:
+                    future.result()
+                except ChsSchedulerException as e:
+                    if slice_key not in self._subslice_nodes:
+                        raise
+                    logger.warning("%s", e)
+                    failed_subslices.add(slice_key)
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+        return [key for key in manifests if key in failed_subslices]
+
     def _provision_dynamic_slices(
-        self, target_pools: dict[str, list[str]]
+        self, target_slices: dict[str, list[str]]
     ) -> tuple[list[str], list[str]]:
-        """Provisions and waits for dynamic TPU slices."""
-        if not (
-            self._tpu_slice_data
-            and self._tpu_slice_data.dynamic_slice_partitions
-            and self.workspace_config_dir
-        ):
+        """Provisions dynamic TPU slices; returns the active and failed keys.
+
+        Only ACTIVE existing Slices are reused. Slices this run created that
+        do not become ACTIVE are deleted.
+        """
+        if not (self._tpu_slice_data and self.workspace_config_dir):
+            return [], []
+        specs = {
+            slice_key: spec
+            for slice_key in target_slices
+            if (spec := self._dynamic_slice_spec(slice_key))
+        }
+        if not specs:
             return [], []
 
-        fulfilled_partitions = self._get_already_fulfilled_partitions()
-        pools_to_provision = []
-        already_fulfilled_pools = []
+        existing_states = self._existing_slice_states()
+        reused = []
+        occupied = []
+        for slice_key, spec in specs.items():
+            if spec.partition_id not in existing_states:
+                continue
+            state = existing_states[spec.partition_id]
+            if state == "ACTIVE":
+                reused.append(slice_key)
+            else:
+                occupied.append(slice_key)
+                logger.warning(
+                    "Cannot provision a dynamic slice for '%s': its TPU "
+                    "partition is held by an existing slice in state %s.",
+                    slice_key,
+                    state or "unknown",
+                )
+        template = _read_slice_template()
+        manifests = {
+            slice_key: self._slice_manifest(template, slice_key, spec)
+            for slice_key, spec in specs.items()
+            if spec.partition_id not in existing_states
+        }
+        if not manifests:
+            return reused, occupied
 
         slice_yaml_path = os.path.join(
             self.workspace_config_dir, "chs-slices.yaml"
         )
-        slice_manifests = []
-        template_path = pkg_resources.files("chs.schedulers").joinpath(
-            "slice.yaml.tpl"
-        )
-        try:
-            with pkg_resources.as_file(template_path) as p:
-                with open(p, "r") as f:
-                    template_str = f.read()
-        except OSError as e:
-            raise ChsSchedulerException(f"Failed to read slice template: {e}")
+        with open(slice_yaml_path, "w") as f:
+            yaml.safe_dump_all(manifests.values(), f, sort_keys=False)
 
-        for (
-            pool_name,
-            partition_id,
-        ) in self._tpu_slice_data.dynamic_slice_partitions.items():
-            if pool_name not in target_pools:
-                continue
-
-            if partition_id in fulfilled_partitions:
-                already_fulfilled_pools.append(pool_name)
-                continue
-
-            pools_to_provision.append(pool_name)
-            tpu_type = self._tpu_slice_data.pool_to_accelerator.get(
-                pool_name, ""
-            )
-            shape = self._tpu_slice_data.pool_to_topology.get(pool_name, "")
-
-            slice_manifest = yaml.safe_load(
-                template_str.format(
-                    slice_name=_slice_name(pool_name),
-                    tpu_type=tpu_type,
-                    shape=shape,
-                    partition_id=partition_id,
-                )
-            )
-            slice_manifest["metadata"]["labels"] = _run_labels(self._run_id)
-            slice_manifests.append(slice_manifest)
-
-        if slice_manifests:
-            with open(slice_yaml_path, "w") as f:
-                yaml.safe_dump_all(slice_manifests, f, sort_keys=False)
-
-            for pool_name, slice_manifest in zip(
-                pools_to_provision, slice_manifests
-            ):
-                self._create_slice(slice_manifest, pool_name)
-
-            success, failed = self._wait_for_slices_active(
-                pools_to_provision, 300
-            )
-            return success + already_fulfilled_pools, failed
-
-        return already_fulfilled_pools, []
+        failed_to_create = self._create_slices(manifests)
+        created = [key for key in manifests if key not in failed_to_create]
+        active, inactive = self._wait_for_slices_active(created, 300)
+        self._delete_slices([_slice_name(key) for key in inactive])
+        return active + reused, occupied + failed_to_create + inactive
 
     def apply_scheduler_resources(self) -> None:
         """Applies generated scheduler resources to the cluster."""
-        target_pools = {}
-        nodes = self.get_nodes_under_test()
-        if nodes:
-            target_pools = self._group_nodes_by_slice(nodes)
+        target_slices = self._slices_to_provision(self.get_nodes_under_test())
+        _, failed_slices = self._provision_dynamic_slices(target_slices)
+        if failed_slices and self._tpu_slice_data:
+            self._drop_failed_slices(failed_slices, target_slices)
 
-        _, failed_nodepools = self._provision_dynamic_slices(target_pools)
+        self._ensure_namespace_exists()
 
-        if failed_nodepools and self._tpu_slice_data:
-            self._delete_slices(
-                [_slice_name(nodepool) for nodepool in failed_nodepools]
-            )
-            nodes_to_remove = set()
-            for nodepool in failed_nodepools:
-                nodes_to_remove.update(target_pools.get(nodepool, []))
-                self._purge_unhealthy_pool_data(
-                    nodepool,
-                    self._tpu_slice_data.pools,
-                    self._tpu_slice_data.node_to_pool,
-                    self._tpu_slice_data.pool_to_topology,
-                    self._tpu_slice_data.dynamic_slice_partitions,
-                    self._tpu_slice_data.pool_to_accelerator,
+    def _slices_to_provision(self, nodes: list[str]) -> dict[str, list[str]]:
+        """Maps each Slice key to its nodes: a pool, or a sub-sliced node."""
+        pool_nodes = [n for n in nodes if n not in self._subslice_nodes]
+        slices = self._group_nodes_by_slice(pool_nodes)
+        for node in nodes:
+            if node in self._subslice_nodes:
+                slices[node] = [node]
+        return slices
+
+    def _drop_failed_slices(
+        self, failed_slices: list[str], target_slices: dict[str, list[str]]
+    ) -> None:
+        """Stops testing the nodes of the slices that could not be used.
+
+        Raises:
+          ChsSchedulerException: If no node is left to test.
+        """
+        failed_subslices = [
+            key for key in failed_slices if key in self._subslice_nodes
+        ]
+        failed_pools = [
+            key for key in failed_slices if key not in self._subslice_nodes
+        ]
+        for pool in failed_pools:
+            self._tpu_slice_data.purge_pool(pool)
+        self._subslice_nodes.difference_update(failed_subslices)
+
+        nodes_to_remove = {
+            node for key in failed_slices for node in target_slices.get(key, [])
+        }
+        if self._resolved_nodes is not None:
+            self._resolved_nodes = [
+                n for n in self._resolved_nodes if n not in nodes_to_remove
+            ]
+            if not self._resolved_nodes:
+                raise ChsSchedulerException(
+                    "All targeted dynamic slices failed to provision: "
+                    f"{', '.join(failed_slices)}."
                 )
 
-            if self._resolved_nodes is not None:
-                self._resolved_nodes = [
-                    n for n in self._resolved_nodes if n not in nodes_to_remove
-                ]
-
-                if not self._resolved_nodes:
-                    raise ChsSchedulerException(
-                        "All targeted dynamic slices failed to provision: "
-                        f"{', '.join(failed_nodepools)}."
-                    )
-
+        if failed_pools:
             logger.warning(
                 "Dynamic slice provisioning failed for nodepools: %s. "
                 "Tests will skip these and run on the remaining active "
                 "slices.",
-                ", ".join(failed_nodepools),
+                ", ".join(failed_pools),
             )
-
-        self._ensure_namespace_exists()
+        if failed_subslices:
+            logger.warning(
+                "Excluded node(s) %s from testing because their %s "
+                "single-host slices could not be provisioned. Tests will "
+                "run on the remaining nodes.",
+                format_names(failed_subslices),
+                DYNAMIC_SINGLE_HOST_TOPOLOGY,
+            )
 
     def find_runs_targeting_nodes(
         self, nodes: list[str]
@@ -1958,12 +2249,10 @@ class KubernetesScheduler(BaseScheduler):
         if node_objects is None:
             node_objects = k8s_client.list_nodes()
         for node in node_objects:
-            metadata = node.get("metadata", {})
-            node_name = metadata.get("name")
-            partition_id = (metadata.get("labels") or {}).get(
-                _PARTITION_ID_LABEL
-            )
-            if node_name in requested and partition_id in run_of_partition:
+            node_name = node.get("metadata", {}).get("name")
+            if node_name not in requested:
+                continue
+            for partition_id in _partition_ids(node) & run_of_partition.keys():
                 targeted[run_of_partition[partition_id]].add(node_name)
         return targeted
 
