@@ -149,7 +149,6 @@ class TestPathStorageProvider(unittest.TestCase):
         with open(src_file, "w") as f:
             f.write("hello")
 
-        # Upload
         self.provider.upload_file(src_file, "bills_of_health/run1.json")
         dest_file = os.path.join(
             self.target_path, "bills_of_health", "run1.json"
@@ -158,7 +157,6 @@ class TestPathStorageProvider(unittest.TestCase):
         with open(dest_file, "r") as f:
             self.assertEqual(f.read(), "hello")
 
-        # Download
         download_dest = os.path.join(self.temp_dir.name, "downloaded.txt")
         self.provider.download_file("bills_of_health/run1.json", download_dest)
         self.assertTrue(os.path.exists(download_dest))
@@ -300,15 +298,12 @@ class TestGcsStorageProvider(unittest.TestCase):
             "gs://my-bucket/sub/path/bills_of_health/run1.json",
         )
 
-        # Upload
         provider.upload_file("/tmp/local.txt", "remote/path.txt")
         mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
 
-        # Download
         provider.download_file("remote/path.txt", "/tmp/local.txt")
         mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
 
-        # Exists
         mock_blob.exists.return_value = True
         self.assertTrue(provider.exists("remote/path.txt"))
         mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
