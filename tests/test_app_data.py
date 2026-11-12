@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 
 from chs.utils import app_data
+from chs.utils.lifecycle import JobState, ReasonCode
 import chs.exceptions as ex
 
 
@@ -31,7 +32,9 @@ def _record_runs(data_dir: str, worker: int) -> None:
     store = app_data.ChsAppData(data_dir=data_dir)
     for i in range(_UPDATES_PER_WORKER):
         store.update_run(f"run-{worker}-{i}", {"run_id": f"run-{worker}-{i}"})
-        store.update_run_status("shared", {f"job-{worker}-{i}": "PENDING"})
+        store.update_run_status(
+            "shared", {f"job-{worker}-{i}": JobState("PENDING")}
+        )
 
 
 class TestChsAppData(unittest.TestCase):
@@ -106,7 +109,7 @@ class TestChsAppData(unittest.TestCase):
             "run1", {"job_entries": {"job1": {"status": "RUNNING"}}}
         )
 
-        self.app_data.update_run_status("run1", {"job1": "COMPLETED"})
+        self.app_data.update_run_status("run1", {"job1": JobState("COMPLETED")})
 
         run = self.app_data.get_run("run1")
         self.assertEqual(run["job_entries"], {"job1": {"status": "COMPLETED"}})
@@ -116,10 +119,65 @@ class TestChsAppData(unittest.TestCase):
             "run1", {"job_entries": {"job1": {"status": "COMPLETED"}}}
         )
 
-        self.app_data.update_run_status("run1", {"job1": "UNKNOWN"})
+        self.app_data.update_run_status("run1", {"job1": JobState("UNKNOWN")})
 
         run = self.app_data.get_run("run1")
         self.assertEqual(run["job_entries"], {"job1": {"status": "COMPLETED"}})
+
+    def test_update_run_status_stores_reason(self):
+        self.app_data.update_run(
+            "run1", {"job_entries": {"job1": {"status": "RUNNING"}}}
+        )
+
+        self.app_data.update_run_status(
+            "run1",
+            {"job1": JobState("DEADLINE", ReasonCode.SLOW_STARTUP)},
+        )
+
+        run = self.app_data.get_run("run1")
+        self.assertEqual(
+            run["job_entries"],
+            {
+                "job1": {
+                    "status": "DEADLINE",
+                    "reason_code": "SLOW_STARTUP",
+                }
+            },
+        )
+
+    def test_update_run_status_keeps_reason_of_terminal_status(self):
+        self.app_data.update_run(
+            "run1",
+            {
+                "job_entries": {
+                    "job1": {
+                        "status": "DEADLINE",
+                        "reason_code": "IMAGE_PULL_FAILED",
+                    }
+                }
+            },
+        )
+
+        self.app_data.update_run_status(
+            "run1",
+            {
+                "job1": JobState(
+                    "CANCELLED",
+                    ReasonCode.STATUS_UNAVAILABLE,
+                )
+            },
+        )
+
+        run = self.app_data.get_run("run1")
+        self.assertEqual(
+            run["job_entries"],
+            {
+                "job1": {
+                    "status": "DEADLINE",
+                    "reason_code": "IMAGE_PULL_FAILED",
+                }
+            },
+        )
 
     def test_update_run_preserves_terminal_status_on_merge(self):
         self.app_data.update_run(

@@ -39,6 +39,7 @@ from chs.schedulers.kubernetes import (
     TpuSliceData,
     _gke_version,
     _is_accelerator_node,
+    _node_taken_message,
     _partition_ids,
     _record_pool_node,
     _record_subslice_node,
@@ -47,10 +48,12 @@ from chs.schedulers.kubernetes import (
     _with_retries,
 )
 from chs.schedulers.slurm import SlurmScheduler
+from chs.schedulers import kubernetes
 from chs.schedulers import _get_kubectl_context, detect_scheduler
 from google.auth.exceptions import GoogleAuthError
 from chs.exceptions import ChsSchedulerException, ChsValidationError
 from chs.utils import k8s_client
+from chs.utils.lifecycle import JobState, ReasonCode
 import click
 from chs import exceptions as ex
 from chs import image
@@ -112,6 +115,11 @@ def _gpu_resource_claim(
         "metadata": {"name": name, "namespace": namespace},
         "status": status,
     }
+
+
+def _statuses(states: dict[str, JobState]) -> dict[str, str]:
+    """Returns the status of each job state."""
+    return {job_id: state.status for job_id, state in states.items()}
 
 
 _LIST_CHS_SLICES = Call(
@@ -250,6 +258,24 @@ def _finished_job(name: str, node: str, condition: str, reason: str) -> dict:
     return job
 
 
+_NOW = datetime.datetime(2026, 11, 18, 12, 0, 0, tzinfo=datetime.UTC)
+
+
+class _FrozenDatetime(datetime.datetime):
+    """A datetime whose now() is _NOW, naive unless a time zone is given."""
+
+    @classmethod
+    def now(cls, tz=None):
+        if tz is None:
+            return _NOW.replace(tzinfo=None)
+        return _NOW.astimezone(tz)
+
+
+def _frozen_now() -> contextlib.AbstractContextManager:
+    """Returns a context in which datetime.datetime.now() returns _NOW."""
+    return mock.patch.object(datetime, "datetime", _FrozenDatetime)
+
+
 def _waiting_pod(name: str, job_name: str, node: str) -> dict[str, Any]:
     """Returns a Job's pod pinned to the node, Unschedulable for 30 s."""
     created = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
@@ -275,6 +301,7 @@ def _pending_pod(
     labels = {}
     if job_name:
         labels["batch.kubernetes.io/job-name"] = job_name
+        labels[_MANAGED_BY] = "chs"
     conditions = []
     if not scheduled and unschedulable:
         conditions.append(
@@ -1149,7 +1176,7 @@ class TestKubernetesScheduler(unittest.TestCase):
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1", "pair"])
+        statuses = _statuses(scheduler.poll_jobs(["job1", "pair"]))
 
         self.assertEqual(statuses, {"job1": "DEADLINE", "pair": "DEADLINE"})
         self.assertEqual(self._resource_claim_listings(), 1)
@@ -3377,7 +3404,7 @@ ramble:
         error = k8s_client.KubeError("forbidden", status=403)
         self.kube.fail_next("delete_jobs", error)
 
-        statuses = KubernetesScheduler().poll_jobs(["job1"])
+        statuses = _statuses(KubernetesScheduler().poll_jobs(["job1"]))
 
         self.assertEqual(statuses, {"job1": "DEADLINE"})
         mock_logger.error.assert_called_once_with(
@@ -3885,13 +3912,73 @@ ramble:
         """Job conditions and counts map to CHS job statuses."""
         cases = {
             "done": {"conditions": [{"type": "Complete", "status": "True"}]},
-            "timed-out": {
+            "startup-timed-out": {
                 "failed": 1,
                 "conditions": [
                     {
                         "type": "Failed",
                         "status": "True",
                         "reason": "DeadlineExceeded",
+                    }
+                ],
+            },
+            "startup-timing-out": {
+                "conditions": [
+                    {
+                        "type": "FailureTarget",
+                        "status": "True",
+                        "reason": "DeadlineExceeded",
+                    }
+                ],
+            },
+            "test-timed-out": {
+                "failed": 1,
+                "conditions": [
+                    {
+                        "type": "FailureTarget",
+                        "status": "True",
+                        "reason": "PodFailurePolicy",
+                        "message": (
+                            "Container mpi-container for pod chs/p-0 failed "
+                            "with exit code 124 matching FailJob rule at "
+                            "index 0"
+                        ),
+                    }
+                ],
+            },
+            "pod-exited-124-message-differs": {
+                "failed": 1,
+                "conditions": [
+                    {
+                        "type": "Failed",
+                        "status": "True",
+                        "reason": "PodFailurePolicy",
+                        "message": "Pod failed",
+                    }
+                ],
+            },
+            "test-failed": {
+                "failed": 1,
+                "conditions": [
+                    {
+                        "type": "Failed",
+                        "status": "True",
+                        "reason": "PodFailurePolicy",
+                        "message": (
+                            "Container c for pod chs/p-0 failed with exit "
+                            "code 1240 matching FailJob rule at index 0"
+                        ),
+                    }
+                ],
+            },
+            "backoff-with-exit-124": {
+                "failed": 1,
+                "conditions": [
+                    {
+                        "type": "Failed",
+                        "status": "True",
+                        "reason": "BackoffLimitExceeded",
+                        "message": "Container c failed with exit code 124",
                     }
                 ],
             },
@@ -3925,6 +4012,19 @@ ramble:
                 {"metadata": {"name": name}, "status": status},
                 namespace=CHS_NAMESPACE,
             )
+        exited = {
+            "test-timed-out": 124,
+            "pod-exited-124-message-differs": 124,
+            "test-failed": 1,
+            "backoff-with-exit-124": 124,
+        }
+        for job_name, code in exited.items():
+            self._add_job_pod(
+                f"{job_name}-0",
+                job_name,
+                main={"terminated": {"exitCode": code}},
+                phase="Failed",
+            )
 
         statuses = KubernetesScheduler().get_job_statuses([*cases, "missing"])
 
@@ -3932,7 +4032,12 @@ ramble:
             statuses,
             {
                 "done": "COMPLETED",
-                "timed-out": "TIMEOUT",
+                "startup-timed-out": "DEADLINE",
+                "startup-timing-out": "DEADLINE",
+                "test-timed-out": "TIMEOUT",
+                "pod-exited-124-message-differs": "TIMEOUT",
+                "test-failed": "UNKNOWN",
+                "backoff-with-exit-124": "UNKNOWN",
                 "failed": "UNKNOWN",
                 "pod-failed-with-active-siblings": "RUNNING",
                 "finishing": "RUNNING",
@@ -3942,7 +4047,127 @@ ramble:
             },
         )
         self.assertEqual(
-            self.kube.calls, [Call("list_jobs", {"namespace": CHS_NAMESPACE})]
+            self.kube.calls,
+            [
+                Call("list_jobs", {"namespace": CHS_NAMESPACE}),
+                Call(
+                    "list_pods",
+                    {
+                        "namespace": CHS_NAMESPACE,
+                        "label_selector": f"{_MANAGED_BY}=chs",
+                    },
+                ),
+            ],
+        )
+
+    def test_get_job_statuses_falls_back_to_message_without_pods(
+        self, mock_logger
+    ):
+        """If pods can't be listed, exit code 124 is read from the message."""
+        for name, message in (
+            ("timed-out", "Container c failed with exit code 124 matching"),
+            ("failed", "Container c failed with exit code 1 matching"),
+        ):
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                {
+                    "metadata": {"name": name},
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "Failed",
+                                "status": "True",
+                                "reason": "PodFailurePolicy",
+                                "message": message,
+                            }
+                        ]
+                    },
+                },
+                namespace=CHS_NAMESPACE,
+            )
+        self.kube.fail_always("list_pods", k8s_client.KubeError("down"))
+
+        statuses = KubernetesScheduler().get_job_statuses(
+            ["timed-out", "failed"]
+        )
+
+        self.assertEqual(
+            statuses, {"timed-out": "TIMEOUT", "failed": "UNKNOWN"}
+        )
+
+    def test_poll_jobs_reports_deadline_by_whether_the_test_started(
+        self, mock_logger
+    ):
+        """A Job past its deadline timed out only if all its pods started."""
+        for name in ("started", "pulling", "half-started", "gone"):
+            job = _finished_job(
+                name, "node1", "FailureTarget", "DeadlineExceeded"
+            )
+            job["spec"]["activeDeadlineSeconds"] = 840
+            job["spec"]["completions"] = 2
+            self.kube.add_object("batch", "jobs", job, namespace=CHS_NAMESPACE)
+        running = {"running": {"startedAt": "2026-11-17T00:00:00Z"}}
+        pulling = {"waiting": {"reason": "ContainerCreating"}}
+        for index in range(2):
+            self._add_job_pod(
+                f"started-{index}", "started", main=running, phase="Running"
+            )
+            self._add_job_pod(f"pulling-{index}", "pulling", main=pulling)
+            self._add_job_pod(
+                f"other-{index}",
+                "gone",
+                main=running,
+                phase="Running",
+                managed_by="x",
+            )
+        self._add_job_pod(
+            "half-started-0", "half-started", main=running, phase="Running"
+        )
+        self._add_job_pod("half-started-1", "half-started", main=pulling)
+
+        with mock.patch.object(kubernetes, "K8S_JOB_STARTUP_BUDGET_SEC", 300):
+            states = KubernetesScheduler().poll_jobs(
+                ["started", "pulling", "half-started", "gone"]
+            )
+
+        startup = JobState(
+            "DEADLINE",
+            ReasonCode.SLOW_STARTUP,
+        )
+        self.assertEqual(
+            states,
+            {
+                "started": JobState("TIMEOUT"),
+                "pulling": startup,
+                "half-started": startup,
+                "gone": startup,
+            },
+        )
+
+    def test_get_job_statuses_treats_deadline_as_startup_if_pods_unknown(
+        self, mock_logger
+    ):
+        """A Job past its deadline counts as not started if pods are unknown."""
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            _finished_job("job1", "node1", "Failed", "DeadlineExceeded"),
+            namespace=CHS_NAMESPACE,
+        )
+        self._add_job_pod(
+            "job1-0",
+            "job1",
+            main={"running": {"startedAt": "2026-11-17T00:00:00Z"}},
+            phase="Running",
+        )
+        self.kube.fail_next(
+            "list_pods", k8s_client.KubeError("Forbidden", status=403)
+        )
+
+        self.assertEqual(
+            KubernetesScheduler().get_job_statuses(["job1"]),
+            {"job1": "DEADLINE"},
         )
 
     def test_apply_scheduler_resources_creates_run_worker_service(
@@ -5328,7 +5553,7 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1", "job2", "job3"])
+        statuses = _statuses(scheduler.poll_jobs(["job1", "job2", "job3"]))
 
         self.assertEqual(
             statuses, {"job1": "PENDING", "job2": "PENDING", "job3": "PENDING"}
@@ -5424,11 +5649,15 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1", "job2", "job3"])
+        states = scheduler.poll_jobs(["job1", "job2", "job3"])
 
+        taken = JobState(
+            "DEADLINE",
+            ReasonCode.NODE_BUSY,
+        )
         self.assertEqual(
-            statuses,
-            {"job1": "DEADLINE", "job2": "PENDING", "job3": "DEADLINE"},
+            states,
+            {"job1": taken, "job2": JobState("PENDING"), "job3": taken},
         )
         self.assertEqual(
             [call.kwargs["name"] for call in self.kube.calls_to("patch_job")],
@@ -5439,11 +5668,9 @@ ramble:
             mock_logger.warning.call_args_list,
             [
                 mock.call(
-                    "Job '%s' was not started because node %s is now used by "
-                    "another workload (pod %s).",
+                    "Job '%s' was not started. %s.",
                     name,
-                    "node1",
-                    "team-a/train",
+                    "Node node1 is used by another workload (pod team-a/train)",
                 )
                 for name in ("job1", "job3")
             ],
@@ -5470,7 +5697,7 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["pair", "single"])
+        statuses = _statuses(scheduler.poll_jobs(["pair", "single"]))
 
         self.assertEqual(statuses, {"pair": "DEADLINE", "single": "PENDING"})
         self.assertEqual(
@@ -5503,10 +5730,10 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        first = scheduler.poll_jobs(["job1", "pair"])
+        first = _statuses(scheduler.poll_jobs(["job1", "pair"]))
         del self.kube.objects[("batch", "jobs", CHS_NAMESPACE, "running")]
         del self.kube.objects[("", "pods", "team-a", "train")]
-        second = scheduler.poll_jobs(["pair"])
+        second = _statuses(scheduler.poll_jobs(["pair"]))
 
         self.assertEqual(first, {"job1": "DEADLINE", "pair": "PENDING"})
         self.assertEqual(second, {"pair": "PENDING"})
@@ -5529,7 +5756,7 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1", "job2", "job3"])
+        statuses = _statuses(scheduler.poll_jobs(["job1", "job2", "job3"]))
 
         self.assertEqual(
             statuses,
@@ -5582,14 +5809,26 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        self.assertEqual(scheduler.poll_jobs(["pair"]), {"pair": "DEADLINE"})
+        self.assertEqual(
+            _statuses(scheduler.poll_jobs(["pair"])), {"pair": "DEADLINE"}
+        )
         self.assertEqual(self.kube.calls_to("patch_job"), [])
         mock_logger.warning.assert_called_once_with(
-            "Job '%s' was not started because node %s is now used by "
-            "another workload (pod %s).",
+            "Job '%s' was not started. %s.",
             "pair",
-            "node2",
-            "team-a/train",
+            "Node node2 is used by another workload (pod team-a/train)",
+        )
+
+    def test_node_taken_message_names_every_taken_node(self, mock_logger):
+        taken = {"node1": "team-a/train", "node2": "team-b/serve"}
+        self.assertEqual(
+            _node_taken_message(["node1"], taken),
+            "Node node1 is used by another workload (pod team-a/train)",
+        )
+        self.assertEqual(
+            _node_taken_message(["node1", "node2"], taken),
+            "Nodes node1, node2 are used by other workloads "
+            "(pods team-a/train, team-b/serve)",
         )
 
     def test_poll_jobs_ignores_chs_pods_on_nodes(self, mock_logger):
@@ -5608,7 +5847,7 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1"])
+        statuses = _statuses(scheduler.poll_jobs(["job1"]))
 
         self.assertEqual(statuses, {"job1": "PENDING"})
         self.assertEqual(
@@ -5638,7 +5877,7 @@ ramble:
                 )
                 scheduler = KubernetesScheduler()
 
-                statuses = scheduler.poll_jobs(["job1"])
+                statuses = _statuses(scheduler.poll_jobs(["job1"]))
 
                 self.assertEqual(statuses, {"job1": "DEADLINE"})
                 self.assertEqual(kube.calls_to("patch_job"), [])
@@ -5658,7 +5897,7 @@ ramble:
         self.kube.fail_next("list_pods", error, error, error)
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1"])
+        statuses = _statuses(scheduler.poll_jobs(["job1"]))
 
         self.assertEqual(statuses, {"job1": "PENDING"})
         self.assertEqual(
@@ -5692,7 +5931,7 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        statuses = scheduler.poll_jobs(["job1"])
+        statuses = _statuses(scheduler.poll_jobs(["job1"]))
 
         self.assertEqual(statuses, {"job1": "DEADLINE"})
         self.assertEqual(self.kube.calls_to("patch_job"), [])
@@ -5720,7 +5959,7 @@ ramble:
         self.assertEqual(self.kube.calls_to("list_pods"), [])
         self.assertEqual(self.kube.calls_to("patch_job"), [])
 
-    def test_get_unschedulable_jobs_returns_job_blocked_by_other_workload(
+    def test_get_start_failures_returns_job_blocked_by_other_workload(
         self, mock_logger
     ):
         """Test a waiting pod whose node another workload uses counts now."""
@@ -5735,16 +5974,17 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), ["job1"])
+        reason = ReasonCode.NODE_BUSY
+        self.assertEqual(
+            scheduler.get_start_failures(["job1"]), {"job1": reason}
+        )
         mock_logger.warning.assert_called_once_with(
-            "Job '%s' cannot schedule all of its pods because node %s "
-            "is now used by another workload (pod %s).",
+            "Job '%s' cannot schedule all of its pods. %s.",
             "job1",
-            "node1",
-            "team-a/train",
+            "Node node1 is used by another workload (pod team-a/train)",
         )
 
-    def test_get_unschedulable_jobs_waits_for_chs_pods_to_leave(
+    def test_get_start_failures_unschedulable_waits_for_chs_pods_to_leave(
         self, mock_logger
     ):
         """Test a pod waiting only for CHS's own pod gets the full timeout."""
@@ -5762,11 +6002,11 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(scheduler.get_start_failures(["job1"]), {})
         mock_logger.warning.assert_not_called()
 
     @mock.patch("time.sleep", return_value=None)
-    def test_get_unschedulable_jobs_waits_if_node_check_fails(
+    def test_get_start_failures_unschedulable_waits_if_node_check_fails(
         self, mock_sleep, mock_logger
     ):
         """Test a failed node check falls back to the normal timeout."""
@@ -5783,7 +6023,7 @@ ramble:
         self.kube.fail_next("list_pods", None, None, error, error, error)
         scheduler = KubernetesScheduler()
 
-        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(scheduler.get_start_failures(["job1"]), {})
         self.assertEqual(mock_sleep.call_count, 2)
         mock_logger.warning.assert_not_called()
         self.assertIn(
@@ -5792,7 +6032,7 @@ ramble:
             [call.args[0] for call in mock_logger.debug.call_args_list],
         )
 
-    def test_get_unschedulable_jobs_waits_if_job_pods_cannot_be_listed(
+    def test_get_start_failures_waits_if_job_pods_cannot_be_listed(
         self, mock_logger
     ):
         """Test no node is checked if the waiting Job's pods are unknown."""
@@ -5812,7 +6052,7 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(scheduler.get_start_failures(["job1"]), {})
         self.assertEqual(len(self.kube.calls_to("list_pods")), 2)
         mock_logger.warning.assert_not_called()
         self.assertIn(
@@ -5821,7 +6061,7 @@ ramble:
             [call.args[0] for call in mock_logger.debug.call_args_list],
         )
 
-    def test_get_unschedulable_jobs_checks_only_nodes_without_job_pods(
+    def test_get_start_failures_checks_only_nodes_without_job_pods(
         self, mock_logger
     ):
         """Test only the nodes a waiting pod can still use are checked."""
@@ -5849,7 +6089,10 @@ ramble:
         )
         scheduler = KubernetesScheduler()
 
-        self.assertEqual(scheduler.get_unschedulable_jobs(["gang"]), ["gang"])
+        self.assertEqual(
+            scheduler.get_start_failures(["gang"]),
+            {"gang": ReasonCode.NODE_BUSY},
+        )
         node_checks = [
             call.kwargs["field_selector"]
             for call in self.kube.calls_to("list_pods")
@@ -5875,7 +6118,7 @@ ramble:
             namespace=CHS_NAMESPACE,
         )
         scheduler = KubernetesScheduler()
-        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(scheduler.get_start_failures(["job1"]), {})
         self.kube.add_object(
             "batch",
             "jobs",
@@ -5883,7 +6126,9 @@ ramble:
             namespace=CHS_NAMESPACE,
         )
 
-        self.assertEqual(scheduler.poll_jobs(["job1"]), {"job1": "UNKNOWN"})
+        self.assertEqual(
+            _statuses(scheduler.poll_jobs(["job1"])), {"job1": "UNKNOWN"}
+        )
 
     def _write_experiment(self, name: str, *objects: dict) -> str:
         experiment_dir = os.path.join(self.tmp_dir, "experiments", name)
@@ -6068,8 +6313,8 @@ ramble:
         self.assertEqual(scheduler.submit_experiments([]), {})
         self.assertEqual(self.kube.calls, [])
 
-    def test_get_unschedulable_jobs(self, mock_logger):
-        """Test get_unschedulable_jobs returns only matching timed-out jobs."""
+    def test_get_start_failures_unschedulable(self, mock_logger):
+        """Test get_start_failures returns only matching timed-out jobs."""
         now = datetime.datetime.now(datetime.timezone.utc)
         old_timestamp = (now - datetime.timedelta(seconds=400)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
@@ -6128,28 +6373,424 @@ ramble:
         )
 
         scheduler = KubernetesScheduler()
-        unschedulable = scheduler.get_unschedulable_jobs(
-            ["job1", "job2", "job3"]
+        with mock.patch.object(
+            kubernetes, "GANG_SCHEDULING_TIMEOUT_SECONDS", 200
+        ):
+            unschedulable = scheduler.get_start_failures(
+                ["job1", "job2", "job3"]
+            )
+        self.assertEqual(
+            unschedulable,
+            {"job1": ReasonCode.NOT_SCHEDULED},
         )
-        self.assertEqual(unschedulable, ["job1"])
 
-    def test_get_unschedulable_jobs_returns_empty_on_kube_error(
+    def test_get_start_failures_unschedulable_returns_empty_on_kube_error(
         self, mock_logger
     ):
-        """Test get_unschedulable_jobs returns empty list on KubeError."""
+        """Test get_start_failures returns no Jobs on KubeError."""
         self.kube.fail_next(
             "list_pods",
             k8s_client.KubeError("Forbidden", status=403),
         )
         scheduler = KubernetesScheduler()
-        self.assertEqual(scheduler.get_unschedulable_jobs(["job1"]), [])
+        self.assertEqual(scheduler.get_start_failures(["job1"]), {})
         mock_logger.warning.assert_called_once()
 
-    def test_get_unschedulable_jobs_empty_job_ids(self, mock_logger):
-        """Test get_unschedulable_jobs returns empty list for empty job_ids."""
+    def test_get_start_failures_unschedulable_empty_job_ids(self, mock_logger):
+        """Test get_start_failures returns no Jobs for empty job_ids."""
         scheduler = KubernetesScheduler()
-        self.assertEqual(scheduler.get_unschedulable_jobs([]), [])
+        self.assertEqual(scheduler.get_start_failures([]), {})
         self.assertEqual(self.kube.calls, [])
+
+    def _add_job_pod(
+        self,
+        name,
+        job_name,
+        *,
+        init=None,
+        main=None,
+        phase="Pending",
+        managed_by="chs",
+        age=0,
+        start_age=None,
+        deleting=False,
+        node="node1",
+        scheduled_age=None,
+        scheduled_status="True",
+    ):
+        """Adds a pod of job_name with the given container states.
+
+        The pod was created age seconds before _NOW, scheduled
+        scheduled_age seconds before _NOW if given, and acknowledged by its
+        kubelet start_age seconds before _NOW if given.
+        A deleting pod has a deletionTimestamp.
+        """
+        status = {"phase": phase}
+        if start_age is not None:
+            start = _NOW - datetime.timedelta(seconds=start_age)
+            status["startTime"] = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if init is not None:
+            status["initContainerStatuses"] = [{"name": "init", "state": init}]
+        if main is not None:
+            status["containerStatuses"] = [{"name": "main", "state": main}]
+        if scheduled_age is not None:
+            scheduled = _NOW - datetime.timedelta(seconds=scheduled_age)
+            status["conditions"] = [
+                {
+                    "type": "PodScheduled",
+                    "status": scheduled_status,
+                    "lastTransitionTime": scheduled.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                }
+            ]
+        created = _NOW - datetime.timedelta(seconds=age)
+        metadata = {
+            "name": name,
+            "namespace": CHS_NAMESPACE,
+            "creationTimestamp": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "labels": {
+                _MANAGED_BY: managed_by,
+                "batch.kubernetes.io/job-name": job_name,
+                "batch.kubernetes.io/job-completion-index": "0",
+            },
+        }
+        if deleting:
+            metadata["deletionTimestamp"] = _NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.kube.add_object(
+            "",
+            "pods",
+            {
+                "metadata": metadata,
+                "spec": {"nodeName": node} if node else {},
+                "status": status,
+            },
+            namespace=CHS_NAMESPACE,
+        )
+
+    def test_get_start_failures_counts_startup_from_scheduling(
+        self, mock_logger
+    ):
+        """The startup budget starts when the pod gets a node."""
+        pulling = {"waiting": {"reason": "ContainerCreating"}}
+        self._add_job_pod(
+            "p1", "scheduled-late", main=pulling, age=550, scheduled_age=299
+        )
+        self._add_job_pod(
+            "p2", "scheduled-early", main=pulling, age=550, scheduled_age=300
+        )
+        self._add_job_pod(
+            "p3",
+            "not-scheduled-condition",
+            main=pulling,
+            age=550,
+            scheduled_age=10,
+            scheduled_status="False",
+        )
+        scheduler = KubernetesScheduler()
+
+        with _frozen_now():
+            failures = scheduler.get_start_failures(
+                ["scheduled-late", "scheduled-early", "not-scheduled-condition"]
+            )
+
+        self.assertEqual(
+            failures,
+            {
+                "scheduled-early": ReasonCode.SLOW_STARTUP,
+                "not-scheduled-condition": ReasonCode.SLOW_STARTUP,
+            },
+        )
+
+    def test_get_start_failures_lists_pending_pods_once(self, mock_logger):
+        """Both checks share one listing of the pending CHS pods."""
+        self._add_job_pod("p1", "slow", age=300)
+        self.kube.add_object(
+            "",
+            "pods",
+            _pending_pod("p2", job_name="gang"),
+            namespace=CHS_NAMESPACE,
+        )
+        scheduler = KubernetesScheduler()
+
+        with _frozen_now():
+            failures = scheduler.get_start_failures(["slow", "gang"])
+
+        self.assertEqual(
+            failures,
+            {
+                "slow": ReasonCode.SLOW_STARTUP,
+                "gang": ReasonCode.NOT_SCHEDULED,
+            },
+        )
+        self.assertEqual(
+            [
+                call
+                for call in self.kube.calls_to("list_pods")
+                if call.kwargs.get("field_selector") == "status.phase=Pending"
+            ],
+            [
+                Call(
+                    "list_pods",
+                    {
+                        "namespace": CHS_NAMESPACE,
+                        "label_selector": f"{_MANAGED_BY}=chs",
+                        "field_selector": "status.phase=Pending",
+                    },
+                )
+            ],
+        )
+
+    def test_get_start_failures_startup_after_startup_budget(self, mock_logger):
+        """Jobs fail once a pod has not started for the startup budget."""
+        pulling = {"waiting": {"reason": "ContainerCreating"}}
+        running = {"running": {"startedAt": "2026-11-17T00:00:00Z"}}
+        self._add_job_pod("p1", "under-budget", main=pulling, age=299)
+        self._add_job_pod(
+            "p2", "at-budget", main=pulling, age=300, start_age=10
+        )
+        self._add_job_pod("p3", "no-status-yet", age=300)
+        self._add_job_pod("p4", "started", main=running, age=900)
+        self._add_job_pod("p5", "mpi", main=running, phase="Running", age=900)
+        self._add_job_pod("p6", "mpi", init=pulling, age=300)
+        self._add_job_pod(
+            "p7", "young-mpi", main=running, phase="Running", age=900
+        )
+        self._add_job_pod("p8", "young-mpi", main=pulling, age=299)
+        self._add_job_pod("p9", "other-run", main=pulling, age=900)
+        self._add_job_pod("p10", "unscheduled", age=900, node=None)
+        scheduler = KubernetesScheduler()
+
+        with _frozen_now():
+            failures = scheduler.get_start_failures(
+                [
+                    "under-budget",
+                    "at-budget",
+                    "no-status-yet",
+                    "started",
+                    "mpi",
+                    "young-mpi",
+                    "unscheduled",
+                ]
+            )
+
+        slow = ReasonCode.SLOW_STARTUP
+        self.assertEqual(
+            failures,
+            {"at-budget": slow, "no-status-yet": slow, "mpi": slow},
+        )
+
+    def test_get_start_failures_startup_reports_pull_error_over_slow_startup(
+        self, mock_logger
+    ):
+        """A pull error is the reason once it has lasted the grace period."""
+        self._add_job_pod(
+            "p1",
+            "job1",
+            main={"waiting": {"reason": "ErrImagePull", "message": "m"}},
+            age=600,
+        )
+        scheduler = KubernetesScheduler()
+
+        with (
+            _frozen_now(),
+            mock.patch.object(
+                kubernetes.time, "monotonic", side_effect=[0, 60]
+            ),
+        ):
+            first = scheduler.get_start_failures(["job1"])
+            second = scheduler.get_start_failures(["job1"])
+
+        self.assertEqual(first["job1"], ReasonCode.SLOW_STARTUP)
+        self.assertEqual(
+            second,
+            {"job1": ReasonCode.IMAGE_PULL_FAILED},
+        )
+
+    def test_get_start_failures_startup_after_pull_error_grace_period(
+        self, mock_logger
+    ):
+        """Jobs fail once a pull error has lasted the grace period."""
+        backoff = {"waiting": {"reason": "ImagePullBackOff", "message": "m1"}}
+        self._add_job_pod("p1", "init-error", init=backoff)
+        self._add_job_pod(
+            "p2",
+            "main-error",
+            main={"waiting": {"reason": "ErrImagePull", "message": "m2"}},
+        )
+        self._add_job_pod(
+            "p3", "pulling", main={"waiting": {"reason": "ContainerCreating"}}
+        )
+        self._add_job_pod("p4", "other-run", main=backoff)
+        self._add_job_pod(
+            "p5",
+            "bad-name",
+            main={"waiting": {"reason": "InvalidImageName", "message": "m5"}},
+        )
+        scheduler = KubernetesScheduler()
+        job_ids = ["init-error", "main-error", "pulling", "bad-name"]
+
+        with (
+            _frozen_now(),
+            mock.patch.object(
+                kubernetes.time, "monotonic", side_effect=[100, 159, 160]
+            ),
+        ):
+            self.assertEqual(scheduler.get_start_failures(job_ids), {})
+            self.assertEqual(scheduler.get_start_failures(job_ids), {})
+            self.assertEqual(
+                scheduler.get_start_failures(job_ids),
+                {
+                    "init-error": ReasonCode.IMAGE_PULL_FAILED,
+                    "main-error": ReasonCode.IMAGE_PULL_FAILED,
+                    "bad-name": ReasonCode.IMAGE_PULL_FAILED,
+                },
+            )
+
+    def test_get_start_failures_startup_restarts_grace_when_error_clears(
+        self, mock_logger
+    ):
+        """A pull that recovers in between does not fail the Job."""
+        backoff = {"waiting": {"reason": "ImagePullBackOff", "message": "m"}}
+        self._add_job_pod("p1", "job1", main=backoff)
+        scheduler = KubernetesScheduler()
+
+        with (
+            _frozen_now(),
+            mock.patch.object(
+                kubernetes.time, "monotonic", side_effect=[0, 30, 70, 129, 130]
+            ),
+        ):
+            self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+            self.kube.objects.clear()
+            self._add_job_pod(
+                "p1", "job1", main={"waiting": {"reason": "ContainerCreating"}}
+            )
+            self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+            self.kube.objects.clear()
+            self._add_job_pod("p1", "job1", main=backoff)
+            self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+            self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+            self.assertEqual(
+                scheduler.get_start_failures(["job1"]),
+                {"job1": ReasonCode.IMAGE_PULL_FAILED},
+            )
+
+    def test_get_start_failures_startup_ignores_pods_not_managed_by_chs(
+        self, mock_logger
+    ):
+        """Only CHS's own pods can fail a CHS Job."""
+        backoff = {"waiting": {"reason": "ImagePullBackOff", "message": "m"}}
+        self._add_job_pod(
+            "p1", "job1", main=backoff, managed_by="other", age=900
+        )
+        scheduler = KubernetesScheduler()
+
+        with (
+            _frozen_now(),
+            mock.patch.object(
+                kubernetes.time, "monotonic", side_effect=[0, 60]
+            ),
+        ):
+            self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+            self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+
+    def test_get_start_failures_startup_kube_error_and_no_jobs(
+        self, mock_logger
+    ):
+        """Listing errors and empty job lists report no failures."""
+        scheduler = KubernetesScheduler()
+        self.assertEqual(scheduler.get_start_failures([]), {})
+        self.assertEqual(self.kube.calls, [])
+        self.kube.fail_next(
+            "list_pods", k8s_client.KubeError("Forbidden", status=403)
+        )
+        self.assertEqual(scheduler.get_start_failures(["job1"]), {})
+        mock_logger.warning.assert_called_once()
+
+    def test_fetch_job_log_skips_pods_that_never_started(self, mock_logger):
+        """A Job that ran out of time before starting has no logs to fetch."""
+        self._add_job_pod(
+            "p1", "pulling", main={"waiting": {"reason": "ContainerCreating"}}
+        )
+        self._add_job_pod(
+            "p2", "killed", main={"terminated": {"exitCode": 137}}
+        )
+        scheduler = KubernetesScheduler()
+        with tempfile.TemporaryDirectory() as d:
+            for job in ("pulling", "killed"):
+                scheduler.fetch_job_log(job, os.path.join(d, f"{job}.log"))
+        self.assertEqual(self.kube.calls_to("stream_pod_log"), [])
+        mock_logger.error.assert_not_called()
+
+    def test_delete_jobs_tolerates_pods_still_pulling(self, mock_logger):
+        """Idle pods that are being deleted are left for Kubernetes."""
+        self._add_job_pod(
+            "p1",
+            "job1",
+            main={"waiting": {"reason": "ContainerCreating"}},
+            deleting=True,
+        )
+        self._add_job_pod(
+            "p2",
+            "job1",
+            main={"terminated": {"exitCode": 137, "startedAt": "2026-11-18"}},
+            deleting=True,
+        )
+        self.kube.fail_next(
+            "delete_jobs", k8s_client.KubeError("Timed out waiting")
+        )
+        self.assertTrue(KubernetesScheduler()._delete_jobs(["job1"]))
+        mock_logger.warning.assert_called_once()
+        mock_logger.error.assert_not_called()
+
+    def test_delete_jobs_timeout_with_other_pods_fails(self, mock_logger):
+        """Deletion timeouts without only idle, terminating pods are errors."""
+        pulling = {"waiting": {"reason": "ContainerCreating"}}
+        running = {"running": {"startedAt": "2026-11-18T00:00:00Z"}}
+        cases = {
+            "no pods": [],
+            "running pod": [{"main": running, "deleting": True}],
+            "pod not being deleted": [{"main": pulling}],
+            "one of the pods running": [
+                {"main": pulling, "deleting": True},
+                {"main": running, "deleting": True},
+            ],
+        }
+        for case, pods in cases.items():
+            with self.subTest(case=case):
+                self.kube.objects.clear()
+                mock_logger.reset_mock()
+                for index, pod in enumerate(pods):
+                    self._add_job_pod(f"p{index}", "job1", **pod)
+                self.kube.fail_next(
+                    "delete_jobs", k8s_client.KubeError("Timed out waiting")
+                )
+                self.assertFalse(KubernetesScheduler()._delete_jobs(["job1"]))
+                mock_logger.error.assert_called_once()
+
+    def test_delete_jobs_checks_only_the_deleted_jobs_pods(self, mock_logger):
+        """Pods of other Jobs do not decide whether a deletion is tolerated."""
+        self._add_job_pod(
+            "p1",
+            "job1",
+            main={"waiting": {"reason": "ContainerCreating"}},
+            deleting=True,
+        )
+        self._add_job_pod(
+            "p2",
+            "other-job",
+            main={"running": {"startedAt": "2026-01-01T00:00:00Z"}},
+            phase="Running",
+        )
+        self.kube.fail_next(
+            "delete_jobs", k8s_client.KubeError("Timed out waiting")
+        )
+        self.assertTrue(KubernetesScheduler()._delete_jobs(["job1"]))
+        self.assertEqual(
+            self.kube.calls_to("list_pods")[-1].kwargs["label_selector"],
+            f"{_MANAGED_BY}=chs",
+        )
 
 
 def _run_job(

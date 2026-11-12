@@ -25,6 +25,7 @@ from chs.core.summary_aggregator import aggregate_boh_summary
 from chs.core.utils.validation_analyzer import extract_validation_data
 from chs.protos import bill_of_health_pb2 as pb
 from chs.utils.config import load_yaml_config
+from chs.utils.lifecycle import incomplete_label
 from chs.utils.tests import get_all_supported_tests_details
 from chs.version import get_version
 
@@ -318,6 +319,7 @@ class HtmlReportGenerator:
                         node_failed_tests.add(canonical_name.lower())
 
                     res_status = eval_tr.result_status
+                    status_detail = ""
 
                     if res_status == pb.RESULT_STATUS_TIMEOUT:
                         status_str = "✕ TIMEOUT"
@@ -325,6 +327,7 @@ class HtmlReportGenerator:
                         node_has_exec_error = True
                     elif res_status == pb.RESULT_STATUS_DEADLINE:
                         status_str = "✕ DEADLINE"
+                        status_detail = incomplete_label(eval_tr)
                         is_met = False
                         node_has_exec_error = True
                     elif res_status == pb.RESULT_STATUS_CANCELLED:
@@ -368,6 +371,7 @@ class HtmlReportGenerator:
                         {
                             "display_name": display_name,
                             "status_str": status_str,
+                            "status_detail": status_detail,
                             "is_met": is_met,
                         }
                     )

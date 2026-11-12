@@ -16,13 +16,14 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 from chs.ramble_manager import RambleManager
 from chs.utils.app_data import ChsAppData
+from chs.utils.lifecycle import JobState
 
 
 class TestRambleManagerStatus(unittest.TestCase):
     @patch("chs.ramble_manager.get_scheduler")
     def test_monitor_jobs_updates_status(self, mock_get_scheduler):
         mock_scheduler = MagicMock()
-        mock_scheduler.poll_jobs.return_value = {"job1": "COMPLETED"}
+        mock_scheduler.poll_jobs.return_value = {"job1": JobState("COMPLETED")}
 
         mock_get_scheduler.return_value = mock_scheduler
 
@@ -48,13 +49,13 @@ class TestRambleManagerStatus(unittest.TestCase):
             )
 
             mock_app_data.update_run_status.assert_called_once_with(
-                "run1", {"job1": "COMPLETED"}
+                "run1", {"job1": JobState("COMPLETED")}
             )
 
     @patch("chs.ramble_manager.get_scheduler")
     def test_monitor_jobs_preserves_terminal_status(self, mock_get_scheduler):
         mock_scheduler = MagicMock()
-        mock_scheduler.poll_jobs.return_value = {"job1": "UNKNOWN"}
+        mock_scheduler.poll_jobs.return_value = {"job1": JobState("UNKNOWN")}
 
         mock_get_scheduler.return_value = mock_scheduler
 
@@ -78,7 +79,7 @@ class TestRambleManagerStatus(unittest.TestCase):
             )
 
             mock_app_data.update_run_status.assert_called_once_with(
-                "run1", {"job1": "UNKNOWN"}
+                "run1", {"job1": JobState("UNKNOWN")}
             )
 
 

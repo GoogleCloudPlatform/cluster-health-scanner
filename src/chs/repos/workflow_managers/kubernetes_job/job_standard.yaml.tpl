@@ -19,7 +19,7 @@ spec:
         - 0
   parallelism: {n_nodes}
   completions: {n_nodes}
-  activeDeadlineSeconds: {timeout}
+  activeDeadlineSeconds: {job_deadline}
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
@@ -54,5 +54,17 @@ spec:
           mkdir -p "{container_experiment_run_dir}"
           mkdir -p "{workdir}"
           cd "{workdir}"
+          cat > /tmp/chs_test_command.sh <<'CHS_TEST_COMMAND_EOF'
           {indented_standard_command}
+          CHS_TEST_COMMAND_EOF
+          CHS_TEST_START=$SECONDS
+          timeout --kill-after=10 {timeout} bash /tmp/chs_test_command.sh
+          CHS_EXIT_CODE=$?
+          if [ $(( SECONDS - CHS_TEST_START )) -ge {timeout} ] && [ $CHS_EXIT_CODE -eq 124 -o $CHS_EXIT_CODE -eq 137 ]; then
+            CHS_EXIT_CODE=124
+            echo "CHS: the test did not finish within its {timeout}s timeout." >&2
+          elif [ $CHS_EXIT_CODE -eq 124 ]; then
+            CHS_EXIT_CODE=1
+          fi
+          exit $CHS_EXIT_CODE
 {standard_volume_mounts_section}

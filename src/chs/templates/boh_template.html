@@ -492,6 +492,7 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
                   <span class="${t.is_met ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'} text-[11px] shrink-0 whitespace-nowrap">
                     ${t.status_str}
                   </span>
+                  ${t.status_detail ? helpTooltip(t.status_detail) : ''}
                 </div>
               `).join('')}
             </div>
@@ -815,6 +816,11 @@ __BOH_OVERVIEW_RAW_DATA_JSON__
 
     function escapeHtml(str) {
       return (str || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function helpTooltip(text) {
+      const safeText = escapeHtml(text);
+      return `<span class="relative group/tip inline-flex items-center shrink-0"><span class="cursor-help text-slate-400 hover:text-slate-600 inline-flex items-center justify-center w-4 h-4 rounded-full border border-slate-300 text-[10px] font-bold transition" tabindex="0" role="img" aria-label="${safeText}">?</span><span class="pointer-events-none absolute right-0 bottom-full mb-1.5 hidden group-hover/tip:block group-focus-within/tip:block w-48 p-2 bg-slate-900/95 text-white text-[11px] font-normal rounded shadow-lg z-50 whitespace-normal leading-snug break-words">${safeText}</span></span>`;
     }
 
     function renderPotentialErrors() {

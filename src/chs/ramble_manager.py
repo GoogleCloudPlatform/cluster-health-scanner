@@ -51,7 +51,7 @@ from chs.storage import StorageProviderFactory
 from chs.telemetry import reporting as telemetry_reporting
 from chs.utils import theme
 from chs.utils.app_data import ChsAppData
-from chs.utils.lifecycle import JobStatus
+from chs.utils.lifecycle import JobState, JobStatus, ReasonCode
 from chs.utils.topology import load_topology
 
 logger = logging.getLogger(__name__)
@@ -737,7 +737,7 @@ class RambleManager:
                             task_id, description=get_jobs_desc()
                         )
                     try:
-                        statuses = scheduler.poll_jobs(
+                        states = scheduler.poll_jobs(
                             [j for j in job_order if j in active_jobs]
                         )
                     except ex.ChsSchedulerException as e:
@@ -761,15 +761,20 @@ class RambleManager:
                             len(active_jobs),
                             e,
                         )
-                        statuses = dict.fromkeys(
-                            active_jobs, JobStatus.DEADLINE.value
+                        states = dict.fromkeys(
+                            active_jobs,
+                            JobState(
+                                JobStatus.DEADLINE.value,
+                                ReasonCode.STATUS_UNAVAILABLE,
+                            ),
                         )
                         pending_log_fetches.difference_update(active_jobs)
                     else:
                         last_successful_poll = time.time()
 
-                    jobs_to_cancel = []
-                    for job_id, status in statuses.items():
+                    jobs_to_cancel: dict[str, ReasonCode] = {}
+                    for job_id, state in states.items():
+                        status = state.status
                         if JobStatus.is_terminal(status):
                             # Job finished
                             pending_start_times.pop(job_id, None)
@@ -809,7 +814,9 @@ class RambleManager:
                                     job_id,
                                     QUEUE_TIMEOUT_SECONDS,
                                 )
-                                jobs_to_cancel.append(job_id)
+                                jobs_to_cancel[job_id] = (
+                                    ReasonCode.NOT_SCHEDULED
+                                )
                         else:
                             pending_start_times.pop(job_id, None)
 
@@ -818,29 +825,34 @@ class RambleManager:
                         for job_id in active_jobs
                         if job_id not in jobs_to_cancel
                     ]
-                    for job_id in scheduler.get_unschedulable_jobs(
+                    start_failures = scheduler.get_start_failures(
                         remaining_jobs
-                    ):
-                        logger.error(
-                            "Job '%s' could not schedule all of its pods in "
-                            "time. It will be cancelled so that no partial "
-                            "set of its pods keeps running.",
-                            job_id,
-                        )
-                        jobs_to_cancel.append(job_id)
+                    )
+                    for job_id, reason in start_failures.items():
+                        if reason in (
+                            ReasonCode.NOT_SCHEDULED,
+                            ReasonCode.NODE_BUSY,
+                        ):
+                            logger.error(
+                                "Job '%s' could not schedule all of its pods "
+                                "in time. It will be cancelled so that no "
+                                "partial set of its pods keeps running.",
+                                job_id,
+                            )
+                    jobs_to_cancel |= start_failures
 
                     if jobs_to_cancel:
-                        scheduler.cancel_jobs(jobs_to_cancel)
-                        for canceled_job in jobs_to_cancel:
-                            statuses[canceled_job] = JobStatus.DEADLINE.value
+                        scheduler.cancel_jobs(list(jobs_to_cancel))
+                        for canceled_job, reason in jobs_to_cancel.items():
+                            states[canceled_job] = JobState(
+                                JobStatus.DEADLINE.value, reason
+                            )
                             if canceled_job in active_jobs:
                                 active_jobs.remove(canceled_job)
                             pending_start_times.pop(canceled_job, None)
 
                     try:
-                        app_data.update_run_status(
-                            self._workspace_name, statuses
-                        )
+                        app_data.update_run_status(self._workspace_name, states)
                     except Exception as e:
                         logger.warning(
                             "Failed to update the CHS run status in the "

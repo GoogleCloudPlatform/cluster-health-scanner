@@ -28,7 +28,7 @@ from chs.utils import file_utils
 
 import chs.exceptions as ex
 import platformdirs
-from chs.utils.lifecycle import JobStatus
+from chs.utils.lifecycle import JobState, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -186,12 +186,9 @@ class ChsAppData:
         logger.debug("AppData: Updated run %s", run_id)
 
     def update_run_status(
-        self, run_id: str, new_job_statuses: dict[str, str]
+        self, run_id: str, new_job_states: dict[str, JobState]
     ) -> None:
-        """Updates the job statuses for a run.
-
-        Terminal statuses are preserved.
-        """
+        """Updates non-terminal job statuses and their reason codes."""
         with file_utils.exclusive_lock(self._lock_file):
             runs = self._load_json(self._runs_file)
             changed = False
@@ -203,7 +200,7 @@ class ChsAppData:
                 run_entry["job_entries"] = {}
                 changed = True
             job_entries = run_entry["job_entries"]
-            for job_id, new_status in new_job_statuses.items():
+            for job_id, new_state in new_job_states.items():
                 if job_id not in job_entries:
                     job_entries[job_id] = {}
                     changed = True
@@ -211,13 +208,11 @@ class ChsAppData:
                 # Update the status only if the job is in a non-terminal state.
                 curr_status = job_entry.get("status")
                 if not JobStatus.is_terminal(curr_status):
-                    resolved_status = (
-                        new_status.value
-                        if isinstance(new_status, JobStatus)
-                        else str(new_status)
-                    )
+                    resolved_status = str(new_state.status)
                     if curr_status != resolved_status:
                         job_entry["status"] = resolved_status
+                        if new_state.reason:
+                            job_entry["reason_code"] = new_state.reason.value
                         changed = True
             if changed:
                 self._save_json(self._runs_file, runs)

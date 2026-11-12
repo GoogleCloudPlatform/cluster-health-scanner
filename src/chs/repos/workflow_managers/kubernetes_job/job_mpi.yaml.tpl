@@ -32,7 +32,7 @@ spec:
         - 0
   parallelism: {n_nodes}
   completions: {n_nodes}
-  activeDeadlineSeconds: {timeout}
+  activeDeadlineSeconds: {job_deadline}
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
@@ -94,6 +94,9 @@ spec:
           cd "{workdir}"
 
           if [[ "$JOB_COMPLETION_INDEX" -eq "0" ]]; then
+            cat > /tmp/chs_test_command.sh <<'CHS_TEST_COMMAND_EOF'
+          {indented_standard_command}
+          CHS_TEST_COMMAND_EOF
             echo "Discovering hosts..."
             for i in $(seq 0 $(( {n_nodes} - 1 ))); do
               OTHER="{sanitized_job_name}-${i}.{worker_service_name}"
@@ -106,21 +109,28 @@ spec:
 
 
             echo "--- STARTING MPI EXECUTION ---"
-            {indented_mpi_command}
+            CHS_TEST_START=$SECONDS
+            timeout --kill-after=10 {timeout} bash /tmp/chs_test_command.sh
             EXIT_CODE=$?
+            if [ $(( SECONDS - CHS_TEST_START )) -ge {timeout} ] && [ $EXIT_CODE -eq 124 -o $EXIT_CODE -eq 137 ]; then
+              EXIT_CODE=124
+              echo "CHS: the test did not finish within its {timeout}s timeout." >&2
+            elif [ $EXIT_CODE -eq 124 ]; then
+              EXIT_CODE=1
+            fi
             echo "--- END MPI EXECUTION ---"
 
             exit $EXIT_CODE
           else
             echo "Worker started. Idling while launcher coordinates..."
             HEAD_NODE="{sanitized_job_name}-0.{worker_service_name}"
-            DNS_DEADLINE=$(( $(date +%s) + {dns_wait_timeout} ))
+            DNS_DEADLINE=$(( $(date +%s) + {job_deadline} ))
 
             # Wait for head node to become reachable
             echo "Waiting for head node ${HEAD_NODE} to become reachable..."
             while ! (echo > /dev/tcp/$HEAD_NODE/{ssh_port}) 2>/dev/null; do
               if [[ $(date +%s) -ge $DNS_DEADLINE ]]; then
-                echo "ERROR: Head node ${HEAD_NODE} did not become reachable within {dns_wait_timeout}s." >&2
+                echo "ERROR: Head node ${HEAD_NODE} did not become reachable within {job_deadline}s." >&2
                 exit 1
               fi
               sleep 5

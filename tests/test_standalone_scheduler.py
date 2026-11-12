@@ -34,7 +34,7 @@ from chs.exceptions import (
 from chs.schedulers import standalone
 from chs.schedulers.standalone import job_spec
 from chs.schedulers.standalone.host import GceInstance
-from chs.utils.lifecycle import JobStatus
+from chs.utils.lifecycle import JobState, JobStatus
 
 _INSTANCE = GceInstance(
     name="tpu-vm-1",
@@ -350,14 +350,20 @@ class RunTest(StandaloneSchedulerTestCase):
 
         self.assertEqual(
             scheduler.poll_jobs(["a", "b"]),
-            {"a": JobStatus.RUNNING.value, "b": JobStatus.PENDING.value},
+            {
+                "a": JobState(JobStatus.RUNNING.value),
+                "b": JobState(JobStatus.PENDING.value),
+            },
         )
         self.backend.exit_code.side_effect = lambda spec: (
             0 if spec.job_name == "a" else None
         )
         self.assertEqual(
             scheduler.poll_jobs(["a", "b"]),
-            {"a": JobStatus.COMPLETED.value, "b": JobStatus.RUNNING.value},
+            {
+                "a": JobState(JobStatus.COMPLETED.value),
+                "b": JobState(JobStatus.RUNNING.value),
+            },
         )
         scheduler.fetch_job_log("a", os.path.join(self.tmp, "a.out"))
         self.backend.fetch_log.assert_called_once()

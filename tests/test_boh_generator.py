@@ -1130,8 +1130,8 @@ class TestBOHGenerator(unittest.TestCase):
             BOHGenerator(self.test_json_path, thresholds_path=thresh_file)
 
     @mock.patch("chs.boh_generator.ChsAppData")
-    def test_generate_time_exceeded(self, mock_app_data_cls):
-        """Test handling of TIMEOUT and DEADLINE job statuses."""
+    def test_generate_incomplete_tests(self, mock_app_data_cls):
+        """Tests that did not finish keep their status and reason code."""
         mock_app_data = mock_app_data_cls.return_value
         mock_app_data.get_run.return_value = {
             "job_entries": {
@@ -1142,47 +1142,60 @@ class TestBOHGenerator(unittest.TestCase):
                 "job2": {
                     "experiment_dir": "/path/to/exp_deadline",
                     "status": "DEADLINE",
+                    "reason_code": "IMAGE_PULL_FAILED",
+                },
+                "job3": {
+                    "experiment_dir": "/path/to/exp_cancelled",
+                    "status": "CANCELLED",
+                },
+                "job4": {
+                    "experiment_dir": "/path/to/exp_done",
+                    "status": "COMPLETED",
                 },
             }
         }
-
+        contexts = [{"name": "null", "foms": [{"name": "metric", "value": 1}]}]
         data = {
             "workspace_name": "test_workspace",
             "experiments": [
                 {
-                    "experiment_name": "exp_timeout",
-                    "CONTEXTS": [
-                        {
-                            "name": "null",
-                            "foms": [{"name": "metric", "value": 1}],
-                        }
-                    ],
-                },
-                {
-                    "experiment_name": "exp_deadline",
-                    "CONTEXTS": [
-                        {
-                            "name": "null",
-                            "foms": [{"name": "metric", "value": 1}],
-                        }
-                    ],
-                },
+                    "experiment_name": name,
+                    "RAMBLE_VARIABLES": {"timeout": "240"},
+                    "CONTEXTS": contexts,
+                }
+                for name in (
+                    "exp_timeout",
+                    "exp_deadline",
+                    "exp_cancelled",
+                    "exp_done",
+                )
             ],
         }
         self._write_json(data)
         generator = BOHGenerator(self.test_json_path)
         report = generator.generate()
 
-        self.assertEqual(len(report.test_results), 2)
-
-        self.assertEqual(report.test_results[0].test_name, "exp_timeout")
         self.assertEqual(
-            report.test_results[0].result_status, pb.RESULT_STATUS_TIMEOUT
-        )
-
-        self.assertEqual(report.test_results[1].test_name, "exp_deadline")
-        self.assertEqual(
-            report.test_results[1].result_status, pb.RESULT_STATUS_DEADLINE
+            [
+                (
+                    r.test_name,
+                    r.result_status,
+                    r.metadata.fields["reason_code"].string_value
+                    if "reason_code" in r.metadata.fields
+                    else None,
+                )
+                for r in report.test_results
+            ],
+            [
+                ("exp_timeout", pb.RESULT_STATUS_TIMEOUT, None),
+                (
+                    "exp_deadline",
+                    pb.RESULT_STATUS_DEADLINE,
+                    "IMAGE_PULL_FAILED",
+                ),
+                ("exp_cancelled", pb.RESULT_STATUS_UNKNOWN, None),
+                ("exp_done", pb.RESULT_STATUS_UNKNOWN, None),
+            ],
         )
 
     @mock.patch("chs.core.plugin_manager.PluginManager.get_plugin")
@@ -1190,12 +1203,7 @@ class TestBOHGenerator(unittest.TestCase):
     def test_generate_time_exceeded_evaluates_finished_nodes(
         self, mock_app_data_cls, mock_get_plugin
     ):
-        """Test only nodes without results in a timed-out Job get TIMEOUT."""
-        mock_app_data_cls.return_value.get_run.return_value = {
-            "job_entries": {
-                "job1": {"experiment_dir": "/path/to/exp", "status": "TIMEOUT"}
-            }
-        }
+        """Test only nodes without results keep an incomplete Job's status."""
         plugin = mock_get_plugin.return_value
         plugin.get_required_contexts.side_effect = lambda x: x
         plugin.get_fom_aliases.return_value = {}
@@ -1238,18 +1246,36 @@ class TestBOHGenerator(unittest.TestCase):
             }
         )
 
-        report = BOHGenerator(
-            self.test_json_path, thresholds_path=thresh_file
-        ).generate()
+        for job_status, result_status in (
+            ("TIMEOUT", pb.RESULT_STATUS_TIMEOUT),
+            ("DEADLINE", pb.RESULT_STATUS_DEADLINE),
+        ):
+            with self.subTest(job_status=job_status):
+                mock_app_data_cls.return_value.get_run.return_value = {
+                    "job_entries": {
+                        "job1": {
+                            "experiment_dir": "/path/to/exp",
+                            "status": job_status,
+                            "reason_code": "SLOW_STARTUP",
+                        }
+                    }
+                }
 
-        self.assertEqual(
-            [r.result_status for r in report.test_results],
-            [
-                pb.RESULT_STATUS_SUCCESS,
-                pb.RESULT_STATUS_FAILED,
-                pb.RESULT_STATUS_TIMEOUT,
-            ],
-        )
+                report = BOHGenerator(
+                    self.test_json_path, thresholds_path=thresh_file
+                ).generate()
+
+                self.assertEqual(
+                    [
+                        (r.result_status, "reason_code" in r.metadata.fields)
+                        for r in report.test_results
+                    ],
+                    [
+                        (pb.RESULT_STATUS_SUCCESS, False),
+                        (pb.RESULT_STATUS_FAILED, False),
+                        (result_status, True),
+                    ],
+                )
 
     def test_parse_tier_results_from_boh_with_time_exceeded_nodes(self):
         """Test a test with any timed-out node is never HEALTHY for tiering."""

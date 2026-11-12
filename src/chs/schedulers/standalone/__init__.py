@@ -35,6 +35,7 @@ from chs.schedulers.standalone.job_spec import load_job_spec
 from chs.schedulers.standalone.native_backend import NativeBackend
 from chs.schedulers.standalone.runner import Backend, SequentialRunner
 from chs.testkit import config as chs_config
+from chs.utils.lifecycle import JobState
 
 logger = logging.getLogger(__name__)
 
@@ -303,10 +304,10 @@ class StandaloneScheduler(BaseScheduler):
     def extract_job_id(self, experiment_dir: str) -> str:
         return load_job_spec(experiment_dir).job_name
 
-    def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
-        """Finishes and starts jobs, then returns their statuses."""
+    def poll_jobs(self, job_ids: list[str]) -> dict[str, JobState]:
+        """Finishes and starts jobs, then returns their states."""
         self._require_runner().poll()
-        return self.get_job_statuses(job_ids)
+        return super().poll_jobs(job_ids)
 
     def get_job_statuses(self, job_ids: list[str]) -> dict[str, str]:
         return self._require_runner().statuses(job_ids)

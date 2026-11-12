@@ -23,6 +23,7 @@ import logging
 from google.auth.exceptions import GoogleAuthError
 from chs.exceptions import ChsSchedulerException
 from chs.utils import gcp
+from chs.utils.lifecycle import JobState, ReasonCode
 
 logger = logging.getLogger(__name__)
 
@@ -285,13 +286,16 @@ class BaseScheduler(abc.ABC):
         """
         pass
 
-    def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
-        """Starts waiting jobs that can run and returns job statuses."""
-        return self.get_job_statuses(job_ids)
+    def poll_jobs(self, job_ids: list[str]) -> dict[str, JobState]:
+        """Starts waiting jobs that can run and returns their states."""
+        return {
+            job_id: JobState(status)
+            for job_id, status in self.get_job_statuses(job_ids).items()
+        }
 
-    def get_unschedulable_jobs(self, job_ids: list[str]) -> list[str]:
-        """Returns active jobs whose pods have timed out waiting to schedule."""
-        return []
+    def get_start_failures(self, job_ids: list[str]) -> dict[str, ReasonCode]:
+        """Returns active jobs that cannot schedule or start, with causes."""
+        return {}
 
     def submit_experiments(self, experiment_dirs: list[str]) -> dict[str, str]:
         """Submits experiments without running the Ramble batch scripts."""

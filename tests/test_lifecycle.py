@@ -17,7 +17,12 @@
 import json
 import unittest
 
-from chs.utils.lifecycle import JobStatus
+from chs.protos import bill_of_health_pb2 as pb
+from chs.utils.lifecycle import (
+    JobStatus,
+    ReasonCode,
+    incomplete_label,
+)
 
 
 class JobStatusTest(unittest.TestCase):
@@ -52,6 +57,46 @@ class JobStatusTest(unittest.TestCase):
             with self.subTest(status=status.name):
                 self.assertEqual(
                     JobStatus.is_terminal(status.value), status in terminal
+                )
+
+
+class IncompleteLabelTest(unittest.TestCase):
+    def _result(self, status, code=None):
+        result = pb.TestResult(result_status=status)
+        if code is not None:
+            result.metadata.fields["reason_code"].string_value = code
+        return result
+
+    def test_label_for_each_reason_code(self):
+        labels = {
+            ReasonCode.SLOW_STARTUP: "Pod didn't start within 5 min",
+            ReasonCode.IMAGE_PULL_FAILED: "Image pull failed",
+            ReasonCode.NOT_SCHEDULED: "Not scheduled",
+            ReasonCode.NODE_BUSY: "Node busy",
+            ReasonCode.STATUS_UNAVAILABLE: "Status unavailable",
+        }
+        self.assertCountEqual(labels, list(ReasonCode))
+        for code, label in labels.items():
+            with self.subTest(code=code):
+                self.assertEqual(
+                    incomplete_label(
+                        self._result(pb.RESULT_STATUS_DEADLINE, code)
+                    ),
+                    label,
+                )
+
+    def test_no_label_without_known_code(self):
+        cases = [
+            (pb.RESULT_STATUS_TIMEOUT, None),
+            (pb.RESULT_STATUS_CANCELLED, None),
+            (pb.RESULT_STATUS_DEADLINE, None),
+            (pb.RESULT_STATUS_DEADLINE, ""),
+            (pb.RESULT_STATUS_TIMEOUT, "NOT_A_CODE"),
+        ]
+        for status, code in cases:
+            with self.subTest(status=status, code=code):
+                self.assertEqual(
+                    incomplete_label(self._result(status, code)), ""
                 )
 
 

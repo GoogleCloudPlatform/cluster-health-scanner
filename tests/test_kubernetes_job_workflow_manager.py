@@ -16,7 +16,9 @@
 
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -67,6 +69,7 @@ _POD_LABELS = {**_WORKER_LABELS, "team": "infra"}
 
 _JOB_VARS_INPUTS = {
     "job_name": "chs-run1-nccl-tests-all-gather",
+    "timeout": "3600",
     "command": "mpirun -n 16 all_gather_perf",
     "experiment_run_dir": "/workspace/experiments/nccl/all-gather/exp1",
     "container_image": "image:latest",
@@ -146,6 +149,7 @@ class KubernetesJobTest(unittest.TestCase):
             "custom_resources_yaml": "",
             "pod_resource_claims_yaml": "",
             "suspend_job": "false",
+            "timeout": "60",
         }
         wm.app_inst.expander.expand_var_name.side_effect = (
             lambda k: var_map.get(k, "")
@@ -237,7 +241,7 @@ class KubernetesJobTest(unittest.TestCase):
         template_vars = {
             "kubernetes_namespace": "chs",
             "n_nodes": var_map.get("n_nodes", "2"),
-            "timeout": "3600",
+            "timeout": var_map["timeout"],
             "ssh_port": "222",
             "processes_per_node": "8",
             "worker_service_name": _WORKER_SERVICE_NAME,
@@ -281,7 +285,7 @@ class KubernetesJobTest(unittest.TestCase):
                 },
                 "parallelism": n_nodes,
                 "completions": n_nodes,
-                "activeDeadlineSeconds": 3600,
+                "activeDeadlineSeconds": 4260,
                 "ttlSecondsAfterFinished": 86400,
             },
         )
@@ -370,9 +374,87 @@ class KubernetesJobTest(unittest.TestCase):
             ],
         )
         self.assertEqual(container["command"][:2], ["bash", "-c"])
-        self.assertTrue(
-            container["command"][2].endswith("echo one\necho two\n")
+        script = container["command"][2]
+        self.assertIn(
+            "<<'CHS_TEST_COMMAND_EOF'\necho one\necho two\n"
+            "CHS_TEST_COMMAND_EOF\n",
+            script,
         )
+        self.assertIn(
+            "timeout --kill-after=10 3600 bash /tmp/chs_test_command.sh\n",
+            script,
+        )
+        self.assertTrue(script.endswith("exit $CHS_EXIT_CODE\n"))
+
+    def test_job_deadline_adds_startup_budget_and_margin(self):
+        """Tests get the startup budget and a margin; no timeout is kept."""
+        var_map = {**_JOB_VARS_INPUTS, "timeout": "240"}
+        self.assertEqual(
+            _workflow_manager(var_map)._job_vars()["job_deadline"], "900"
+        )
+        var_map["timeout"] = "{timeout}"
+        self.assertEqual(
+            _workflow_manager(var_map)._job_vars()["job_deadline"], "{timeout}"
+        )
+
+    def test_template_exit_codes(self):
+        """Only a test that outlives its own timeout exits with 124.
+
+        The MPI launcher runs as a single node. The scripts run on the host,
+        so the fixed paths go to a temporary directory, sshd and ldconfig are
+        skipped, ssh is a stub, and --kill-after is shortened to keep the test
+        fast.
+        """
+        cases = {
+            "exit 0": 0,
+            "exit 3": 3,
+            "sleep 30": 124,
+            "trap '' TERM; while true; do sleep 1; done": 124,
+            "kill -9 $$": 137,
+            "exit 124": 1,
+        }
+        for template in ("job_standard.yaml.tpl", "job_mpi.yaml.tpl"):
+            for command, expected in cases.items():
+                with (
+                    self.subTest(template=template, command=command),
+                    tempfile.TemporaryDirectory() as d,
+                ):
+                    var_map = {
+                        **_JOB_VARS_INPUTS,
+                        "command": command,
+                        "timeout": "2",
+                        "n_nodes": "1",
+                        "experiment_run_dir": d,
+                    }
+                    _, docs = self._render(template, var_map)
+                    pod_spec = docs[-1]["spec"]["template"]["spec"]
+                    (container,) = pod_spec["containers"]
+                    shell, flag, script = container["command"]
+                    for fixed, local in (
+                        ("/tmp/chs_test_command.sh", f"{d}/test.sh"),
+                        ("/tmp/hostfile", f"{d}/hostfile"),
+                        ("/sbin/sshd", "true"),
+                        ("/sbin/ldconfig", "true"),
+                        ("--kill-after=10", "--kill-after=1"),
+                    ):
+                        script = script.replace(fixed, local)
+                    os.mkdir(f"{d}/bin")
+                    with open(f"{d}/bin/ssh", "w") as ssh:
+                        ssh.write("#!/bin/sh\nexit 0\n")
+                    os.chmod(f"{d}/bin/ssh", 0o755)
+                    env = {
+                        **os.environ,
+                        "HOME": d,
+                        "PATH": f"{d}/bin:{os.environ['PATH']}",
+                        "JOB_COMPLETION_INDEX": "0",
+                    }
+                    result = subprocess.run(
+                        [shell, flag, script],
+                        capture_output=True,
+                        env=env,
+                        timeout=60,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_mpi_template_renders_secret_and_one_indexed_job(self):
         """Golden structure of the MPI template."""
@@ -428,7 +510,17 @@ class KubernetesJobTest(unittest.TestCase):
         self.assertNotIn("DNS_DEADLINE", discovery)
         self.assertIn("$(seq 0 $(( 3 - 1 )))", script)
         self.assertNotIn("POD_NAME", script)
-        self.assertIn("\n  mpirun -n 16 \\\n    all_gather_perf\n", script)
+        self.assertIn(
+            "<<'CHS_TEST_COMMAND_EOF'\nmpirun -n 16 \\\n  all_gather_perf\n"
+            "CHS_TEST_COMMAND_EOF\n",
+            script,
+        )
+        launch = script[script.index("STARTING MPI") :]
+        self.assertIn(
+            "timeout --kill-after=10 3600 bash /tmp/chs_test_command.sh\n",
+            launch,
+        )
+        self.assertIn("DNS_DEADLINE=$(( $(date +%s) + 4260 ))", script)
 
     def test_custom_resources_get_run_labels(self):
         """Custom resources keep their labels and get the run's labels."""

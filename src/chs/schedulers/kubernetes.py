@@ -53,7 +53,7 @@ from chs.exceptions import (
     ChsSchedulerException,
     ChsValidationError,
 )
-from chs.utils.lifecycle import JobStatus
+from chs.utils.lifecycle import JobState, JobStatus, ReasonCode
 from chs import image, resources
 from chs.constants import (
     CHS_NAMESPACE,
@@ -63,7 +63,9 @@ from chs.constants import (
     DRA_API_VERSION,
     DYNAMIC_SINGLE_HOST_TOPOLOGY,
     GPU_CLAIM_TEMPLATE_SUFFIX,
+    GANG_SCHEDULING_TIMEOUT_SECONDS,
     INSTANCE_LABEL,
+    K8S_JOB_STARTUP_BUDGET_SEC,
     MANAGED_BY_CHS,
     MANAGED_BY_LABEL,
     NAMESPACE_DELETE_TIMEOUT_SEC,
@@ -78,7 +80,12 @@ _BUSY_NODES_BATCH_SIZE = 32
 _BUSY_NODES_MAX_RETRIES = 3
 _MAX_NODES_UNDER_TEST = 500
 
-GANG_SCHEDULING_TIMEOUT_SECONDS = 300
+_IMAGE_PULL_ERROR_GRACE_SECONDS = 60
+_IMAGE_PULL_ERROR_REASONS = frozenset(
+    {"ErrImagePull", "ImagePullBackOff", "InvalidImageName"}
+)
+_TIMEOUT_EXIT_CODE = 124
+_TEST_TIMEOUT_EXIT_RE = re.compile(r"(?i)\bexit code 124\b")
 
 _JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
 _JOB_COMPLETION_INDEX_LABEL = "batch.kubernetes.io/job-completion-index"
@@ -208,6 +215,101 @@ def _apply_objects(objects: list[dict]) -> None:
             lambda: _apply_object(obj),
             f"{obj['kind']} '{obj['metadata']['name']}'",
         )
+
+
+def _has_started(pod: dict) -> bool:
+    """Returns whether any of the pod's main containers has ever started."""
+    for container in pod.get("status", {}).get("containerStatuses") or []:
+        state = container.get("state", {})
+        if state.get("running") or (state.get("terminated") or {}).get(
+            "startedAt"
+        ):
+            return True
+    return False
+
+
+def _timed_out(pod: dict) -> bool:
+    """Returns whether one of the pod's main containers exited with 124."""
+    return any(
+        (container.get("state", {}).get("terminated") or {}).get("exitCode")
+        == _TIMEOUT_EXIT_CODE
+        for container in pod.get("status", {}).get("containerStatuses") or []
+    )
+
+
+def _is_running(pod: dict) -> bool:
+    """Returns whether any of the pod's main containers is running."""
+    return any(
+        container.get("state", {}).get("running")
+        for container in pod.get("status", {}).get("containerStatuses") or []
+    )
+
+
+def _image_pull_error(pod: dict) -> str | None:
+    """Returns the image pull error of one of the pod's containers, if any."""
+    status = pod.get("status", {})
+    for container in (status.get("initContainerStatuses") or []) + (
+        status.get("containerStatuses") or []
+    ):
+        waiting = container.get("state", {}).get("waiting") or {}
+        if waiting.get("reason") in _IMAGE_PULL_ERROR_REASONS:
+            message = waiting.get("message")
+            return (
+                f"{waiting['reason']}: {message}"
+                if message
+                else waiting["reason"]
+            )
+    return None
+
+
+def _scheduled_seconds(pod: dict, now: datetime.datetime) -> float:
+    """Returns the seconds since the pod got a node, or since its creation."""
+    for condition in pod.get("status", {}).get("conditions") or []:
+        if (
+            condition.get("type") == "PodScheduled"
+            and condition.get("status") == "True"
+            and condition.get("lastTransitionTime")
+        ):
+            since = datetime.datetime.fromisoformat(
+                condition["lastTransitionTime"]
+            )
+            return (now - since).total_seconds()
+    return _pod_age_seconds(pod, now)
+
+
+def _pod_age_seconds(pod: dict, now: datetime.datetime) -> float:
+    """Returns the seconds from the pod's creation until now."""
+    created = datetime.datetime.fromisoformat(
+        pod["metadata"]["creationTimestamp"]
+    )
+    return (now - created).total_seconds()
+
+
+def _node_taken_message(busy: list[str], taken: dict[str, str]) -> str:
+    """Returns a log message naming the busy nodes and the pods using them."""
+    pods = ", ".join(taken[node] for node in busy)
+    if len(busy) == 1:
+        return f"Node {busy[0]} is used by another workload (pod {pods})"
+    return f"Nodes {', '.join(busy)} are used by other workloads (pods {pods})"
+
+
+def _failed_condition(job: dict) -> dict:
+    """Returns the Job's Failed or FailureTarget condition, or {}."""
+    return (
+        _job_condition(job, "Failed")
+        or _job_condition(job, "FailureTarget")
+        or {}
+    )
+
+
+def _failure_reason(job: dict) -> str:
+    """Returns the reason the Job failed, or ""."""
+    return _failed_condition(job).get("reason", "")
+
+
+def _failure_message(job: dict) -> str:
+    """Returns the message of the Job's failure, or ""."""
+    return _failed_condition(job).get("message", "")
 
 
 def _job_condition(job: dict, condition_type: str) -> dict | None:
@@ -562,6 +664,7 @@ class KubernetesScheduler(BaseScheduler):
         self._subslice_nodes: set[str] = set()
         self._run_id: str | None = None
         self.workspace_config_dir: str | None = None
+        self._image_pull_errors_since: dict[str, float] = {}
 
     def _resolve_project_id(self, node: str) -> str:
         """Resolves GCP project ID from Kubernetes node providerID or ADC."""
@@ -1866,10 +1969,10 @@ class KubernetesScheduler(BaseScheduler):
         """Returns the JobStatus value of a batch/v1 Job."""
         if _job_condition(job, "Complete"):
             return JobStatus.COMPLETED.value
-        failed = _job_condition(job, "Failed")
+        failed = _failed_condition(job)
         if failed:
             if failed.get("reason") == "DeadlineExceeded":
-                return JobStatus.TIMEOUT.value
+                return JobStatus.DEADLINE.value
             return JobStatus.UNKNOWN.value
         status = job.get("status", {})
         if status.get("active", 0) == 0:
@@ -1889,16 +1992,19 @@ class KubernetesScheduler(BaseScheduler):
                 e,
             )
             return {j: JobStatus.UNKNOWN.value for j in job_ids}
-        return self._statuses_from_jobs(jobs, job_ids)
+        return {
+            job_id: state.status
+            for job_id, state in self._states_from_jobs(jobs, job_ids).items()
+        }
 
-    def poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
-        """Starts waiting Jobs with free nodes and returns job statuses."""
+    def poll_jobs(self, job_ids: list[str]) -> dict[str, JobState]:
+        """Starts waiting Jobs with free nodes and returns their states."""
         # One admission pass checks nodes for other workloads repeatedly, so
         # it reuses one listing of the DRA ResourceClaims.
         with self._caching_dra_gpu_holders():
             return self._poll_jobs(job_ids)
 
-    def _poll_jobs(self, job_ids: list[str]) -> dict[str, str]:
+    def _poll_jobs(self, job_ids: list[str]) -> dict[str, JobState]:
         if not job_ids:
             return {}
         try:
@@ -1907,7 +2013,7 @@ class KubernetesScheduler(BaseScheduler):
             raise ChsSchedulerException(
                 f"Failed to list the CHS Jobs: {e}"
             ) from e
-        statuses = self._statuses_from_jobs(jobs, job_ids)
+        states = self._states_from_jobs(jobs, job_ids)
         queue = list(job_ids)
         checked = set()
         taken = {}
@@ -1926,43 +2032,123 @@ class KubernetesScheduler(BaseScheduler):
             if not blocked:
                 break
             for name in blocked:
-                busy = sorted(nodes_by_job[name].intersection(taken))
                 logger.warning(
-                    "Job '%s' was not started because node %s is now used by "
-                    "another workload (pod %s).",
+                    "Job '%s' was not started. %s.",
                     name,
-                    ", ".join(busy),
-                    ", ".join(taken[node] for node in busy),
+                    _node_taken_message(
+                        sorted(nodes_by_job[name].intersection(taken)), taken
+                    ),
                 )
-                statuses[name] = JobStatus.DEADLINE.value
+                states[name] = JobState(
+                    JobStatus.DEADLINE.value, ReasonCode.NODE_BUSY
+                )
             skipped += blocked
             # Skipped Jobs hold no nodes, so the Jobs behind them may start.
             queue = [name for name in queue if name not in blocked]
         self._start_jobs(to_start)
         if skipped:
             self.cancel_jobs(skipped)
-        return statuses
+        return states
 
     @staticmethod
     def _list_jobs() -> list[dict]:
         return k8s_client.list_jobs(namespace=CHS_NAMESPACE)
 
-    def _statuses_from_jobs(
+    def _states_from_jobs(
         self, jobs: list[dict], job_ids: list[str]
-    ) -> dict[str, str]:
-        statuses = {j: JobStatus.UNKNOWN.value for j in job_ids}
+    ) -> dict[str, JobState]:
+        """Returns the states of the given Jobs, found in the listed Jobs."""
+        states = {j: JobState(JobStatus.UNKNOWN.value) for j in job_ids}
+        past_deadline = {}
+        failed_by_policy = {}
         try:
             for job in jobs:
                 job_id = job.get("metadata", {}).get("name")
-                if job_id in statuses:
-                    statuses[job_id] = self._evaluate_job_status(job)
+                if job_id in states:
+                    status = self._evaluate_job_status(job)
+                    states[job_id] = JobState(status)
+                    if status == JobStatus.DEADLINE:
+                        past_deadline[job_id] = job
+                    elif _failure_reason(job) == "PodFailurePolicy":
+                        failed_by_policy[job_id] = job
         except (AttributeError, TypeError) as e:
             logger.warning(
                 "Failed to retrieve the current execution statuses "
                 "for the scheduled Jobs. Error: %s",
                 e,
             )
-        return statuses
+        if past_deadline or failed_by_policy:
+            pods_by_job = self._pods_by_job([*past_deadline, *failed_by_policy])
+            states.update(
+                self._past_deadline_states(past_deadline, pods_by_job)
+            )
+            states.update(
+                self._policy_failure_states(failed_by_policy, pods_by_job)
+            )
+        return states
+
+    @staticmethod
+    def _policy_failure_states(
+        jobs: dict[str, dict], pods_by_job: dict[str, list[dict]] | None
+    ) -> dict[str, JobState]:
+        """Returns TIMEOUT for Jobs whose pod exited 124, else UNKNOWN."""
+        states = {}
+        for job_id, job in jobs.items():
+            if pods_by_job is None:
+                timed_out = bool(
+                    _TEST_TIMEOUT_EXIT_RE.search(_failure_message(job))
+                )
+            else:
+                timed_out = any(map(_timed_out, pods_by_job.get(job_id, [])))
+            status = JobStatus.TIMEOUT if timed_out else JobStatus.UNKNOWN
+            states[job_id] = JobState(status.value)
+        return states
+
+    @staticmethod
+    def _past_deadline_states(
+        jobs: dict[str, dict], pods_by_job: dict[str, list[dict]] | None
+    ) -> dict[str, JobState]:
+        """Returns TIMEOUT if all pods started, else DEADLINE."""
+        if pods_by_job is None:
+            return {
+                job_id: JobState(
+                    JobStatus.DEADLINE.value, ReasonCode.STATUS_UNAVAILABLE
+                )
+                for job_id in jobs
+            }
+        started = {
+            job_id
+            for job_id, job in jobs.items()
+            if sum(map(_has_started, pods_by_job.get(job_id, [])))
+            >= job.get("spec", {}).get("completions", 1)
+        }
+        states = {}
+        for job_id, job in jobs.items():
+            if job_id in started:
+                states[job_id] = JobState(JobStatus.TIMEOUT.value)
+            else:
+                states[job_id] = JobState(
+                    JobStatus.DEADLINE.value, ReasonCode.SLOW_STARTUP
+                )
+        return states
+
+    @staticmethod
+    def _pods_by_job(job_ids: list[str]) -> dict[str, list[dict]] | None:
+        """Returns the Jobs' pods by Job name, or None if listing fails."""
+        job_id_set = set(job_ids)
+        try:
+            pods = k8s_client.list_pods(
+                namespace=CHS_NAMESPACE, label_selector=_CHS_SELECTOR
+            )
+        except k8s_client.KubeError as e:
+            logger.debug("Failed to list the pods of Jobs. Error: %s", e)
+            return None
+        pods_by_job = defaultdict(list)
+        for pod in pods:
+            job_name = pod["metadata"].get("labels", {}).get(_JOB_NAME_LABEL)
+            if job_name in job_id_set:
+                pods_by_job[job_name].append(pod)
+        return pods_by_job
 
     def _start_jobs(self, names: list[str]) -> None:
         if not names:
@@ -1987,31 +2173,82 @@ class KubernetesScheduler(BaseScheduler):
         except k8s_client.KubeError as e:
             logger.warning("Failed to start Job '%s'. Error: %s", name, e)
 
-    def get_unschedulable_jobs(self, job_ids: list[str]) -> list[str]:
-        """Returns Jobs that could not schedule all of their pods.
-
-        A Job is returned once a pod has waited for
-        GANG_SCHEDULING_TIMEOUT_SECONDS, or as soon as a pod is waiting and
-        another workload uses one of the Job's nodes.
-        """
+    def get_start_failures(self, job_ids: list[str]) -> dict[str, ReasonCode]:
+        """Returns Jobs that could not schedule or start their pods."""
         if not job_ids:
-            return []
-        job_id_set = set(job_ids)
+            return {}
         try:
             pods = k8s_client.list_pods(
                 namespace=CHS_NAMESPACE,
+                label_selector=_CHS_SELECTOR,
                 field_selector="status.phase=Pending",
             )
         except k8s_client.KubeError as e:
             logger.warning(
-                "Failed to list pending pods to check for unschedulable "
-                "Jobs. Error: %s",
+                "Failed to list pending pods to check for start failures. "
+                "Error: %s",
                 e,
             )
-            return []
+            return {}
+        failures = self._unschedulable_jobs(pods, set(job_ids))
+        failures |= self._startup_failures(
+            pods, {job_id for job_id in job_ids if job_id not in failures}
+        )
+        return failures
 
+    def _startup_failures(
+        self, pods: list[dict], job_id_set: set[str]
+    ) -> dict[str, ReasonCode]:
+        """Returns Jobs with an image pull error or a pod that did not start."""
         now = datetime.datetime.now(datetime.UTC)
-        unschedulable = set()
+        errors: dict[str, str] = {}
+        failures: dict[str, ReasonCode] = {}
+        for pod in pods:
+            job_name = pod["metadata"].get("labels", {}).get(_JOB_NAME_LABEL)
+            if job_name not in job_id_set:
+                continue
+            error = _image_pull_error(pod)
+            if error:
+                errors.setdefault(job_name, error)
+            if (
+                pod.get("spec", {}).get("nodeName")
+                and not _has_started(pod)
+                and _scheduled_seconds(pod, now) >= K8S_JOB_STARTUP_BUDGET_SEC
+            ):
+                if job_name not in failures:
+                    logger.error(
+                        "Job '%s' cannot start: pod %s did not start within "
+                        "%d s.",
+                        job_name,
+                        pod["metadata"].get("name"),
+                        K8S_JOB_STARTUP_BUDGET_SEC,
+                    )
+                failures[job_name] = ReasonCode.SLOW_STARTUP
+
+        monotonic_now = time.monotonic()
+        for job_name in list(self._image_pull_errors_since):
+            if job_name not in errors:
+                del self._image_pull_errors_since[job_name]
+        for job_name, error in errors.items():
+            first_seen = self._image_pull_errors_since.setdefault(
+                job_name, monotonic_now
+            )
+            if monotonic_now - first_seen >= _IMAGE_PULL_ERROR_GRACE_SECONDS:
+                logger.error(
+                    "Job '%s' cannot start: an image could not be downloaded. "
+                    "Error: %s",
+                    job_name,
+                    error,
+                )
+                failures[job_name] = ReasonCode.IMAGE_PULL_FAILED
+        return failures
+
+    def _unschedulable_jobs(
+        self, pods: list[dict], job_id_set: set[str]
+    ) -> dict[str, ReasonCode]:
+        """Returns Jobs whose pods could not be scheduled, with the cause."""
+        now = datetime.datetime.now(datetime.UTC)
+        unschedulable = {}
         waiting = defaultdict(set)
         for pod in pods:
             metadata = pod["metadata"]
@@ -2025,12 +2262,8 @@ class KubernetesScheduler(BaseScheduler):
                 for c in pod.get("status", {}).get("conditions", [])
             ):
                 continue
-            created = datetime.datetime.fromisoformat(
-                metadata["creationTimestamp"].replace("Z", "+00:00")
-            )
-            age_seconds = (now - created).total_seconds()
-            if age_seconds >= GANG_SCHEDULING_TIMEOUT_SECONDS:
-                unschedulable.add(job_name)
+            if _pod_age_seconds(pod, now) >= GANG_SCHEDULING_TIMEOUT_SECONDS:
+                unschedulable[job_name] = ReasonCode.NOT_SCHEDULED
             else:
                 waiting[job_name] |= pod_nodes(pod)
 
@@ -2042,14 +2275,12 @@ class KubernetesScheduler(BaseScheduler):
             busy = sorted(nodes.intersection(taken))
             if busy:
                 logger.warning(
-                    "Job '%s' cannot schedule all of its pods because node %s "
-                    "is now used by another workload (pod %s).",
+                    "Job '%s' cannot schedule all of its pods. %s.",
                     job_name,
-                    ", ".join(busy),
-                    ", ".join(taken[node] for node in busy),
+                    _node_taken_message(busy, taken),
                 )
-                unschedulable.add(job_name)
-        return sorted(unschedulable)
+                unschedulable[job_name] = ReasonCode.NODE_BUSY
+        return unschedulable
 
     @staticmethod
     def _nodes_without_job_pods(
@@ -2112,6 +2343,10 @@ class KubernetesScheduler(BaseScheduler):
             pods = self._get_pods(job_id, head_pod_only=not is_tpu)
             if not pods:
                 logger.debug("No pods found to fetch logs for Job %s.", job_id)
+                return
+            pods = [pod for pod in pods if _has_started(pod)]
+            if not pods:
+                logger.debug("No container of Job %s ever started.", job_id)
                 return
             logger.debug(
                 "Fetching logs from %d pods: %s",
@@ -2754,6 +2989,16 @@ class KubernetesScheduler(BaseScheduler):
             )
             logger.debug("Successfully deleted Jobs: %s", ", ".join(job_ids))
         except k8s_client.KubeError as e:
+            if self._only_idle_terminating_pods_left(job_ids):
+                logger.warning(
+                    "The Jobs %s are still being deleted: their pods are "
+                    "terminating but no container is running, e.g. an image "
+                    "pull is still finishing. Kubernetes removes them once it "
+                    "ends. Error: %s",
+                    format_names(job_ids),
+                    e,
+                )
+                return True
             logger.error(
                 "Encountered an error while attempting to "
                 "delete active Jobs. Error: %s",
@@ -2761,6 +3006,15 @@ class KubernetesScheduler(BaseScheduler):
             )
             return False
         return True
+
+    def _only_idle_terminating_pods_left(self, job_ids: list[str]) -> bool:
+        """Returns whether all of the Jobs' pods are being deleted and idle."""
+        pods_by_job = self._pods_by_job(job_ids) or {}
+        pods = [pod for pods in pods_by_job.values() for pod in pods]
+        return bool(pods) and all(
+            pod["metadata"].get("deletionTimestamp") and not _is_running(pod)
+            for pod in pods
+        )
 
     def _delete_worker_service(self, run_id: str) -> bool:
         """Deletes the run's worker Service; returns whether it succeeded."""

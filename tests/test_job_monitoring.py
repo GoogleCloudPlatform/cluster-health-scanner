@@ -20,6 +20,7 @@ from chs.exceptions import ChsSchedulerException
 from chs.ramble_manager import RambleManager  # noqa: E402
 from chs.schedulers.kubernetes import KubernetesScheduler  # noqa: E402
 from chs.schedulers.slurm import SlurmScheduler  # noqa: E402
+from chs.utils.lifecycle import JobState, ReasonCode
 
 
 class TestJobMonitoring(unittest.TestCase):
@@ -85,8 +86,8 @@ class TestJobMonitoring(unittest.TestCase):
         ):
             # Mock job completion (job-1 running -> completed, job-2 completed)
             mock_scheduler.poll_jobs.side_effect = [
-                {"job-1": "RUNNING", "job-2": "COMPLETED"},
-                {"job-1": "COMPLETED"},
+                {"job-1": JobState("RUNNING"), "job-2": JobState("COMPLETED")},
+                {"job-1": JobState("COMPLETED")},
             ]
 
             # Execute
@@ -115,7 +116,9 @@ class TestJobMonitoring(unittest.TestCase):
                 return_value={"job-1": "/path/log"},
             ),
         ):
-            mock_scheduler.poll_jobs.return_value = {"job-1": "COMPLETED"}
+            mock_scheduler.poll_jobs.return_value = {
+                "job-1": JobState("COMPLETED")
+            }
             mock_scheduler.fetch_job_log.side_effect = Exception("Fetch failed")
 
             # Execute (should not raise)
@@ -159,8 +162,8 @@ class TestJobMonitoring(unittest.TestCase):
         ):
             # Mock completion
             mock_scheduler.poll_jobs.side_effect = [
-                {"job-1": "RUNNING"},
-                {"job-1": "COMPLETED"},
+                {"job-1": JobState("RUNNING")},
+                {"job-1": JobState("COMPLETED")},
             ]
 
             # Execute
@@ -178,7 +181,7 @@ class TestJobMonitoring(unittest.TestCase):
     ):
         mock_scheduler = MagicMock()
         mock_get_scheduler.return_value = mock_scheduler
-        mock_scheduler.poll_jobs.return_value = {"job-1": "RUNNING"}
+        mock_scheduler.poll_jobs.return_value = {"job-1": JobState("RUNNING")}
 
         with (
             patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
@@ -206,8 +209,8 @@ class TestJobMonitoring(unittest.TestCase):
         mock_scheduler = MagicMock()
         mock_get_scheduler.return_value = mock_scheduler
         mock_scheduler.poll_jobs.return_value = {
-            "job-1": "COMPLETED",
-            "job-2": "RUNNING",
+            "job-1": JobState("COMPLETED"),
+            "job-2": JobState("RUNNING"),
         }
         mock_scheduler.fetch_job_log.side_effect = slow_fetch
 
@@ -238,9 +241,9 @@ class TestJobMonitoring(unittest.TestCase):
         mock_scheduler = MagicMock()
         mock_get_scheduler.return_value = mock_scheduler
         mock_scheduler.poll_jobs.return_value = {
-            "job-b": "COMPLETED",
-            "job-a": "COMPLETED",
-            "job-c": "COMPLETED",
+            "job-b": JobState("COMPLETED"),
+            "job-a": JobState("COMPLETED"),
+            "job-c": JobState("COMPLETED"),
         }
 
         with (
@@ -272,7 +275,7 @@ class TestJobMonitoring(unittest.TestCase):
         mock_get_scheduler.return_value = mock_scheduler
         mock_scheduler.poll_jobs.side_effect = [
             ChsSchedulerException("connection reset"),
-            {"job-1": "COMPLETED"},
+            {"job-1": JobState("COMPLETED")},
         ]
 
         with (
@@ -290,7 +293,7 @@ class TestJobMonitoring(unittest.TestCase):
             self.assertEqual(mock_scheduler.poll_jobs.call_count, 2)
             mock_sleep.assert_called()
             mock_app_data.update_run_status.assert_called_once_with(
-                ANY, {"job-1": "COMPLETED"}
+                ANY, {"job-1": JobState("COMPLETED")}
             )
 
     @patch("chs.ramble_manager.time")
@@ -325,7 +328,50 @@ class TestJobMonitoring(unittest.TestCase):
         self.assertEqual(mock_scheduler.poll_jobs.call_count, 4)
         mock_fetch_log.assert_not_called()
         mock_app_data.update_run_status.assert_called_once_with(
-            ANY, {"job-1": "DEADLINE"}
+            ANY,
+            {
+                "job-1": JobState(
+                    "DEADLINE",
+                    ReasonCode.STATUS_UNAVAILABLE,
+                )
+            },
+        )
+
+    @patch("chs.ramble_manager.time")
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_cancels_job_pending_past_queue_timeout(
+        self, mock_get_scheduler, mock_time
+    ):
+        mock_time.time.side_effect = lambda: sum(
+            call.args[0] for call in mock_time.sleep.call_args_list
+        )
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.return_value = {"job-1": JobState("PENDING")}
+        mock_scheduler.get_start_failures.return_value = {}
+
+        with (
+            patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            mock_app_data = MagicMock()
+            mock_app_data.get_run.return_value = {"deadline": 120}
+            self.manager._monitor_jobs(
+                mock_app_data, poll_interval=60, tier=None
+            )
+
+        mock_scheduler.cancel_jobs.assert_called_once_with(["job-1"])
+        mock_scheduler.get_start_failures.assert_called_with([])
+        mock_app_data.update_run_status.assert_called_with(
+            ANY,
+            {
+                "job-1": JobState(
+                    "DEADLINE",
+                    ReasonCode.NOT_SCHEDULED,
+                )
+            },
         )
 
     @patch("time.sleep")
@@ -335,8 +381,11 @@ class TestJobMonitoring(unittest.TestCase):
     ):
         mock_scheduler = MagicMock()
         mock_get_scheduler.return_value = mock_scheduler
-        mock_scheduler.poll_jobs.return_value = {"job-1": "PENDING"}
-        mock_scheduler.get_unschedulable_jobs.return_value = ["job-1"]
+        mock_scheduler.poll_jobs.return_value = {"job-1": JobState("PENDING")}
+        not_scheduled = ReasonCode.NOT_SCHEDULED
+        mock_scheduler.get_start_failures.return_value = {
+            "job-1": not_scheduled
+        }
 
         with (
             patch.object(self.manager, "get_job_ids", return_value=["job-1"]),
@@ -352,9 +401,53 @@ class TestJobMonitoring(unittest.TestCase):
 
             mock_scheduler.cancel_jobs.assert_called_once_with(["job-1"])
             mock_app_data.update_run_status.assert_called_with(
-                ANY, {"job-1": "DEADLINE"}
+                ANY, {"job-1": JobState("DEADLINE", not_scheduled)}
             )
             mock_sleep.assert_not_called()
+
+    @patch("time.sleep")
+    @patch("chs.ramble_manager.get_scheduler")
+    def test_monitor_jobs_cancels_startup_failures_as_deadline(
+        self, mock_get_scheduler, mock_sleep
+    ):
+        mock_scheduler = MagicMock()
+        mock_get_scheduler.return_value = mock_scheduler
+        mock_scheduler.poll_jobs.return_value = {
+            "job-1": JobState("RUNNING"),
+            "job-2": JobState("PENDING"),
+        }
+        slow = ReasonCode.SLOW_STARTUP
+        not_scheduled = ReasonCode.NOT_SCHEDULED
+        mock_scheduler.get_start_failures.return_value = {
+            "job-1": slow,
+            "job-2": not_scheduled,
+        }
+
+        with (
+            patch.object(
+                self.manager, "get_job_ids", return_value=["job-1", "job-2"]
+            ),
+            patch.object(
+                self.manager, "_map_jobs_to_log_paths", return_value={}
+            ),
+        ):
+            mock_app_data = MagicMock()
+            mock_app_data.get_run.return_value = {}
+            self.manager._monitor_jobs(
+                mock_app_data, poll_interval=1, tier=None
+            )
+
+            (checked,) = mock_scheduler.get_start_failures.call_args.args
+            self.assertCountEqual(checked, ["job-1", "job-2"])
+            (cancelled,) = mock_scheduler.cancel_jobs.call_args.args
+            self.assertCountEqual(cancelled, ["job-1", "job-2"])
+            mock_app_data.update_run_status.assert_called_with(
+                ANY,
+                {
+                    "job-1": JobState("DEADLINE", slow),
+                    "job-2": JobState("DEADLINE", not_scheduled),
+                },
+            )
 
 
 if __name__ == "__main__":

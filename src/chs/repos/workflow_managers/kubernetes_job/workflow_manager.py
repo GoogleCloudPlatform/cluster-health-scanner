@@ -32,7 +32,9 @@ from chs.constants import (
     DRA_API_VERSION,
     GPU_CLAIM_NAME,
     GPU_CLAIM_TEMPLATE_SUFFIX,
+    GANG_SCHEDULING_TIMEOUT_SECONDS,
     INSTANCE_LABEL,
+    K8S_JOB_STARTUP_BUDGET_SEC,
     MANAGED_BY_CHS,
     MANAGED_BY_LABEL,
     NVIDIA_GPU_DEVICE_CLASS,
@@ -44,8 +46,19 @@ _POD_SPEC_INDENT = 6
 _CONTAINER_INDENT = 8
 _CONTAINER_FIELD_INDENT = 10
 _GPU_RESOURCE = NVIDIA_GPU_RESOURCE
+_JOB_DEADLINE_MARGIN_SEC = 60
 
-_DNS_WAIT_TIMEOUT_SECONDS = 300
+
+def _job_deadline(timeout: str) -> str:
+    """Returns timeout + scheduling + startup + margin; non-numbers as is."""
+    if not timeout.isdigit():
+        return timeout
+    return str(
+        int(timeout)
+        + GANG_SCHEDULING_TIMEOUT_SECONDS
+        + K8S_JOB_STARTUP_BUDGET_SEC
+        + _JOB_DEADLINE_MARGIN_SEC
+    )
 
 
 class KubernetesJob(WorkflowManagerBase):
@@ -487,9 +500,6 @@ class KubernetesJob(WorkflowManagerBase):
 
         workdir = app_workdir if app_workdir else experiment_run_dir
 
-        indented_mpi_command = raw_cmd.replace(
-            "\n", "\n" + (" " * (_CONTAINER_FIELD_INDENT + 2))
-        )
         indented_standard_command = raw_cmd.replace(
             "\n", "\n" + (" " * _CONTAINER_FIELD_INDENT)
         )
@@ -589,10 +599,9 @@ class KubernetesJob(WorkflowManagerBase):
             "init_containers_section": init_c,
             "mpi_volumes_append": mvol_add,
             "mpi_volume_mounts_append": mmnt_add,
-            "dns_wait_timeout": str(_DNS_WAIT_TIMEOUT_SECONDS),
+            "job_deadline": _job_deadline(expander.expand_var_name("timeout")),
             "sanitized_job_name": sanitized_job_name,
             "container_image": container_image,
-            "indented_mpi_command": indented_mpi_command,
             "indented_standard_command": indented_standard_command,
             "container_experiment_run_dir": experiment_run_dir,
             "workdir": workdir,

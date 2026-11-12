@@ -39,6 +39,7 @@ from chs.protos import bill_of_health_pb2 as pb
 from chs.ramble_manager import RambleManager
 from chs.utils import k8s_client
 from chs.utils.app_data import ChsAppData
+from chs.utils.lifecycle import JobState
 
 # Imported for its guard: no test here may create a real Kubernetes client.
 from tests import k8s_fakes  # noqa: F401
@@ -1005,7 +1006,8 @@ class AppDataDirtyCheckAndTerminalProtectionTest(unittest.TestCase):
             self.app_data, "_save_json", wraps=self.app_data._save_json
         ) as mock_save:
             self.app_data.update_run_status(
-                "run1", {"job1": "RUNNING", "job2": "RUNNING"}
+                "run1",
+                {"job1": JobState("RUNNING"), "job2": JobState("RUNNING")},
             )
 
         mock_save.assert_not_called()
@@ -1025,7 +1027,9 @@ class AppDataDirtyCheckAndTerminalProtectionTest(unittest.TestCase):
         with mock.patch.object(
             self.app_data, "_save_json", wraps=self.app_data._save_json
         ) as mock_save:
-            self.app_data.update_run_status("run1", {"job1": "COMPLETED"})
+            self.app_data.update_run_status(
+                "run1", {"job1": JobState("COMPLETED")}
+            )
 
         mock_save.assert_called_once()
         self.assertEqual(

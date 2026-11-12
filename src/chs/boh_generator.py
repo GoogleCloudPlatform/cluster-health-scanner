@@ -654,14 +654,14 @@ class BOHGenerator:
             )
             job_status = matching_entry.get("status", "UNKNOWN").upper()
             machine_type = ramble_vars.get("machine_type", "default")
-            job_time_exceeded = (
-                job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES
-            )
+            incomplete = job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES
+            reason_code = ""
 
-            if job_time_exceeded:
+            if incomplete:
                 test_result.result_status = lifecycle.TIME_EXCEEDED_PB_STATUSES[
                     job_status
                 ]
+                reason_code = matching_entry.get("reason_code", "")
             elif self.skip_validation:
                 test_result.result_status = pb.RESULT_STATUS_UNKNOWN
 
@@ -682,11 +682,15 @@ class BOHGenerator:
                     for m in result.metrics
                 )
                 if not self.skip_validation and (
-                    not job_time_exceeded or node_reported_metrics
+                    not incomplete or node_reported_metrics
                 ):
                     self._evaluate_thresholds(
                         machine_type, result, exp | ramble_vars
                     )
+                elif incomplete and reason_code:
+                    result.metadata.fields[
+                        "reason_code"
+                    ].string_value = reason_code
                 self.report.test_results.append(result)
 
         return self.report
@@ -707,7 +711,7 @@ def parse_tier_results_from_boh(
         boh = boh_pb
 
     tier_results = {test: TestStatus.ERROR for test in expected_tests}
-    time_exceeded_tests = {
+    incomplete_tests = {
         r.test_name
         for r in boh.test_results
         if r.result_status in lifecycle.TIME_EXCEEDED_PB_STATUSES.values()
@@ -722,7 +726,7 @@ def parse_tier_results_from_boh(
             elif result.result_status == pb.ResultStatus.RESULT_STATUS_SUCCESS:
                 if (
                     tier_results[test] != TestStatus.DEGRADED
-                    and test not in time_exceeded_tests
+                    and test not in incomplete_tests
                 ):
                     tier_results[test] = TestStatus.HEALTHY
 

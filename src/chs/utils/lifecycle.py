@@ -14,7 +14,10 @@
 
 """Lifecycle Manager for CHS Jobs."""
 
+from dataclasses import dataclass
 from enum import StrEnum
+
+from chs.constants import K8S_JOB_STARTUP_BUDGET_SEC
 from chs.protos import bill_of_health_pb2 as pb
 
 
@@ -58,7 +61,42 @@ class JobStatus(StrEnum):
         ]
 
 
+class ReasonCode(StrEnum):
+    """Why a job did not finish."""
+
+    SLOW_STARTUP = "SLOW_STARTUP"
+    IMAGE_PULL_FAILED = "IMAGE_PULL_FAILED"
+    NOT_SCHEDULED = "NOT_SCHEDULED"
+    NODE_BUSY = "NODE_BUSY"
+    STATUS_UNAVAILABLE = "STATUS_UNAVAILABLE"
+
+
+@dataclass(frozen=True)
+class JobState:
+    """A job status and, if it did not finish, the reason code."""
+
+    status: str
+    reason: ReasonCode | None = None
+
+
 TIME_EXCEEDED_PB_STATUSES = {
     JobStatus.TIMEOUT.value: pb.RESULT_STATUS_TIMEOUT,
     JobStatus.DEADLINE.value: pb.RESULT_STATUS_DEADLINE,
 }
+
+
+_REASON_LABELS = {
+    ReasonCode.SLOW_STARTUP: (
+        f"Pod didn't start within {K8S_JOB_STARTUP_BUDGET_SEC // 60} min"
+    ),
+    ReasonCode.IMAGE_PULL_FAILED: "Image pull failed",
+    ReasonCode.NOT_SCHEDULED: "Not scheduled",
+    ReasonCode.NODE_BUSY: "Node busy",
+    ReasonCode.STATUS_UNAVAILABLE: "Status unavailable",
+}
+
+
+def incomplete_label(test_result: pb.TestResult) -> str:
+    """Returns the tooltip cause for a reason code, or ""."""
+    code = test_result.metadata.fields.get("reason_code")
+    return _REASON_LABELS.get(code.string_value, "") if code else ""

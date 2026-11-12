@@ -57,10 +57,23 @@ _SLICE_LIST = Call(
 
 
 def _pod(name, namespace=CHS_NAMESPACE):
-    """Returns a minimal Kubernetes Pod object."""
+    """Returns a minimal Kubernetes Pod object whose container has run."""
     return {
         "metadata": {"name": name, "namespace": namespace},
         "spec": {"containers": [{"name": "test"}]},
+        "status": {
+            "containerStatuses": [
+                {
+                    "name": "test",
+                    "state": {
+                        "terminated": {
+                            "exitCode": 0,
+                            "startedAt": "2026-01-01T00:00:00Z",
+                        }
+                    },
+                }
+            ]
+        },
     }
 
 
