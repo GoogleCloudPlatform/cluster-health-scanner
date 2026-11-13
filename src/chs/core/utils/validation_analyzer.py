@@ -32,6 +32,8 @@ class ValidationRowData:
     threshold: str
     status: str
     status_style: str
+    comparator: int = pb.COMPARATOR_UNSPECIFIED
+    expected: float | None = None
 
 
 @dataclass
@@ -237,6 +239,14 @@ def extract_validation_data(
                         threshold=threshold_str,
                         status=status_str,
                         status_style=status_style,
+                        comparator=validation_criteria.comparator,
+                        expected=(
+                            validation_criteria.expected_value.number_value
+                            if validation_criteria.expected_value.HasField(
+                                "number_value"
+                            )
+                            else None
+                        ),
                     )
                 )
 

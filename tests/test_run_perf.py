@@ -934,6 +934,7 @@ class ShowResultsCachedUriTest(unittest.TestCase):
             self.boh_path,
             boh_html_uri="gs://bucket/bills_of_health/ws1.html",
             boh_json_uri="gs://bucket/bills_of_health/ws1.json",
+            boh_pdf_uri=None,
         )
 
     def test_cached_boh_uri_used_when_html_uri_absent(self):
@@ -949,6 +950,7 @@ class ShowResultsCachedUriTest(unittest.TestCase):
             self.boh_path,
             boh_html_uri=None,
             boh_json_uri="gs://bucket/bills_of_health/ws1.json",
+            boh_pdf_uri=None,
         )
 
     def test_falls_back_to_provider_exists_when_no_cached_uri(self):
@@ -964,6 +966,7 @@ class ShowResultsCachedUriTest(unittest.TestCase):
             self.boh_path,
             boh_html_uri="gs://bucket/bills_of_health/ws1.html",
             boh_json_uri="gs://bucket/bills_of_health/ws1.json",
+            boh_pdf_uri=None,
         )
 
     def test_falls_back_to_provider_when_run_entry_lacks_uris(self):
@@ -979,6 +982,7 @@ class ShowResultsCachedUriTest(unittest.TestCase):
             self.boh_path,
             boh_html_uri="gs://bucket/bills_of_health/ws1.html",
             boh_json_uri="gs://bucket/bills_of_health/ws1.json",
+            boh_pdf_uri=None,
         )
 
 

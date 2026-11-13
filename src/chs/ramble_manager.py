@@ -44,6 +44,8 @@ from chs import exceptions as ex
 from chs import resources
 from chs.boh_generator import BOHGenerator
 from chs.html_generator import HtmlReportGenerator
+from chs.pdf_generator import PdfReportGenerator
+from chs.protos import bill_of_health_pb2 as pb
 from chs.utils import file_utils
 from chs.schedulers import get_scheduler
 from chs.schedulers.base import BaseScheduler
@@ -104,6 +106,7 @@ class RambleManager:
         self._debug_flag = ["-d"] if debug else []
         self._app_data = ChsAppData()
         self._path = os.path.join(self._base_dir, self._workspace_name)
+        self.boh_pdf_uploaded = False
 
         # Ensure the directory exists for logging and execution
         os.makedirs(self._path, exist_ok=True)
@@ -377,6 +380,9 @@ class RambleManager:
             run_id=self.run_id,
             images_dir=self._app_data.get_images_dir(),
         )
+        run_entry = self._app_data.get_run(self._workspace_name)
+        if self._should_generate_pdf(run_entry, machine_type=machine_type):
+            scheduler.write_hardware_inventory(self.path)
 
     def setup_workspace(self) -> None:
         """Sets up the Ramble workspace by running 'ramble workspace setup'.
@@ -426,8 +432,7 @@ class RambleManager:
         run_entry["submission_complete"] = True
         self._app_data.update_run(self._workspace_name, run_entry)
         logger.debug(
-            "All Jobs submitted successfully. "
-            "submission_complete set to True."
+            "All Jobs submitted successfully. submission_complete set to True."
         )
 
         return list(job_to_dir.keys())
@@ -796,7 +801,7 @@ class RambleManager:
                                 log_path = job_log_map.get(job_id)
                                 if log_path:
                                     logger.debug(
-                                        "Fetching log for " "completed job: %s",
+                                        "Fetching log for completed job: %s",
                                         job_id,
                                     )
                                     future = executor.submit(
@@ -1190,6 +1195,31 @@ class RambleManager:
         boh = boh_generator.generate()
         logger.debug("Bill of Health generated successfully.")
 
+        run_machine_type = (
+            boh.system_info.metadata.fields.get("machine_type").string_value
+            if "machine_type" in boh.system_info.metadata.fields
+            else ""
+        )
+        pdf_enabled = self._should_generate_pdf(
+            run_entry, machine_type=run_machine_type
+        )
+        pdf_gen = None
+        if pdf_enabled:
+            resolved_machine = run_machine_type or (
+                run_entry.get("machine_type", "")
+                if isinstance(run_entry, dict)
+                else ""
+            )
+            try:
+                pdf_gen = PdfReportGenerator.from_workspace(str(workspace_dir))
+                pdf_gen.populate_entities(boh, machine_type=resolved_machine)
+            except Exception as e:
+                logger.warning(
+                    "Failed to add CHS hardware IDs to Bill of Health "
+                    "JSON. Error: %s",
+                    e,
+                )
+
         boh_path = workspace_dir / "bill_of_health.json"
         with file_utils.atomic_open(boh_path, "w") as f:
             f.write(MessageToJson(boh, preserving_proto_field_name=True))
@@ -1208,10 +1238,55 @@ class RambleManager:
                 e,
             )
 
+        if pdf_enabled:
+            self._save_pdf_report(boh, workspace_dir, pdf_gen=pdf_gen)
+
         return str(workspace_dir)
 
+    def _should_generate_pdf(
+        self, run_entry: dict[str, Any] | None, machine_type: str = ""
+    ) -> bool:
+        """Returns whether TPU PDF Bill of Health generation applies."""
+        resolved = resources.normalize_machine_type(
+            machine_type
+            or (
+                run_entry.get("machine_type", "")
+                if isinstance(run_entry, dict)
+                else ""
+            )
+        )
+        return resources.is_tpu(resolved)
+
+    def _save_pdf_report(
+        self,
+        boh: pb.BillOfHealth,
+        workspace_dir: pathlib.Path,
+        pdf_gen: PdfReportGenerator | None = None,
+    ) -> None:
+        """Renders the Bill of Health as a PDF next to its JSON; never raises.
+
+        A PDF left by an earlier generation is removed first, so a failed
+        render never leaves a stale report behind to be uploaded or exported.
+        """
+        pdf_path = workspace_dir / "bill_of_health.pdf"
+        try:
+            pdf_path.unlink(missing_ok=True)
+            generator = pdf_gen or PdfReportGenerator.from_workspace(
+                workspace_dir
+            )
+            generator.save_pdf(boh, str(pdf_path))
+            logger.debug("PDF Bill of Health generated successfully.")
+        except Exception as e:
+            logger.warning(
+                "Failed to generate the PDF Bill of Health. Error: %s", e
+            )
+            logger.debug("PDF Bill of Health failure details", exc_info=True)
+
     def _upload_boh(self, provider) -> tuple[str | None, str | None, bool]:
-        """Uploads the Bill of Health JSON and HTML files.
+        """Uploads the Bill of Health JSON, HTML and (if generated) PDF files.
+
+        The PDF is uploaded only after the JSON and HTML uploads succeed, so
+        the reported locations never mix remote and local copies.
 
         Returns:
             A tuple of (json_destination, html_destination, success).
@@ -1252,10 +1327,35 @@ class RambleManager:
                 upload_success = False
                 boh_html_dest = None
 
+        self.boh_pdf_uploaded = upload_success and self._upload_boh_pdf(
+            provider
+        )
+
         if upload_success:
             logger.debug("Bill of Health uploaded successfully.")
 
         return boh_json_dest, boh_html_dest, upload_success
+
+    def _upload_boh_pdf(self, provider) -> bool:
+        """Uploads the PDF Bill of Health if present; returns success.
+
+        Failure only warns and never affects the outcome of the core Bill of
+        Health upload.
+        """
+        pdf_path = os.path.join(self.path, "bill_of_health.pdf")
+        if not os.path.exists(pdf_path):
+            return False
+        try:
+            provider.upload_file(pdf_path, self.boh_pdf_destination)
+            return True
+        except Exception as e:
+            logger.warning("Failed to archive the PDF Bill of Health: %s", e)
+            return False
+
+    @property
+    def boh_pdf_destination(self) -> str:
+        """Storage path the PDF Bill of Health is archived to, if generated."""
+        return f"bills_of_health/{self._workspace_name}.pdf"
 
     def _get_archive_dir(self) -> str:
         """Returns the local workspace archive directory."""
@@ -1378,8 +1478,9 @@ class RambleManager:
 
         Each test log is copied as ``<experiment>.log`` where ``<experiment>``
         is the experiment directory name without its ``chs-<run_id>-`` prefix.
-        ``bill_of_health.html``, ``bill_of_health.json``, ``debug.txt``, and
-        ``internal.log`` are copied as-is when present.
+        ``bill_of_health.html``, ``bill_of_health.json``,
+        ``bill_of_health.pdf``, ``debug.txt``, and ``internal.log`` are copied
+        as-is when present.
 
         Args:
           target_dir: Directory to copy the logs into. Created if missing.
@@ -1422,6 +1523,7 @@ class RambleManager:
         for name in (
             "bill_of_health.html",
             "bill_of_health.json",
+            "bill_of_health.pdf",
             "debug.txt",
             "internal.log",
         ):

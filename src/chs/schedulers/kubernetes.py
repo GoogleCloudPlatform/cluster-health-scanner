@@ -108,6 +108,7 @@ _FROM_WATCH_CACHE = {"resource_version": "0"}
 _TOPOLOGY_MODE_LABEL = "cloud.google.com/gke-accelerator-topology-mode"
 _TPU_ACCELERATOR_LABEL = "cloud.google.com/gke-tpu-accelerator"
 _TPU_TOPOLOGY_LABEL = "cloud.google.com/gke-tpu-topology"
+_TPU_CHIP_IDS_ANNOTATION = "node.gke.io/tpu-chip-ids"
 _PARTITION_LABEL_PREFIX = "cloud.google.com/gke-tpu-partition-"
 _TPU7X_PARTITION_TOPOLOGIES = ("2x2x1", "2x2x2", "2x2x4", "2x4x4", "4x4x4")
 _PARTITION_ID_LABELS = tuple(
@@ -336,14 +337,26 @@ def _has_nvidia_gpus(resources_map: dict | None) -> bool:
         return False
 
 
+def _expected_slice_hosts(
+    topology: str | None, allocatable: dict | None
+) -> int | None:
+    """Returns host count implied by topology and google.com/tpu, if known."""
+    try:
+        chips = math.prod(int(dim) for dim in (topology or "").split("x"))
+        per_host = int((allocatable or {}).get("google.com/tpu", 0))
+        if chips <= 0 or per_host <= 0:
+            return None
+        if chips <= per_host:
+            return 1
+        return chips // per_host if chips % per_host == 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
 def _is_single_host_slice(
     topology: str | None, allocatable: dict | None
 ) -> bool:
-    try:
-        chips = math.prod(int(dim) for dim in (topology or "").split("x"))
-        return chips <= int((allocatable or {}).get("google.com/tpu", 0))
-    except Exception:
-        return False
+    return _expected_slice_hosts(topology, allocatable) == 1
 
 
 def _node_name(node: dict) -> str | None:
@@ -604,6 +617,7 @@ class TpuSliceData:
     provision_only_nodes: set[str] = field(default_factory=set)
     single_host_slices: dict[str, SliceSpec] = field(default_factory=dict)
     single_host_pools: set[str] = field(default_factory=set)
+    pool_expected_hosts: dict[str, int] = field(default_factory=dict)
 
     def purge_pool(self, pool: str) -> None:
         """Forgets the pool and its nodes so that no test targets them."""
@@ -613,6 +627,7 @@ class TpuSliceData:
         self.dynamic_slice_partitions.pop(pool, None)
         self.pool_to_accelerator.pop(pool, None)
         self.single_host_pools.discard(pool)
+        self.pool_expected_hosts.pop(pool, None)
 
 
 def boolean_representer(dumper, data):
@@ -1491,14 +1506,16 @@ class KubernetesScheduler(BaseScheduler):
             else:
                 _record_pool_node(data, unhealthy_pools, node_name, labels)
                 pool = data.node_to_pool.get(node_name)
-                if (
-                    pool
-                    and not is_provision_only
-                    and _is_single_host_slice(
-                        labels.get(_TPU_TOPOLOGY_LABEL), allocatable
-                    )
-                ):
-                    data.single_host_pools.add(pool)
+                if pool:
+                    pool_topo = data.pool_to_topology.get(pool)
+                    expected = _expected_slice_hosts(pool_topo, allocatable)
+                    if (
+                        expected is not None
+                        and pool not in data.pool_expected_hosts
+                    ):
+                        data.pool_expected_hosts[pool] = expected
+                    if not is_provision_only and expected == 1:
+                        data.single_host_pools.add(pool)
 
         if unhealthy_pools:
             logger.warning(
@@ -1716,6 +1733,92 @@ class KubernetesScheduler(BaseScheduler):
             topologies=dict(sorted(topologies.items())),
             nodepool_count=None if self.nodes_arg else len(pools),
         )
+
+    def get_accelerator_ids(self, nodes: list[str]) -> dict[str, list[str]]:
+        """Reads TPU chip IDs from the annotations of the node objects."""
+        accelerator_ids = {}
+        for node in self._get_node_objects(nodes):
+            metadata = node.get("metadata", {})
+            annotation = (metadata.get("annotations") or {}).get(
+                _TPU_CHIP_IDS_ANNOTATION, ""
+            )
+            chip_ids = [i.strip() for i in annotation.split(",") if i.strip()]
+            if chip_ids:
+                accelerator_ids[metadata["name"]] = chip_ids
+        return accelerator_ids
+
+    def get_tpu_slices_tested(self, nodes: list[str]) -> list[dict]:
+        """Returns the multi-host node pools that the run tests whole.
+
+        A pool counts only if every node of it is tested as part of the
+        pool: --nodes runs, single-host pools, dynamic sub-slices and
+        partially targeted pools are tested host by host and are not
+        reported as slices.
+        """
+        if self.nodes_arg:
+            return []
+        data = self._get_tpu_slices()
+        tested = set(nodes) - self._subslice_nodes
+        pools = {data.node_to_pool[n] for n in tested if n in data.node_to_pool}
+        slices = []
+        for pool in sorted(pools - data.single_host_pools):
+            pool_nodes = set(data.pools[pool])
+            expected = data.pool_expected_hosts.get(pool)
+            if (
+                len(pool_nodes) > 1
+                and pool_nodes <= tested
+                and (expected is None or len(pool_nodes) == expected)
+            ):
+                slices.append(
+                    {
+                        "topology": data.pool_to_topology.get(pool, "unknown"),
+                        "nodes": sorted(pool_nodes),
+                    }
+                )
+        return slices
+
+    def get_host_metadata(self, nodes: list[str]) -> dict[str, dict[str, str]]:
+        """Returns nodepool and GCE instance ID per GKE node."""
+        if not nodes:
+            return {}
+        objects_by_name = {
+            o["metadata"]["name"]: o
+            for o in self._get_node_objects(nodes)
+            if o.get("metadata", {}).get("name")
+        }
+        metadata_map: dict[str, dict[str, str]] = {}
+        need_gce = []
+        for node in nodes:
+            obj = objects_by_name.get(node, {})
+            meta = obj.get("metadata", {})
+            labels = meta.get("labels") or {}
+            annotations = meta.get("annotations") or {}
+            entry: dict[str, str] = {}
+            nodepool = labels.get("cloud.google.com/gke-nodepool", "").strip()
+            if nodepool:
+                entry["nodepool"] = nodepool
+            inst_id = annotations.get(
+                "container.googleapis.com/instance_id", ""
+            ) or self.node_to_instance_id.get(node, "")
+            if inst_id and inst_id != node:
+                entry["instance_id"] = str(inst_id)
+            else:
+                need_gce.append(node)
+            if entry:
+                metadata_map[node] = entry
+        if need_gce and self._instances_info:
+            for node in need_gce:
+                info = self._instances_info.get(node) or {}
+                inst_id = info.get("instance_id")
+                if (
+                    inst_id
+                    and not str(inst_id).startswith("default-")
+                    and str(inst_id) != node
+                ):
+                    metadata_map.setdefault(node, {})["instance_id"] = str(
+                        inst_id
+                    )
+        return metadata_map
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
         """Discovers network topology from the labels of the node objects."""

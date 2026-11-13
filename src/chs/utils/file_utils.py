@@ -15,12 +15,18 @@
 """File utilities for the Cluster Health Scanner."""
 
 import fcntl
+import json
+import logging
 import os
 import pathlib
 import shutil
 import tempfile
 from contextlib import contextmanager
-from typing import Generator, IO
+from typing import Any, Callable, Generator, IO, TypeVar
+
+_JsonContainer = TypeVar("_JsonContainer", dict, list)
+
+logger = logging.getLogger(__name__)
 
 # Cache umask at import time to avoid thread-safety issues with os.umask()
 _UMASK = os.umask(0)
@@ -111,3 +117,44 @@ def atomic_open(
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
         raise
+
+
+def load_json(
+    path: str | pathlib.Path,
+    expected_type: type[_JsonContainer],
+    *,
+    is_valid: Callable[[Any], bool] | None = None,
+    warn: bool = False,
+) -> _JsonContainer:
+    """Reads a JSON object or array, tolerating absent or malformed files.
+
+    Args:
+        path: File to read.
+        expected_type: `dict` or `list`; anything else in the file yields an
+            empty one.
+        is_valid: Optional filter applied to each list entry, or to each
+            (key, value) item of a dict; rejected entries are dropped.
+        warn: Log a warning (instead of debug) when the file exists but
+            cannot be used.
+
+    Returns:
+        The parsed container, or an empty `expected_type()` when the file is
+        missing, unreadable, not JSON, or of another type.
+    """
+    if not os.path.isfile(path):
+        return expected_type()
+    log = logger.warning if warn else logger.debug
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        log("Ignoring unreadable JSON file %s: %s", path, e)
+        return expected_type()
+    if not isinstance(data, expected_type):
+        log("Ignoring %s: expected a JSON %s", path, expected_type.__name__)
+        return expected_type()
+    if is_valid is None:
+        return data
+    if isinstance(data, dict):
+        return dict(item for item in data.items() if is_valid(item))
+    return [entry for entry in data if is_valid(entry)]

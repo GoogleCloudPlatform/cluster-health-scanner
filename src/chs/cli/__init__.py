@@ -103,6 +103,7 @@ class ResultLocations:
 
     boh_html_uri: str | None = None
     boh_json_uri: str | None = None
+    boh_pdf_uri: str | None = None
 
 
 def handle_chs_exceptions(f):
@@ -334,12 +335,14 @@ def _resolve_result_locations(
     workspace_name: str,
     workspaces_dir: pathlib.Path,
 ) -> ResultLocations:
-    """Resolves display locations of the BoH HTML and BoH JSON.
+    """Resolves display locations of the BoH HTML, JSON and PDF.
 
     URIs cached in runs.json are preferred (no storage round-trips). If none
-    are cached, the run's storage provider is queried. For runs without remote
-    storage, artifacts are located on local disk. Local paths that no longer
-    exist are skipped, and the rest are formatted relative to cwd when under it.
+    are cached, the run's storage provider is queried for the HTML and JSON.
+    The PDF is never probed remotely: its URI comes from the runs.json cache
+    or the local search. For runs without remote storage, artifacts are
+    located on local disk. Local paths that no longer exist are skipped, and
+    the rest are formatted relative to cwd when under it.
 
     Args:
       run_data: Run entry dictionary from runs.json, or None.
@@ -348,7 +351,7 @@ def _resolve_result_locations(
       workspaces_dir: Path to the workspaces directory.
 
     Returns:
-      ResultLocations with boh_html_uri and boh_json_uri.
+      ResultLocations with boh_html_uri, boh_json_uri and boh_pdf_uri.
     """
     run_data = run_data or {}
 
@@ -361,6 +364,7 @@ def _resolve_result_locations(
 
     boh_html_uri = _existing_local_or_remote(run_data.get("boh_html_uri"))
     boh_json_uri = _existing_local_or_remote(run_data.get("boh_uri"))
+    boh_pdf_uri = _existing_local_or_remote(run_data.get("boh_pdf_uri"))
 
     if not (boh_html_uri or boh_json_uri) and run_provider:
         html_remote = f"bills_of_health/{workspace_name}.html"
@@ -392,10 +396,14 @@ def _resolve_result_locations(
         boh_json_uri = boh_json_uri or _find_local_artifact(
             "bill_of_health.json", *search_dirs
         )
+        boh_pdf_uri = boh_pdf_uri or _find_local_artifact(
+            "bill_of_health.pdf", *search_dirs
+        )
 
     return ResultLocations(
         boh_html_uri=_format_local_display_path(boh_html_uri),
         boh_json_uri=_format_local_display_path(boh_json_uri),
+        boh_pdf_uri=_format_local_display_path(boh_pdf_uri),
     )
 
 
@@ -433,23 +441,17 @@ def _archive_and_log(
         "bill_of_health.json", export_dir, ramble_manager.path
     )
 
+    local_pdf = _find_local_artifact(
+        "bill_of_health.pdf", export_dir, ramble_manager.path
+    )
+
     if storage_provider and all_uploads_succeeded:
-        if boh_html_path:
-            console.print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report "
-                f"saved at: {rendering.format_location(boh_html_path)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]",
-                soft_wrap=True,
-            )
-            updates["boh_html_uri"] = boh_html_path
-        if boh_json_path:
-            console.print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-                f"{rendering.format_location(boh_json_path)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]",
-                soft_wrap=True,
-            )
-            updates["boh_uri"] = boh_json_path
+        html_path, json_path = boh_html_path, boh_json_path
+        pdf_path = (
+            storage_provider.get_uri(ramble_manager.boh_pdf_destination)
+            if local_pdf and ramble_manager.boh_pdf_uploaded
+            else local_pdf
+        )
         if ws_path:
             logger.debug(
                 "Workspace archived to: %s",
@@ -466,29 +468,24 @@ def _archive_and_log(
                 style=theme.CHS_WARNING_STYLE,
                 markup=False,
             )
-
         html_path = local_html or boh_html_path
         json_path = local_json or boh_json_path
+        pdf_path = local_pdf
 
-        display_html = _format_local_display_path(html_path)
-        display_json = _format_local_display_path(json_path)
-
-        if display_html:
+    for label, run_entry_key, location in (
+        ("Interactive health report", "boh_html_uri", html_path),
+        ("Bill of Health", "boh_uri", json_path),
+        ("PDF Bill of Health", "boh_pdf_uri", pdf_path),
+    ):
+        if location:
+            display = _format_local_display_path(location)
             console.print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Interactive health report "
-                f"saved at: {rendering.format_location(display_html)}"
+                f"[{theme.CHS_SUCCESS_STYLE}]{label} saved at: "
+                f"{rendering.format_location(display)}"
                 f"[/{theme.CHS_SUCCESS_STYLE}]",
                 soft_wrap=True,
             )
-            updates["boh_html_uri"] = html_path
-        if display_json:
-            console.print(
-                f"[{theme.CHS_SUCCESS_STYLE}]Bill of Health saved at: "
-                f"{rendering.format_location(display_json)}"
-                f"[/{theme.CHS_SUCCESS_STYLE}]",
-                soft_wrap=True,
-            )
-            updates["boh_uri"] = json_path
+            updates[run_entry_key] = location
 
     if updates:
         ramble_manager.update_run_entry(updates)
@@ -1226,6 +1223,7 @@ def _show_results(
                 tmp_file_path,
                 boh_html_uri=locations.boh_html_uri,
                 boh_json_uri=locations.boh_json_uri,
+                boh_pdf_uri=locations.boh_pdf_uri,
             )
             telemetry_reporting.record_test_results(viewer.boh)
             viewer.show_summary_and_details()
@@ -1242,6 +1240,7 @@ def _show_results(
         boh_path,
         boh_html_uri=locations.boh_html_uri,
         boh_json_uri=locations.boh_json_uri,
+        boh_pdf_uri=locations.boh_pdf_uri,
     )
 
     telemetry_reporting.record_test_results(viewer.boh)

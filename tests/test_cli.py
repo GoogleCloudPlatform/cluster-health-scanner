@@ -2343,6 +2343,7 @@ class TestCli(unittest.TestCase):
             {
                 "boh_html_uri": os.path.join(export_dir, "bill_of_health.html"),
                 "boh_uri": os.path.join(export_dir, "bill_of_health.json"),
+                "boh_pdf_uri": os.path.join(export_dir, "bill_of_health.pdf"),
             }
         )
 
@@ -2447,6 +2448,7 @@ class TestCli(unittest.TestCase):
                 boh_json,
                 boh_html_uri=expected_html,
                 boh_json_uri=expected_json,
+                boh_pdf_uri=None,
             )
             mock_viewer.show_summary_and_details.assert_called_once()
 
@@ -2483,6 +2485,7 @@ class TestCli(unittest.TestCase):
                 boh_json,
                 boh_html_uri=f"gs://my-bucket/prefix/bills_of_health/{ws_name}.html",
                 boh_json_uri=f"gs://my-bucket/prefix/bills_of_health/{ws_name}.json",
+                boh_pdf_uri=None,
             )
             mock_viewer.show_summary_and_details.assert_called_once()
 
@@ -2517,6 +2520,7 @@ class TestCli(unittest.TestCase):
                 boh_json,
                 boh_html_uri=None,
                 boh_json_uri=cli._format_local_display_path(str(boh_json)),
+                boh_pdf_uri=None,
             )
 
     @mock.patch("chs.cli._analyze_action", autospec=True)

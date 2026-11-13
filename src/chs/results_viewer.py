@@ -43,6 +43,7 @@ class ResultsViewer:
         boh_path: str | os.PathLike[str],
         boh_html_uri: str | None = None,
         boh_json_uri: str | None = None,
+        boh_pdf_uri: str | None = None,
     ):
         """Initializes the viewer with the path to the Bill of Health JSON.
 
@@ -50,10 +51,12 @@ class ResultsViewer:
           boh_path: Local path of the Bill of Health JSON to render.
           boh_html_uri: Display location of the interactive HTML report.
           boh_json_uri: Display location of the Bill of Health JSON.
+          boh_pdf_uri: Display location of the PDF Bill of Health.
         """
         self.boh_path = boh_path
         self.boh_html_uri = boh_html_uri
         self.boh_json_uri = boh_json_uri
+        self.boh_pdf_uri = boh_pdf_uri
         self.console = Console()
         self.boh = pb.BillOfHealth()
         self.plugin_manager = PluginManager()
@@ -133,6 +136,7 @@ class ResultsViewer:
         locations = (
             ("Check the interactive health report in", self.boh_html_uri),
             ("Bill of Health (JSON):", self.boh_json_uri),
+            ("Bill of Health (PDF):", self.boh_pdf_uri),
         )
         for label, location in locations:
             if location:

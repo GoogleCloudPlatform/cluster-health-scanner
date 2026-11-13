@@ -28,6 +28,9 @@ from chs.utils.lifecycle import JobState, ReasonCode
 logger = logging.getLogger(__name__)
 
 CHS_JOB_PREFIX = "chs-"
+HARDWARE_IDS_FILENAME = "hardware_ids.json"
+HOST_METADATA_FILENAME = "host_metadata.json"
+TPU_SLICES_FILENAME = "tpu_slices.json"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -217,6 +220,57 @@ class BaseScheduler(abc.ABC):
         topo_path = os.path.join(workspace_dir, "topology.json")
         with open(topo_path, "w") as f:
             json.dump(self.get_topology(), f)
+
+    def get_accelerator_ids(self, nodes: list[str]) -> dict[str, list[str]]:
+        """Returns the hardware identifiers of each node's accelerators.
+
+        Nodes whose identifiers are unknown are omitted.
+        """
+        return {}
+
+    def get_tpu_slices_tested(self, nodes: list[str]) -> list[dict]:
+        """Returns the whole multi-host TPU slices among the tested nodes.
+
+        Each slice is {"topology": "<AxBxC>", "nodes": [sorted node names]}.
+        """
+        return []
+
+    def get_host_metadata(self, nodes: list[str]) -> dict[str, dict[str, str]]:
+        """Returns scheduler and instance metadata keyed by host name.
+
+        Optional keys per host: 'nodepool', 'partition', and 'instance_id'.
+        """
+        return {}
+
+    def write_hardware_inventory(
+        self, workspace_dir: str, nodes: list[str] | None = None
+    ) -> None:
+        """Best-effort write of TPU chip IDs, host metadata, and TPU slices.
+
+        Files are written only when non-empty; a stale file cannot leak in
+        because every run has its own workspace directory. Never raises, so
+        a failed lookup cannot fail the run.
+        """
+        try:
+            target_nodes = (
+                self.get_nodes_under_test() if nodes is None else nodes
+            ) or []
+        except Exception as e:
+            logger.debug("Failed to resolve nodes for inventory: %s", e)
+            return
+        for filename, collect in (
+            (HARDWARE_IDS_FILENAME, self.get_accelerator_ids),
+            (HOST_METADATA_FILENAME, self.get_host_metadata),
+            (TPU_SLICES_FILENAME, self.get_tpu_slices_tested),
+        ):
+            try:
+                data = collect(target_nodes)
+                if not data:
+                    continue
+                with open(os.path.join(workspace_dir, filename), "w") as f:
+                    json.dump(data, f)
+            except Exception as e:
+                logger.debug("Failed to record %s: %s", filename, e)
 
     @abc.abstractmethod
     def resolve_raw_nodes(self) -> list[str]:
