@@ -647,31 +647,36 @@ class BOHGenerator:
             )
             job_status = matching_entry.get("status", "UNKNOWN").upper()
             machine_type = ramble_vars.get("machine_type", "default")
+            job_time_exceeded = (
+                job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES
+            )
 
-            if job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES:
+            if job_time_exceeded:
                 test_result.result_status = lifecycle.TIME_EXCEEDED_PB_STATUSES[
                     job_status
                 ]
             elif self.skip_validation:
                 test_result.result_status = pb.RESULT_STATUS_UNKNOWN
 
-            needs_evaluation = not (
-                job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES
-                or self.skip_validation
-            )
-
             results_to_add = [test_result]
-            if (
+            per_node_results = (
                 plugin.creates_per_node_results()
                 and len(test_result.target_resources) > 1
-            ):
+            )
+            if per_node_results:
                 results_to_add = self._split_test_result_per_node(test_result)
 
             for result in results_to_add:
                 if hasattr(plugin, "post_process_test_result"):
                     plugin.post_process_test_result(result)
 
-                if needs_evaluation:
+                node_reported_metrics = per_node_results and any(
+                    m.metadata.fields["context"].string_value
+                    for m in result.metrics
+                )
+                if not self.skip_validation and (
+                    not job_time_exceeded or node_reported_metrics
+                ):
                     self._evaluate_thresholds(
                         machine_type, result, exp | ramble_vars
                     )
@@ -695,6 +700,11 @@ def parse_tier_results_from_boh(
         boh = boh_pb
 
     tier_results = {test: TestStatus.ERROR for test in expected_tests}
+    time_exceeded_tests = {
+        r.test_name
+        for r in boh.test_results
+        if r.result_status in lifecycle.TIME_EXCEEDED_PB_STATUSES.values()
+    }
     has_hard_failure = False
 
     for result in boh.test_results:
@@ -703,7 +713,10 @@ def parse_tier_results_from_boh(
             if result.result_status == pb.ResultStatus.RESULT_STATUS_FAILED:
                 tier_results[test] = TestStatus.DEGRADED
             elif result.result_status == pb.ResultStatus.RESULT_STATUS_SUCCESS:
-                if tier_results[test] != TestStatus.DEGRADED:
+                if (
+                    tier_results[test] != TestStatus.DEGRADED
+                    and test not in time_exceeded_tests
+                ):
                     tier_results[test] = TestStatus.HEALTHY
 
         for m in result.metrics:
