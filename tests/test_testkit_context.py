@@ -86,35 +86,23 @@ class NodesStringTest(unittest.TestCase):
 
 
 class KubernetesAffinityTest(unittest.TestCase):
-    def test_pins_to_nodes_and_keeps_pods_apart(self):
+    def test_pins_to_nodes_without_pod_anti_affinity(self):
         values = {}
         ctx.apply_kubernetes_affinity(values, "            - node-1")
 
-        self.assertIn("kubernetes.io/hostname", values["affinity_yaml"])
         affinity = yaml.safe_load(values["affinity_yaml"])
+        self.assertEqual(list(affinity), ["nodeAffinity"])
         self.assertEqual(
-            affinity["podAntiAffinity"],
-            {
-                "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                        "labelSelector": {
-                            "matchExpressions": [
-                                {
-                                    "key": "app.kubernetes.io/managed-by",
-                                    "operator": "In",
-                                    "values": ["chs"],
-                                },
-                                {
-                                    "key": "app.kubernetes.io/component",
-                                    "operator": "In",
-                                    "values": ["worker"],
-                                },
-                            ]
-                        },
-                        "topologyKey": "kubernetes.io/hostname",
-                    }
-                ]
-            },
+            affinity["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"],
+            [
+                {
+                    "key": "kubernetes.io/hostname",
+                    "operator": "In",
+                    "values": ["node-1"],
+                }
+            ],
         )
 
     def test_without_nodes_affinity_is_empty(self):
@@ -548,12 +536,12 @@ class SliceContextTest(StubbedConfigTestCase):
             'cloud.google.com/gke-tpu-slice-topology: "2x2x1"',
             single_host["pod_annotations_yaml"],
         )
-        self.assertNotIn("podAffinity", single_host["affinity_yaml"])
+        affinity = yaml.safe_load(single_host["affinity_yaml"])
+        self.assertEqual(list(affinity), ["nodeAffinity"])
         self.assertIn("node-1", single_host["affinity_yaml"])
         self.assertIn("node-2", single_host["affinity_yaml"])
-        self.assertNotIn(ctx.EXCLUSIVE_SLICE_KEY, single_host)
 
-    def test_a_dynamic_slice_asks_for_exclusive_hardware(self):
+    def test_a_dynamic_slice_is_only_pinned_to_its_nodes(self):
         contexts = self.build(
             variables(
                 tpu_slices={"a": ["node-1"], "b": ["node-2"]},
@@ -564,67 +552,16 @@ class SliceContextTest(StubbedConfigTestCase):
 
         static, dynamic = (c[1]["variables"] for c in contexts)
         self.assertNotIn("job_annotations_yaml", dynamic)
-        self.assertNotIn("podAffinity", static["affinity_yaml"])
         self.assertIn("2x2x2", dynamic["pod_annotations_yaml"])
-        for ctx_vars in (static, dynamic):
-            self.assertNotIn(ctx.EXCLUSIVE_SLICE_KEY, ctx_vars)
-
-        affinity = yaml.safe_load(
-            dynamic["affinity_yaml"].replace("{job_name}", "my-job")
-        )
-        slice_key = "cloud.google.com/gke-tpu-slice"
-        self.assertEqual(
-            affinity["podAffinity"],
-            {
-                "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                        "labelSelector": {
-                            "matchExpressions": [
-                                {
-                                    "key": "batch.kubernetes.io/job-name",
-                                    "operator": "In",
-                                    "values": ["my-job"],
-                                }
-                            ]
-                        },
-                        "topologyKey": slice_key,
-                    }
-                ]
-            },
-        )
-        anti_terms = affinity["podAntiAffinity"][
-            "requiredDuringSchedulingIgnoredDuringExecution"
-        ]
-        self.assertEqual(
-            [t["topologyKey"] for t in anti_terms],
-            ["kubernetes.io/hostname", slice_key],
-        )
-        self.assertEqual(
-            anti_terms[1]["labelSelector"]["matchExpressions"],
-            [
-                {
-                    "key": "app.kubernetes.io/managed-by",
-                    "operator": "In",
-                    "values": ["chs"],
-                },
-                {
-                    "key": "app.kubernetes.io/component",
-                    "operator": "In",
-                    "values": ["worker"],
-                },
-                {
-                    "key": "batch.kubernetes.io/job-name",
-                    "operator": "NotIn",
-                    "values": ["my-job"],
-                },
-            ],
-        )
-        self.assertIn(
-            "node-2",
-            affinity["nodeAffinity"][
-                "requiredDuringSchedulingIgnoredDuringExecution"
-            ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"],
-        )
+        for ctx_vars, node in ((static, "node-1"), (dynamic, "node-2")):
+            affinity = yaml.safe_load(ctx_vars["affinity_yaml"])
+            self.assertEqual(list(affinity), ["nodeAffinity"])
+            self.assertEqual(
+                affinity["nodeAffinity"][
+                    "requiredDuringSchedulingIgnoredDuringExecution"
+                ]["nodeSelectorTerms"][0]["matchExpressions"][0]["values"],
+                [node],
+            )
 
     def test_dynamic_slice_keeps_existing_job_annotations(self):
         contexts = self.build(

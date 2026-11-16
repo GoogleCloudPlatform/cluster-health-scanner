@@ -18,13 +18,7 @@ import math
 import os
 import textwrap
 
-from chs.constants import (
-    COMPONENT_LABEL,
-    MANAGED_BY_CHS,
-    MANAGED_BY_LABEL,
-    SLURM_RUN_ID_COMMENT_PREFIX,
-    WORKER_COMPONENT,
-)
+from chs.constants import SLURM_RUN_ID_COMMENT_PREFIX
 from chs.testkit import config as chs_config
 from chs.utils.cluster import sanitize_dns_1123
 
@@ -47,50 +41,21 @@ def nodes_str(scheduler: str, nodes: list[str] | None) -> str:
     return ""
 
 
-_JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
-_TPU_SLICE_TOPOLOGY_KEY = "cloud.google.com/gke-tpu-slice"
-EXCLUSIVE_SLICE_KEY = "_chs_exclusive_tpu_slice"
+def kubernetes_affinity_yaml(nodes_block: str | None) -> str:
+    """Returns the Kubernetes affinity YAML of a CHS test.
 
-_ONE_POD_PER_NODE_TERM = f'''- labelSelector:
-    matchExpressions:
-    - key: {MANAGED_BY_LABEL}
-      operator: In
-      values:
-      - {MANAGED_BY_CHS}
-    - key: {COMPONENT_LABEL}
-      operator: In
-      values:
-      - {WORKER_COMPONENT}
-  topologyKey: "kubernetes.io/hostname"'''
-
-_SAME_SLICE_POD_AFFINITY = f"""podAffinity:
-  requiredDuringSchedulingIgnoredDuringExecution:
-  - labelSelector:
-      matchExpressions:
-      - key: {_JOB_NAME_LABEL}
-        operator: In
-        values:
-        - {{job_name}}
-    topologyKey: {_TPU_SLICE_TOPOLOGY_KEY}"""
-
-_EXCLUSIVE_SLICE_TERM = f"""- labelSelector:
-    matchExpressions:
-    - key: {MANAGED_BY_LABEL}
-      operator: In
-      values:
-      - {MANAGED_BY_CHS}
-    - key: {COMPONENT_LABEL}
-      operator: In
-      values:
-      - {WORKER_COMPONENT}
-    - key: {_JOB_NAME_LABEL}
-      operator: NotIn
-      values:
-      - {{job_name}}
-  topologyKey: {_TPU_SLICE_TOPOLOGY_KEY}"""
-
-
-def node_affinity_yaml(nodes_block: str) -> str:
+    Pods are only pinned to the nodes of nodes_block; CHS uses no pod
+    (anti-)affinity, whose cost grows with the cluster size:
+    - Every CHS pod requests all GPUs or TPU chips of its node, so CHS
+      pods never share a node.
+    - Gang admission only starts a Job once no running CHS Job of the run
+      is pinned to any of its nodes.
+    - A dynamic TPU slice covers exactly one node pool, which is the node
+      set that its Job is pinned to, and CHS refuses to create a Slice that
+      another CHS run already holds.
+    """
+    if not nodes_block:
+        return ""
     return f"""nodeAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
     nodeSelectorTerms:
@@ -101,49 +66,11 @@ def node_affinity_yaml(nodes_block: str) -> str:
 {nodes_block}"""
 
 
-def kubernetes_affinity_yaml(
-    nodes_block: str | None, exclusive_slice: bool = False
-) -> str:
-    """Returns the pod affinity YAML of a CHS test.
-
-    Pods are pinned to nodes_block and at most one CHS pod runs per node.
-    With exclusive_slice, all pods of the Job share one TPU slice that no
-    other CHS Job uses.
-    """
-    sections = []
-    anti_affinity_terms = []
-    if nodes_block:
-        sections.append(node_affinity_yaml(nodes_block))
-        anti_affinity_terms.append(_ONE_POD_PER_NODE_TERM)
-    if exclusive_slice:
-        sections.append(_SAME_SLICE_POD_AFFINITY)
-        anti_affinity_terms.append(_EXCLUSIVE_SLICE_TERM)
-    if anti_affinity_terms:
-        terms = "\n".join(textwrap.indent(t, "  ") for t in anti_affinity_terms)
-        sections.append(
-            "podAntiAffinity:\n"
-            "  requiredDuringSchedulingIgnoredDuringExecution:\n"
-            f"{terms}"
-        )
-    return "\n".join(sections)
-
-
-def mark_exclusive_tpu_slice(variables: dict) -> None:
-    """Makes the affinity of the test request an exclusive TPU slice."""
-    variables[EXCLUSIVE_SLICE_KEY] = True
-
-
-def pop_exclusive_tpu_slice(variables: dict) -> bool:
-    return bool(variables.pop(EXCLUSIVE_SLICE_KEY, False))
-
-
 def apply_kubernetes_affinity(
     variables: dict,
     nodes_block: str | None,
 ) -> None:
-    variables["affinity_yaml"] = kubernetes_affinity_yaml(
-        nodes_block, pop_exclusive_tpu_slice(variables)
-    )
+    variables["affinity_yaml"] = kubernetes_affinity_yaml(nodes_block)
 
 
 def sbatch_headers(headers: dict) -> str:
@@ -390,9 +317,7 @@ def build_slice_contexts(
         if slice_topology:
             slice_vars["tpu_topology"] = slice_topology
 
-        if slice_id in dynamic_pools:
-            apply_dynamic_slice_annotations(slice_vars)
-        elif slice_id in single_host_pools:
+        if slice_id in dynamic_pools or slice_id in single_host_pools:
             annotate_slice_topology(slice_vars)
 
         if len(tpu_slices) == 1:
@@ -413,12 +338,6 @@ def build_slice_contexts(
         contexts.append((slice_experiment_name, context_dict))
 
     return contexts
-
-
-def apply_dynamic_slice_annotations(slice_vars: dict) -> None:
-    """Requests an exclusive, correctly shaped dynamic TPU slice."""
-    mark_exclusive_tpu_slice(slice_vars)
-    annotate_slice_topology(slice_vars)
 
 
 def annotate_slice_topology(slice_vars: dict) -> None:
