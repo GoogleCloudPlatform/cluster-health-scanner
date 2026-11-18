@@ -203,6 +203,29 @@ class PluginContractTest(unittest.TestCase):
             self.assertEqual(spec.context["modifiers"], [{"name": "detector"}])
         self.assertEqual(plugin.extra_context, {"modifiers": []})
 
+    def test_whole_slice_tests_stop_the_job_on_pod_failure(self):
+        """Pods of a whole-slice test work together; others are independent."""
+        for whole_slice in (True, False):
+            with self.subTest(requires_whole_slice=whole_slice):
+                plugin = type(
+                    "P",
+                    (SlicePlugin,),
+                    {
+                        "name": "demo",
+                        "application": "demo",
+                        "default_workloads": ("check",),
+                        "requires_whole_slice": whole_slice,
+                    },
+                )()
+                self.resolve_test.return_value = {"variables": {}}
+
+                (spec,) = plugin.build(self.request())
+
+                self.assertEqual(
+                    spec.context["variables"].get("fail_job_on_pod_failure"),
+                    "true" if whole_slice else None,
+                )
+
     def test_a_test_that_cannot_name_workloads_keeps_its_own(self):
         """Without the workload in the name, two workloads would collide."""
         plugin = type(

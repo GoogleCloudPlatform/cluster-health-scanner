@@ -39,6 +39,7 @@ from chs.constants import (
     MANAGED_BY_LABEL,
     NVIDIA_GPU_DEVICE_CLASS,
     NVIDIA_GPU_RESOURCE,
+    STOP_ON_POD_FAILURE_ANNOTATION,
     WORKER_COMPONENT,
 )
 
@@ -232,6 +233,15 @@ class KubernetesJob(WorkflowManagerBase):
         name="pod_resource_claims_yaml",
         default="",
         description="Raw YAML for Pod spec.template.spec.resourceClaims",
+    )
+
+    workflow_manager_variable(
+        name="fail_job_on_pod_failure",
+        default="false",
+        description="Whether CHS stops the whole standard Job, after "
+        "fetching the logs of all its pods, once one pod fails. "
+        "'true' for tests whose pods work together (collectives); "
+        "'false' for tests whose pods are independent",
     )
 
     def __init__(self, file_path):
@@ -524,6 +534,9 @@ class KubernetesJob(WorkflowManagerBase):
         ja = self._yaml_block("job_annotations_yaml", "annotations", 2).replace(
             raw_job_name, sanitized_job_name
         )
+        if expander.expand_var_name("fail_job_on_pod_failure") == "true":
+            stop = f'    {STOP_ON_POD_FAILURE_ANNOTATION}: "true"'
+            ja = f"{ja or '  annotations:'}\n{stop}"
 
         # Pod Spec blocks
         pl = self._labels_section(

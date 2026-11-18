@@ -72,6 +72,7 @@ from chs.constants import (
     NVIDIA_GPU_DEVICE_CLASS,
     NVIDIA_GPU_DRA_DRIVER,
     NVIDIA_GPU_RESOURCE,
+    STOP_ON_POD_FAILURE_ANNOTATION,
     SUPPORTED_DYNAMIC_SLICE_TOPOLOGY,
     WORKER_COMPONENT,
 )
@@ -84,6 +85,7 @@ _IMAGE_PULL_ERROR_REASONS = frozenset(
     {"ErrImagePull", "ImagePullBackOff", "InvalidImageName"}
 )
 _TIMEOUT_EXIT_CODE = 124
+_POLICY_FAILURE_REASONS = frozenset({"PodFailurePolicy", "FailedIndexes"})
 _TEST_TIMEOUT_EXIT_RE = re.compile(r"(?i)\bexit code 124\b")
 
 _JOB_NAME_LABEL = "batch.kubernetes.io/job-name"
@@ -216,6 +218,12 @@ def _timed_out(pod: dict) -> bool:
         == _TIMEOUT_EXIT_CODE
         for container in pod.get("status", {}).get("containerStatuses") or []
     )
+
+
+def _stops_on_pod_failure(job: dict) -> bool:
+    """Returns whether CHS stops the Job once one of its pods fails."""
+    annotations = job.get("metadata", {}).get("annotations") or {}
+    return annotations.get(STOP_ON_POD_FAILURE_ANNOTATION) == "true"
 
 
 def _is_running(pod: dict) -> bool:
@@ -654,6 +662,7 @@ class KubernetesScheduler(BaseScheduler):
         self._run_id: str | None = None
         self.workspace_config_dir: str | None = None
         self._image_pull_errors_since: dict[str, float] = {}
+        self._jobs_to_stop: set[str] = set()
 
     def _resolve_project_id(self, node: str) -> str:
         """Resolves GCP project ID from Kubernetes node providerID or ADC."""
@@ -2063,7 +2072,12 @@ class KubernetesScheduler(BaseScheduler):
                     states[job_id] = JobState(status)
                     if status == JobStatus.DEADLINE:
                         past_deadline[job_id] = job
-                    elif _failure_reason(job) == "PodFailurePolicy":
+                    elif _failure_reason(job) in _POLICY_FAILURE_REASONS:
+                        failed_by_policy[job_id] = job
+                    elif _stops_on_pod_failure(job) and job.get(
+                        "status", {}
+                    ).get("failed"):
+                        self._jobs_to_stop.add(job_id)
                         failed_by_policy[job_id] = job
         except (AttributeError, TypeError) as e:
             logger.warning(
@@ -2395,6 +2409,8 @@ class KubernetesScheduler(BaseScheduler):
                     os.remove(temp_path)
                 except OSError:
                     pass
+            if job_id in self._jobs_to_stop:
+                self.cancel_jobs([job_id])
 
     def extract_job_id(self, experiment_dir: str) -> str:
         """Extracts the job ID (Job name) from the experiment directory."""

@@ -9,14 +9,7 @@ metadata:
 spec:
   {suspend_section}
   completionMode: Indexed
-  backoffLimit: 0
-  podFailurePolicy:
-    rules:
-    - action: FailJob
-      onExitCodes:
-        operator: NotIn
-        values:
-        - 0
+  backoffLimitPerIndex: 0
   parallelism: {n_nodes}
   completions: {n_nodes}
   activeDeadlineSeconds: {job_deadline}

@@ -19,6 +19,7 @@ SLURM_RUN_ID_COMMENT_PREFIX = "chs-run-id="
 MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 INSTANCE_LABEL = "app.kubernetes.io/instance"
 COMPONENT_LABEL = "app.kubernetes.io/component"
+STOP_ON_POD_FAILURE_ANNOTATION = "cluster-health-scanner/stop-on-pod-failure"
 MANAGED_BY_CHS = "chs"
 WORKER_COMPONENT = "worker"
 DELETE_WAIT_TIMEOUT_SEC = 60

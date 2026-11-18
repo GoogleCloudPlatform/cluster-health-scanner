@@ -220,6 +220,8 @@ class SlicePlugin(BaseTestPlugin):
     requires_whole_slice: ClassVar[bool] = False
 
     def build_contexts(self, variables, experiment_name, request):
+        if self.requires_whole_slice:
+            variables = {**variables, "fail_job_on_pod_failure": "true"}
         return build_slice_contexts(
             variables,
             experiment_name,

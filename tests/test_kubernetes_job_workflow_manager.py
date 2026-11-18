@@ -103,6 +103,17 @@ def _workflow_manager(var_map: dict[str, str]) -> KubernetesJob:
     return wm
 
 
+_FAIL_JOB_ON_ERROR = {
+    "action": "FailJob",
+    "onExitCodes": {"operator": "NotIn", "values": [0]},
+}
+_STANDARD_FAILURE_SPEC = {"backoffLimitPerIndex": 0}
+_MPI_FAILURE_SPEC = {
+    "backoffLimit": 0,
+    "podFailurePolicy": {"rules": [_FAIL_JOB_ON_ERROR]},
+}
+
+
 class KubernetesJobTest(unittest.TestCase):
     """Tests for the kubernetes-job workflow manager."""
 
@@ -309,7 +320,7 @@ class KubernetesJobTest(unittest.TestCase):
         )
         return template_vars, [d for d in yaml.safe_load_all(rendered) if d]
 
-    def _assert_job_spec(self, job, job_name, n_nodes):
+    def _assert_job_spec(self, job, job_name, n_nodes, failure_spec):
         self.assertEqual(job["apiVersion"], "batch/v1")
         self.assertEqual(job["kind"], "Job")
         self.assertEqual(job["metadata"]["name"], job_name)
@@ -321,18 +332,7 @@ class KubernetesJobTest(unittest.TestCase):
             {
                 "suspend": True,
                 "completionMode": "Indexed",
-                "backoffLimit": 0,
-                "podFailurePolicy": {
-                    "rules": [
-                        {
-                            "action": "FailJob",
-                            "onExitCodes": {
-                                "operator": "NotIn",
-                                "values": [0],
-                            },
-                        }
-                    ]
-                },
+                **failure_spec,
                 "parallelism": n_nodes,
                 "completions": n_nodes,
                 "activeDeadlineSeconds": 4260,
@@ -374,7 +374,9 @@ class KubernetesJobTest(unittest.TestCase):
 
         job_name = template_vars["sanitized_job_name"]
         self.assertEqual(len(docs), 1)
-        pod_spec = self._assert_job_spec(docs[0], job_name, 2)
+        pod_spec = self._assert_job_spec(
+            docs[0], job_name, 2, _STANDARD_FAILURE_SPEC
+        )
         self.assertEqual(
             docs[0]["spec"]["template"]["metadata"]["annotations"],
             {"networking.gke.io/default-interface": "eth0"},
@@ -435,6 +437,36 @@ class KubernetesJobTest(unittest.TestCase):
             script,
         )
         self.assertTrue(script.endswith("exit $CHS_EXIT_CODE\n"))
+
+    def test_standard_template_marks_jobs_chs_stops_on_pod_failure(self):
+        """Pods only fail their index; collective Jobs get the annotation."""
+        stop = {"cluster-health-scanner/stop-on-pod-failure": "true"}
+        cases = {
+            ("", ""): None,
+            ("false", "a: b"): {"a": "b"},
+            ("true", ""): stop,
+            ("true", "a: b"): {"a": "b", **stop},
+        }
+        for (value, annotations), expected in cases.items():
+            with self.subTest(fail_job_on_pod_failure=value, other=annotations):
+                var_map = {
+                    **_JOB_VARS_INPUTS,
+                    "fail_job_on_pod_failure": value,
+                    "job_annotations_yaml": annotations,
+                }
+                _, docs = self._render("job_standard.yaml.tpl", var_map)
+                job = docs[0]
+                self.assertEqual(
+                    {k: job["spec"][k] for k in _STANDARD_FAILURE_SPEC},
+                    _STANDARD_FAILURE_SPEC,
+                )
+                self.assertNotIn("backoffLimit", job["spec"])
+                self.assertNotIn("podFailurePolicy", job["spec"])
+                self.assertEqual(job["metadata"].get("annotations"), expected)
+                self.assertEqual(job["metadata"]["labels"], _JOB_LABELS)
+                self.assertEqual(
+                    job["spec"]["template"]["metadata"]["labels"], _POD_LABELS
+                )
 
     def test_job_deadline_adds_startup_budget_and_margin(self):
         """Tests get the startup budget and a margin; no timeout is kept."""
@@ -522,7 +554,9 @@ class KubernetesJobTest(unittest.TestCase):
         self.assertEqual([d["kind"] for d in docs], ["Secret", "Job"])
         self.assertEqual(docs[0]["metadata"]["name"], f"{job_name}-ssh")
         self.assertEqual(docs[0]["metadata"]["labels"], _JOB_LABELS)
-        pod_spec = self._assert_job_spec(docs[1], job_name, 3)
+        pod_spec = self._assert_job_spec(
+            docs[1], job_name, 3, _MPI_FAILURE_SPEC
+        )
         self.assertEqual(
             [c["name"] for c in pod_spec["initContainers"]], ["tcpxo-daemon"]
         )

@@ -4144,6 +4144,126 @@ ramble:
             ],
         )
 
+    def test_get_job_statuses_reports_failed_indexes_by_pod_exit_codes(
+        self, mock_logger
+    ):
+        """A Job with failed indexes timed out if one of its pods exited 124.
+
+        Pods of independent tests fail only their own index, so a Job whose
+        pods failed ends with FailedIndexes once all its pods have finished.
+        """
+        conditions = {
+            "timed-out": ("FailedIndexes", "Job has failed indexes"),
+            "failed": ("FailedIndexes", "Job has failed indexes"),
+            "timed-out-and-failed": (
+                "FailedIndexes",
+                "Job has failed indexes",
+            ),
+            "lost": ("FailedIndexes", "Job has failed indexes"),
+        }
+        for name, (reason, message) in conditions.items():
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                {
+                    "metadata": {"name": name},
+                    "status": {
+                        "failed": 1,
+                        "conditions": [
+                            {
+                                "type": "FailureTarget",
+                                "status": "True",
+                                "reason": reason,
+                                "message": message,
+                            }
+                        ],
+                    },
+                },
+                namespace=CHS_NAMESPACE,
+            )
+
+        def exited(code):
+            return {
+                "terminated": {
+                    "exitCode": code,
+                    "startedAt": "2026-11-17T00:00:00Z",
+                }
+            }
+
+        self._add_job_pod("timed-out-0", "timed-out", main=exited(124))
+        self._add_job_pod("timed-out-1", "timed-out", main=exited(0))
+        self._add_job_pod("failed-0", "failed", main=exited(1))
+        self._add_job_pod("failed-1", "failed", main=exited(0))
+        self._add_job_pod(
+            "timed-out-and-failed-0", "timed-out-and-failed", main=exited(124)
+        )
+        self._add_job_pod(
+            "timed-out-and-failed-1", "timed-out-and-failed", main=exited(1)
+        )
+        self._add_job_pod("lost-0", "lost", main=exited(0))
+
+        statuses = KubernetesScheduler().get_job_statuses(list(conditions))
+
+        self.assertEqual(
+            statuses,
+            {
+                "timed-out": "TIMEOUT",
+                "failed": "UNKNOWN",
+                "timed-out-and-failed": "TIMEOUT",
+                "lost": "UNKNOWN",
+            },
+        )
+        self.assertEqual(len(self.kube.calls_to("list_pods")), 1)
+
+    def test_get_job_statuses_ends_annotated_job_on_first_failed_pod(
+        self, mock_logger
+    ):
+        """A running collective Job with a failed pod is done for CHS."""
+        stop = {"cluster-health-scanner/stop-on-pod-failure": "true"}
+        cases = {"stop-timed-out": stop, "stop-failed": stop, "independent": {}}
+        for name, annotations in cases.items():
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                {
+                    "metadata": {"name": name, "annotations": annotations},
+                    "status": {"active": 1, "failed": 1},
+                },
+                namespace=CHS_NAMESPACE,
+            )
+        exit_codes = {
+            "stop-timed-out": 124,
+            "stop-failed": 1,
+            "independent": 124,
+        }
+        for name, code in exit_codes.items():
+            self._add_job_pod(
+                f"{name}-0",
+                name,
+                main={
+                    "terminated": {
+                        "exitCode": code,
+                        "startedAt": "2026-11-17T00:00:00Z",
+                    }
+                },
+            )
+            self._add_job_pod(
+                f"{name}-1",
+                name,
+                main={"running": {"startedAt": "2026-11-17T00:00:00Z"}},
+            )
+
+        statuses = KubernetesScheduler().get_job_statuses(list(cases))
+
+        self.assertEqual(
+            statuses,
+            {
+                "stop-timed-out": "TIMEOUT",
+                "stop-failed": "UNKNOWN",
+                "independent": "RUNNING",
+            },
+        )
+
     def test_get_job_statuses_falls_back_to_message_without_pods(
         self, mock_logger
     ):
@@ -6767,6 +6887,68 @@ ramble:
                 scheduler.fetch_job_log(job, os.path.join(d, f"{job}.log"))
         self.assertEqual(self.kube.calls_to("stream_pod_log"), [])
         mock_logger.error.assert_not_called()
+
+    def test_fetch_job_log_stops_job_chs_ended_on_failed_pod(self, mock_logger):
+        """CHS stops a collective Job after fetching its pods' logs."""
+        stop = {"cluster-health-scanner/stop-on-pod-failure": "true"}
+        timed_out = {
+            "terminated": {"exitCode": 124, "startedAt": "2026-11-17T00:00:00Z"}
+        }
+        running = {"running": {"startedAt": "2026-11-17T00:00:00Z"}}
+        cases = {"tpu-stop": stop, "tpu-independent": {}}
+        for job, annotations in cases.items():
+            self.kube.add_object(
+                "batch",
+                "jobs",
+                {
+                    "metadata": {"name": job, "annotations": annotations},
+                    "status": {"active": 1, "failed": 1},
+                },
+                namespace=CHS_NAMESPACE,
+            )
+            self._add_job_pod(f"{job}-0", job, main=timed_out)
+            self._add_job_pod(f"{job}-1", job, main=running)
+        self.kube.add_object(
+            "batch",
+            "jobs",
+            {
+                "metadata": {"name": "tpu-stop-done", "annotations": stop},
+                "status": {
+                    "failed": 2,
+                    "conditions": [
+                        {
+                            "type": "Failed",
+                            "status": "True",
+                            "reason": "FailedIndexes",
+                        }
+                    ],
+                },
+            },
+            namespace=CHS_NAMESPACE,
+        )
+        self._add_job_pod("tpu-stop-done-0", "tpu-stop-done", main=timed_out)
+        self._add_job_pod("tpu-stop-done-1", "tpu-stop-done", main=timed_out)
+        cases["tpu-stop-done"] = stop
+        scheduler = KubernetesScheduler()
+        self.assertEqual(
+            scheduler.get_job_statuses(list(cases)),
+            {
+                "tpu-stop": "TIMEOUT",
+                "tpu-independent": "RUNNING",
+                "tpu-stop-done": "TIMEOUT",
+            },
+        )
+        with tempfile.TemporaryDirectory() as d:
+            for job in cases:
+                scheduler.fetch_job_log(job, os.path.join(d, f"{job}.log"))
+        self.assertEqual(
+            [
+                call.kwargs["object_names"]
+                for call in self.kube.calls_to("delete_jobs")
+            ],
+            [["tpu-stop"]],
+        )
+        self.assertEqual(len(self.kube.calls_to("stream_pod_log")), 6)
 
     def test_delete_jobs_tolerates_pods_still_pulling(self, mock_logger):
         """Idle pods that are being deleted are left for Kubernetes."""
