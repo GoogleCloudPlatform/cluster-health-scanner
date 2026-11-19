@@ -16,7 +16,9 @@ suites:
 - name: lite
   est_time: "~5 mins"
   description: "Quick health check."
-  deadline: 1080
+  deadline:
+    gpu: 1080
+    tpu: 1080
   tests:
   - name: nvidia-smi
     variables:
@@ -58,7 +60,9 @@ suites:
 - name: standard
   est_time: "~30 mins"
   description: "Thorough network & collective testing."
-  deadline: 3600
+  deadline:
+    gpu: 3600
+    tpu: 2400
   tests:
   - name: nvidia-smi
     variables:

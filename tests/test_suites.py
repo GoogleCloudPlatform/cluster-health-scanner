@@ -137,6 +137,52 @@ class TestSuites(unittest.TestCase):
             with self.assertRaises(Exception):  # Yaml parser generic exception
                 load_suite("test_suite")
 
+    def test_get_suite_deadline(self):
+        """Test resolving scalar and per-accelerator deadlines."""
+        from chs.utils.suites import get_suite_deadline
+
+        split_cfg = {"deadline": {"gpu": 3600, "tpu": 2400}}
+        self.assertEqual(get_suite_deadline(split_cfg, "a3-megagpu-8g"), 3600)
+        self.assertEqual(
+            get_suite_deadline(split_cfg, "tpu7x-standard-4t"), 2400
+        )
+        self.assertEqual(
+            get_suite_deadline(split_cfg, "n2-standard-4", default=1500), 1500
+        )
+        partial_tpu_cfg = {"deadline": {"tpu": 2400, "default": 3000}}
+        self.assertEqual(
+            get_suite_deadline(partial_tpu_cfg, "a3-megagpu-8g"), 3000
+        )
+        self.assertEqual(
+            get_suite_deadline(partial_tpu_cfg, "tpu7x-standard-4t"), 2400
+        )
+        partial_gpu_cfg = {"deadline": {"gpu": 3600, "default": 1800}}
+        self.assertEqual(
+            get_suite_deadline(partial_gpu_cfg, "tpu7x-standard-4t"), 1800
+        )
+        self.assertEqual(
+            get_suite_deadline(partial_gpu_cfg, "a3-megagpu-8g"), 3600
+        )
+        self.assertEqual(
+            get_suite_deadline({"deadline": 1200}, "tpu7x-standard-4t"), 1200
+        )
+        self.assertEqual(
+            get_suite_deadline({"deadline": "bad"}, "a3-megagpu-8g", 900), 900
+        )
+
+    def test_bundled_suites_deadlines(self):
+        """Test that bundled lite and standard suites resolve GPU/TPU."""
+        from chs.utils.suites import get_suite_deadline
+
+        lite = load_suite("lite")
+        standard = load_suite("standard")
+        self.assertEqual(get_suite_deadline(lite, "a3-megagpu-8g"), 1080)
+        self.assertEqual(get_suite_deadline(lite, "tpu7x-standard-4t"), 1080)
+        self.assertEqual(get_suite_deadline(standard, "a3-megagpu-8g"), 3600)
+        self.assertEqual(
+            get_suite_deadline(standard, "tpu7x-standard-4t"), 2400
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

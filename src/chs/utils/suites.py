@@ -15,9 +15,9 @@
 import logging
 from typing import Any
 
-from chs.utils.config import load_yaml_config
-
+from chs import resources
 from chs.exceptions import SuiteNotFoundException
+from chs.utils.config import load_yaml_config
 
 logger = logging.getLogger(__name__)
 
@@ -69,3 +69,24 @@ def get_all_suites_details() -> list[dict[str, Any]]:
 def is_suite_tiered(suite_cfg: dict) -> bool:
     """Checks if a suite defines any tests with dependencies."""
     return any("trigger_condition" in t for t in suite_cfg.get("tests", []))
+
+
+def get_suite_deadline(
+    suite_cfg: dict[str, Any],
+    machine_type: str = "",
+    default: int = resources.DEFAULT_DEADLINE,
+) -> int:
+    """Resolves a suite's deadline (seconds) for the target machine type."""
+    raw_deadline = suite_cfg.get("deadline", default)
+    if isinstance(raw_deadline, dict):
+        cfg_default = raw_deadline.get("default", default)
+        if resources.is_tpu(machine_type):
+            raw_deadline = raw_deadline.get("tpu", cfg_default)
+        elif resources.is_gpu(machine_type):
+            raw_deadline = raw_deadline.get("gpu", cfg_default)
+        else:
+            raw_deadline = cfg_default
+    try:
+        return int(raw_deadline)
+    except (ValueError, TypeError):
+        return default

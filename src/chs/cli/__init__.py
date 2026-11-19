@@ -1893,12 +1893,7 @@ def run(
                     f" '{machine_type}'."
                 )
 
-            try:
-                deadline = int(
-                    suite_cfg.get("deadline", resources.DEFAULT_DEADLINE)
-                )
-            except (ValueError, TypeError):
-                deadline = resources.DEFAULT_DEADLINE
+            deadline = utils.suites.get_suite_deadline(suite_cfg, machine_type)
 
             test_names = [t.get("name") for t in resolved_tests]
             logger.debug(
@@ -1935,10 +1930,10 @@ def run(
             if suite != "custom":
                 try:
                     s_cfg = load_suite(suite)
-                    deadline = int(
-                        s_cfg.get("deadline", resources.DEFAULT_DEADLINE)
+                    deadline = utils.suites.get_suite_deadline(
+                        s_cfg, machine_type
                     )
-                except (ValueError, TypeError, ex.SuiteNotFoundException):
+                except ex.SuiteNotFoundException:
                     pass
 
         if resources.is_tpu(machine_type) and scheduler_obj.nodes_arg:
