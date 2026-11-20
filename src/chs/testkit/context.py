@@ -13,18 +13,65 @@
 # limitations under the License.
 
 import copy
+import json
 import logging
 import math
 import os
 import textwrap
 
 from chs.constants import SLURM_RUN_ID_COMMENT_PREFIX
+from chs.exceptions import ChsExecutionException
 from chs.testkit import config as chs_config
 from chs.utils.cluster import sanitize_dns_1123
 
 logger = logging.getLogger(__name__)
 
 _NODE_LIST_INDENT = 12
+
+INVENTORY_FILE = "chs_inventory.json"
+TPU_INVENTORY_KEYS = (
+    "tpu_slices",
+    "tpu_slice_topologies",
+    "tpu_dynamic_pools",
+    "tpu_single_host_pools",
+)
+INVENTORY_KEYS = ("nodes",) + TPU_INVENTORY_KEYS
+# Schedulers that write the inventory to INVENTORY_FILE, not ramble.yaml.
+INVENTORY_SCHEDULERS = ("kubernetes",)
+
+
+def write_inventory(config_dir: str, inventory: dict) -> None:
+    """Writes the cluster-wide inventory next to ramble.yaml."""
+    with open(os.path.join(config_dir, INVENTORY_FILE), "w") as f:
+        json.dump(inventory, f)
+
+
+def load_inventory(workspace_root: str | None, scheduler: str | None) -> dict:
+    """Returns the inventory written by write_inventory.
+
+    Schedulers in INVENTORY_SCHEDULERS leave `nodes` empty in ramble.yaml, so
+    a missing inventory file would silently produce empty experiments; raise
+    instead. Other schedulers keep the inventory in ramble.yaml and get {}.
+
+    Raises:
+      ChsExecutionException: if the scheduler writes an inventory file and it
+        is missing.
+    """
+    if scheduler not in INVENTORY_SCHEDULERS:
+        return {}
+    path = os.path.join(workspace_root or "", "configs", INVENTORY_FILE)
+    if not workspace_root or not os.path.exists(path):
+        raise ChsExecutionException(
+            f"Cluster inventory {path} not found for scheduler {scheduler}. "
+            "Recreate the workspace with `chs run`."
+        )
+    with open(path) as f:
+        return json.load(f)
+
+
+def _drop_tpu_inventory(ctx_vars: dict) -> None:
+    for key in TPU_INVENTORY_KEYS:
+        ctx_vars.pop(key, None)
 
 
 def yaml_block(value: str, indent_spaces: int) -> str:
@@ -222,6 +269,8 @@ def build_node_context(
     scheduler = ctx_vars.get("scheduler", "kubernetes")
 
     ctx_vars["node"] = ctx_vars.get("nodes")
+    ctx_vars["nodes"] = "{node}"
+    _drop_tpu_inventory(ctx_vars)
     ctx_vars["n_nodes"] = 1
 
     nodes_block = (
@@ -256,6 +305,7 @@ def build_cluster_context(
 ) -> dict:
     ctx_vars = copy.deepcopy(variables)
     scheduler = ctx_vars.get("scheduler", "kubernetes")
+    _drop_tpu_inventory(ctx_vars)
 
     if nodes_list is not None:
         ctx_vars["nodes"] = nodes_list
@@ -308,10 +358,14 @@ def build_slice_contexts(
     dynamic_pools = variables.get("tpu_dynamic_pools", [])
     single_host_pools = variables.get("tpu_single_host_pools", [])
 
+    shared_vars = {
+        k: v for k, v in variables.items() if k not in INVENTORY_KEYS
+    }
+
     contexts = []
     for slice_id, slice_nodes in tpu_slices.items():
-        slice_vars = copy.deepcopy(variables)
-        slice_vars["nodes"] = slice_nodes
+        slice_vars = copy.deepcopy(shared_vars)
+        slice_vars["nodes"] = list(slice_nodes)
 
         slice_topology = slice_topologies.get(slice_id)
         if slice_topology:

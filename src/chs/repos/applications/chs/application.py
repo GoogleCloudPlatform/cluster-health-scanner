@@ -16,6 +16,7 @@ import logging
 
 from chs.exceptions import ChsExecutionException
 from chs.testkit import build_test_request, load_plugin
+from chs.testkit.context import load_inventory
 
 from ramble.appkit import *  # isort: skip # noqa: E402, F403
 
@@ -121,7 +122,9 @@ class Chs(ExecutableApplication):
             f"chs-{chs_run_id}" if chs_run_id else self.expander.experiment_name
         )
         suite_deadline = self.expander.expand_var_name("deadline", typed=True)
-        base_vars = self.non_reserved_variables()
+        scheduler = self.expander.expand_var_name("scheduler")
+        base_vars = dict(self.non_reserved_variables())
+        base_vars.update(load_inventory(self.workspace.root, scheduler))
 
         for test in tests_config.tests:
             plugin = load_plugin(test.name)

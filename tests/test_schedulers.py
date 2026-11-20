@@ -49,6 +49,7 @@ from chs.schedulers.kubernetes import (
 from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import kubernetes
 from chs.schedulers import _get_kubectl_context, detect_scheduler
+from chs.testkit.context import TPU_INVENTORY_KEYS, load_inventory
 from google.auth.exceptions import GoogleAuthError
 from chs.exceptions import ChsSchedulerException, ChsValidationError
 from chs.utils import k8s_client
@@ -2077,7 +2078,12 @@ class TestKubernetesScheduler(unittest.TestCase):
         )
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml")) as f:
-            variables = yaml.safe_load(f)["ramble"]["variables"]
+            ramble_vars = yaml.safe_load(f)["ramble"]["variables"]
+        for key in TPU_INVENTORY_KEYS:
+            self.assertNotIn(key, ramble_vars)
+        self.assertEqual(ramble_vars["nodes"], [])
+        variables = load_inventory(self.tmp_dir, "kubernetes")
+        self.assertEqual(variables["nodes"], ["d1", "s1"])
         self.assertEqual(
             variables["tpu_slices"], {"dynpool": ["d1"], "staticpool": ["s1"]}
         )
@@ -2508,7 +2514,10 @@ ramble:
             data = yaml.safe_load(f)
 
         variables = data["ramble"]["variables"]
-        self.assertEqual(variables["nodes"], ["node1"])
+        self.assertEqual(variables["nodes"], [])
+        self.assertEqual(
+            load_inventory(self.tmp_dir, "kubernetes")["nodes"], ["node1"]
+        )
         self.assertEqual(variables["machine_type"], "a3-megagpu-8g")
         self.assertEqual(variables["tests"], ["test1"])
         self.assertEqual(variables["default_interface_name"], "eth0")

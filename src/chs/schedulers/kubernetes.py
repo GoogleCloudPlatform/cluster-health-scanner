@@ -54,6 +54,7 @@ from chs.exceptions import (
 )
 from chs.utils.lifecycle import JobState, JobStatus, ReasonCode
 from chs import image, resources
+from chs.testkit import context as testkit_context
 from chs.constants import (
     CHS_NAMESPACE,
     COMPONENT_LABEL,
@@ -1943,6 +1944,16 @@ class KubernetesScheduler(BaseScheduler):
         logger.debug("Configuration: %r", config)
 
         self._write_topology_json(workspace_config_dir)
+
+        testkit_context.write_inventory(
+            workspace_config_dir,
+            {
+                key: variables.pop(key)
+                for key in testkit_context.INVENTORY_KEYS
+                if key in variables
+            },
+        )
+        variables["nodes"] = []
 
         with open(os.path.join(workspace_config_dir, "ramble.yaml"), "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)

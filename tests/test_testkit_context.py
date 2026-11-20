@@ -27,6 +27,7 @@ from unittest import mock
 
 import yaml
 
+from chs.exceptions import ChsExecutionException
 from chs.testkit import config as chs_config
 from chs.testkit import context as ctx
 
@@ -584,6 +585,68 @@ class SliceContextTest(StubbedConfigTestCase):
         self.assertEqual(
             contexts[0][1]["variables"]["node"], ["node-1", "node-2"]
         )
+
+    def test_a_slice_carries_only_its_own_inventory(self):
+        """No experiment copies the cluster-wide maps (O(N^2) otherwise)."""
+        contexts = self.build(
+            variables(
+                nodes=["node-1", "n2", "n3"],
+                tpu_slices={"a": ["node-1"], "b": ["n2", "n3"]},
+                tpu_slice_topologies={"a": "2x2x1", "b": "2x2x2"},
+                tpu_dynamic_pools=[],
+                tpu_single_host_pools=[],
+            )
+        )
+
+        for (_, context), nodes in zip(contexts, (["node-1"], ["n2", "n3"])):
+            slice_vars = context["variables"]
+            self.assertEqual(slice_vars["nodes"], nodes)
+            for key in ctx.TPU_INVENTORY_KEYS:
+                self.assertNotIn(key, slice_vars)
+        self.assertEqual(contexts[1][1]["variables"]["tpu_topology"], "2x2x2")
+
+
+class InventoryDietTest(StubbedConfigTestCase):
+    def test_a_node_experiment_carries_one_node_not_the_list(self):
+        context = ctx.build_node_context(
+            variables(tpu_slices={"a": ["node-1", "node-2"]})
+        )
+
+        node_vars = context["variables"]
+        self.assertEqual(node_vars["node"], ["node-1", "node-2"])
+        self.assertEqual(node_vars["nodes"], "{node}")
+        self.assertNotIn("tpu_slices", node_vars)
+
+    def test_a_cluster_experiment_drops_the_tpu_maps(self):
+        context = ctx.build_cluster_context(
+            variables(tpu_slices={"a": ["node-1", "node-2"]})
+        )
+
+        self.assertEqual(context["variables"]["nodes"], ["node-1", "node-2"])
+        self.assertNotIn("tpu_slices", context["variables"])
+
+    def test_inventory_round_trips_through_the_side_file(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        os.makedirs(os.path.join(root, "configs"))
+        inventory = {"nodes": ["a"], "tpu_slices": {"p": ["a"]}}
+
+        ctx.write_inventory(os.path.join(root, "configs"), inventory)
+
+        self.assertEqual(ctx.load_inventory(root, "kubernetes"), inventory)
+
+    def test_kubernetes_without_inventory_fails_loudly(self):
+        """An empty experiment set must not pass for a successful run."""
+        missing = tempfile.gettempdir() + "/none"
+        for root in (missing, None):
+            with self.assertRaises(ChsExecutionException):
+                ctx.load_inventory(root, "kubernetes")
+
+    def test_schedulers_keeping_nodes_in_ramble_yaml_need_no_inventory(self):
+        missing = tempfile.gettempdir() + "/none"
+        for scheduler in ("slurm", "standalone"):
+            self.assertEqual(ctx.load_inventory(missing, scheduler), {})
+            self.assertEqual(ctx.load_inventory(None, scheduler), {})
 
 
 class BenchmarkConfigTest(unittest.TestCase):
