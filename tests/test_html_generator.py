@@ -235,3 +235,157 @@ def test_html_report_generator_chs_version_fallback():
     with mock.patch("chs.html_generator.get_version", return_value="9.9.9"):
         report_data = generator.generate_report_data(boh)
         assert report_data["metadata"]["chs_version"] == "9.9.9"
+
+
+def test_html_report_generator_multinode_metric_bucketing():
+    """Multi-node results without custom filter assign per-node metrics."""
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-multinode"
+
+    res = boh.test_results.add(
+        test_name="dcgm",
+        test_level="node",
+        result_status=pb.RESULT_STATUS_FAILED,
+    )
+    res.target_resources.add(node_name="node-a")
+    res.target_resources.add(node_name="node-b")
+
+    # node-a passes, node-b fails threshold
+    m_a = res.metrics.add(key="Perf")
+    m_a.value.number_value = 100.0
+    m_a.metadata.fields["context"].string_value = "node-a"
+    m_a.validation_criteria.name = "perf"
+    m_a.validation_criteria.result_status = pb.RESULT_STATUS_SUCCESS
+
+    m_b = res.metrics.add(key="Perf")
+    m_b.value.number_value = 10.0
+    m_b.metadata.fields["context"].string_value = "node-b"
+    m_b.validation_criteria.name = "perf"
+    m_b.validation_criteria.result_status = pb.RESULT_STATUS_FAILED
+
+    report_data = generator.generate_report_data(boh)
+    insights = {n["node_name"]: n for n in report_data["node_insights"]}
+
+    assert insights["node-a"]["status"] == "INCOMPLETE"
+    assert insights["node-a"]["tests"][0]["status_str"] == "✕ FAILED TO EXECUTE"
+    assert insights["node-b"]["status"] == "DEGRADED"
+    assert (
+        insights["node-b"]["tests"][0]["status_str"]
+        == "✕ DID NOT MEET THRESHOLD"
+    )
+
+
+def test_html_report_generator_custom_filter_runs_once_per_result():
+    """Custom _filter_validation_results is invoked once per TestResult."""
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-custom-filter"
+
+    res = boh.test_results.add(
+        test_name="tpu-collectives",
+        test_level="slice",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    for i in range(4):
+        res.target_resources.add(node_name=f"node-{i}")
+    m = res.metrics.add(key="Achieved Bandwidth", unit="GB/s")
+    m.value.number_value = 350.0
+    m.validation_criteria.name = "efficiency"
+    m.validation_criteria.result_status = pb.RESULT_STATUS_SUCCESS
+
+    with (
+        mock.patch("chs.html_generator.aggregate_boh_summary") as mock_agg,
+        mock.patch(
+            "chs.html_generator.extract_validation_data", return_value=[]
+        ),
+        mock.patch.object(
+            generator, "_extract_detailed_reports", return_value=[]
+        ),
+    ):
+        mock_agg.return_value = mock.Mock(
+            run_id="r1",
+            test_summaries=[],
+            errors_and_warnings=[],
+        )
+        with mock.patch(
+            "chs.tests.tpu_collectives.renderer.TpuCollectivesRenderer"
+            "._filter_validation_results",
+            side_effect=lambda results, nodes: results,
+        ) as mock_filter:
+            report_data = generator.generate_report_data(boh)
+
+    assert len(report_data["node_insights"]) == 4
+    mock_filter.assert_called_once()
+
+
+def test_html_report_generator_multinode_prefix_boundary():
+    """Failing metric on node-10 must not mark node-1 as DEGRADED."""
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-prefix"
+
+    res = boh.test_results.add(
+        test_name="dcgm",
+        test_level="node",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    res.target_resources.add(node_name="node-1")
+    res.target_resources.add(node_name="node-10")
+
+    m_ok = res.metrics.add(key="Perf")
+    m_ok.value.number_value = 100.0
+    m_ok.metadata.fields["context"].string_value = "host:node-1"
+    m_ok.validation_criteria.name = "perf"
+    m_ok.validation_criteria.result_status = pb.RESULT_STATUS_SUCCESS
+
+    m_fail = res.metrics.add(key="Perf")
+    m_fail.value.number_value = 10.0
+    m_fail.metadata.fields["context"].string_value = "host:node-10"
+    m_fail.validation_criteria.name = "perf"
+    m_fail.validation_criteria.result_status = pb.RESULT_STATUS_FAILED
+
+    report_data = generator.generate_report_data(boh)
+    insights = {n["node_name"]: n for n in report_data["node_insights"]}
+    assert insights["node-1"]["status"] == "HEALTHY"
+    assert insights["node-10"]["status"] == "DEGRADED"
+
+
+def test_html_report_generator_handles_unrecognized_test_name():
+    """Unrecognized test names (resolve_test_name -> None) do not crash."""
+    generator = HtmlReportGenerator()
+    boh = pb.BillOfHealth()
+    boh.report_id = "test-unknown-plugin"
+
+    res = boh.test_results.add(
+        test_name="custom-unregistered-test",
+        test_level="node",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    res.target_resources.add(node_name="node-1")
+    m = res.metrics.add(key="Throughput")
+    m.value.number_value = 42.0
+    m.validation_criteria.name = "throughput"
+    m.validation_criteria.result_status = pb.RESULT_STATUS_SUCCESS
+
+    with (
+        mock.patch("chs.html_generator.aggregate_boh_summary") as mock_agg,
+        mock.patch(
+            "chs.html_generator.extract_validation_data", return_value=[]
+        ),
+        mock.patch.object(
+            generator, "_extract_detailed_reports", return_value=[]
+        ),
+    ):
+        mock_agg.return_value = mock.Mock(
+            run_id="r1",
+            test_summaries=[],
+            errors_and_warnings=[],
+        )
+        report_data = generator.generate_report_data(boh)
+    insights = {n["node_name"]: n for n in report_data["node_insights"]}
+    assert insights["node-1"]["status"] == "HEALTHY"
+    assert (
+        insights["node-1"]["tests"][0]["display_name"]
+        == "custom-unregistered-test (node)"
+    )

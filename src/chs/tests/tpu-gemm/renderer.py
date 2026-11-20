@@ -63,6 +63,7 @@ class TpuGemmRenderer(DefaultRenderer):
             return None
 
         parsed_map: dict[str, list[TpuGemmParsedResult]] = {}
+        parsed_by_key: dict[tuple[str, str], TpuGemmParsedResult] = {}
 
         for res in test_results:
             test_level = res.test_level if res.test_level else "check"
@@ -101,12 +102,7 @@ class TpuGemmRenderer(DefaultRenderer):
                 if sweep_param not in parsed_map:
                     parsed_map[sweep_param] = []
 
-                parsed = None
-                for p in parsed_map[sweep_param]:
-                    if p.nodes == resolved_node:
-                        parsed = p
-                        break
-
+                parsed = parsed_by_key.get((sweep_param, resolved_node))
                 if parsed is None:
                     parsed = TpuGemmParsedResult(
                         test_level=test_level,
@@ -114,6 +110,7 @@ class TpuGemmRenderer(DefaultRenderer):
                         sweep_param=sweep_param,
                     )
                     parsed_map[sweep_param].append(parsed)
+                    parsed_by_key[(sweep_param, resolved_node)] = parsed
 
                 val = (
                     m.value.number_value

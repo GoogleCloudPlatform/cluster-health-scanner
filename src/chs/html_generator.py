@@ -14,12 +14,16 @@
 
 """HTML Bill of Health Report Generator for Cluster Health Scanner (CHS)."""
 
+from collections import defaultdict
+from collections.abc import Iterable
+from dataclasses import dataclass
 import json
 import logging
 import os
 from typing import Any
 
 
+from chs.boh_generator import NodeContextMatcher
 from chs.core.plugin_manager import PluginManager
 from chs.core.summary_aggregator import aggregate_boh_summary
 from chs.core.utils.validation_analyzer import extract_validation_data
@@ -34,6 +38,38 @@ DEFAULT_TEMPLATE_PATH = os.path.join(
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _NodeTestEntry:
+    canonical_name: str
+    display_name: str
+    eval_tr: pb.TestResult
+    has_unmet_metric: bool
+    has_val_criteria: bool
+    has_metrics: bool
+
+
+def _summarize_metrics(metrics: Iterable[pb.Metric]) -> tuple[bool, bool, bool]:
+    """Returns (has_unmet_metric, has_val_criteria, has_metrics) in one pass."""
+    has_unmet_metric = False
+    has_val_criteria = False
+    has_metrics = False
+    for m in metrics:
+        if m.HasField("validation_criteria"):
+            if m.validation_criteria.result_status == pb.RESULT_STATUS_FAILED:
+                has_unmet_metric = True
+            if m.validation_criteria.name:
+                has_val_criteria = True
+        if not (
+            m.key.endswith("Error Detected")
+            or m.key.endswith("Failure Detected")
+            or "Warning" in m.key
+        ):
+            has_metrics = True
+        if has_unmet_metric and has_val_criteria and has_metrics:
+            break
+    return has_unmet_metric, has_val_criteria, has_metrics
 
 
 class HtmlReportGenerator:
@@ -258,6 +294,95 @@ class HtmlReportGenerator:
             e.node for e in summary.errors_and_warnings if e.node
         }
 
+        resolved_name_cache: dict[str, str] = {}
+        plugin_cache: dict[str, Any] = {}
+        node_to_entries: dict[str, list[_NodeTestEntry]] = defaultdict(list)
+
+        for tr in boh.test_results:
+            target_nodes = {t.node_name for t in tr.target_resources}
+            if not target_nodes:
+                continue
+
+            if tr.test_name not in resolved_name_cache:
+                resolved_name_cache[tr.test_name] = (
+                    plugin_manager.resolve_test_name(tr.test_name)
+                    or tr.test_name
+                )
+            canonical_name = resolved_name_cache[tr.test_name]
+
+            if canonical_name not in plugin_cache:
+                plugin_cache[canonical_name] = plugin_manager.get_plugin(
+                    canonical_name
+                )
+            plugin = plugin_cache[canonical_name]
+            has_custom_filter = bool(
+                plugin and hasattr(plugin, "_filter_validation_results")
+            )
+
+            eval_tr = tr
+            if has_custom_filter:
+                sorted_nodes = sorted(target_nodes)
+                filtered_list = plugin._filter_validation_results(
+                    [tr], sorted_nodes
+                )
+                if filtered_list:
+                    eval_tr = filtered_list[0]
+
+            display_name = (
+                f"{canonical_name} ({tr.test_level})"
+                if tr.test_level
+                else canonical_name
+            )
+
+            if has_custom_filter or len(target_nodes) == 1:
+                has_unmet, has_val, has_m = _summarize_metrics(eval_tr.metrics)
+                entry = _NodeTestEntry(
+                    canonical_name=canonical_name,
+                    display_name=display_name,
+                    eval_tr=eval_tr,
+                    has_unmet_metric=has_unmet,
+                    has_val_criteria=has_val,
+                    has_metrics=has_m,
+                )
+                for node_name in target_nodes:
+                    node_to_entries[node_name].append(entry)
+            else:
+                matcher = NodeContextMatcher(target_nodes)
+                per_node_metrics: dict[str, list[pb.Metric]] = {
+                    n: [] for n in target_nodes
+                }
+                shared_metrics: list[pb.Metric] = []
+                for m in eval_tr.metrics:
+                    ctx = m.metadata.fields.get("context")
+                    ctx_str = (
+                        ctx.string_value if ctx and ctx.string_value else ""
+                    )
+                    if ctx_str:
+                        matched_nodes = matcher.match(ctx_str)
+                        if matched_nodes:
+                            for t_node in matched_nodes:
+                                per_node_metrics[t_node].append(m)
+                            continue
+                    shared_metrics.append(m)
+
+                shared_unmet, shared_val, shared_has_m = _summarize_metrics(
+                    shared_metrics
+                )
+                for node_name in target_nodes:
+                    n_unmet, n_val, n_has_m = _summarize_metrics(
+                        per_node_metrics[node_name]
+                    )
+                    node_to_entries[node_name].append(
+                        _NodeTestEntry(
+                            canonical_name=canonical_name,
+                            display_name=display_name,
+                            eval_tr=eval_tr,
+                            has_unmet_metric=(shared_unmet or n_unmet),
+                            has_val_criteria=(shared_val or n_val),
+                            has_metrics=(shared_has_m or n_has_m),
+                        )
+                    )
+
         node_insights = []
         for node in sorted(all_nodes):
             node_tests = []
@@ -267,114 +392,59 @@ class HtmlReportGenerator:
             node_failed_tests = set()
             node_passed_tests = set()
 
-            for tr in boh.test_results:
-                target_nodes = {t.node_name for t in tr.target_resources}
-                if node in target_nodes:
-                    canonical_name = plugin_manager.resolve_test_name(
-                        tr.test_name
-                    )
-                    plugin = plugin_manager.get_plugin(canonical_name)
-                    has_custom_filter = bool(
-                        plugin and hasattr(plugin, "_filter_validation_results")
-                    )
+            for entry in node_to_entries.get(node, ()):
+                canonical_name = entry.canonical_name
+                display_name = entry.display_name
+                eval_tr = entry.eval_tr
+                has_unmet_metric = entry.has_unmet_metric
+                if has_unmet_metric:
+                    node_has_unmet_threshold = True
+                    node_failed_tests.add(canonical_name.lower())
 
-                    eval_tr = tr
-                    if has_custom_filter:
-                        sorted_nodes = sorted(list(target_nodes))
-                        filtered_list = plugin._filter_validation_results(
-                            [tr], sorted_nodes
-                        )
-                        if filtered_list:
-                            eval_tr = filtered_list[0]
+                res_status = eval_tr.result_status
+                status_detail = ""
 
-                    display_name = (
-                        f"{canonical_name} ({tr.test_level})"
-                        if tr.test_level
-                        else canonical_name
-                    )
-
-                    if has_custom_filter:
-                        node_metrics = list(eval_tr.metrics)
+                if res_status == pb.RESULT_STATUS_TIMEOUT:
+                    status_str = "✕ TIMEOUT"
+                    is_met = False
+                    node_has_exec_error = True
+                elif res_status == pb.RESULT_STATUS_DEADLINE:
+                    status_str = "✕ DEADLINE"
+                    status_detail = incomplete_label(eval_tr)
+                    is_met = False
+                    node_has_exec_error = True
+                elif res_status == pb.RESULT_STATUS_CANCELLED:
+                    status_str = "✕ CANCELLED"
+                    is_met = False
+                    node_has_exec_error = True
+                elif has_unmet_metric:
+                    status_str = "✕ DID NOT MEET THRESHOLD"
+                    is_met = False
+                elif res_status == pb.RESULT_STATUS_FAILED:
+                    status_str = "✕ FAILED TO EXECUTE"
+                    is_met = False
+                    node_has_exec_error = True
+                else:
+                    if not entry.has_val_criteria and entry.has_metrics:
+                        status_str = "• EXECUTED (No thresholds set)"
+                        is_met = False
+                    elif entry.has_metrics:
+                        status_str = "✓ MET THRESHOLD"
+                        is_met = True
+                        node_passed_tests.add(canonical_name.lower())
                     else:
-                        node_metrics = []
-                        for m in eval_tr.metrics:
-                            ctx = m.metadata.fields.get("context")
-                            if ctx and ctx.string_value:
-                                ctx_str = ctx.string_value
-                                if any(
-                                    t_node in ctx_str for t_node in target_nodes
-                                ):
-                                    if node not in ctx_str:
-                                        continue
-                            node_metrics.append(m)
+                        status_str = "✕ MISSING METRICS"
+                        is_met = False
+                        node_has_missing_metrics = True
 
-                    has_unmet_metric = any(
-                        m.HasField("validation_criteria")
-                        and m.validation_criteria.result_status
-                        == pb.RESULT_STATUS_FAILED
-                        for m in node_metrics
-                    )
-                    if has_unmet_metric:
-                        node_has_unmet_threshold = True
-                        node_failed_tests.add(canonical_name.lower())
-
-                    res_status = eval_tr.result_status
-                    status_detail = ""
-
-                    if res_status == pb.RESULT_STATUS_TIMEOUT:
-                        status_str = "✕ TIMEOUT"
-                        is_met = False
-                        node_has_exec_error = True
-                    elif res_status == pb.RESULT_STATUS_DEADLINE:
-                        status_str = "✕ DEADLINE"
-                        status_detail = incomplete_label(eval_tr)
-                        is_met = False
-                        node_has_exec_error = True
-                    elif res_status == pb.RESULT_STATUS_CANCELLED:
-                        status_str = "✕ CANCELLED"
-                        is_met = False
-                        node_has_exec_error = True
-                    elif has_unmet_metric:
-                        status_str = "✕ DID NOT MEET THRESHOLD"
-                        is_met = False
-                    elif res_status == pb.RESULT_STATUS_FAILED:
-                        status_str = "✕ FAILED TO EXECUTE"
-                        is_met = False
-                        node_has_exec_error = True
-                    else:
-                        has_val_criteria = any(
-                            m.HasField("validation_criteria")
-                            and m.validation_criteria.name
-                            for m in node_metrics
-                        )
-                        has_metrics = any(
-                            not (
-                                m.key.endswith("Error Detected")
-                                or m.key.endswith("Failure Detected")
-                                or "Warning" in m.key
-                            )
-                            for m in node_metrics
-                        )
-                        if not has_val_criteria and has_metrics:
-                            status_str = "• EXECUTED (No thresholds set)"
-                            is_met = False
-                        elif has_metrics:
-                            status_str = "✓ MET THRESHOLD"
-                            is_met = True
-                            node_passed_tests.add(canonical_name.lower())
-                        else:
-                            status_str = "✕ MISSING METRICS"
-                            is_met = False
-                            node_has_missing_metrics = True
-
-                    node_tests.append(
-                        {
-                            "display_name": display_name,
-                            "status_str": status_str,
-                            "status_detail": status_detail,
-                            "is_met": is_met,
-                        }
-                    )
+                node_tests.append(
+                    {
+                        "display_name": display_name,
+                        "status_str": status_str,
+                        "status_detail": status_detail,
+                        "is_met": is_met,
+                    }
+                )
 
             validated_tier1_tests = set()
             for (

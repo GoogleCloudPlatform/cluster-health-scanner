@@ -1969,6 +1969,165 @@ class TestBOHGenerator(unittest.TestCase):
             by_node["inter-n1"].result_status, pb.RESULT_STATUS_UNKNOWN
         )
 
+    def test_generate_loads_run_data_once_across_many_experiments(self):
+        """generate() reads app_data.get_run once across all experiments."""
+        experiments = []
+        job_entries = {}
+        for i in range(10):
+            exp_name = f"exp_{i}"
+            exp_dir = f"/ws/experiments/{exp_name}"
+            job_entries[f"job-{i}"] = {
+                "status": "COMPLETED",
+                "experiment_dir": exp_dir,
+            }
+            experiments.append(
+                {
+                    "experiment_name": exp_name,
+                    "application_name": "dcgm",
+                    "RAMBLE_VARIABLES": {
+                        "experiment_run_dir": exp_dir,
+                        "node": f"node-{i}",
+                    },
+                    "CONTEXTS": [],
+                }
+            )
+        self._write_json(
+            {"workspace_name": "ws-many", "experiments": experiments}
+        )
+
+        generator = BOHGenerator(self.test_json_path)
+        with mock.patch.object(
+            generator.app_data,
+            "get_run",
+            return_value={
+                "node_to_instance_id": {
+                    f"node-{i}": f"id-{i}" for i in range(10)
+                },
+                "job_entries": job_entries,
+            },
+        ) as mock_get_run:
+            report = generator.generate()
+
+        mock_get_run.assert_called_once_with("ws-many")
+        self.assertEqual(len(report.test_results), 10)
+        self.assertEqual(
+            report.test_results[0].target_resources[0].instance_id, "id-0"
+        )
+
+    def test_split_test_result_per_node_exact_boundaries_and_complex_names(
+        self,
+    ):
+        """Per-node split isolates prefix-overlapping and dotted node names."""
+        self._write_json({"experiments": []})
+        generator = BOHGenerator(self.test_json_path)
+
+        tr = pb.TestResult(
+            test_name="tpu-hbm",
+            test_level="node",
+            result_status=pb.RESULT_STATUS_SUCCESS,
+        )
+        tr.metadata.fields["log_file"].string_value = "test.out"
+        for name in ("node-1", "node-10", "node-2.cluster.local"):
+            tr.target_resources.add(node_name=name, instance_id=f"inst-{name}")
+
+        # Explicit node metadata metric
+        m_node = tr.metrics.add(key="node_meta")
+        m_node.metadata.fields["node"].string_value = "node-1"
+
+        # Context-matched metrics (node-1 must not match node-10)
+        m_ctx1 = tr.metrics.add(key="ctx_1")
+        m_ctx1.metadata.fields["context"].string_value = "host:node-1,chip:0"
+        m_ctx10 = tr.metrics.add(key="ctx_10")
+        m_ctx10.metadata.fields["context"].string_value = "host:node-10,chip:0"
+        m_dotted = tr.metrics.add(key="ctx_dotted")
+        m_dotted.metadata.fields[
+            "context"
+        ].string_value = "host:node-2.cluster.local,chip:0"
+
+        # Shared metric (empty/null context)
+        m_shared = tr.metrics.add(key="shared")
+        m_shared.metadata.fields["context"].string_value = "null"
+
+        split = generator._split_test_result_per_node(tr)
+        by_node = {
+            r.target_resources[0].node_name: [m.key for m in r.metrics]
+            for r in split
+        }
+        self.assertEqual(by_node["node-1"], ["node_meta", "ctx_1", "shared"])
+        self.assertEqual(by_node["node-10"], ["ctx_10", "shared"])
+        self.assertEqual(
+            by_node["node-2.cluster.local"], ["ctx_dotted", "shared"]
+        )
+
+    def test_split_test_result_per_node_dotted_names_next_to_punctuation(
+        self,
+    ):
+        """Dotted names match when a '.' or punctuation borders them."""
+        self._write_json({"experiments": []})
+        generator = BOHGenerator(self.test_json_path)
+
+        tr = pb.TestResult(test_name="tpu-hbm", test_level="node")
+        for name in ("10.0.0.1", "10.0.0.2", "a.b"):
+            tr.target_resources.add(node_name=name)
+        contexts = {
+            "trailing_dot": "peer 10.0.0.1.",
+            "ip_in_path": "/hosts/10.0.0.2/log",
+            "inside_fqdn": "x.a.b,chip:0",
+            "prefix_only": "10.0.0.10",
+            "glued_letter": "xa.b",
+        }
+        for key, ctx in contexts.items():
+            tr.metrics.add(key=key).metadata.fields[
+                "context"
+            ].string_value = ctx
+
+        by_node = {
+            r.target_resources[0].node_name: [m.key for m in r.metrics]
+            for r in generator._split_test_result_per_node(tr)
+        }
+        self.assertEqual(by_node["10.0.0.1"], ["trailing_dot"])
+        self.assertEqual(by_node["10.0.0.2"], ["ip_in_path"])
+        self.assertEqual(by_node["a.b"], ["inside_fqdn"])
+
+    def test_generate_tolerates_job_entry_without_experiment_dir(self):
+        """A job entry whose experiment_dir is None does not break matching."""
+        self._write_json(
+            {
+                "workspace_name": "ws-none-dir",
+                "experiments": [
+                    {
+                        "experiment_name": "exp_a",
+                        "application_name": "dcgm",
+                        "RAMBLE_VARIABLES": {
+                            "experiment_run_dir": "/ws/exp_a",
+                            "node": "node-a",
+                        },
+                        "CONTEXTS": [],
+                    }
+                ],
+            }
+        )
+        generator = BOHGenerator(self.test_json_path)
+        with mock.patch.object(
+            generator.app_data,
+            "get_run",
+            return_value={
+                "job_entries": {
+                    "job-none": {"status": "COMPLETED", "experiment_dir": None},
+                    "job-a": {
+                        "status": "TIMEOUT",
+                        "experiment_dir": "/ws/exp_a",
+                    },
+                }
+            },
+        ):
+            report = generator.generate()
+
+        self.assertEqual(len(report.test_results), 1)
+        self.assertEqual(
+            report.test_results[0].result_status, pb.RESULT_STATUS_TIMEOUT
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

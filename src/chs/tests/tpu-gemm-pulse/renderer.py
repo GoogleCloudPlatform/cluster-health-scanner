@@ -66,6 +66,7 @@ class TpuGemmPulseRenderer(DefaultRenderer):
             return None
 
         parsed_map: dict[str, list[TpuGemmPulseParsedResult]] = {}
+        parsed_by_key: dict[tuple[str, str], TpuGemmPulseParsedResult] = {}
 
         for res in test_results:
             for m in res.metrics:
@@ -99,15 +100,14 @@ class TpuGemmPulseRenderer(DefaultRenderer):
                 resolved_param = sweep_param
 
                 entries = parsed_map.setdefault(resolved_param, [])
-                parsed = next(
-                    (p for p in entries if p.nodes == resolved_node), None
-                )
+                parsed = parsed_by_key.get((resolved_param, resolved_node))
                 if parsed is None:
                     parsed = TpuGemmPulseParsedResult(
                         nodes=resolved_node,
                         sweep_param=resolved_param,
                     )
                     entries.append(parsed)
+                    parsed_by_key[(resolved_param, resolved_node)] = parsed
 
                 num_val = (
                     m.value.number_value

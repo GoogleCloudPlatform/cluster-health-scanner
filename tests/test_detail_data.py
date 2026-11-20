@@ -150,6 +150,76 @@ def test_tpu_gemm_pulse_renderer_get_detail_data():
     assert report.tables[0].rows[0]["throughput"] == "1006.18"
 
 
+def _add_gemm_metric(
+    res: pb.TestResult, key: str, value: float, node: str, sweep: str
+) -> None:
+    m = res.metrics.add(key=key)
+    m.value.number_value = value
+    m.metadata.fields["node"].string_value = node
+    m.metadata.fields["sweep_param"].string_value = sweep
+
+
+def test_tpu_gemm_renderer_merges_metrics_per_node_and_sweep():
+    """Metrics for one (sweep, node) share a row across results, in order."""
+    nodes = [f"node-{i}" for i in range(3)]
+    results = []
+    for node in nodes:
+        res = pb.TestResult(test_name="tpu-gemm", test_level="check")
+        res.target_resources.add(node_name=node)
+        for sweep in ("4096", "8192"):
+            _add_gemm_metric(res, "Throughput", 100.0, node, sweep)
+        results.append(res)
+    # A later result for node-1 / 4096 updates the existing row.
+    late = pb.TestResult(test_name="tpu-gemm", test_level="check")
+    _add_gemm_metric(late, "MFU", 55.0, "node-1", "4096")
+    results.append(late)
+
+    rows = TpuGemmRenderer().get_detail_data(results).tables[0].rows
+
+    # Rows are grouped by sweep (sorted), nodes in first-seen order, and the
+    # sweep label is only printed on the first row of each group.
+    assert [(r["sweep_param"], r["nodes"]) for r in rows] == [
+        ("4096", "node-0"),
+        ("", "node-1"),
+        ("", "node-2"),
+        ("8192", "node-0"),
+        ("", "node-1"),
+        ("", "node-2"),
+    ]
+    assert rows[1]["throughput"] == "100.00"
+    assert rows[1]["mfu"] == "55.0%"
+    assert rows[4]["mfu"] == "N/A"
+
+
+def test_tpu_gemm_pulse_renderer_merges_metrics_per_node_and_sweep():
+    """Metrics for one (sweep, node) share a row across results, in order."""
+    nodes = [f"node-{i}" for i in range(3)]
+    results = []
+    for node in nodes:
+        res = pb.TestResult(test_name="tpu-gemm-pulse", test_level="check")
+        res.target_resources.add(node_name=node)
+        for sweep in ("4096", "8192"):
+            _add_gemm_metric(res, "Throughput", 100.0, node, sweep)
+        results.append(res)
+    late = pb.TestResult(test_name="tpu-gemm-pulse", test_level="check")
+    _add_gemm_metric(late, "Slowdown Ratio", 1.25, "node-1", "4096")
+    results.append(late)
+
+    rows = TpuGemmPulseRenderer().get_detail_data(results).tables[0].rows
+
+    assert [(r["sweep_param"], r["nodes"]) for r in rows] == [
+        ("4096", "node-0"),
+        ("", "node-1"),
+        ("", "node-2"),
+        ("8192", "node-0"),
+        ("", "node-1"),
+        ("", "node-2"),
+    ]
+    assert rows[1]["throughput"] == "100.00"
+    assert rows[1]["slowdown_ratio"] == "1.25"
+    assert rows[4]["slowdown_ratio"] == "N/A"
+
+
 def test_tpu_hbm_renderer_get_detail_data():
     renderer = TpuHbmRenderer()
     assert renderer.get_detail_data([]) is None

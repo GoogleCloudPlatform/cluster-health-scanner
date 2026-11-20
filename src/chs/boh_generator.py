@@ -35,6 +35,78 @@ from chs.version import get_version
 
 logger = logging.getLogger(__name__)
 
+_NODE_NAME_RE = re.compile(r"[a-zA-Z0-9_-]+")
+_DOTTED_NODE_NAME_RE = re.compile(r"[a-zA-Z0-9_.-]+")
+
+
+def _dot_segment_spans(token: str) -> set[str]:
+    """Returns every run of whole dot-separated segments in token.
+
+    "x.a.b." yields "x", "a", "b", "x.a", "a.b", "x.a.b" (and spans with
+    the empty trailing segment), so a dotted node name matches wherever a
+    "." or a non-name character borders it, as with the per-node regex.
+    """
+    parts = token.split(".")
+    return {
+        ".".join(parts[i:j])
+        for i in range(len(parts))
+        for j in range(i + 1, len(parts) + 1)
+    }
+
+
+class NodeContextMatcher:
+    """Boundary-safe O(tokens) matcher for finding target node names in text.
+
+    A name matches when no letter, digit, "_" or "-" touches either end.
+    """
+
+    def __init__(self, target_names: set[str]):
+        self._simple_targets = {
+            name for name in target_names if _NODE_NAME_RE.fullmatch(name)
+        }
+        self._dotted_targets = {
+            name
+            for name in target_names
+            if name not in self._simple_targets
+            and _DOTTED_NODE_NAME_RE.fullmatch(name)
+        }
+        self._complex_targets = [
+            (
+                name,
+                re.compile(
+                    r"(?<![a-zA-Z0-9_-])"
+                    + re.escape(name)
+                    + r"(?![a-zA-Z0-9_-])"
+                ),
+            )
+            for name in target_names
+            if name not in self._simple_targets
+            and name not in self._dotted_targets
+        ]
+        self._cache: dict[str, tuple[str, ...]] = {}
+
+    def match(self, ctx: str) -> tuple[str, ...]:
+        """Returns target node names appearing as whole tokens in ctx."""
+        matched = self._cache.get(ctx)
+        if matched is not None:
+            return matched
+
+        found: list[str] = []
+        if self._simple_targets:
+            tokens = set(_NODE_NAME_RE.findall(ctx))
+            found.extend(tokens & self._simple_targets)
+        if self._dotted_targets:
+            spans = set()
+            for token in _DOTTED_NODE_NAME_RE.findall(ctx):
+                spans |= _dot_segment_spans(token)
+            found.extend(spans & self._dotted_targets)
+        for name, pat in self._complex_targets:
+            if pat.search(ctx):
+                found.append(name)
+        matched = tuple(found)
+        self._cache[ctx] = matched
+        return matched
+
 
 class BOHGenerator:
     """Generates Bill of Health from Ramble JSON results."""
@@ -175,43 +247,53 @@ class BOHGenerator:
     def _split_test_result_per_node(
         self, test_result: pb.TestResult
     ) -> list[pb.TestResult]:
-        split_results = []
-        for target in test_result.target_resources:
-            node_result = pb.TestResult()
-            node_result.CopyFrom(test_result)
+        targets = list(test_result.target_resources)
+        if not targets:
+            return []
 
-            node_result.ClearField("target_resources")
+        template = pb.TestResult()
+        template.CopyFrom(test_result)
+        template.ClearField("target_resources")
+        template.ClearField("metrics")
+
+        target_names = {t.node_name.strip() for t in targets}
+        matcher = NodeContextMatcher(target_names)
+        metrics_by_node: dict[str, list[pb.Metric]] = {
+            name: [] for name in target_names
+        }
+
+        for metric in test_result.metrics:
+            fields = metric.metadata.fields
+            if "node" in fields:
+                metric_node = fields["node"].string_value.strip()
+                bucket = metrics_by_node.get(metric_node)
+                if bucket is not None:
+                    bucket.append(metric)
+                continue
+
+            ctx = (
+                fields["context"].string_value.strip()
+                if "context" in fields
+                else ""
+            )
+            if not ctx or ctx == "null":
+                for bucket in metrics_by_node.values():
+                    bucket.append(metric)
+                continue
+
+            for name in matcher.match(ctx):
+                metrics_by_node[name].append(metric)
+
+        split_results = []
+        for target in targets:
+            node_result = pb.TestResult()
+            node_result.CopyFrom(template)
             node_result.target_resources.add(
                 node_name=target.node_name, instance_id=target.instance_id
             )
-
-            node_metrics = []
-            target_name = target.node_name.strip()
-            pattern = (
-                r"(?<![a-zA-Z0-9_-])"
-                + re.escape(target_name)
-                + r"(?![a-zA-Z0-9_-])"
+            node_result.metrics.extend(
+                metrics_by_node[target.node_name.strip()]
             )
-
-            for metric in node_result.metrics:
-                ctx = ""
-                if "context" in metric.metadata.fields:
-                    ctx = metric.metadata.fields["context"].string_value.strip()
-
-                if "node" in metric.metadata.fields:
-                    metric_node = metric.metadata.fields[
-                        "node"
-                    ].string_value.strip()
-                    if metric_node == target_name:
-                        node_metrics.append(metric)
-                elif not ctx or ctx == "null":
-                    node_metrics.append(metric)
-                elif re.search(pattern, ctx):
-                    node_metrics.append(metric)
-
-            node_result.ClearField("metrics")
-            node_result.metrics.extend(node_metrics)
-
             split_results.append(node_result)
         return split_results
 
@@ -474,10 +556,9 @@ class BOHGenerator:
 
         return pb.RESULT_STATUS_UNKNOWN
 
-    def _add_system_info_from_app_data(self) -> None:
-        """Adds system information to the report from ChsAppData."""
+    def _add_system_info_from_app_data(self, run_data: dict[str, Any]) -> None:
+        """Adds system information to the report from the run entry."""
         try:
-            run_data = self.app_data.get_run(self.report.report_id)
             if run_data:
                 command_statement = run_data.get("command_statement", "")
                 if command_statement:
@@ -527,15 +608,22 @@ class BOHGenerator:
         if self.skip_validation:
             self.report.metadata.fields["skip_validation"].bool_value = True
 
-        self._add_system_info_from_app_data()
-
         run_data = self.app_data.get_run(self.report.report_id) or {}
+        self._add_system_info_from_app_data(run_data)
+
+        node_mapping = run_data.get("node_to_instance_id", {})
         job_entries = run_data.get("job_entries", {})
         executed_exp_dirs = {
             job.get("experiment_dir")
             for job in job_entries.values()
             if job.get("experiment_dir")
         }
+        # First job entry per experiment directory name.
+        job_entry_by_exp_name: dict[str, dict[str, Any]] = {}
+        for entry in job_entries.values():
+            job_entry_by_exp_name.setdefault(
+                os.path.basename(entry.get("experiment_dir") or ""), entry
+            )
 
         for exp in data.get("experiments", []):
             exp_name = exp.get("experiment_name", "")
@@ -563,7 +651,6 @@ class BOHGenerator:
 
             if desc:
                 test_result.metadata.fields["description"].string_value = desc
-            metrics_map = {}
 
             tags = exp.get("TAGS", [])
             if tags:
@@ -587,9 +674,6 @@ class BOHGenerator:
                 test_result.metadata.fields[
                     "gcs_log_file"
                 ].string_value = gcs_path
-
-            run_data = self.app_data.get_run(self.report.report_id) or {}
-            node_mapping = run_data.get("node_to_instance_id", {})
 
             node = ramble_vars.get("node")
             if node:
@@ -639,19 +723,7 @@ class BOHGenerator:
 
                     test_result.metrics.extend(metrics)
 
-            for metric in test_result.metrics:
-                metrics_map[metric.key] = metric
-
-            job_entries = run_data.get("job_entries", {})
-            matching_entry = next(
-                (
-                    entry
-                    for entry in job_entries.values()
-                    if os.path.basename(entry.get("experiment_dir", ""))
-                    == exp_name
-                ),
-                {},
-            )
+            matching_entry = job_entry_by_exp_name.get(exp_name, {})
             job_status = matching_entry.get("status", "UNKNOWN").upper()
             machine_type = ramble_vars.get("machine_type", "default")
             incomplete = job_status in lifecycle.TIME_EXCEEDED_PB_STATUSES
