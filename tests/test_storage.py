@@ -124,21 +124,12 @@ class TestPathStorageProvider(unittest.TestCase):
 
     def test_validate_cleanup_on_write_failure(self):
         """Test validate cleans up created directories if write test fails."""
-        # Create a directory path that we cannot write to (simulated by making a
-        # parent read-only)
         parent_dir = os.path.join(self.temp_dir.name, "readonly_parent")
         os.makedirs(parent_dir)
 
         target_path = os.path.join(parent_dir, "new_dir", "results")
         provider = PathStorageProvider({"path": target_path})
 
-        # Make parent read-only before validation attempt
-        # Wait, if we make parent read-only, directory creation might fail.
-        # We want to test case where directory creation succeeds but write
-        # fails.
-        # This is harder to simulate portably without permission tricks.
-        # Alternative: Mock mkdir to succeed but mock NamedTemporaryFile to
-        # fail.
         with mock.patch("tempfile.NamedTemporaryFile") as mock_tempfile:
             mock_tempfile.side_effect = OSError("No space left on device")
 
@@ -158,7 +149,6 @@ class TestPathStorageProvider(unittest.TestCase):
         with open(src_file, "w") as f:
             f.write("hello")
 
-        # Upload
         self.provider.upload_file(src_file, "bills_of_health/run1.json")
         dest_file = os.path.join(
             self.target_path, "bills_of_health", "run1.json"
@@ -167,7 +157,6 @@ class TestPathStorageProvider(unittest.TestCase):
         with open(dest_file, "r") as f:
             self.assertEqual(f.read(), "hello")
 
-        # Download
         download_dest = os.path.join(self.temp_dir.name, "downloaded.txt")
         self.provider.download_file("bills_of_health/run1.json", download_dest)
         self.assertTrue(os.path.exists(download_dest))
@@ -309,15 +298,12 @@ class TestGcsStorageProvider(unittest.TestCase):
             "gs://my-bucket/sub/path/bills_of_health/run1.json",
         )
 
-        # Upload
         provider.upload_file("/tmp/local.txt", "remote/path.txt")
         mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
 
-        # Download
         provider.download_file("remote/path.txt", "/tmp/local.txt")
         mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")
 
-        # Exists
         mock_blob.exists.return_value = True
         self.assertTrue(provider.exists("remote/path.txt"))
         mock_bucket.blob.assert_called_with("sub/path/remote/path.txt")

@@ -17,6 +17,7 @@ platforms:
 - a3-ultragpu-8g
 - a4-highgpu-8g
 - a3-megagpu-8g
+- a3-highgpu-8g
 - a4x-highgpu-4g
 - a4x-maxgpu-4g-metal
 - a5x-highgpu-4g-metal
@@ -40,12 +41,22 @@ defaults:
       container_name: hpc-benchmarks:25.09
       container_uri: docker://nvcr.io#nvidia/hpc-benchmarks:25.09
       srun_args: -l --container-workdir /workspace --container-image {container_path} --container-writable --wait=60
+  standalone:
+    modifiers:
+    - name: gpu-persistence-mode
+    variables:
+      app_workdir: /workspace
+      container_image: nvcr.io/nvidia/hpc-benchmarks:25.09
+      mpi_command: mpirun --allow-run-as-root -n {n_ranks} --tag-output bash -c 'export CUDA_VISIBLE_DEVICES=$OMPI_COMM_WORLD_LOCAL_RANK; exec "$@"' --
 machines:
   a4-highgpu-8g:
     slurm:
       variables:
         n_elements: '2040000000'
   a3-megagpu-8g:
+    variables:
+      n_elements: '300653184'
+  a3-highgpu-8g:
     variables:
       n_elements: '300653184'
   a4x-highgpu-4g:
@@ -57,6 +68,9 @@ machines:
     kubernetes:
       variables:
         container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+    standalone:
+      variables:
+        container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
     slurm:
       variables:
         container_name: hpc-benchmarks:26.02
@@ -65,5 +79,8 @@ machines:
     variables:
       n_elements: '2800000000'
     kubernetes:
+      variables:
+        container_image: nvcr.io/nvidia/hpc-benchmarks:26.02
+    standalone:
       variables:
         container_image: nvcr.io/nvidia/hpc-benchmarks:26.02

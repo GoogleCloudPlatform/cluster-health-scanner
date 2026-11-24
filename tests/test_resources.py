@@ -48,9 +48,20 @@ class TestResources(unittest.TestCase):
         self.assertFalse(is_tpu("a3-megagpu-8g"))
         self.assertFalse(is_tpu("a4x-highgpu-4g"))
         self.assertFalse(is_tpu("a5x-highgpu-4g-metal"))
+        self.assertFalse(is_tpu("a3-highgpu-8g"))
         self.assertFalse(is_tpu("unknown"))
         self.assertFalse(is_tpu(""))
         self.assertFalse(is_tpu(None))
+
+    def test_a3_high_resource(self):
+        from chs.resources import is_gpu, MACHINE_TYPE_RESOURCE_MAP
+
+        self.assertIn("a3-highgpu-8g", MACHINE_TYPE_RESOURCE_MAP)
+        self.assertEqual(
+            MACHINE_TYPE_RESOURCE_MAP["a3-highgpu-8g"]["accelerators"],
+            8,
+        )
+        self.assertTrue(is_gpu("a3-highgpu-8g"))
 
     def test_a5x_resource(self):
         from chs.resources import is_gpu, MACHINE_TYPE_RESOURCE_MAP

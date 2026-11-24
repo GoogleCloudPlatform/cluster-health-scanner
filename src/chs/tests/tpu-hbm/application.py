@@ -70,7 +70,7 @@ class TpuHbm(ExecutableApplication):
 
     figure_of_merit_context(
         "node_params",
-        regex=r"HOST (?P<node>\S+) \((?P<dtype>\w+)\): Running \[\d+/\d+\] hbm \(\w+_dim_(?P<num_elements>\d+)_dev_\d+\)",
+        regex=r"HOST (?P<node>\S+) \((?P<dtype>\w+)\): Running \[\d+/\d+\] hbm \(\w+_dim_(?P<num_elements>\d+)_(?:scope_\w+_idx_\d+|dev_\d+)\)",
         output_format="{node},{num_elements},{dtype}",
     )
 

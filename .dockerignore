@@ -17,12 +17,13 @@ lib/
 tests/
 docs/
 scratch/
-examples/
 .agents/
 .gemini/
 
-# Development & build tooling configs
+# Development & build tooling (not part of the image)
+bin/
 cloudbuild.yaml
+cloudbuild-integration.yaml
 pytest.ini
 .pre-commit-config.yaml
 .coverage

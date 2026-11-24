@@ -29,8 +29,8 @@ PLATFORMS_DIR = pathlib.Path(chs_config.PLATFORMS_ROOT)
 TESTS_DIR = pathlib.Path(chs_config.TESTS_ROOT)
 
 SCHEDULER_ONLY_MODIFIERS = {
-    "gpu-persistence-mode": "kubernetes",
-    "pyxis-enroot": "slurm",
+    "gpu-persistence-mode": {"kubernetes", "standalone"},
+    "pyxis-enroot": {"slurm"},
 }
 
 SCHEDULERS = set(chs_config.SCHEDULERS)
@@ -165,14 +165,49 @@ class ResolveShippedFilesTest(unittest.TestCase):
                         test_name, machine, scheduler, domain_type
                     )
 
-    def test_standalone_tests_run_natively_without_an_image(self):
+    def test_standalone_container_tests_get_an_image(self):
         for test_name, machine, scheduler in _supported_combinations():
             if scheduler != "standalone":
                 continue
             resolved = chs_config.resolve_test(test_name, machine, scheduler)
             with self.subTest(test=test_name, machine=machine):
-                self.assertEqual(resolved["variables"].get("runtime"), "tpu")
-                self.assertIsNone(resolved["variables"].get("container_image"))
+                if resolved["variables"].get("runtime") == "tpu":
+                    self.assertIsNone(
+                        resolved["variables"].get("container_image")
+                    )
+                else:
+                    self.assertTrue(
+                        resolved["variables"].get("container_image")
+                    )
+
+    def test_standalone_containers_match_their_kubernetes_pods(self):
+        """Standalone repeats the K8s pod's image, workdir and MPI command."""
+        combinations = set(_supported_combinations())
+        for test_name, machine, scheduler in combinations:
+            if scheduler != "standalone":
+                continue
+            standalone = chs_config.resolve_test(test_name, machine, scheduler)
+            if standalone["variables"].get("runtime") == "tpu":
+                continue
+            with self.subTest(test=test_name, machine=machine):
+                self.assertEqual(
+                    standalone["variables"].get("privileged"), "true"
+                )
+                self.assertIn((test_name, machine, "kubernetes"), combinations)
+                k8s = chs_config.resolve_test(test_name, machine, "kubernetes")
+                k8s_modifiers = {m["name"] for m in k8s["modifiers"]}
+                if "gpu-persistence-mode" in k8s_modifiers:
+                    self.assertIn(
+                        "gpu-persistence-mode",
+                        {m["name"] for m in standalone["modifiers"]},
+                    )
+                for key in ("container_image", "app_workdir", "mpi_command"):
+                    # Unset and '' both leave the scheduler template's ''.
+                    self.assertEqual(
+                        standalone["variables"].get(key) or "",
+                        k8s["variables"].get(key) or "",
+                        key,
+                    )
 
     def test_standalone_gets_no_tpu_env_modifier(self):
         """The native runner sets a standalone test's TPU environment."""
@@ -210,7 +245,7 @@ class ResolveShippedFilesTest(unittest.TestCase):
                 test=test_name, machine=machine, scheduler=scheduler
             ):
                 for name, only_on in SCHEDULER_ONLY_MODIFIERS.items():
-                    if scheduler != only_on:
+                    if scheduler not in only_on:
                         self.assertNotIn(name, names)
 
     def test_a4x_nccl_tests_get_a_compute_domain(self):

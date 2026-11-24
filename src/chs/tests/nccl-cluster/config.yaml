@@ -13,14 +13,25 @@
 # limitations under the License.
 
 
+# Cluster schedulers only: the test spans VMs; standalone tests one VM.
 platforms:
-- a3-ultragpu-8g
-- a4-highgpu-8g
-- a3-megagpu-8g
-- a4x-highgpu-4g
+- a3-ultragpu-8g:
+  - kubernetes
+  - slurm
+- a4-highgpu-8g:
+  - kubernetes
+  - slurm
+- a3-megagpu-8g:
+  - kubernetes
+  - slurm
+- a3-highgpu-8g
+- a4x-highgpu-4g:
+  - kubernetes
+  - slurm
 - a4x-maxgpu-4g-metal:
   - kubernetes
-- a5x-highgpu-4g-metal
+- a5x-highgpu-4g-metal:
+  - kubernetes
 defaults:
   env_vars:
     set:
@@ -148,6 +159,60 @@ machines:
         nccl_tests_build_dir: '{workspace_shared}/nccl-tests-{nccl_tests_ref}'
         nccl-tests_path: '{nccl_tests_build_dir}/build'
         srun_args: --mpi=pmi2 --export=ALL --container-workdir {nccl-tests_path} --container-image {container_path} --container-mounts "/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/var/lib/tcpxo/lib64/" --container-writable --wait=60
+  a3-highgpu-8g:
+    kubernetes:
+      env_vars:
+        set:
+          CUDA_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+          LD_LIBRARY_PATH: /usr/local/nvidia/lib64
+          NCCL_ALGO: Ring
+          NCCL_BUFFSIZE: "4194304"
+          NCCL_CROSS_NIC: "0"
+          NCCL_DYNAMIC_CHUNK_SIZE: "524288"
+          NCCL_GPUDIRECTTCPX_CTRL_DEV: eth0
+          NCCL_GPUDIRECTTCPX_PROGRAM_FLOW_STEERING_WAIT_MICROS: "500000"
+          NCCL_GPUDIRECTTCPX_RX_BINDINGS: "eth1:22-35,126-139;eth2:22-35,126-139;eth3:74-87,178-191;eth4:74-87,178-191"
+          NCCL_GPUDIRECTTCPX_SOCKET_IFNAME: eth1,eth2,eth3,eth4
+          NCCL_GPUDIRECTTCPX_TX_BINDINGS: "eth1:8-21,112-125;eth2:8-21,112-125;eth3:60-73,164-177;eth4:60-73,164-177"
+          NCCL_GPUDIRECTTCPX_UNIX_CLIENT_PREFIX: /run/tcpx
+          NCCL_NET_GDR_LEVEL: PIX
+          NCCL_NSOCKS_PERTHREAD: "4"
+          NCCL_P2P_NET_CHUNKSIZE: "524288"
+          NCCL_P2P_NVL_CHUNKSIZE: "1048576"
+          NCCL_P2P_PCI_CHUNKSIZE: "524288"
+          NCCL_P2P_PXN_LEVEL: "0"
+          NCCL_PROTO: Simple
+          NCCL_SOCKET_IFNAME: eth0
+          NCCL_SOCKET_NTHREADS: "1"
+      variables:
+        container_image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/nccl-plugin-gpudirecttcpx-dev:v3.1.9
+        init_containers_yaml: |
+          - name: tcpx-daemon
+            image: us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpx/tcpgpudmarxd-dev:v2.0.12
+            imagePullPolicy: Always
+            restartPolicy: Always
+            command: ["/tcpgpudmarxd/build/app/tcpgpudmarxd"]
+            args:
+              - "--gpu_nic_preset"
+              - "a3vm"
+              - "--gpu_shmem_type"
+              - "fd"
+              - "--uds_path"
+              - "/run/tcpx"
+              - "--setup_param"
+              - "--verbose 128 2 0"
+            securityContext:
+              privileged: true
+              capabilities:
+                add:
+                  - NET_ADMIN
+            volumeMounts:
+              - name: nvidia
+                mountPath: /usr/local/nvidia/lib64
+              - name: tcpx-socket
+                mountPath: /run/tcpx
+        nccl-tests_path: /third_party/nccl-tests-mpi/build
+        ssh_port: 222
   a4x-highgpu-4g:
     env_vars:
       set:

@@ -6,21 +6,22 @@ Run `chs list machine-types` to view supported machine types in the terminal, an
 
 ### TPU
 
-| Machine type | Accelerator | Kubernetes | Slurm | Standalone (TPU VM) |
+| Machine type | Accelerator | Kubernetes | Slurm | Standalone |
 | --- | --- | --- | --- | --- |
 | `ct6e-standard-4t` | TPU v6e (Trillium) | Yes | No | Yes |
 | `tpu7x-standard-4t` | TPU7x (Ironwood) | Yes | No | Yes |
 
 ### GPU
 
-| Machine type | Accelerator | Kubernetes | Slurm |
-| --- | --- | --- | --- |
-| `a3-megagpu-8g` | NVIDIA H100 80GB | Yes | Yes |
-| `a3-ultragpu-8g` | NVIDIA H200 141GB | Yes | Yes |
-| `a4-highgpu-8g` | NVIDIA B200 | Yes | Yes |
-| `a4x-highgpu-4g` | NVIDIA GB200 NVL72 | Yes | Yes |
-| `a4x-maxgpu-4g-metal` | NVIDIA GB300 NVL72 | Yes | Yes |
-| `a5x-highgpu-4g-metal` | NVIDIA Vera Rubin NVL72 | Yes | No |
+| Machine type | Accelerator | Kubernetes | Slurm | Standalone |
+| --- | --- | --- | --- | --- |
+| `a3-highgpu-8g` | NVIDIA H100 80GB | Yes | No | No |
+| `a3-megagpu-8g` | NVIDIA H100 80GB | Yes | Yes | Yes |
+| `a3-ultragpu-8g` | NVIDIA H200 141GB | Yes | Yes | Yes |
+| `a4-highgpu-8g` | NVIDIA B200 | Yes | Yes | Yes |
+| `a4x-highgpu-4g` | NVIDIA GB200 NVL72 | Yes | Yes | Yes |
+| `a4x-maxgpu-4g-metal` | NVIDIA GB300 NVL72 | Yes | Yes | Yes |
+| `a5x-highgpu-4g-metal` | NVIDIA Vera Rubin NVL72 | Yes | No | Yes |
 
 All nodes targeted by a single `chs run` invocation must share the same
 accelerator (machine type). CHS determines it automatically from the targeted
@@ -35,6 +36,7 @@ Pass/fail thresholds are defined per machine type in each test's
 
 - [`tpu-info`](../tests/tpu-info/thresholds.yaml)
 - [`tpu-gemm`](../tests/tpu-gemm/thresholds.yaml)
+- [`tpu-gemm-pulse`](../tests/tpu-gemm-pulse/thresholds.yaml)
 - [`tpu-hbm`](../tests/tpu-hbm/thresholds.yaml)
 - [`tpu-host-device`](../tests/tpu-host-device/thresholds.yaml)
 - [`tpu-collectives`](../tests/tpu-collectives/thresholds.yaml)

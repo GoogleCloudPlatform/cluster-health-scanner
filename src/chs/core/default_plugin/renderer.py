@@ -24,11 +24,6 @@ from rich.markup import escape
 class DefaultRenderer:
     """Default visualization logic using Rich."""
 
-    @staticmethod
-    def _has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
-        """Checks if test results contain any validation criteria."""
-        return validation_renderer.has_validation_criteria(test_results)
-
     def render_raw_metrics(
         self, test_results: list[pb.TestResult]
     ) -> RenderableType:

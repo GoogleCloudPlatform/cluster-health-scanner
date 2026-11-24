@@ -26,16 +26,24 @@ from ramble.wmkit import *
 from ramble.experiment_result import ExperimentStatus
 
 from chs.constants import (
+    CHS_NAMESPACE,
     COMPONENT_LABEL,
+    DRA_API_GROUP,
+    DRA_API_VERSION,
+    GPU_CLAIM_NAME,
+    GPU_CLAIM_TEMPLATE_SUFFIX,
     INSTANCE_LABEL,
     MANAGED_BY_CHS,
     MANAGED_BY_LABEL,
+    NVIDIA_GPU_DEVICE_CLASS,
+    NVIDIA_GPU_RESOURCE,
     WORKER_COMPONENT,
 )
 
 _POD_SPEC_INDENT = 6
 _CONTAINER_INDENT = 8
 _CONTAINER_FIELD_INDENT = 10
+_GPU_RESOURCE = NVIDIA_GPU_RESOURCE
 
 _DNS_WAIT_TIMEOUT_SECONDS = 300
 
@@ -200,6 +208,13 @@ class KubernetesJob(WorkflowManagerBase):
     )
 
     workflow_manager_variable(
+        name="use_gpu_dra",
+        default="false",
+        description="Whether to allocate GPUs through DRA instead of "
+        "the device plugin",
+    )
+
+    workflow_manager_variable(
         name="pod_resource_claims_yaml",
         default="",
         description="Raw YAML for Pod spec.template.spec.resourceClaims",
@@ -276,6 +291,164 @@ class KubernetesJob(WorkflowManagerBase):
             print(f"Warning: Failed to generate SSH keys: {e}")
 
         return priv_key, pub_key
+
+    @staticmethod
+    def _merge_container_resources(*resource_maps):
+        """Merges container resources maps, concatenating their claims.
+
+        Claims are deduplicated by name, keeping the first occurrence, since
+        Kubernetes rejects containers that reference a claim twice.
+        """
+        merged = {}
+        for resource_map in resource_maps:
+            for key, value in (resource_map or {}).items():
+                if key == "claims":
+                    claims = merged.setdefault("claims", [])
+                    names = {c.get("name") for c in claims}
+                    for claim in value or []:
+                        if claim.get("name") not in names:
+                            claims.append(claim)
+                            names.add(claim.get("name"))
+                elif isinstance(value, dict):
+                    merged.setdefault(key, {}).update(value)
+                else:
+                    merged[key] = value
+        return merged
+
+    def _standard_sections(self, raw_job_name, sanitized_job_name, run_labels):
+        """Returns the container resources, pod claims and custom resources."""
+        expander = self.app_inst.expander
+        base_cr = self._yaml_append(
+            "container_resources_yaml", _CONTAINER_FIELD_INDENT
+        )
+        extra_cr = self._yaml_append(
+            "extra_container_resources_yaml", _CONTAINER_FIELD_INDENT
+        )
+        all_cr = "\n".join(s for s in [base_cr, extra_cr] if s)
+        c_res = (
+            f"{' ' * _CONTAINER_INDENT}resources:\n{all_cr}" if all_cr else ""
+        )
+        custom_res = self._labeled_custom_resources(
+            expander.expand_var_name("custom_resources_yaml").replace(
+                raw_job_name, sanitized_job_name
+            ),
+            run_labels,
+        )
+        pod_claims = self._yaml_block(
+            "pod_resource_claims_yaml", "resourceClaims", _POD_SPEC_INDENT
+        ).replace(raw_job_name, sanitized_job_name)
+        return c_res, pod_claims, custom_res
+
+    def _gpu_dra_sections(self, raw_job_name, sanitized_job_name, run_labels):
+        """Returns the sections that request the GPUs through DRA.
+
+        The container's nvidia.com/gpu request is replaced by a claim on a
+        ResourceClaimTemplate for the same number of NVIDIA GPUs. Other
+        claims, e.g. the IMEX channel of a ComputeDomain, are kept. Jobs that
+        do not request nvidia.com/gpu, e.g. the root experiment, get the
+        standard sections, exactly as with the device plugin.
+
+        Returns:
+          The container resources, pod resourceClaims and custom resources
+          sections.
+
+        Raises:
+          ValueError: If nvidia.com/gpu is requested with a non-positive count.
+        """
+        expander = self.app_inst.expander
+
+        def load(var_name):
+            value = expander.expand_var_name(var_name)
+            if not value or not value.strip():
+                return None
+            return yaml.safe_load(
+                value.replace(raw_job_name, sanitized_job_name)
+            )
+
+        resources = self._merge_container_resources(
+            load("container_resources_yaml"),
+            load("extra_container_resources_yaml"),
+        )
+        gpu_counts = []
+        for section in ("limits", "requests"):
+            quantities = resources.get(section)
+            if not isinstance(quantities, dict):
+                continue
+            if _GPU_RESOURCE in quantities:
+                gpu_counts.append(int(quantities.pop(_GPU_RESOURCE)))
+            if not quantities:
+                del resources[section]
+        if not gpu_counts:
+            return self._standard_sections(
+                raw_job_name, sanitized_job_name, run_labels
+            )
+        gpu_count = max(gpu_counts)
+        if gpu_count <= 0:
+            raise ValueError(
+                f"Cannot request GPUs through DRA for Job "
+                f"'{sanitized_job_name}': GPU count must be positive, "
+                f"got {gpu_count}."
+            )
+
+        template_name = f"{sanitized_job_name}{GPU_CLAIM_TEMPLATE_SUFFIX}"
+        container_claims = resources.setdefault("claims", [])
+        if not any(c.get("name") == GPU_CLAIM_NAME for c in container_claims):
+            container_claims.append({"name": GPU_CLAIM_NAME})
+        pod_claims = load("pod_resource_claims_yaml") or []
+        if not any(c.get("name") == GPU_CLAIM_NAME for c in pod_claims):
+            pod_claims.append(
+                {
+                    "name": GPU_CLAIM_NAME,
+                    "resourceClaimTemplateName": template_name,
+                }
+            )
+
+        claim_template = {
+            "apiVersion": f"{DRA_API_GROUP}/{DRA_API_VERSION}",
+            "kind": "ResourceClaimTemplate",
+            "metadata": {
+                "name": template_name,
+                "namespace": (
+                    expander.expand_var_name("kubernetes_namespace")
+                    or CHS_NAMESPACE
+                ),
+            },
+            "spec": {
+                "spec": {
+                    "devices": {
+                        "requests": [
+                            {
+                                "name": "gpus",
+                                "exactly": {
+                                    "deviceClassName": NVIDIA_GPU_DEVICE_CLASS,
+                                    "allocationMode": "ExactCount",
+                                    "count": gpu_count,
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+        custom_resources_yaml = expander.expand_var_name(
+            "custom_resources_yaml"
+        ).replace(raw_job_name, sanitized_job_name)
+        custom_resources = [claim_template] + [
+            r for r in yaml.safe_load_all(custom_resources_yaml) if r
+        ]
+
+        resources_yaml = yaml.safe_dump(resources, sort_keys=False).strip()
+        pod_claims_yaml = yaml.safe_dump(pod_claims, sort_keys=False).strip()
+        return (
+            f"{' ' * _CONTAINER_INDENT}resources:\n"
+            + textwrap.indent(resources_yaml, " " * _CONTAINER_FIELD_INDENT),
+            f"{' ' * _POD_SPEC_INDENT}resourceClaims:\n"
+            + textwrap.indent(pod_claims_yaml, " " * (_POD_SPEC_INDENT + 2)),
+            self._labeled_custom_resources(
+                yaml.safe_dump_all(custom_resources, sort_keys=False),
+                run_labels,
+            ),
+        )
 
     def _job_vars(self) -> dict[str, str]:
         """Returns the experiment's template variables, computed once."""
@@ -365,16 +538,16 @@ class KubernetesJob(WorkflowManagerBase):
             "tolerations_yaml", "tolerations", _POD_SPEC_INDENT
         ).replace(raw_job_name, sanitized_job_name)
 
-        base_cr = self._yaml_append(
-            "container_resources_yaml", _CONTAINER_FIELD_INDENT
-        )
-        extra_cr = self._yaml_append(
-            "extra_container_resources_yaml", _CONTAINER_FIELD_INDENT
-        )
-        all_cr = "\n".join(s for s in [base_cr, extra_cr] if s)
-        c_res = (
-            f"{' ' * _CONTAINER_INDENT}resources:\n{all_cr}" if all_cr else ""
-        )
+        use_gpu_dra = expander.expand_var_name("use_gpu_dra") == "true"
+        if not use_gpu_dra:
+            c_res, pod_claims, custom_res = self._standard_sections(
+                raw_job_name, sanitized_job_name, run_labels
+            )
+        else:
+            c_res, pod_claims, custom_res = self._gpu_dra_sections(
+                raw_job_name, sanitized_job_name, run_labels
+            )
+
         c_sec = self._yaml_block(
             "container_security_context_yaml",
             "securityContext",
@@ -395,16 +568,6 @@ class KubernetesJob(WorkflowManagerBase):
         mmnt_add = self._yaml_append(
             "extra_volume_mounts_yaml", _CONTAINER_INDENT
         )
-
-        custom_res = self._labeled_custom_resources(
-            expander.expand_var_name("custom_resources_yaml").replace(
-                raw_job_name, sanitized_job_name
-            ),
-            run_labels,
-        )
-        pod_claims = self._yaml_block(
-            "pod_resource_claims_yaml", "resourceClaims", _POD_SPEC_INDENT
-        ).replace(raw_job_name, sanitized_job_name)
 
         priv_key, pub_key = self._generate_ssh_keys()
         suspend = expander.expand_var_name("suspend_job")

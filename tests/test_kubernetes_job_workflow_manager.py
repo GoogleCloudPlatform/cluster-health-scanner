@@ -488,6 +488,209 @@ class KubernetesJobTest(unittest.TestCase):
         ]
         self.assertEqual(env_names, ["MY_NODE_NAME"])
 
+    def test_kubernetes_job_use_gpu_dra_standard(self):
+        """Standard template renders claims when use_gpu_dra is true."""
+        var_map = {
+            **_JOB_VARS_INPUTS,
+            "use_gpu_dra": "true",
+            "container_resources_yaml": (
+                "limits:\n  nvidia.com/gpu: 8\nrequests:\n  nvidia.com/gpu: 8"
+            ),
+        }
+
+        template_vars, docs = self._render("job_standard.yaml.tpl", var_map)
+        job_name = template_vars["sanitized_job_name"]
+
+        self.assertEqual(
+            [d["kind"] for d in docs], ["ResourceClaimTemplate", "Job"]
+        )
+
+        rct = docs[0]
+        self.assertEqual(rct["apiVersion"], "resource.k8s.io/v1")
+        self.assertEqual(rct["metadata"]["name"], f"{job_name}-gpu-template")
+        self.assertEqual(rct["metadata"]["namespace"], "chs")
+        self.assertEqual(rct["metadata"]["labels"], _RUN_LABELS)
+        req = rct["spec"]["spec"]["devices"]["requests"][0]
+        self.assertEqual(req["exactly"]["deviceClassName"], "gpu.nvidia.com")
+        self.assertEqual(req["exactly"]["count"], 8)
+
+        job = docs[1]
+        pod_spec = job["spec"]["template"]["spec"]
+        self.assertEqual(
+            pod_spec["resourceClaims"],
+            [
+                {
+                    "name": "gpu-claim",
+                    "resourceClaimTemplateName": f"{job_name}-gpu-template",
+                }
+            ],
+        )
+        container = pod_spec["containers"][0]
+        self.assertEqual(
+            container["resources"],
+            {"claims": [{"name": "gpu-claim"}]},
+        )
+
+    def test_kubernetes_job_use_gpu_dra_with_compute_domain(self):
+        """DRA merges gpu-claim with existing compute-domain-channel claims."""
+        raw_job_name = _JOB_VARS_INPUTS["job_name"]
+        var_map = {
+            **_JOB_VARS_INPUTS,
+            "use_gpu_dra": "true",
+            "container_resources_yaml": (
+                "limits:\n  nvidia.com/gpu: 8\nrequests:\n  nvidia.com/gpu: 8"
+            ),
+            "extra_container_resources_yaml": (
+                "claims:\n- name: compute-domain-channel"
+            ),
+            "pod_resource_claims_yaml": (
+                "- name: compute-domain-channel\n"
+                "  resourceClaimTemplateName: compute-domain-channel-template"
+            ),
+            "custom_resources_yaml": (
+                "apiVersion: resource.nvidia.com/v1beta1\n"
+                "kind: ComputeDomain\n"
+                "metadata:\n"
+                f"  name: {raw_job_name}-cd\n"
+                "  namespace: chs\n"
+                "spec:\n"
+                "  numNodes: 2\n"
+            ),
+        }
+
+        template_vars, docs = self._render("job_mpi.yaml.tpl", var_map)
+        job_name = template_vars["sanitized_job_name"]
+
+        self.assertEqual(
+            [d["kind"] for d in docs],
+            ["ResourceClaimTemplate", "ComputeDomain", "Secret", "Job"],
+        )
+
+        rct = docs[0]
+        self.assertEqual(rct["apiVersion"], "resource.k8s.io/v1")
+        self.assertEqual(rct["metadata"]["name"], f"{job_name}-gpu-template")
+        self.assertEqual(
+            rct["spec"]["spec"]["devices"]["requests"][0]["exactly"]["count"], 8
+        )
+
+        job = docs[3]
+        pod_spec = job["spec"]["template"]["spec"]
+        self.assertEqual(
+            pod_spec["resourceClaims"],
+            [
+                {
+                    "name": "compute-domain-channel",
+                    "resourceClaimTemplateName": (
+                        "compute-domain-channel-template"
+                    ),
+                },
+                {
+                    "name": "gpu-claim",
+                    "resourceClaimTemplateName": f"{job_name}-gpu-template",
+                },
+            ],
+        )
+        container = pod_spec["containers"][0]
+        self.assertEqual(
+            container["resources"],
+            {
+                "claims": [
+                    {"name": "compute-domain-channel"},
+                    {"name": "gpu-claim"},
+                ]
+            },
+        )
+
+    def test_kubernetes_job_use_gpu_dra_non_gpu_job_renders_standard(self):
+        """DRA only converts nvidia.com/gpu requests, like the device plugin.
+
+        A Job that does not request nvidia.com/gpu, e.g. the root
+        cluster-health experiment, gets no GPUs, even if gpus_per_node is set.
+        """
+        for gpus_per_node in ("", "8"):
+            with self.subTest(gpus_per_node=gpus_per_node):
+                var_map = {
+                    **_JOB_VARS_INPUTS,
+                    "use_gpu_dra": "true",
+                    "container_resources_yaml": "",
+                    "gpus_per_node": gpus_per_node,
+                }
+
+                _, docs = self._render("job_standard.yaml.tpl", var_map)
+
+                self.assertEqual([d["kind"] for d in docs], ["Job"])
+                pod_spec = docs[0]["spec"]["template"]["spec"]
+                self.assertNotIn("resourceClaims", pod_spec)
+                self.assertNotIn("resources", pod_spec["containers"][0])
+
+    def test_merge_container_resources_deduplicates_claims(self):
+        """Claims named twice across the resources maps are kept once."""
+        self.assertEqual(
+            KubernetesJob._merge_container_resources(
+                {
+                    "limits": {"nvidia.com/gpu": 4},
+                    "claims": [{"name": "compute-domain-channel"}],
+                },
+                {
+                    "limits": {"memory": "1Gi"},
+                    "claims": [
+                        {"name": "compute-domain-channel"},
+                        {"name": "other"},
+                    ],
+                },
+            ),
+            {
+                "limits": {"nvidia.com/gpu": 4, "memory": "1Gi"},
+                "claims": [
+                    {"name": "compute-domain-channel"},
+                    {"name": "other"},
+                ],
+            },
+        )
+
+    def test_kubernetes_job_use_gpu_dra_claims_in_base_resources(self):
+        """A4X-max keeps its IMEX claim from container_resources_yaml."""
+        var_map = {
+            **_JOB_VARS_INPUTS,
+            "use_gpu_dra": "true",
+            "container_resources_yaml": (
+                "limits:\n  nvidia.com/gpu: 4\n  memory: 1Gi\n"
+                "requests:\n  nvidia.com/gpu: 4\n"
+                "claims:\n- name: compute-domain-channel"
+            ),
+        }
+
+        _, docs = self._render("job_standard.yaml.tpl", var_map)
+
+        container = docs[-1]["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual(
+            container["resources"],
+            {
+                "limits": {"memory": "1Gi"},
+                "claims": [
+                    {"name": "compute-domain-channel"},
+                    {"name": "gpu-claim"},
+                ],
+            },
+        )
+        self.assertEqual(
+            docs[0]["spec"]["spec"]["devices"]["requests"][0]["exactly"][
+                "count"
+            ],
+            4,
+        )
+
+    def test_kubernetes_job_use_gpu_dra_invalid_gpu_count(self):
+        """DRA fails if nvidia.com/gpu requested has non-positive count."""
+        var_map = {
+            **_JOB_VARS_INPUTS,
+            "use_gpu_dra": "true",
+            "container_resources_yaml": "limits:\n  nvidia.com/gpu: 0",
+        }
+
+        with self.assertRaisesRegex(ValueError, "GPU count must be positive"):
+            _workflow_manager(var_map)._job_vars()
+
 
 if __name__ == "__main__":
     unittest.main()

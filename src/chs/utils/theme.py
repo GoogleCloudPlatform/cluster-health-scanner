@@ -54,19 +54,6 @@ def create_styled_table(
     return table
 
 
-def create_error_table(errors: list[tuple[str, str]]) -> Table:
-    """Creates a table for displaying errors and warnings."""
-    table = create_styled_table(
-        "Type",
-        "Detail",
-        header_style="bold red",
-        expand=True,
-    )
-    for error_type, detail in errors:
-        table.add_row(error_type, detail)
-    return table
-
-
 class LogSpinner:
     """A progress logger for non-interactive environments (e.g. cluster pods).
 

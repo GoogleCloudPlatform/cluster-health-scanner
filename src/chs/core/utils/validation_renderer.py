@@ -21,23 +21,6 @@ from . import rendering
 from . import validation_analyzer
 
 
-def has_validation_criteria(test_results: list[pb.TestResult]) -> bool:
-    """Checks if any metric in the test results has validation criteria."""
-    return validation_analyzer.has_validation_criteria(test_results)
-
-
-def _parse_threshold(validation_criteria: pb.ValidationCriteria) -> str:
-    """Parses expected value and comparator into a string."""
-    return validation_analyzer.parse_threshold(validation_criteria)
-
-
-def _parse_status(
-    validation_criteria: pb.ValidationCriteria,
-) -> tuple[str, str]:
-    """Returns (status_str, status_style) for validation criteria."""
-    return validation_analyzer.parse_status(validation_criteria)
-
-
 def render_validation_results(
     test_results: list[pb.TestResult],
     plugin_manager: Any = None,

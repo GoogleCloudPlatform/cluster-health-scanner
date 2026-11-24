@@ -30,10 +30,10 @@ from chs.exceptions import (
     HostCheckException,
 )
 from chs.schedulers.base import BaseScheduler
-from chs.schedulers.standalone import host
+from chs.schedulers.standalone import docker, host
 from chs.schedulers.standalone.job_spec import load_job_spec
 from chs.schedulers.standalone.native_backend import NativeBackend
-from chs.schedulers.standalone.runner import SequentialRunner
+from chs.schedulers.standalone.runner import Backend, SequentialRunner
 from chs.testkit import config as chs_config
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,10 @@ class StandaloneScheduler(BaseScheduler):
         self._resolved_nodes: list[str] | None = None
         self._lock_fd: int | None = None
         self._lock_writable = False
+        self._docker: list[str] | None = None
+        self._gpu: host.GpuAccess | None = None
         self._runner: SequentialRunner | None = None
+        self._docker_backend: docker.DockerBackend | None = None
         self._run_id: str | None = None
 
     @property
@@ -160,22 +163,58 @@ class StandaloneScheduler(BaseScheduler):
                     f"Another CHS process holds {LOCK_PATH} on the VM."
                 )
             self._record_run_id("")
-            if not host.tpu_devices():
+            if host.tpu_devices():
+                self._check_tpus()
+            elif host.has_gpus():
+                self._check_gpus()
+            else:
                 raise HostCheckException(
-                    "The VM has no TPU devices (/dev/vfio/<n>)."
-                )
-            host.check_tpus_idle()
-            host.check_tpu_access()
-            if importlib.util.find_spec(BENCHMARKS_PACKAGE) is None:
-                raise HostCheckException(
-                    "The TPU test dependencies are not installed. CHS installs"
-                    " them only on Linux x86_64 with Python 3.12."
+                    "The VM has no TPU (/dev/vfio/<n>) or GPU (/dev/nvidia<n>)"
+                    " devices. On a GPU VM, check that the NVIDIA driver is"
+                    " loaded."
                 )
         except BaseException:
             if self._lock_fd is not None:
                 os.close(self._lock_fd)
                 self._lock_fd = None
             raise
+
+    def _check_tpus(self) -> None:
+        host.check_tpus_idle()
+        host.check_tpu_access()
+        if importlib.util.find_spec(BENCHMARKS_PACKAGE) is None:
+            raise HostCheckException(
+                "The TPU test dependencies are not installed. CHS installs"
+                " them only on Linux x86_64 with Python 3.12."
+            )
+
+    def _check_gpus(self) -> None:
+        if host.in_container():
+            try:
+                docker.state_volume()
+            except ChsSchedulerException as e:
+                raise HostCheckException(str(e)) from e
+        docker_cmd = host.find_docker()
+        self._remove_leftover_containers(docker_cmd)
+        gpu = host.probe_gpu_access(docker_cmd)
+        host.check_gpus_idle()
+        self._docker, self._gpu = docker_cmd, gpu
+
+    def _remove_leftover_containers(self, docker_cmd: list[str]) -> None:
+        """Removes all CHS containers; caller must hold the lock (runs gone)."""
+        try:
+            names = [c.name for c in docker.list_containers(docker_cmd)]
+            if names:
+                logger.info(
+                    "Removing %d container(s) left by earlier CHS runs: %s",
+                    len(names),
+                    ", ".join(names),
+                )
+                docker.remove_containers(docker_cmd, names)
+        except ChsSchedulerException as e:
+            raise HostCheckException(
+                f"Could not remove leftover CHS containers: {e}"
+            ) from e
 
     def get_nodes_under_test(self) -> list[str]:
         """Returns the local VM if it passes the node check, else []."""
@@ -186,6 +225,7 @@ class StandaloneScheduler(BaseScheduler):
                 self._resolved_nodes = [node]
             except HostCheckException as e:
                 logger.warning("Skipping node '%s': %s", node, e)
+                self.node_skip_reasons[node] = str(e)
                 self._resolved_nodes = []
         return self._resolved_nodes
 
@@ -203,18 +243,25 @@ class StandaloneScheduler(BaseScheduler):
         run_id: str | None = None,
         images_dir: str | None = None,
     ) -> None:
-        """Writes the Ramble config and readies the native backend."""
+        """Writes the Ramble config and readies the test backend."""
         self._run_id = run_id
         nodes = self.get_nodes_under_test()
         if nodes:
             if run_id:
                 self._record_run_id(run_id)
-            chip_count = chs_config.load_platform(machine_type)["variables"][
-                "tpu_chips_per_node"
-            ]
-            self._runner = SequentialRunner(
-                {TPU_RUNTIME: NativeBackend(chip_count=chip_count)}
-            )
+            backends: dict[str, Backend]
+            if self._gpu is not None and self._docker is not None:
+                # Specs without a runtime run as containers.
+                self._docker_backend = docker.DockerBackend(
+                    self._docker, self._gpu
+                )
+                backends = {"": self._docker_backend}
+            else:
+                chip_count = chs_config.load_platform(machine_type)[
+                    "variables"
+                ]["tpu_chips_per_node"]
+                backends = {TPU_RUNTIME: NativeBackend(chip_count=chip_count)}
+            self._runner = SequentialRunner(backends)
         template_path = pkg_resources.files("chs.schedulers").joinpath(
             "standalone_template.yaml"
         )
@@ -246,6 +293,11 @@ class StandaloneScheduler(BaseScheduler):
         runner = self._require_runner()
         specs = {d: load_job_spec(d) for d in experiment_dirs}
         runner.submit(list(specs.values()))
+        if self._docker_backend is not None:
+            # Pull before any test starts, so no test waits on a pull.
+            self._docker_backend.pull_images(
+                [spec for spec in specs.values() if not spec.runtime]
+            )
         return {spec.job_name: d for d, spec in specs.items()}
 
     def extract_job_id(self, experiment_dir: str) -> str:
@@ -269,15 +321,37 @@ class StandaloneScheduler(BaseScheduler):
     def cancel_run(self, run_id: str) -> bool:
         """Cancels the run's jobs, or stops it if another process runs it."""
         if self._runner is not None:
-            return run_id == self._run_id and self._runner.cancel_all()
+            if run_id != self._run_id:
+                return False
+            cancelled = self._runner.cancel_all()
+            self._remove_run_containers()
+            return cancelled
         return self._stop_lock_holder(run_id)
 
     def cancel_all_runs(self) -> None:
         """Stops the active run's jobs, or the CHS run holding the VM."""
         if self._runner is not None:
             self._runner.cancel_all()
+            self._remove_run_containers()
         else:
             self._stop_lock_holder()
+
+    def _remove_run_containers(self) -> None:
+        """Removes this run's containers, including any the runner missed."""
+        if self._docker is None:
+            return
+        try:
+            docker.remove_containers(
+                self._docker,
+                [
+                    c.name
+                    for c in docker.list_containers(
+                        self._docker, run_id=self._run_id
+                    )
+                ],
+            )
+        except ChsSchedulerException as e:
+            logger.warning("Could not remove the run's containers: %s", e)
 
     def _stop_lock_holder(self, run_id: str | None = None) -> bool:
         """Sends SIGTERM to the lock holder, if it runs `run_id` (or any)."""
@@ -289,8 +363,15 @@ class StandaloneScheduler(BaseScheduler):
         except HostCheckException as e:
             raise ChsCancellationException(str(e)) from e
         if locked:
-            os.close(self._lock_fd)
-            self._lock_fd = None
+            try:
+                # No live run: remove containers left by dead runs.
+                if run_id is None and host.has_gpus():
+                    self._remove_leftover_containers(host.find_docker())
+            except HostCheckException as e:
+                raise ChsCancellationException(str(e)) from e
+            finally:
+                os.close(self._lock_fd)
+                self._lock_fd = None
             return False
         pid = self._lock_holder()
         if pid is None or pid == os.getpid():

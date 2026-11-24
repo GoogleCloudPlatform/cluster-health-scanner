@@ -37,8 +37,6 @@ class StreamParsedResult:
 class StreamRenderer(DefaultRenderer):
     """Renders details for stream tests."""
 
-    validation_render_mode = "all"
-
     def get_column_schema(self) -> list[ColumnDef]:
         return [
             ColumnDef("node", "Node"),

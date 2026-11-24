@@ -23,6 +23,7 @@ from chs.tests.nvidia_smi.renderer import NvidiaSmiRenderer
 from chs.tests.stream.renderer import StreamRenderer
 from chs.tests.tpu_collectives.renderer import TpuCollectivesRenderer
 from chs.tests.tpu_gemm.renderer import TpuGemmRenderer
+from chs.tests.tpu_gemm_pulse.renderer import TpuGemmPulseRenderer
 from chs.tests.tpu_hbm.renderer import TpuHbmRenderer
 from chs.tests.tpu_host_device.renderer import TpuHostDeviceRenderer
 from chs.tests.tpu_network_stress.renderer import (
@@ -127,6 +128,26 @@ def test_tpu_gemm_renderer_get_detail_data():
     assert report.test_name == "tpu-gemm"
     assert len(report.tables) == 1
     assert report.tables[0].rows[0]["throughput"] == "120.50"
+
+
+def test_tpu_gemm_pulse_renderer_get_detail_data():
+    renderer = TpuGemmPulseRenderer()
+    assert renderer.get_detail_data([]) is None
+
+    res = pb.TestResult(test_name="tpu-gemm-pulse", test_level="check")
+    res.target_resources.add(node_name="node-1")
+
+    m1 = res.metrics.add(key="Throughput")
+    m1.value.number_value = 1006.18
+    m1.metadata.fields[
+        "context"
+    ].string_value = "node-1,16384x16384x16384,bfloat16,chain=100,cycles=100"
+
+    report = renderer.get_detail_data([res])
+    assert report is not None
+    assert report.test_name == "tpu-gemm-pulse"
+    assert len(report.tables) == 1
+    assert report.tables[0].rows[0]["throughput"] == "1006.18"
 
 
 def test_tpu_hbm_renderer_get_detail_data():

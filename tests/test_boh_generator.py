@@ -1185,6 +1185,93 @@ class TestBOHGenerator(unittest.TestCase):
             report.test_results[1].result_status, pb.RESULT_STATUS_DEADLINE
         )
 
+    @mock.patch("chs.core.plugin_manager.PluginManager.get_plugin")
+    @mock.patch("chs.boh_generator.ChsAppData")
+    def test_generate_time_exceeded_evaluates_finished_nodes(
+        self, mock_app_data_cls, mock_get_plugin
+    ):
+        """Test only nodes without results in a timed-out Job get TIMEOUT."""
+        mock_app_data_cls.return_value.get_run.return_value = {
+            "job_entries": {
+                "job1": {"experiment_dir": "/path/to/exp", "status": "TIMEOUT"}
+            }
+        }
+        plugin = mock_get_plugin.return_value
+        plugin.get_required_contexts.side_effect = lambda x: x
+        plugin.get_fom_aliases.return_value = {}
+        plugin.creates_per_node_results.return_value = True
+        plugin.extract_test_info.return_value = ("exp", "check", "")
+        plugin.parse_context_metadata.side_effect = lambda c: {"context": c}
+        thresh_file = os.path.join(self.test_dir.name, "thresh.yaml")
+        with open(thresh_file, "w") as f:
+            json.dump(
+                {"default": {"exp": {"type": "min", "thresholds": {"bw": 50}}}},
+                f,
+            )
+        self._write_json(
+            {
+                "experiments": [
+                    {
+                        "experiment_name": "exp",
+                        "RAMBLE_RAW_VARIABLES": {"nodes": ["n1", "n2", "n3"]},
+                        "CONTEXTS": [
+                            {
+                                "name": "n1",
+                                "foms": [{"name": "bw", "value": 100}],
+                            },
+                            {
+                                "name": "n2",
+                                "foms": [{"name": "bw", "value": 10}],
+                            },
+                            {
+                                "name": "null",
+                                "foms": [
+                                    {
+                                        "name": "Host Memory Error Detected",
+                                        "value": "Killed",
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+
+        report = BOHGenerator(
+            self.test_json_path, thresholds_path=thresh_file
+        ).generate()
+
+        self.assertEqual(
+            [r.result_status for r in report.test_results],
+            [
+                pb.RESULT_STATUS_SUCCESS,
+                pb.RESULT_STATUS_FAILED,
+                pb.RESULT_STATUS_TIMEOUT,
+            ],
+        )
+
+    def test_parse_tier_results_from_boh_with_time_exceeded_nodes(self):
+        """Test a test with any timed-out node is never HEALTHY for tiering."""
+        from chs.tier_manager import TestStatus
+
+        T, S, F = (
+            pb.RESULT_STATUS_TIMEOUT,
+            pb.RESULT_STATUS_SUCCESS,
+            pb.RESULT_STATUS_FAILED,
+        )
+        for statuses, expected in (
+            ([S, T], TestStatus.ERROR),
+            ([T, F, S], TestStatus.DEGRADED),
+        ):
+            boh = pb.BillOfHealth()
+            for status in statuses:
+                boh.test_results.add(test_name="tpu-hbm", result_status=status)
+            tier_results, _ = chs.boh_generator.parse_tier_results_from_boh(
+                boh, {"tpu-hbm"}
+            )
+            self.assertEqual(tier_results["tpu-hbm"], expected)
+
     def test_parse_tier_results_from_boh_with_prefixed_test_names(self):
         """Test parse_tier_results_from_boh correctly matches test names."""
         boh = pb.BillOfHealth()

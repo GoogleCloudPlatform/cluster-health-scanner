@@ -12,20 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This is a placeholder file. This will be generated from the CLI.
-ramble:
+
+platforms:
+- tpu7x-standard-4t
+defaults:
+  modifiers:
+  - name: generic-error-detector
+  - name: tpu-error-detector
   variables:
-    processes_per_node: 1
-    mpi_command: ''
-    batch_submit: '{execute_experiment}'
-  applications:
-    hostname:
-      workloads:
-        local:
-          experiments:
-            test:
-              variables:
-                n_ranks: 1
-  software:
-    packages: {}
-    environments: {}
+    benchmarks_yaml_file: tpuv6e/gemm_pulse_32768x4096x4096_bf16.yaml
+  kubernetes:
+    variables:
+      container_image: '{chs_image}'
+  standalone:
+    variables:
+      runtime: tpu
+machines:
+  tpu7x-standard-4t:
+    variables:
+      benchmarks_yaml_file: tpu7x/gemm_pulse_16384_bf16.yaml

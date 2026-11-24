@@ -70,6 +70,7 @@ _VARS = {
     "privileged": "false",
     "chs_run_id": "vm-1-lite-ab12",
     "runtime": "",
+    "app_workdir": "",
 }
 
 
@@ -119,10 +120,15 @@ class StandaloneWorkflowManagerTest(unittest.TestCase):
         self.vars["privileged"] = ""
         self.assertEqual(self._spec()["privileged"], "false")
 
-    def test_truncation_and_command(self):
+    def test_truncation_command_and_workdir(self):
         job_vars = self.wm._job_vars()
         self.assertEqual(
             job_vars["standalone_command"], "cd /ws\npython3 gemm.py "
+        )
+        self.assertEqual(job_vars["workdir"], _VARS["experiment_run_dir"])
+        self.vars["app_workdir"] = "/workspace/microbenchmarks"
+        self.assertEqual(
+            self.wm._job_vars()["workdir"], "/workspace/microbenchmarks"
         )
 
         self.vars["job_name"] = "x" * 300
@@ -147,7 +153,7 @@ class StandaloneWorkflowManagerTest(unittest.TestCase):
 
         with open(os.path.join(_WM_DIR, "job_script.tpl")) as f:
             content = f.read()
-        self.assertIn('cd "{experiment_run_dir}"', content)
+        self.assertIn('cd "{workdir}"', content)
         self.assertTrue(content.rstrip().endswith("{standalone_command}"))
 
 

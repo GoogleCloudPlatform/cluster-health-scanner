@@ -32,7 +32,7 @@ _SAMPLE_LOG = "\n".join(
         "HOST node-1: standalone_host_init: set TPU_HOST_BOUNDS=1,1,1",
         "HOST node-1: JAX devices: 8 (e.g. [TpuDevice(id=0, ...)]...)",
         "HOST node-1: Running [1/1] host_to_device "
-        "(tpu_sync_devall_size_4096mib)...",
+        "(tpu_sync_scope_host_idx_0_size_4096mib)...",
         "HOST node-1: Success [1/1] host_to_device. Metrics: "
         "{'num_devices': 8, 'wall_clock_p50_ms': 167.4, "
         "'wall_clock_bandwidth_per_device_gb_s': 25.6351543, "

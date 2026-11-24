@@ -16,6 +16,7 @@
 schedulers:
 - kubernetes
 - slurm
+- standalone
 variables:
   cpu_affinity: 0-69:0-69:70-139:70-139
   gpus_per_node: 4
@@ -63,3 +64,6 @@ kubernetes:
         operator: Equal
         value: arm64
         effect: NoSchedule
+standalone:
+  variables:
+    privileged: 'true'

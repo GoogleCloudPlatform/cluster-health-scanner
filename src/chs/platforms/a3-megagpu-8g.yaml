@@ -16,6 +16,7 @@
 schedulers:
 - kubernetes
 - slurm
+- standalone
 variables:
   cpu_affinity: 0-51:0-51:0-51:0-51:52-103:52-103:52-103:52-103
   gpus_per_node: 8
@@ -63,3 +64,6 @@ kubernetes:
       - key: "nvidia.com/gpu"
         operator: "Exists"
         effect: "NoSchedule"
+standalone:
+  variables:
+    privileged: 'true'

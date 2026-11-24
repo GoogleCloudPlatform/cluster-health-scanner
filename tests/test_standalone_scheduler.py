@@ -112,6 +112,9 @@ class StandaloneSchedulerTestCase(unittest.TestCase):
         with self.assertLogs(standalone.logger, "WARNING") as logs:
             self.assertEqual(scheduler.get_nodes_under_test(), [])
         self.assertIsNone(scheduler._lock_fd)
+        # The CLI adds the reason to its "No valid nodes" error.
+        (reason,) = scheduler.node_skip_reasons.values()
+        self.assertIn(reason, logs.output[0])
         return logs.output[0]
 
 
@@ -168,9 +171,9 @@ class NodeCheckTest(StandaloneSchedulerTestCase):
         self.assertIn("no host", self._skip_reason())
         self.host["check_tpus_idle"].assert_not_called()
 
-    def test_vm_without_tpus_is_skipped(self):
+    def test_vm_without_tpus_or_gpus_is_skipped(self):
         shutil.rmtree(self.tmp + "/dev/vfio")
-        self.assertIn("no TPU devices", self._skip_reason())
+        self.assertIn("no TPU (/dev/vfio/<n>) or GPU", self._skip_reason())
         self.host["check_tpus_idle"].assert_not_called()
 
     def test_missing_tpu_dependencies_skip_the_node(self):
@@ -493,6 +496,271 @@ class CancelFromAnotherProcessTest(StandaloneSchedulerTestCase):
         self.assertEqual(scheduler.get_nodes_under_test(), ["tpu-vm-1"])
         self.assertFalse(scheduler.cancel_run("run-1"))
         self.kill.assert_not_called()
+
+
+class GpuTest(StandaloneSchedulerTestCase):
+    """A GPU VM: leftover containers are removed, tests run in Docker."""
+
+    _DOCKER = ["docker"]
+    _GPU = standalone.host.GpuAccess(nvidia_runtime=True)
+
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(self.tmp + "/dev/vfio")
+        open(self.tmp + "/dev/nvidia0", "w").close()
+        self._patch(
+            standalone.host,
+            "gce_instance",
+            mock.Mock(
+                return_value=GceInstance(
+                    name="gpu-vm-1",
+                    instance_id="456",
+                    machine_type="a3-ultragpu-8g",
+                )
+            ),
+        )
+        self.calls = mock.Mock()
+        for target, name, value in (
+            (standalone.host, "find_docker", self._DOCKER),
+            (standalone.host, "probe_gpu_access", self._GPU),
+            (standalone.host, "check_gpus_idle", None),
+            (standalone.docker, "list_containers", []),
+            (standalone.docker, "remove_containers", None),
+        ):
+            fake = self._patch(target, name, mock.Mock(return_value=value))
+            self.calls.attach_mock(fake, name)
+        self.in_container = self._patch(
+            standalone.host, "in_container", mock.Mock(return_value=False)
+        )
+        self.state_volume = self._patch(
+            standalone.docker,
+            "state_volume",
+            mock.Mock(return_value="chs-local-state"),
+        )
+        self.backend = mock.Mock()
+        self.backend.exit_code.return_value = None
+        self.docker_backend = self._patch(
+            standalone.docker,
+            "DockerBackend",
+            mock.Mock(return_value=self.backend),
+        )
+        self.native_backend = self._patch(
+            standalone, "NativeBackend", mock.Mock()
+        )
+
+    def _call_names(self):
+        return [c[0] for c in self.calls.mock_calls]
+
+    def test_leftover_containers_are_removed_before_the_gpu_checks(self):
+        self.calls.list_containers.return_value = [
+            standalone.docker.Container("old-a", "run-0"),
+            standalone.docker.Container("old-b", "run-9"),
+        ]
+        with self.assertLogs(standalone.logger, "INFO") as logs:
+            self.assertEqual(self._nodes(), ["gpu-vm-1"])
+        self.assertIn("old-a, old-b", logs.output[0])
+        self.assertEqual(
+            self._call_names(),
+            [
+                "find_docker",
+                "list_containers",
+                "remove_containers",
+                "probe_gpu_access",
+                "check_gpus_idle",
+            ],
+        )
+        self.calls.list_containers.assert_called_once_with(self._DOCKER)
+        self.calls.remove_containers.assert_called_once_with(
+            self._DOCKER, ["old-a", "old-b"]
+        )
+        self.host["check_tpus_idle"].assert_not_called()
+
+    def test_no_leftover_containers_removes_nothing(self):
+        self.assertEqual(self._nodes(), ["gpu-vm-1"])
+        self.calls.remove_containers.assert_not_called()
+
+    def test_held_lock_skips_before_touching_docker(self):
+        first = self._scheduler()
+        self.assertEqual(first.get_nodes_under_test(), ["gpu-vm-1"])
+        self.calls.reset_mock()
+        self.assertIn(standalone.LOCK_PATH, self._skip_reason())
+        self.assertEqual(self._call_names(), [])
+
+    def test_docker_failures_skip_the_node_with_the_reason(self):
+        self.calls.find_docker.side_effect = HostCheckException(
+            "Docker is unusable: `docker`: permission denied."
+        )
+        self.assertIn("Docker is unusable", self._skip_reason())
+        self.calls.find_docker.side_effect = None
+
+        self.calls.list_containers.side_effect = ChsSchedulerException(
+            "`docker ps` failed: timed out after 120 seconds"
+        )
+        self.assertIn(
+            "Could not remove leftover CHS containers: `docker ps` failed",
+            self._skip_reason(),
+        )
+        self.calls.list_containers.side_effect = None
+
+        self.calls.list_containers.return_value = [
+            standalone.docker.Container("old", "run-0")
+        ]
+        self.calls.remove_containers.side_effect = ChsSchedulerException(
+            "Could not remove containers: permission denied"
+        )
+        with self.assertLogs(standalone.logger, "INFO") as logs:
+            self.assertEqual(self._scheduler().get_nodes_under_test(), [])
+        self.assertIn("permission denied", logs.output[-1])
+        self.calls.probe_gpu_access.assert_not_called()
+
+    def test_cancel_all_without_a_live_run_removes_leftovers(self):
+        self.calls.list_containers.return_value = [
+            standalone.docker.Container("old", "run-0")
+        ]
+        scheduler = self._scheduler()
+        with self.assertLogs(standalone.logger, "INFO"):
+            scheduler.cancel_all_runs()
+        self.calls.remove_containers.assert_called_once_with(
+            self._DOCKER, ["old"]
+        )
+        self.assertIsNone(scheduler._lock_fd)
+        self.assertEqual(self._nodes(), ["gpu-vm-1"])
+
+    def test_cancel_all_docker_failure_fails_the_cancel(self):
+        self.calls.find_docker.side_effect = HostCheckException(
+            "Docker is unusable: `docker`: permission denied."
+        )
+        scheduler = self._scheduler()
+        with self.assertRaisesRegex(
+            standalone.ChsCancellationException, "Docker is unusable"
+        ):
+            scheduler.cancel_all_runs()
+        self.assertIsNone(scheduler._lock_fd)
+        self.calls.find_docker.side_effect = None
+        self.assertEqual(self._nodes(), ["gpu-vm-1"])
+
+    def test_cancel_run_leaves_leftover_containers(self):
+        self.calls.list_containers.return_value = [
+            standalone.docker.Container("old", "run-0")
+        ]
+        self.assertFalse(self._scheduler().cancel_run("run-0"))
+        self.assertEqual(self._call_names(), [])
+
+    def test_cancel_all_leaves_a_live_runs_containers(self):
+        live = self._scheduler()
+        self.assertEqual(live.get_nodes_under_test(), ["gpu-vm-1"])
+        self.calls.reset_mock()
+        self._scheduler().cancel_all_runs()
+        self.assertEqual(self._call_names(), [])
+
+    def test_chs_container_needs_a_named_state_volume(self):
+        self.assertEqual(self._nodes(), ["gpu-vm-1"])
+        self.state_volume.assert_not_called()
+
+        self.in_container.return_value = True
+        self.assertEqual(self._nodes(), ["gpu-vm-1"])
+        self.state_volume.assert_called_once_with()
+
+        self.state_volume.side_effect = ChsSchedulerException(
+            "The CHS state at /workspace/.local/share must be a named Docker"
+            " volume"
+        )
+        self.calls.reset_mock()
+        self.assertIn("named Docker volume", self._skip_reason())
+        self.assertEqual(self._call_names(), [])
+
+    def test_busy_gpus_skip_the_node(self):
+        self.calls.check_gpus_idle.side_effect = HostCheckException(
+            "GPUs are busy: used by process 7 (python)."
+        )
+        self.assertIn("GPUs are busy", self._skip_reason())
+
+    def test_tpu_vm_never_touches_docker(self):
+        os.makedirs(self.tmp + "/dev/vfio")
+        open(self.tmp + "/dev/vfio/0", "w").close()
+        self.assertEqual(self._nodes(), ["gpu-vm-1"])
+        self.host["check_tpus_idle"].assert_called_once_with()
+        self.assertEqual(self._call_names(), [])
+
+    def _docker_run_scheduler(self):
+        """A scheduler with container job "a" of run-1 submitted."""
+        scheduler = self._scheduler()
+        configs = os.path.join(self.tmp, "configs")
+        os.makedirs(configs)
+        scheduler.write_ramble_config(
+            configs,
+            tests=[{"name": "nvidia-smi"}],
+            machine_type="a3-ultragpu-8g",
+            run_id="run-1",
+        )
+        exp_dir = os.path.join(self.tmp, "a")
+        os.makedirs(exp_dir)
+        with open(os.path.join(exp_dir, job_spec.SPEC_FILE), "w") as f:
+            yaml.safe_dump(
+                {
+                    "job_name": "a",
+                    "node": "gpu-vm-1",
+                    "image": "nvidia/cuda:12",
+                    "script": "/s",
+                    "timeout": "60",
+                    "order": "1",
+                    "privileged": "true",
+                    "run_id": "run-1",
+                    "runtime": "",
+                },
+                f,
+            )
+        scheduler.submit_experiments([exp_dir])
+        return scheduler
+
+    def test_container_specs_run_on_the_docker_backend(self):
+        scheduler = self._docker_run_scheduler()
+        self.docker_backend.assert_called_once_with(self._DOCKER, self._GPU)
+        self.native_backend.assert_not_called()
+        self.backend.pull_images.assert_called_once()
+        self.assertEqual(
+            [s.image for s in self.backend.pull_images.call_args.args[0]],
+            ["nvidia/cuda:12"],
+        )
+        self.backend.start.assert_not_called()
+        scheduler.poll_jobs(["a"])
+        self.backend.start.assert_called_once()
+        self.assertTrue(scheduler.cancel_run("run-1"))
+        self.backend.stop.assert_called_once()
+
+    def test_cancel_of_a_live_run_removes_its_containers(self):
+        scheduler = self._docker_run_scheduler()
+        scheduler.poll_jobs(["a"])
+        self.calls.reset_mock()
+        self.calls.list_containers.return_value = [
+            standalone.docker.Container("a", "run-1"),
+            standalone.docker.Container("started-unseen", "run-1"),
+        ]
+        self.assertFalse(scheduler.cancel_run("run-2"))
+        self.assertEqual(self._call_names(), [])
+
+        self.assertTrue(scheduler.cancel_run("run-1"))
+        self.backend.stop.assert_called_once()
+        self.calls.list_containers.assert_called_once_with(
+            self._DOCKER, run_id="run-1"
+        )
+        self.calls.remove_containers.assert_called_once_with(
+            self._DOCKER, ["a", "started-unseen"]
+        )
+
+        self.calls.remove_containers.side_effect = ChsSchedulerException(
+            "Could not remove containers: permission denied"
+        )
+        with self.assertLogs(standalone.logger, "WARNING") as logs:
+            scheduler.cancel_all_runs()
+        self.assertIn("permission denied", logs.output[0])
+
+        self.backend.fetch_log.side_effect = ChsSchedulerException(
+            "Could not read the output of container a."
+        )
+        with self.assertRaises(ChsSchedulerException):
+            scheduler.fetch_job_log("a", os.path.join(self.tmp, "a.out"))
+        self.backend.remove.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -32,6 +32,14 @@ a3-megagpu-8g:
     - value: 344.0
       conditions:
         workload_name: all-gather
+a3-highgpu-8g:
+  bandwidth:
+    - value: 455.0
+      conditions:
+        workload_name: all-reduce
+    - value: 344.0
+      conditions:
+        workload_name: all-gather
 a4-highgpu-8g:
   bandwidth:
     - value: 768.0

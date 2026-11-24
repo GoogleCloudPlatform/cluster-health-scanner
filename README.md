@@ -1,13 +1,13 @@
 # Cluster Health Scanner (CHS)
 
-Cluster Health Scanner (CHS) is an end-to-end diagnostic tool for evaluating the health, performance, and reliability of TPU and GPU hardware. It abstracts away the underlying infrastructure so that the same tool runs natively on Kubernetes (including Google Kubernetes Engine (GKE)), Slurm, and standalone TPU VMs, with a unified, deterministic approach to hardware validation.
+Cluster Health Scanner (CHS) is an end-to-end diagnostic tool for evaluating the health, performance, and reliability of TPU and GPU hardware. It abstracts away the underlying infrastructure so that the same tool runs natively on Kubernetes (including Google Kubernetes Engine (GKE)), Slurm, and standalone TPU and GPU VMs, with a unified, deterministic approach to hardware validation.
 
 > **Note:** Looking for the legacy v1 (`cluster_diag` / Helm `health_runner`) implementation? It is preserved under the [`legacy-archive`](https://github.com/GoogleCloudPlatform/cluster-health-scanner/tree/legacy-archive) tag.
 
 ## Why use CHS
 
 - **Unified:** One tool, one set of commands, and one report format for TPUs and GPUs, including day-zero support for next-generation architectures.
-- **Multiple environments:** Native support for Kubernetes, Slurm, and standalone TPU VMs. CHS automatically detects the scheduler and accelerator (machine type), so you don't need to specify them.
+- **Multiple environments:** Native support for Kubernetes, Slurm, and standalone TPU and GPU VMs. CHS automatically detects the scheduler and accelerator (machine type), so you don't need to specify them.
 - **Scalable validation:** Scales seamlessly from isolating single-host faults to validating multi-node topologies and the networking between them.
 - **Slicing support:** Full orchestration support for both dynamic and static TPU slice topologies on Kubernetes.
 - **Safe by default:** Preflight checks validate the targets, and CHS tests only idle nodes, so running workloads aren't disrupted.
@@ -33,11 +33,11 @@ Sample interactive health report (`bill_of_health.html`):
 
 ## Installation
 
-Install CHS using either the Python package or the container image on the machine that runs the tests — **any machine with `kubectl` access** for Kubernetes, the **controller or login node** for Slurm, or **the TPU VM itself** for standalone mode (see [Where to run](#where-to-run) for environment setup).
+Install CHS using either the Python package or the container image on the machine that runs the tests — **any machine with `kubectl` access** for Kubernetes, the **controller or login node** for Slurm, or **the TPU or GPU VM itself** for standalone mode (see [Where to run](#where-to-run) for environment setup).
 
 ### Option 1: Python package
 
-> **Note:** Supported on **Kubernetes**, **Slurm**, and **standalone TPU VMs**. Requires [Python 3.12+](https://www.python.org/downloads/) and [`git`](https://git-scm.com/downloads). If your `python3` is older, see [Troubleshooting](docs/troubleshooting.md#python-312-is-not-available).
+> **Note:** Supported on **Kubernetes**, **Slurm**, and **standalone TPU and GPU VMs**. Requires [Python 3.12+](https://www.python.org/downloads/) and [`git`](https://git-scm.com/downloads). If your `python3` is older, see [Troubleshooting](docs/troubleshooting.md#python-312-is-not-available).
 > - Standalone TPU VMs need **Python 3.12** exactly (not 3.13+) on x86_64: on other versions, CHS installs without the TPU test dependencies.
 
 ```bash
@@ -56,7 +56,7 @@ pip install git+https://github.com/GoogleCloudPlatform/cluster-health-scanner.gi
 
 > **Note:**
 > - Requires [Docker](https://docs.docker.com/engine/install/).
-> - On a standalone TPU VM running **Container-Optimized OS (COS)**, this is the only supported way to run CHS.
+> - On a standalone TPU or GPU VM running **Container-Optimized OS (COS)**, this is the only supported way to run CHS.
 > - Not supported on **Slurm**; use the Python package.
 
 Pull the container image:
@@ -82,7 +82,7 @@ Define a `chs` alias so that `chs` commands can be run directly:
     -v "$(pwd)/chs-output":/workspace/chs-output \
     us-docker.pkg.dev/gce-ai-infra/chs/chs:latest'
   ```
-- **Standalone (TPU VM):** Grants access to the VM's TPU devices and host PID namespace, persists run state in `chs-local-state`, and writes outputs to `./chs-output`:
+- **Standalone (TPU or GPU VM):** Grants access to the VM's TPU or GPU devices, its Docker daemon, and host PID namespace, persists run state in `chs-local-state`, and writes outputs to `./chs-output`:
   ```bash
   alias chs='docker run --rm -it --privileged --pid=host \
     -v /:/host \
@@ -109,6 +109,7 @@ Where you run CHS depends on the environment that you're testing:
   EOF
   ```
 - **Standalone (TPU VM):** Run CHS **directly on the TPU VM**, which must expose TPU devices under `/dev/vfio`. Run as `root` or raise the **memlock limit** (`ulimit -l unlimited`) before running native TPU tests.
+- **Standalone (GPU VM):** Run CHS **directly on the GPU VM**, which needs the **NVIDIA driver** loaded (GPU devices under `/dev/nvidia<n>`) and **Docker**. Each test runs in a container on the VM's Docker daemon, which CHS reaches as `docker` or `sudo -n docker` (from the CHS container, with the VM's own `docker` CLI). Containers get the GPUs through the NVIDIA container runtime if Docker has it, otherwise through the VM's driver. CHS pulls the test images (from Docker Hub and `nvcr.io`) before the first test starts. On a single GPU VM, CHS runs `nvidia-smi`, `dcgm`, `gemm` and `stream`; the `nccl-*` tests need Kubernetes or Slurm.
 
 ### Required IAM roles (Google Cloud)
 
@@ -133,7 +134,7 @@ chs list tests
 
 ### 2. Run diagnostics
 
-Run a suite (`lite` or `standard`) on your cluster or TPU VM:
+Run a suite (`lite` or `standard`) on your cluster, TPU VM, or GPU VM:
 
 - **Kubernetes:**
 
@@ -147,7 +148,7 @@ Run a suite (`lite` or `standard`) on your cluster or TPU VM:
   chs run --partitions=PARTITION_NAMES --suite=lite
   ```
 
-- **Standalone (TPU VM):**
+- **Standalone (TPU or GPU VM):**
 
   ```bash
   chs run --suite=lite

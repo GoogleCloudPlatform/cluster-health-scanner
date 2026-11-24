@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chs"
-version = "0.4.0"
+version = "0.5.0"
 description = "CHS provides a comprehensive suite of tools for validating the health and performance of Accelerators."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1.0,<9.0.0",
     "ramble @ git+https://github.com/Ramble-Project/ramble.git@c4f7213432ff78e7e8f40d9742c44ea199c8f7f7",  # Oct 07, 2026
-    "accelerator_microbenchmarks @ git+https://github.com/AI-Hypercomputer/accelerator-microbenchmarks.git@027cd628b15e5ede2d0057e0d3c0187b954f42ad ; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'",  # Nov 03, 2026
+    "accelerator_microbenchmarks @ git+https://github.com/AI-Hypercomputer/accelerator-microbenchmarks.git@0207c5b9bfb1269648646e3e5f018c3af02fac00 ; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version == '3.12'",  # Nov 11, 2026
     "platformdirs>=3.0.0,<5.0.0",
     "protobuf>=4.21.0",
     "rich>=13.0.0",
@@ -70,9 +70,6 @@ exclude = [
 
     # Auto-generated files
     "*_pb2.py",
-
-    # Test snapshots
-    "tests/integration/goldens",
 ]
 
 # Same as Black.

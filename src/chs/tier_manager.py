@@ -22,11 +22,6 @@ class TestStatus(enum.Enum):
     ERROR = "ERROR"
 
 
-class SubmissionStatus(enum.Enum):
-    PENDING = "PENDING"
-    COMPLETED = "COMPLETED"
-
-
 class TierManager:
     """Manages the execution graph for tiered diagnostic suites."""
 

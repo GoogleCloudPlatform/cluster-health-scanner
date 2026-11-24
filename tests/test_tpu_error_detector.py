@@ -110,6 +110,24 @@ class TestTpuErrorDetector(unittest.TestCase):
                 "(INTERNAL: GRPC_ERROR error message: STOP_SESSION failed",
             )
         )
+        self.assertTrue(
+            re.match(
+                regex,
+                "ERROR:root:CHECKSUM MISMATCH within host 0: local diverging",
+            )
+        )
+        self.assertTrue(
+            re.match(
+                regex,
+                "ERROR:root:Checksum check incomplete: 7 of 8 expected devices",
+            )
+        )
+        self.assertTrue(
+            re.match(
+                regex,
+                "ERROR:root:Degenerate chain result (inf/NaN or all zeros)",
+            )
+        )
         self.assertFalse(re.match(regex, "TPU initialized successfully"))
 
     def test_comp_regex(self):

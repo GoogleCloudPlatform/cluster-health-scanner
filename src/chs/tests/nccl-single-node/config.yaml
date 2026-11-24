@@ -13,13 +13,26 @@
 # limitations under the License.
 
 
+# Not standalone yet: containers lack gIB/RDMA host networking and tcpxo.
 platforms:
-- a3-ultragpu-8g
-- a4-highgpu-8g
-- a3-megagpu-8g
-- a4x-highgpu-4g
-- a4x-maxgpu-4g-metal
-- a5x-highgpu-4g-metal
+- a3-ultragpu-8g:
+  - kubernetes
+  - slurm
+- a4-highgpu-8g:
+  - kubernetes
+  - slurm
+- a3-megagpu-8g:
+  - kubernetes
+  - slurm
+- a3-highgpu-8g
+- a4x-highgpu-4g:
+  - kubernetes
+  - slurm
+- a4x-maxgpu-4g-metal:
+  - kubernetes
+  - slurm
+- a5x-highgpu-4g-metal:
+  - kubernetes
 defaults:
   env_vars:
     set:
@@ -147,6 +160,12 @@ machines:
         nccl_tests_build_dir: '{workspace_shared}/nccl-tests-{nccl_tests_ref}'
         nccl-tests_path: '{nccl_tests_build_dir}/build'
         srun_args: --mpi=pmi2 --export=ALL --container-workdir {nccl-tests_path} --container-image {container_path} --container-mounts "/var/tmp:/var/tmp,{nccl_tests_build_dir}:{nccl_tests_build_dir},/var/lib/tcpxo/lib64/" --container-writable --wait=60
+  a3-highgpu-8g:
+    kubernetes:
+      env_vars:
+        set:
+          CUDA_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+          LD_LIBRARY_PATH: /third_party/nccl/build/lib:/usr/local/nvidia/lib64
   a4x-highgpu-4g:
     env_vars:
       set:

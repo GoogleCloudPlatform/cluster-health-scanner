@@ -27,7 +27,6 @@ class PluginManager:
 
     def __init__(self):
         self._plugins: dict[str, Type[TestPlugin]] = {}
-        self._default_plugin = DefaultPlugin()
 
         self._discover_plugins()
 

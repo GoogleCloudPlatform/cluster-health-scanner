@@ -13,10 +13,16 @@
 # limitations under the License.
 
 
+# Cluster schedulers only: the test spans VMs; standalone tests one VM.
 platforms:
-- a4x-highgpu-4g
-- a4x-maxgpu-4g-metal
-- a5x-highgpu-4g-metal
+- a4x-highgpu-4g:
+  - kubernetes
+  - slurm
+- a4x-maxgpu-4g-metal:
+  - kubernetes
+  - slurm
+- a5x-highgpu-4g-metal:
+  - kubernetes
 defaults:
   env_vars:
     set:

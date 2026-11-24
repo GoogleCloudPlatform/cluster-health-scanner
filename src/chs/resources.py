@@ -23,6 +23,10 @@ MACHINE_TYPE_RESOURCE_MAP = {
         "accelerators": 8,
         "resource_name": "nvidia.com/gpu",
     },
+    "a3-highgpu-8g": {
+        "accelerators": 8,
+        "resource_name": "nvidia.com/gpu",
+    },
     "a4-highgpu-8g": {
         "accelerators": 8,
         "resource_name": "nvidia.com/gpu",
