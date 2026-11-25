@@ -1539,6 +1539,34 @@ class TestCli(unittest.TestCase):
                     "/tmp/test_ws", "test_ws", run_id=None, debug=verbose
                 )
 
+    def test_run_action_passes_experimental_to_workspace_config(self):
+        mock_scheduler = mock.Mock()
+        mock_scheduler.name = "kubernetes"
+        mock_scheduler.setup_scheduler_resources.side_effect = (
+            lambda workspace_config_dir=None, tests=None, **kwargs: tests
+        )
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        for experimental in (False, True):
+            with self.subTest(experimental=experimental):
+                self.mock_rm_instance.configure_workspace.reset_mock()
+
+                cli.run_action(
+                    suite="custom",
+                    scheduler_obj=mock_scheduler,
+                    tests=[{"name": "tpu-info"}],
+                    workspace_name="test_ws",
+                    workspaces_base_dir="/tmp/test_ws",
+                    machine_type="tpu7x-standard-4t",
+                    experimental=experimental,
+                )
+
+                self.assertIs(
+                    self.mock_rm_instance.configure_workspace.call_args.kwargs[
+                        "experimental"
+                    ],
+                    experimental,
+                )
+
     def test_analyze_action_turns_on_ramble_debug_only_when_verbose(self):
         """Test _analyze_action passes `chs -v` to RambleManager as debug."""
         self.mock_app_data.get_workspaces_dir.return_value = "/tmp/workspaces"

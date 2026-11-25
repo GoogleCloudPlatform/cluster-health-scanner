@@ -862,6 +862,7 @@ def run_action(
     run_id: str | None = None,
     active_tests: list[str] | None = None,
     verbose: bool = False,
+    experimental: bool = False,
 ) -> list[str] | None:
     """Validates parameters and orchestrates test suite execution.
 
@@ -876,6 +877,8 @@ def run_action(
       deadline: The deadline for the job in seconds.
       verbose: Whether `chs -v` was given; it also turns on debug logging
         while setting up, running and analyzing the tests.
+      experimental: Whether `--experimental` was given, enabling alpha and
+        beta features.
 
     Returns:
       A list of submitted job IDs.
@@ -919,6 +922,7 @@ def run_action(
                     tests,
                     machine_type=machine_type,
                     deadline=deadline,
+                    experimental=experimental,
                 )
                 ramble_manager.setup_workspace()
 
@@ -1710,6 +1714,15 @@ def list_machine_types(ctx: click.Context, tpu: bool, gpu: bool) -> bool:
         "\n\n "
     ),
 )
+@click.option(
+    "--experimental",
+    is_flag=True,
+    help=(
+        "Enable features that are in alpha or beta. They may change or be "
+        "removed without notice."
+        "\n\n "
+    ),
+)
 @click.pass_obj
 @_handle_termination_signals(_interrupt_run)
 def run(
@@ -1725,6 +1738,7 @@ def run(
     run_id: str | None = None,
     storage_path: str | None = None,
     scheduler: str | None = None,
+    experimental: bool = False,
 ) -> RunExecutionResult:
     """Run tests or a suite on the specified cluster hardware.
 
@@ -2189,6 +2203,7 @@ def run(
                 run_id=run_id,
                 active_tests=active_tier_tests if is_tiered else None,
                 verbose=obj.get("verbose", False),
+                experimental=experimental,
             )
 
         if not job_ids:

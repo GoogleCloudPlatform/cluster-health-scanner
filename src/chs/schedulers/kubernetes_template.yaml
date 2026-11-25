@@ -19,6 +19,7 @@ ramble:
     overwrite_inventories: True
   variables:
     chs_run_id: ""
+    chs_experimental: "false"
     scheduler: kubernetes
     use_gpu_dra: "false"
     nodes: []

@@ -1395,7 +1395,7 @@ class TestPdfBillOfHealth(unittest.TestCase):
             [{"topology": "4x4x4", "nodes": nodes}],
         )
         by_name = {t.name: t.thresholds for t in rep.tests}
-        assert by_name["tpu-compute-stress (stress)"] == ["Performance >= 869"]
+        assert by_name["tpu-compute-stress (stress)"] == ["Performance >= 998"]
         assert by_name["tpu-collectives (psum)"] == [
             "Peak Bandwidth (median) >= 352"
         ]

@@ -1972,6 +1972,7 @@ class KubernetesScheduler(BaseScheduler):
         deadline: int | None = None,
         run_id: str | None = None,
         images_dir: str | None = None,
+        experimental: bool = False,
     ) -> None:
         self.workspace_config_dir = workspace_config_dir
         nodes = self.get_nodes_under_test()
@@ -2011,6 +2012,7 @@ class KubernetesScheduler(BaseScheduler):
         variables["default_interface_name"] = default_interface_name
         variables["all_interfaces_json"] = json.dumps(all_interfaces)
         variables["chs_run_id"] = run_id
+        variables["chs_experimental"] = "true" if experimental else "false"
         variables["use_gpu_dra"] = (
             "true"
             if self._is_gpu_dra_enabled(machine_type, nodes or [])

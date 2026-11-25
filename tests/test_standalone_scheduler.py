@@ -297,6 +297,20 @@ class RunTest(StandaloneSchedulerTestCase):
         self.assertEqual(config["variants"]["workflow_manager"], "standalone")
         return config["variables"]
 
+    def test_write_ramble_config_turns_experimental_off_by_default(self):
+        self._started_scheduler()
+        self.assertEqual(self._variables()["chs_experimental"], "false")
+
+    def test_write_ramble_config_sets_chs_experimental(self):
+        self._scheduler().write_ramble_config(
+            self.configs,
+            tests=[{"name": "tpu-info"}],
+            machine_type="ct6e-standard-4t",
+            run_id="run-1",
+            experimental=True,
+        )
+        self.assertEqual(self._variables()["chs_experimental"], "true")
+
     def test_write_ramble_config_records_the_run_id(self):
         self._started_scheduler()
         with open(self.tmp + standalone.LOCK_PATH) as f:

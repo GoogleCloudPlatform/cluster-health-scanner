@@ -243,6 +243,7 @@ class StandaloneScheduler(BaseScheduler):
         deadline: int | None = None,
         run_id: str | None = None,
         images_dir: str | None = None,
+        experimental: bool = False,
     ) -> None:
         """Writes the Ramble config and readies the test backend."""
         self._run_id = run_id
@@ -276,6 +277,7 @@ class StandaloneScheduler(BaseScheduler):
         variables["machine_type"] = machine_type
         variables["tests"] = tests or []
         variables["chs_run_id"] = run_id
+        variables["chs_experimental"] = "true" if experimental else "false"
         if deadline is not None:
             variables["deadline"] = deadline
         self._write_topology_json(workspace_config_dir)

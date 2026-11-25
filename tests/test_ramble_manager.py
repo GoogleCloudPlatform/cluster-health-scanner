@@ -477,6 +477,22 @@ class TestRambleManager(unittest.TestCase):
             deadline=None,
             run_id=None,
             images_dir="/tmp/images",
+            experimental=False,
+        )
+
+    def test_configure_workspace_passes_experimental_to_scheduler(self):
+        manager = RambleManager(self.tmp_dir, "ws1", self.mock_run)
+        mock_scheduler = mock.Mock()
+        self.mock_app_data.get_images_dir.return_value = "/tmp/images"
+
+        with mock.patch("os.makedirs"):
+            manager.configure_workspace(
+                mock_scheduler, None, machine_type="a3-high", experimental=True
+            )
+
+        self.assertIs(
+            mock_scheduler.write_ramble_config.call_args.kwargs["experimental"],
+            True,
         )
 
     def test_repr(self):

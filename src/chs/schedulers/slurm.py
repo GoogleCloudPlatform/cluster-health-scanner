@@ -424,6 +424,7 @@ class SlurmScheduler(BaseScheduler):
         deadline: int | None = None,
         run_id: str | None = None,
         images_dir: str | None = None,
+        experimental: bool = False,
     ) -> None:
         self._ensure_enroot_directories()
         nodes = self.get_nodes_under_test()
@@ -457,6 +458,7 @@ class SlurmScheduler(BaseScheduler):
             variables["deadline"] = deadline
 
         variables["chs_run_id"] = run_id
+        variables["chs_experimental"] = "true" if experimental else "false"
         variables["allow_interdomain_pairs"] = self.allow_interdomain_pairs(
             machine_type
         )

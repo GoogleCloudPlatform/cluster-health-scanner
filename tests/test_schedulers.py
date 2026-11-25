@@ -473,6 +473,38 @@ class TestSlurmScheduler(unittest.TestCase):
             env["ENROOT_CONFIG_CREDENTIALS"], "/home/user/.enroot/.credentials"
         )
 
+    def test_write_ramble_config_sets_chs_experimental(self, mock_logger):
+        for experimental, expected in ((False, "false"), (True, "true")):
+            with (
+                self.subTest(experimental=experimental),
+                tempfile.TemporaryDirectory() as config_dir,
+            ):
+                scheduler = SlurmScheduler(nodes="node1")
+                with (
+                    mock.patch.object(scheduler, "_ensure_enroot_directories"),
+                    mock.patch.object(
+                        scheduler,
+                        "get_nodes_under_test",
+                        return_value=["node1"],
+                    ),
+                    mock.patch.object(
+                        scheduler,
+                        "_discover_network_interfaces",
+                        return_value=["eth0"],
+                    ),
+                    mock.patch.object(scheduler, "_write_topology_json"),
+                ):
+                    scheduler.write_ramble_config(
+                        config_dir,
+                        [{"name": "nccl-single-node"}],
+                        "a3-megagpu-8g",
+                        experimental=experimental,
+                    )
+
+                with open(os.path.join(config_dir, "ramble.yaml")) as f:
+                    variables = yaml.safe_load(f)["ramble"]["variables"]
+                self.assertEqual(variables["chs_experimental"], expected)
+
     def test_discover_network_interfaces_with_anchor(self, mock_logger):
         """Test _discover_network_interfaces uses default route as anchor."""
         scheduler = SlurmScheduler()
@@ -2667,6 +2699,34 @@ ramble:
         self.assertEqual(variables["worker_service_name"], "chs-run-a")
         self.assertNotIn("chs_image", variables)
         self.assertEqual(variables["use_gpu_dra"], "false")
+        self.assertEqual(variables["chs_experimental"], "false")
+
+    @mock.patch(
+        "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",
+        return_value=["node1"],
+    )
+    def test_write_ramble_config_sets_chs_experimental(
+        self, mock_filter, mock_logger
+    ):
+        workspace_config_dir = os.path.join(self.tmp_dir, "configs")
+        os.makedirs(workspace_config_dir, exist_ok=True)
+
+        with mock.patch.object(
+            KubernetesScheduler,
+            "_discover_networks",
+            return_value=(["default"], ["rdma-0"]),
+        ):
+            KubernetesScheduler(nodes="node1").write_ramble_config(
+                workspace_config_dir,
+                [{"name": "test1"}],
+                "a3-megagpu-8g",
+                run_id="run-a",
+                experimental=True,
+            )
+
+        with open(os.path.join(workspace_config_dir, "ramble.yaml")) as f:
+            variables = yaml.safe_load(f)["ramble"]["variables"]
+        self.assertEqual(variables["chs_experimental"], "true")
 
     @mock.patch(
         "chs.schedulers.kubernetes.KubernetesScheduler.get_nodes_under_test",

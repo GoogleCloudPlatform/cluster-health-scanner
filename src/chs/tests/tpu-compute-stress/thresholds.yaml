@@ -15,6 +15,6 @@
 
 type: min
 tpu7x-standard-4t:
-  performance: 915.0
+  performance: 1050.0
 ct6e-standard-4t:
   performance: 685.0

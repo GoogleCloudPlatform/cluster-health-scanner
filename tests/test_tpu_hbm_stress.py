@@ -125,6 +125,12 @@ class TestTpuHbmStressApp(unittest.TestCase):
             "--xla_tpu_dvfs_p_state=7", os.environ["LIBTPU_INIT_ARGS"]
         )
 
+    def test_measured_burn_leaves_the_original_data_in_place(self):
+        app = self.load_app_with_env("v4-128")
+        self.assertEqual(
+            2 * app.NUM_BURN_ROUND_TRIPS, app.NUM_ITERATIONS_MEASURE
+        )
+
     def test_main_pass(self):
         app = self.load_app_with_env("v4-128")
 
@@ -167,6 +173,60 @@ class TestTpuHbmStressApp(unittest.TestCase):
         app.jax.device_get.return_value = [12345, 99999]
 
         with (
+            patch.object(app.logging, "info"),
+            patch.object(app.logging, "error") as mock_error,
+        ):
+            app.main()
+            mock_error.assert_called()
+            # Assert "STRESS_FAIL" is logged in error
+            fail_called = any(
+                "STRESS_FAIL" in call_args[0][0]
+                for call_args in mock_error.call_args_list
+            )
+            self.assertTrue(fail_called)
+
+    def test_experimental_main_pass(self):
+        app = self.load_app_with_env("v4-128")
+
+        # mock device behavior
+        app.jax.local_devices.return_value = [MagicMock()]
+        app.jax.local_devices()[0].memory_stats.return_value = {
+            "bytes_limit": 16 * 1024**3
+        }
+
+        app.hbm_burn = MagicMock(return_value="mock_outputs")
+        app.count_mismatches_both_polarities = MagicMock(return_value=0)
+        app.capacity_walk = MagicMock(return_value=0)
+        app.jax.process_index.return_value = 0
+
+        with (
+            patch.dict(os.environ, {"CHS_EXPERIMENTAL": "true"}),
+            patch.object(app.logging, "info") as mock_info,
+            patch.object(app.logging, "error") as mock_error,
+        ):
+            app.main()
+            mock_error.assert_not_called()
+            # Assert "STRESS_PASS" is logged
+            pass_called = any(
+                "STRESS_PASS" in call_args[0][0]
+                for call_args in mock_info.call_args_list
+            )
+            self.assertTrue(pass_called)
+
+    def test_experimental_main_fail(self):
+        app = self.load_app_with_env("v4-128")
+
+        app.jax.local_devices.return_value = [
+            MagicMock(),
+            MagicMock(),
+        ]  # 2 devices
+        app.jax.process_index.return_value = 0
+        app.hbm_burn = MagicMock(return_value="mock_outputs")
+        app.count_mismatches_both_polarities = MagicMock(return_value=1)
+        app.capacity_walk = MagicMock(return_value=0)
+
+        with (
+            patch.dict(os.environ, {"CHS_EXPERIMENTAL": "true"}),
             patch.object(app.logging, "info"),
             patch.object(app.logging, "error") as mock_error,
         ):

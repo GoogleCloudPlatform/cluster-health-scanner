@@ -49,6 +49,7 @@ Run tests or a suite on your cluster, TPU VM, or GPU VM. All nodes targeted in a
 | `--run-id TEXT` | Custom run ID for this CHS execution. If omitted, a unique identifier based on the cluster name and suite (for example `cluster-name-lite-hash`) is automatically generated. |
 | `--scheduler [kubernetes\|slurm\|standalone]` | Scheduler to use, overriding automatic scheduler detection. |
 | `--storage-path DESTINATION` | Where to save this run's results. A `gs://bucket[/prefix]` URI uploads them to GCS instead of the configured storage. Any other value is a local directory: results go to `<DESTINATION>/<workspace_name>/` instead of `./chs-output/`. With Docker, use a path under `/workspace/chs-output` or a bind-mounted directory. |
+| `--experimental` | Enable features that are in alpha or beta. They may change or be removed without notice. |
 
 **Examples:**
 

@@ -353,6 +353,7 @@ class RambleManager:
         tests: list[str] | None,
         machine_type: str,
         deadline: int | None = None,
+        experimental: bool = False,
     ) -> None:
         """Configures the Ramble workspace for the CHS run.
 
@@ -361,6 +362,7 @@ class RambleManager:
           tests: An optional list of names of specific tests to run.
           machine_type: The machine type.
           deadline: Suite-level deadline in seconds.
+          experimental: Whether alpha and beta features are enabled.
         """
         self._scheduler = scheduler
 
@@ -379,6 +381,7 @@ class RambleManager:
             deadline=deadline,
             run_id=self.run_id,
             images_dir=self._app_data.get_images_dir(),
+            experimental=experimental,
         )
         run_entry = self._app_data.get_run(self._workspace_name)
         if self._should_generate_pdf(run_entry, machine_type=machine_type):

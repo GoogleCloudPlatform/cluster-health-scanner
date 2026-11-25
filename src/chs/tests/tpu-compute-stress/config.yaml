@@ -27,3 +27,10 @@ defaults:
     - name: tpu-node-local-init
     variables:
       container_image: '{chs_image}'
+machines:
+  tpu7x-standard-4t:
+    variables:
+      max_p_state: 7
+  ct6e-standard-4t:
+    variables:
+      max_p_state: 3

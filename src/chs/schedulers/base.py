@@ -298,6 +298,7 @@ class BaseScheduler(abc.ABC):
         deadline: int | None = None,
         run_id: str | None = None,
         images_dir: str | None = None,
+        experimental: bool = False,
     ) -> None:
         """Writes the Ramble configuration file for the workspace.
 
@@ -307,6 +308,8 @@ class BaseScheduler(abc.ABC):
           machine_type: The machine type of the cluster nodes.
           deadline: The deadline for the job in seconds.
           run_id: The user-facing run ID.
+          images_dir: Directory holding the container images.
+          experimental: Whether alpha and beta features are enabled.
         """
         pass
 

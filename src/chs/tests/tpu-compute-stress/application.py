@@ -35,11 +35,17 @@ class TpuComputeStress(ExecutableApplication):
     name = "tpu-compute-stress"
     tags("stress", "tpu", "compute")
 
+    variable(
+        "max_p_state",
+        default="7",
+        description="Highest libtpu DVFS P-state the chip supports",
+    )
+
     executable(
         "execute",
         template=[
             f"echo '{_B64_SCRIPT}' | base64 -d > tpu_compute_stress.py",
-            "$\\{CHS_PYTHON:-python3\\} tpu_compute_stress.py",
+            'LIBTPU_INIT_ARGS="$\\{LIBTPU_INIT_ARGS:-\\} --xla_tpu_dvfs_p_state={max_p_state}" CHS_EXPERIMENTAL={chs_experimental} $\\{CHS_PYTHON:-python3\\} tpu_compute_stress.py',
         ],
         use_mpi=False,
     )

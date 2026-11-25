@@ -60,7 +60,39 @@ _safe_elements = int((_hbm_bytes * 0.20) // 4)
 # to natively sidestep the XLA compilation padding explosion on threefry/randint
 NUM_ELEMENTS = 1 << (_safe_elements.bit_length() - 1)
 NUM_ITERATIONS_WARMUP = 100
-NUM_ITERATIONS_MEASURE = 15000
+NUM_BURN_ROUND_TRIPS = 7500
+NUM_ITERATIONS_MEASURE = 2 * NUM_BURN_ROUND_TRIPS
+WALK_CHUNK_BYTES = 1 << 30
+WALK_CHUNK_WORDS = WALK_CHUNK_BYTES // jnp.dtype(jnp.uint32).itemsize
+WALK_VERIFY_TEMP_CHUNKS = 2
+WALK_PEAK_FRACTION_OF_LIMIT = 0.90
+DATA_SEED = 42
+BURN_DATA_STREAM = 0
+WALK_FIRST_STREAM = BURN_DATA_STREAM + 1
+DEVICE_AXIS = "device"
+REPLICATED = jax.sharding.PartitionSpec()
+PER_DEVICE = jax.sharding.PartitionSpec(DEVICE_AXIS)
+
+
+def _local_mesh():
+    return jax.sharding.Mesh(
+        np.array(jax.local_devices()), axis_names=DEVICE_AXIS
+    )
+
+
+def _random_words(stream, num_words):
+    key = jax.random.fold_in(jax.random.key(DATA_SEED), stream)
+    return jax.random.bits(key, (num_words,), dtype=jnp.uint32)
+
+
+@functools.partial(jax.jit, static_argnums=(1,))
+def random_words_on_every_device(stream, num_words):
+    return jax.shard_map(
+        lambda local_stream: _random_words(local_stream, num_words),
+        mesh=_local_mesh(),
+        in_specs=REPLICATED,
+        out_specs=REPLICATED,
+    )(stream)
 
 
 @jax.jit
@@ -72,10 +104,7 @@ def _init_single_memory(key):
 
 def init_memory(key):
     local_devices = jax.local_devices()
-    mesh = jax.sharding.Mesh(np.array(local_devices), axis_names="device")
-    sharding = jax.sharding.NamedSharding(
-        mesh, jax.sharding.PartitionSpec(None)
-    )
+    sharding = jax.sharding.NamedSharding(_local_mesh(), REPLICATED)
     with jax.default_device(local_devices[0]):
         a0 = _init_single_memory(key)
         a_np = jax.device_get(a0)
@@ -88,15 +117,18 @@ def init_memory(key):
     return A
 
 
+def init_regenerable_memory():
+    A = random_words_on_every_device(BURN_DATA_STREAM, NUM_ELEMENTS)
+    jax.block_until_ready(A)
+    return A
+
+
 def _hbm_burn_step(x):
     return jax.lax.bitwise_not(x)
 
 
 @functools.partial(jax.jit, static_argnums=(1,))
 def _hbm_burn_device_loop(a, num_iters):
-    mesh = jax.sharding.Mesh(np.array(jax.local_devices()), axis_names="device")
-    spec = jax.sharding.PartitionSpec(None)
-
     def _loop(x):
         return jax.lax.fori_loop(
             0, num_iters, lambda _, v: _hbm_burn_step(v), x
@@ -104,9 +136,9 @@ def _hbm_burn_device_loop(a, num_iters):
 
     return jax.shard_map(
         _loop,
-        mesh=mesh,
-        in_specs=spec,
-        out_specs=spec,
+        mesh=_local_mesh(),
+        in_specs=REPLICATED,
+        out_specs=REPLICATED,
     )(a)
 
 
@@ -117,7 +149,7 @@ def hbm_burn(a, num_iters):
         step = min(NUM_ITERATIONS_WARMUP, remaining)
         x = _hbm_burn_device_loop(x, step)
         remaining -= step
-    return [s.data for s in x.addressable_shards]
+    return x
 
 
 @jax.jit
@@ -127,15 +159,84 @@ def _hbm_checksum_single(a):
 
 
 def hbm_checksum(a):
-    return [_hbm_checksum_single(x) for x in a]
+    return [_hbm_checksum_single(shard.data) for shard in a.addressable_shards]
+
+
+def checksums_match_device_0(burned):
+    checksums = jax.device_get(hbm_checksum(burned))
+    return all(checksum == checksums[0] for checksum in checksums)
+
+
+@functools.partial(jax.jit, static_argnames=("inverted",))
+def count_mismatches_per_device(buf, stream, inverted):
+    def _count(local_buf, local_stream):
+        expected = _random_words(local_stream, local_buf.shape[0])
+        if inverted:
+            expected = jax.lax.bitwise_not(expected)
+        return jnp.count_nonzero(local_buf != expected, keepdims=True)
+
+    return jax.shard_map(
+        _count,
+        mesh=_local_mesh(),
+        in_specs=(REPLICATED, REPLICATED),
+        out_specs=PER_DEVICE,
+    )(buf, stream)
+
+
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _invert_in_place(buf):
+    return jax.lax.bitwise_not(buf)
+
+
+def _total(per_device_counts):
+    return int(np.sum(jax.device_get(per_device_counts)))
+
+
+def count_mismatches_both_polarities(buffers, streams):
+    counts = [
+        count_mismatches_per_device(buf, stream, inverted=False)
+        for buf, stream in zip(buffers, streams)
+    ]
+    mismatches = _total(counts)
+    inverted = [_invert_in_place(buf) for buf in buffers]
+    counts = [
+        count_mismatches_per_device(buf, stream, inverted=True)
+        for buf, stream in zip(inverted, streams)
+    ]
+    return mismatches + _total(counts)
+
+
+def walk_chunk_count():
+    peak_chunks = (
+        int(_hbm_bytes * WALK_PEAK_FRACTION_OF_LIMIT) // WALK_CHUNK_BYTES
+    )
+    return peak_chunks - WALK_VERIFY_TEMP_CHUNKS
+
+
+def capacity_walk():
+    streams = range(WALK_FIRST_STREAM, WALK_FIRST_STREAM + walk_chunk_count())
+    chunks = [
+        random_words_on_every_device(stream, WALK_CHUNK_WORDS)
+        for stream in streams
+    ]
+    return count_mismatches_both_polarities(chunks, streams)
+
+
+def experimental_enabled():
+    return os.environ.get("CHS_EXPERIMENTAL") == "true"
 
 
 def main():
+    experimental = experimental_enabled()
     logging.info("Starting TPU HBM stress script...")
     logging.info(f"ACCELERATOR_TYPE: {accel_type}, Deduced P_STATE: {p_state}")
     logging.info(
         f"NUM_ELEMENTS={NUM_ELEMENTS} NUM_ITERATIONS_MEASURE={NUM_ITERATIONS_MEASURE}"
     )
+    if experimental:
+        logging.info(
+            f"HBM_BYTES_LIMIT={_hbm_bytes} WALK_CHUNKS={walk_chunk_count()}"
+        )
     local_devices = jax.local_devices()
     node_name = os.environ.get("MY_NODE_NAME", "UnknownHost")
 
@@ -145,11 +246,12 @@ def main():
     )
 
     logging.info(f"NODE:{node_name} EVENT:WARMUP_START")
-    root_key = jax.random.PRNGKey(42)
-    A_mem = init_memory(root_key)
+    if experimental:
+        A_mem = init_regenerable_memory()
+    else:
+        A_mem = init_memory(jax.random.PRNGKey(DATA_SEED))
 
-    warmup_res = hbm_burn(A_mem, NUM_ITERATIONS_WARMUP)
-    jax.block_until_ready(warmup_res)
+    jax.block_until_ready(hbm_burn(A_mem, NUM_ITERATIONS_WARMUP))
 
     logging.info(f"NODE:{node_name} EVENT:MEASURE_START")
     start_time = time.time()
@@ -158,6 +260,7 @@ def main():
     jax.block_until_ready(outputs)
 
     duration = time.time() - start_time
+    del A_mem
 
     bytes_per_iteration = (NUM_ELEMENTS * 4) * 2
     total_bytes_transferred = bytes_per_iteration * NUM_ITERATIONS_MEASURE
@@ -166,16 +269,20 @@ def main():
     devices_per_chip = max(1, len(local_devices) // 4)
     chip_bandwidth = gb_per_second * devices_per_chip
 
-    checksums = jax.device_get(hbm_checksum(outputs))
-    golden_checksum = checksums[0]
-    is_valid = True
+    if experimental:
+        burn_mismatches = count_mismatches_both_polarities(
+            [outputs], [BURN_DATA_STREAM]
+        )
+        del outputs
+        walk_mismatches = capacity_walk()
+        logging.info(
+            f"NODE:{node_name} EVENT:HBM_MISMATCHES BURN:{burn_mismatches} WALK:{walk_mismatches}"
+        )
+        sdc_detected = bool(burn_mismatches or walk_mismatches)
+    else:
+        sdc_detected = not checksums_match_device_0(outputs)
 
-    for i, dev in enumerate(local_devices):
-        if checksums[i] != golden_checksum:
-            is_valid = False
-            break
-
-    if not is_valid:
+    if sdc_detected:
         logging.error(
             f"NODE:{node_name} EVENT:STRESS_FAIL. TPU devices failed SDC check"
         )
