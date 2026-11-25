@@ -50,6 +50,7 @@ from chs.schedulers.slurm import SlurmScheduler
 from chs.schedulers import kubernetes
 from chs.schedulers import _get_kubectl_context, detect_scheduler
 from chs.testkit.context import TPU_INVENTORY_KEYS, load_inventory
+from chs.tpu_runtime_versions import TpuRuntimeVersions
 from google.auth.exceptions import GoogleAuthError
 from chs.exceptions import ChsSchedulerException, ChsValidationError
 from chs.utils import k8s_client
@@ -361,6 +362,12 @@ class TestSlurmScheduler(unittest.TestCase):
     def test_name(self, mock_logger):
         scheduler = SlurmScheduler()
         self.assertEqual(scheduler.name, "slurm")
+
+    def test_get_cluster_metadata_is_empty(self, mock_logger):
+        self.assertEqual(
+            SlurmScheduler().get_cluster_metadata(["node1"], "a3-megagpu-8g"),
+            {},
+        )
 
     @mock.patch("subprocess.run")
     def test_get_nodes_under_test_nodes_arg(self, mock_run, mock_logger):
@@ -2051,6 +2058,110 @@ class TestKubernetesScheduler(unittest.TestCase):
             _gke_version("1.11.10-gke.5"), _gke_version("1.36.0-gke.1")
         )
         self.assertLess(_gke_version("unknown"), _gke_version("0.0.0-gke.0"))
+
+    def _add_versioned_nodes(self, versions: dict[str, str | None]) -> None:
+        for name, version in versions.items():
+            self.kube.add_object(
+                "",
+                "nodes",
+                _versioned_tpu_node(name, version, provision_only=False),
+            )
+
+    def test_get_cluster_metadata_reads_gke_version_of_fetched_nodes(
+        self, mock_logger
+    ):
+        """The GKE version comes from node objects the run already fetched."""
+        self._add_versioned_nodes(
+            {
+                "tpu-1": "v1.36.4-gke.2377000",
+                "tpu-2": "v1.36.4-gke.2377000",
+                "untested": "v1.35.8-gke.1036000",
+            }
+        )
+        scheduler = KubernetesScheduler()
+        scheduler._get_node_objects(["tpu-1", "tpu-2"])
+        calls_before = len(self.kube.calls)
+
+        # A GPU machine type: only the GKE version applies.
+        self.assertEqual(
+            scheduler.get_cluster_metadata(["tpu-1", "tpu-2"], "a3-megagpu-8g"),
+            {"gke_version": "1.36.4-gke.2377000"},
+        )
+        self.assertEqual(self.kube.calls[calls_before:], [])
+
+    def test_get_cluster_metadata_adds_tpu_runtime_versions_on_tpu(
+        self, mock_logger
+    ):
+        self._add_versioned_nodes({"tpu-1": "v1.36.4-gke.2377000"})
+        gke = {"gke_version": "1.36.4-gke.2377000"}
+        saved = TpuRuntimeVersions(jax="0.12.0", libtpu="0.0.50")
+        for versions, expected in (
+            (
+                saved,
+                gke | {"jax_version": "0.12.0", "libtpu_version": "0.0.50"},
+            ),
+            (None, gke),
+        ):
+            with (
+                self.subTest(versions=versions),
+                mock.patch.object(
+                    kubernetes.tpu_runtime_versions,
+                    "load",
+                    return_value=versions,
+                ),
+            ):
+                self.assertEqual(
+                    KubernetesScheduler().get_cluster_metadata(
+                        ["tpu-1"], "tpu7x-standard-4t"
+                    ),
+                    expected,
+                )
+
+    def test_get_cluster_metadata_lists_distinct_gke_versions_oldest_first(
+        self, mock_logger
+    ):
+        self._add_versioned_nodes(
+            {
+                "newer": "v1.36.10-gke.100",
+                "older": "v1.36.4-gke.2377000",
+                "same": "v1.36.4-gke.2377000",
+            }
+        )
+
+        self.assertEqual(
+            KubernetesScheduler().get_cluster_metadata(
+                ["newer", "older", "same"], "a3-megagpu-8g"
+            ),
+            {"gke_version": "1.36.4-gke.2377000, 1.36.10-gke.100"},
+        )
+
+    def test_get_cluster_metadata_skips_unknown_gke_versions(self, mock_logger):
+        """Nodes without nodeInfo or with a null kubeletVersion are skipped."""
+        self._add_versioned_nodes({"no-info": None})
+        null_version = _versioned_tpu_node(
+            "null-version", None, provision_only=False
+        )
+        null_version["status"]["nodeInfo"] = {"kubeletVersion": None}
+        self.kube.add_object("", "nodes", null_version)
+        scheduler = KubernetesScheduler()
+
+        for nodes in (["no-info", "null-version"], []):
+            with self.subTest(nodes=nodes):
+                self.assertEqual(
+                    scheduler.get_cluster_metadata(nodes, "a3-megagpu-8g"), {}
+                )
+
+    def test_get_cluster_metadata_skips_gke_version_when_nodes_unreadable(
+        self, mock_logger
+    ):
+        self.kube.fail_always("list_nodes", k8s_client.KubeError("down"))
+
+        self.assertEqual(
+            KubernetesScheduler().get_cluster_metadata(
+                ["tpu-1"], "a3-megagpu-8g"
+            ),
+            {},
+        )
 
     def test_partition_ids_reads_only_tpu7x_partition_shapes(self, mock_logger):
         prefix = "cloud.google.com/gke-tpu-partition-"

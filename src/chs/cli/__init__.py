@@ -2152,30 +2152,33 @@ def run(
     args_string = shlex.join(sys.argv[1:])
     command_statement = f"{cli_name} {args_string}".strip()
 
-    app_data.update_run(
-        workspace_name,
-        {
-            "run_id": run_id,
-            "workspace_name": workspace_name,
-            "workspace_path": os.path.join(workspaces_base_dir, workspace_name),
-            "submission_time": datetime.datetime.now(datetime.UTC).isoformat(),
-            "scheduler": scheduler_obj.name,
-            "machine_type": machine_type,
-            "command_statement": command_statement,
-            "storage": run_storage_config,
-            "node_to_instance_id": scheduler_obj.node_to_instance_id,
-            "deadline": deadline,
-            "tests": parsed_tests,
-            "suite": suite,
-            "is_tiered": is_tiered,
-            "active_tier": 1,
-            "active_tier_tests": active_tier_tests,
-            "submission_complete": False,
-            "export_logs_dir": _resolve_export_logs_dir(
-                custom_export_dir, workspace_name
-            ),
-        },
+    run_entry = {
+        "run_id": run_id,
+        "workspace_name": workspace_name,
+        "workspace_path": os.path.join(workspaces_base_dir, workspace_name),
+        "submission_time": datetime.datetime.now(datetime.UTC).isoformat(),
+        "scheduler": scheduler_obj.name,
+        "machine_type": machine_type,
+        "command_statement": command_statement,
+        "storage": run_storage_config,
+        "node_to_instance_id": scheduler_obj.node_to_instance_id,
+        "deadline": deadline,
+        "tests": parsed_tests,
+        "suite": suite,
+        "is_tiered": is_tiered,
+        "active_tier": 1,
+        "active_tier_tests": active_tier_tests,
+        "submission_complete": False,
+        "export_logs_dir": _resolve_export_logs_dir(
+            custom_export_dir, workspace_name
+        ),
+    }
+    cluster_metadata = scheduler_obj.get_cluster_metadata(
+        nodes_under_test, machine_type
     )
+    if cluster_metadata:
+        run_entry["cluster_metadata"] = cluster_metadata
+    app_data.update_run(workspace_name, run_entry)
 
     if is_tiered:
         tests_str = ", ".join(active_tier_tests)

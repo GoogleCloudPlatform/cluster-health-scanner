@@ -12,6 +12,7 @@ dist/
 lib/
 *.egg-info/
 *_pb2.py
+src/chs/tpu_runtime_versions.json
 
 # Non-production & developer-only directories
 tests/

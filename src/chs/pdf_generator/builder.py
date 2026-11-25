@@ -54,6 +54,12 @@ _SYSTEM_TYPE_SCHEDULERS = {
     "KUBERNETES_CLUSTER": ("GKE", "GKE Node", "Nodepool"),
     "STANDALONE_CLUSTER": ("Standalone", "VM Host", ""),
 }
+# (overview label, system_info.metadata key), shown only when reported.
+_SOFTWARE_VERSIONS = (
+    ("GKE version", "gke_version"),
+    ("JAX version", "jax_version"),
+    ("libtpu version", "libtpu_version"),
+)
 
 
 def _group_kind(machine_type: str, topology: str) -> str:
@@ -358,6 +364,10 @@ class _Builder:
         ]
         if self._scheduler:
             info.append(("Scheduler", self._scheduler))
+        fields = boh.system_info.metadata.fields
+        for label, key in _SOFTWARE_VERSIONS:
+            if key in fields and fields[key].string_value:
+                info.append((label, fields[key].string_value))
         return info
 
     def _test_row(self, key: TestKey) -> model.TestRow:

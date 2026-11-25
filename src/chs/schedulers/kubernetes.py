@@ -53,7 +53,7 @@ from chs.exceptions import (
     ChsValidationError,
 )
 from chs.utils.lifecycle import JobState, JobStatus, ReasonCode
-from chs import image, resources
+from chs import image, resources, tpu_runtime_versions
 from chs.testkit import context as testkit_context
 from chs.constants import (
     CHS_NAMESPACE,
@@ -1819,6 +1819,48 @@ class KubernetesScheduler(BaseScheduler):
                         inst_id
                     )
         return metadata_map
+
+    def get_cluster_metadata(
+        self, nodes: list[str], machine_type: str
+    ) -> dict[str, str]:
+        """Returns the GKE version of the nodes, plus JAX and libtpu on TPU.
+
+        TPU pods run the published CHS image, which is built from the pins
+        that tpu_runtime_versions saved when CHS was built.
+        """
+        metadata = {}
+        if gke_version := self._gke_version_of(nodes):
+            metadata["gke_version"] = gke_version
+        if resources.is_tpu(resources.normalize_machine_type(machine_type)):
+            if versions := tpu_runtime_versions.load():
+                metadata["jax_version"] = versions.jax
+                metadata["libtpu_version"] = versions.libtpu
+        return metadata
+
+    def _gke_version_of(self, nodes: list[str]) -> str:
+        """Returns the GKE version that the nodes run, e.g. 1.36.4-gke.2377000.
+
+        It is the kubelet version of the node objects already fetched for the
+        run, so reading it makes no API call. Distinct versions are listed
+        oldest first, and "" means no version could be read.
+        """
+        try:
+            node_objects = self._get_node_objects(nodes)
+        except (
+            ChsSchedulerException,
+            ChsValidationError,
+            k8s_client.KubeError,
+            OSError,
+        ) as e:
+            logger.debug("Could not read the GKE version of the nodes: %s", e)
+            return ""
+        versions = set()
+        for node in node_objects:
+            node_info = (node.get("status") or {}).get("nodeInfo") or {}
+            version = (node_info.get("kubeletVersion") or "").strip()
+            if version:
+                versions.add(version.removeprefix("v"))
+        return ", ".join(sorted(versions, key=lambda v: (_gke_version(v), v)))
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
         """Discovers network topology from the labels of the node objects."""

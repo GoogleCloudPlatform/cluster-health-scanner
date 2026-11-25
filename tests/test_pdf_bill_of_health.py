@@ -1485,6 +1485,32 @@ class TestPdfBillOfHealth(unittest.TestCase):
             rep = builder.build_report(boh, {"n0": ["c0"]}, [])
             assert dict(rep.run_info)["Scheduler"] == expected_sched
 
+    def test_overview_strip_shows_software_versions_when_reported(self):
+        boh = _new_boh("versions", "tpu7x-standard-4t")
+        boh.system_info.type = "KUBERNETES_CLUSTER"
+        _add_gte_metric(
+            _add_result(boh, "tpu-hbm", ["n0"], test_level="check"),
+            "Bandwidth (median)",
+            3300.0,
+            3200.0,
+        )
+        labels = {"GKE version", "JAX version", "libtpu version"}
+
+        rep = builder.build_report(boh, {"n0": ["c0"]}, [])
+        assert not labels & set(dict(rep.run_info))
+
+        fields = boh.system_info.metadata.fields
+        fields["gke_version"].string_value = "1.36.4-gke.2377000"
+        fields["jax_version"].string_value = "0.12.0"
+        fields["libtpu_version"].string_value = "0.0.50"
+        rep = builder.build_report(boh, {"n0": ["c0"]}, [])
+        assert rep.run_info[-4:] == [
+            ("Scheduler", "GKE"),
+            ("GKE version", "1.36.4-gke.2377000"),
+            ("JAX version", "0.12.0"),
+            ("libtpu version", "0.0.50"),
+        ]
+
     def test_review_edge_cases_columns_pulse_nan_strip_charts_and_overview(
         self,
     ):

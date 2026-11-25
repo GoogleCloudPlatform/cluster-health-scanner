@@ -1777,6 +1777,43 @@ class TestCli(unittest.TestCase):
         )
 
     @mock.patch("chs.cli._analyze_action")
+    def test_run_command_records_cluster_metadata_of_nodes_under_test(
+        self, mock_analyze_action
+    ):
+        """The run entry keeps the scheduler's metadata only if non-empty."""
+        self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"
+        self.mock_rm_instance.execute_experiments.return_value = ["job1"]
+        self.mock_scheduler.name = "slurm"
+        self.mock_scheduler.get_nodes_under_test.return_value = ["n1", "n2"]
+        metadata = {"gke_version": "1.36.4-gke.2377000"}
+
+        for returned, expected in ((metadata, metadata), ({}, None)):
+            with self.subTest(returned=returned):
+                self.mock_app_data.update_run.reset_mock()
+                self.mock_scheduler.get_cluster_metadata.reset_mock()
+                self.mock_scheduler.get_cluster_metadata.return_value = returned
+
+                result = self.runner.invoke(
+                    cli.cli,
+                    [
+                        "run",
+                        "--suite",
+                        "suite1",
+                        "--run-id",
+                        "customrun",
+                        "--auto-approve",
+                    ],
+                    standalone_mode=False,
+                )
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.mock_scheduler.get_cluster_metadata.assert_called_once_with(
+                    ["n1", "n2"], "a3-megagpu-8g"
+                )
+                _, run_details = self.mock_app_data.update_run.call_args[0]
+                self.assertEqual(run_details.get("cluster_metadata"), expected)
+
+    @mock.patch("chs.cli._analyze_action")
     def test_run_command_storage_path(self, mock_analyze_action):
         """Test --storage-path flag for local and cloud destinations."""
         self.mock_app_data.get_workspaces_dir.return_value = "/mocked/ws"

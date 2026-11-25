@@ -34,6 +34,7 @@ from chs.exceptions import (
 from chs.schedulers import standalone
 from chs.schedulers.standalone import job_spec
 from chs.schedulers.standalone.host import GceInstance
+from chs.tpu_runtime_versions import TpuRuntimeVersions
 from chs.utils.lifecycle import JobState, JobStatus
 
 _INSTANCE = GceInstance(
@@ -132,6 +133,32 @@ class NodesTest(StandaloneSchedulerTestCase):
         self.assertEqual(scheduler.node_to_zone, {"tpu-vm-1": "us-east5-b"})
         self.assertEqual(scheduler.project_id, "my-project")
         self.assertIs(schedulers.get_scheduler("standalone"), scheduler)
+
+    def test_cluster_metadata_reports_installed_tpu_runtime_versions(self):
+        """TPU tests run on the interpreter running CHS, so on its packages."""
+        scheduler = self._scheduler()
+        installed = TpuRuntimeVersions(jax="0.12.0", libtpu="0.0.50")
+        for versions, machine_type, expected in (
+            (
+                installed,
+                "ct6e-standard-4t",
+                {"jax_version": "0.12.0", "libtpu_version": "0.0.50"},
+            ),
+            (installed, "a3-megagpu-8g", {}),
+            (None, "ct6e-standard-4t", {}),
+        ):
+            with (
+                self.subTest(versions=versions, machine_type=machine_type),
+                mock.patch.object(
+                    standalone.tpu_runtime_versions,
+                    "installed",
+                    return_value=versions,
+                ),
+            ):
+                self.assertEqual(
+                    scheduler.get_cluster_metadata(["tpu-vm-1"], machine_type),
+                    expected,
+                )
 
     def test_rejects_remote_and_cluster_targets(self):
         for kwargs in (

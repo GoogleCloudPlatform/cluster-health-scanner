@@ -1120,6 +1120,44 @@ class TestBOHGenerator(unittest.TestCase):
         # Verify that other fields are NOT there
         self.assertNotIn("scheduler", report.system_info.metadata.fields)
 
+    @mock.patch("chs.boh_generator.ChsAppData")
+    def test_generate_system_info_copies_cluster_metadata(
+        self, mock_app_data_cls
+    ):
+        """Versions saved in the run entry are copied into system_info."""
+        self._write_json({"workspace_name": "ws", "experiments": []})
+        metadata = {
+            "gke_version": "1.36.4-gke.2377000",
+            "jax_version": "0.12.0",
+            "libtpu_version": "0.0.50",
+        }
+        for run_entry, expected in (
+            (
+                {
+                    "machine_type": "tpu7x-standard-4t",
+                    "cluster_metadata": metadata,
+                },
+                metadata,
+            ),
+            ({"machine_type": "a3-megagpu-8g"}, {}),
+        ):
+            with self.subTest(expected=expected):
+                mock_app_data_cls.return_value.get_run.return_value = run_entry
+
+                report = BOHGenerator(
+                    self.test_json_path, cluster_type="kubernetes"
+                ).generate()
+
+                fields = report.system_info.metadata.fields
+                self.assertEqual(
+                    {
+                        k: fields[k].string_value
+                        for k in metadata
+                        if k in fields
+                    },
+                    expected,
+                )
+
     def test_load_thresholds_invalid_yaml(self):
         """Test that invalid YAML logs warning and falls back."""
         thresh_file = os.path.join(self.test_dir.name, "bad_yaml.yaml")

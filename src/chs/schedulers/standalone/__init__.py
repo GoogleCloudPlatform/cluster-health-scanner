@@ -24,6 +24,7 @@ from typing import Any
 
 import yaml
 
+from chs import resources, tpu_runtime_versions
 from chs.exceptions import (
     ChsCancellationException,
     ChsSchedulerException,
@@ -118,6 +119,21 @@ class StandaloneScheduler(BaseScheduler):
 
     def get_topology(self) -> dict[str, dict[str, list[str]]]:
         return {}
+
+    def get_cluster_metadata(
+        self, nodes: list[str], machine_type: str
+    ) -> dict[str, str]:
+        """Returns the JAX and libtpu versions of a TPU VM.
+
+        TPU tests run as native processes on the interpreter running CHS, so
+        these are the versions installed with CHS.
+        """
+        if not resources.is_tpu(resources.normalize_machine_type(machine_type)):
+            return {}
+        versions = tpu_runtime_versions.installed()
+        if versions is None:
+            return {}
+        return {"jax_version": versions.jax, "libtpu_version": versions.libtpu}
 
     def _lock_host(self) -> bool:
         """Takes the host-wide lock for this process; False if it is held."""

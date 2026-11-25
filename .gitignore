@@ -7,4 +7,5 @@ build/
 .ruff_cache/
 .coverage
 *_pb2.py
+src/chs/tpu_runtime_versions.json
 /chs-output/

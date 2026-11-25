@@ -242,6 +242,16 @@ class BaseScheduler(abc.ABC):
         """
         return {}
 
+    def get_cluster_metadata(
+        self, nodes: list[str], machine_type: str
+    ) -> dict[str, str]:
+        """Returns software versions of the tested nodes for the Bill of Health.
+
+        Optional keys: 'gke_version', 'jax_version' and 'libtpu_version'.
+        Unknown values are left out.
+        """
+        return {}
+
     def write_hardware_inventory(
         self, workspace_dir: str, nodes: list[str] | None = None
     ) -> None:

@@ -580,6 +580,11 @@ class BOHGenerator:
                     self.report.system_info.metadata.fields[
                         "storage"
                     ].string_value = formatting.format_storage_path(storage)
+                for key, value in run_data.get("cluster_metadata", {}).items():
+                    if value:
+                        self.report.system_info.metadata.fields[
+                            key
+                        ].string_value = str(value)
         except Exception as e:
             logger.debug(
                 "Failed to retrieve system information from "
