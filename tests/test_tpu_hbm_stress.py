@@ -131,6 +131,76 @@ class TestTpuHbmStressApp(unittest.TestCase):
             2 * app.NUM_BURN_ROUND_TRIPS, app.NUM_ITERATIONS_MEASURE
         )
 
+    def test_burn_loop_iteration_count_is_static(self):
+        app = self.load_app_with_env("v4-128")
+        burn_loop_jit = [
+            jit_call
+            for jit_call in app.jax.jit.call_args_list
+            if jit_call.args[0].__name__ == "_hbm_burn_device_loop"
+        ][-1]
+        self.assertEqual((1,), burn_loop_jit.kwargs.get("static_argnums"))
+        self.assertNotIn("donate_argnums", burn_loop_jit.kwargs)
+
+    def _record_burn_order(self, experimental):
+        app = self.load_app_with_env("v4-128")
+        app.jax.local_devices.return_value = [MagicMock()]
+        app.jax.process_index.return_value = 0
+        app.jax.device_get.return_value = [12345]
+        app.hbm_checksum = MagicMock()
+        app.count_mismatches_both_polarities = MagicMock(return_value=0)
+        app.capacity_walk = MagicMock(return_value=0)
+        events = []
+        burns = {
+            app.NUM_ITERATIONS_WARMUP: MagicMock(
+                side_effect=lambda a: events.append("warmup")
+            ),
+            app.NUM_ITERATIONS_MEASURE: MagicMock(
+                side_effect=lambda a: events.append("measure")
+            ),
+        }
+
+        def compile_hbm_burn(a, num_iters):
+            events.append(("compile", num_iters))
+            return burns[num_iters]
+
+        def clock():
+            events.append("clock")
+            return float(len(events))
+
+        app.compile_hbm_burn = MagicMock(side_effect=compile_hbm_burn)
+        with (
+            patch.dict(
+                os.environ, {"CHS_EXPERIMENTAL": str(experimental).lower()}
+            ),
+            patch.object(app, "time") as mock_time,
+            patch.object(app.logging, "info"),
+            patch.object(app.logging, "error"),
+        ):
+            mock_time.time.side_effect = clock
+            app.main()
+        return app, events, burns
+
+    def _assert_measured_burn_is_one_precompiled_call(self, experimental):
+        app, events, burns = self._record_burn_order(experimental)
+        self.assertEqual(
+            [
+                ("compile", app.NUM_ITERATIONS_WARMUP),
+                ("compile", app.NUM_ITERATIONS_MEASURE),
+                "warmup",
+                "clock",
+                "measure",
+                "clock",
+            ],
+            events,
+        )
+        burns[app.NUM_ITERATIONS_MEASURE].assert_called_once()
+
+    def test_measured_burn_is_one_precompiled_call(self):
+        self._assert_measured_burn_is_one_precompiled_call(experimental=False)
+
+    def test_experimental_measured_burn_is_one_precompiled_call(self):
+        self._assert_measured_burn_is_one_precompiled_call(experimental=True)
+
     def test_main_pass(self):
         app = self.load_app_with_env("v4-128")
 
@@ -140,7 +210,9 @@ class TestTpuHbmStressApp(unittest.TestCase):
             "bytes_limit": 16 * 1024**3
         }
 
-        app.hbm_burn = MagicMock(return_value="mock_outputs")
+        app.compile_hbm_burn = MagicMock(
+            return_value=MagicMock(return_value="mock_outputs")
+        )
         app.hbm_checksum = MagicMock(return_value="mock_checksum_expr")
         app.jax.device_get.return_value = [12345]  # golden checksum
         app.jax.process_index.return_value = 0
@@ -166,7 +238,9 @@ class TestTpuHbmStressApp(unittest.TestCase):
             MagicMock(),
         ]  # 2 devices
         app.jax.process_index.return_value = 0
-        app.hbm_burn = MagicMock(return_value="mock_outputs")
+        app.compile_hbm_burn = MagicMock(
+            return_value=MagicMock(return_value="mock_outputs")
+        )
         app.hbm_checksum = MagicMock(return_value="mock_checksum_expr")
 
         # One device matches golden, second device corrupts
@@ -194,7 +268,9 @@ class TestTpuHbmStressApp(unittest.TestCase):
             "bytes_limit": 16 * 1024**3
         }
 
-        app.hbm_burn = MagicMock(return_value="mock_outputs")
+        app.compile_hbm_burn = MagicMock(
+            return_value=MagicMock(return_value="mock_outputs")
+        )
         app.count_mismatches_both_polarities = MagicMock(return_value=0)
         app.capacity_walk = MagicMock(return_value=0)
         app.jax.process_index.return_value = 0
@@ -221,7 +297,9 @@ class TestTpuHbmStressApp(unittest.TestCase):
             MagicMock(),
         ]  # 2 devices
         app.jax.process_index.return_value = 0
-        app.hbm_burn = MagicMock(return_value="mock_outputs")
+        app.compile_hbm_burn = MagicMock(
+            return_value=MagicMock(return_value="mock_outputs")
+        )
         app.count_mismatches_both_polarities = MagicMock(return_value=1)
         app.capacity_walk = MagicMock(return_value=0)
 

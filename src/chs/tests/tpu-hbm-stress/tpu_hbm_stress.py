@@ -142,14 +142,8 @@ def _hbm_burn_device_loop(a, num_iters):
     )(a)
 
 
-def hbm_burn(a, num_iters):
-    remaining = int(num_iters)
-    x = a
-    while remaining > 0:
-        step = min(NUM_ITERATIONS_WARMUP, remaining)
-        x = _hbm_burn_device_loop(x, step)
-        remaining -= step
-    return x
+def compile_hbm_burn(a, num_iters):
+    return _hbm_burn_device_loop.lower(a, num_iters).compile()
 
 
 @jax.jit
@@ -251,12 +245,14 @@ def main():
     else:
         A_mem = init_memory(jax.random.PRNGKey(DATA_SEED))
 
-    jax.block_until_ready(hbm_burn(A_mem, NUM_ITERATIONS_WARMUP))
+    warmup_burn = compile_hbm_burn(A_mem, NUM_ITERATIONS_WARMUP)
+    measured_burn = compile_hbm_burn(A_mem, NUM_ITERATIONS_MEASURE)
+    jax.block_until_ready(warmup_burn(A_mem))
 
     logging.info(f"NODE:{node_name} EVENT:MEASURE_START")
     start_time = time.time()
 
-    outputs = hbm_burn(A_mem, NUM_ITERATIONS_MEASURE)
+    outputs = measured_burn(A_mem)
     jax.block_until_ready(outputs)
 
     duration = time.time() - start_time
