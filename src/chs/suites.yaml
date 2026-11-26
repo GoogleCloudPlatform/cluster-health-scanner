@@ -96,9 +96,6 @@ suites:
   - name: tpu-gemm
     variables:
       timeout: 300
-  - name: tpu-gemm-pulse
-    variables:
-      timeout: 360
   - name: tpu-host-device
     variables:
       timeout: 480

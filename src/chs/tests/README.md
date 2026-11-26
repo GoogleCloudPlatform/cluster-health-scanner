@@ -8,7 +8,7 @@ CHS organizes diagnostics into **suites** (predefined testing bundles, `--suite 
 | --- | --- | --- |
 | [`tpu-info`](tpu-info) | Basic TPU health covering device count, `libtpu` version, and TPU device type. | `lite`, `standard` |
 | [`tpu-gemm`](tpu-gemm) | Performs generalized matrix multiplications (GEMM) through the TPU to calculate exactly how many peak TFLOP/s the compute pipeline can sustain. | `lite`, `standard` |
-| [`tpu-gemm-pulse`](tpu-gemm-pulse) | Cycles the TPU through repeated idle-to-full chained GEMM load steps to stress power delivery and load transitions while verifying bit-exact 64-bit checksums across local devices on each host. | `standard` |
+| [`tpu-gemm-pulse`](tpu-gemm-pulse) | Cycles the TPU through repeated idle-to-full chained GEMM load steps to stress power delivery and load transitions while verifying bit-exact 64-bit checksums across local devices on each host. | None (use `--tests`) |
 | [`tpu-hbm`](tpu-hbm) | Generates performance traces to measure the absolute architectural read and write bandwidth limits of the HBM. | `lite`, `standard` |
 | [`tpu-host-device`](tpu-host-device) | Measures host-to-device and device-to-host transfer bandwidth (GB/s) between the host CPU and the TPU. | `lite`, `standard` |
 | [`tpu-collectives`](tpu-collectives) | Times distributed cross-chip operations (like All-Reduce and All-Gather) to measure the real-world bandwidth limits of the interconnect infrastructure. | `lite`, `standard` |
