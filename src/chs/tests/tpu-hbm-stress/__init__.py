@@ -20,6 +20,9 @@ from .renderer import TpuHbmStressRenderer
 class TpuHbmStressPlugin(
     TpuHbmStressRenderer, TpuHbmStressExtractor, TestPlugin
 ):
+    def get_metric_units(self) -> dict[str, str]:
+        return {"Bandwidth": "GB/s"}
+
     def creates_per_node_results(self) -> bool:
         return True
 

@@ -26,6 +26,9 @@ class TpuHostDevicePlugin(
             "d2h_bandwidth": "D2H Bandwidth",
         }
 
+    def get_metric_units(self) -> dict[str, str]:
+        return {"H2D Bandwidth": "GB/s", "D2H Bandwidth": "GB/s"}
+
     def creates_per_node_results(self) -> bool:
         return True
 

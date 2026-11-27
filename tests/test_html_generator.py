@@ -18,7 +18,9 @@ import os
 import tempfile
 from unittest import mock
 
+from chs.core.summary_aggregator import aggregate_boh_summary
 from chs.html_generator import HtmlReportGenerator
+from chs.pdf_generator import builder
 from chs.protos import bill_of_health_pb2 as pb
 
 
@@ -388,4 +390,143 @@ def test_html_report_generator_handles_unrecognized_test_name():
     assert (
         insights["node-1"]["tests"][0]["display_name"]
         == "custom-unregistered-test (node)"
+    )
+
+
+def _timed_out_nccl_target(test_name: str, machine_type: str) -> str:
+    boh = pb.BillOfHealth(report_id=f"test-{test_name}-{machine_type}")
+    boh.system_info.metadata.fields["machine_type"].string_value = machine_type
+    res = boh.test_results.add(
+        test_name=test_name,
+        test_level="all-reduce",
+        result_status=pb.RESULT_STATUS_TIMEOUT,
+    )
+    res.target_resources.add(node_name="node-0")
+    res.target_resources.add(node_name="node-1")
+    summary = aggregate_boh_summary(boh)
+    assert summary is not None
+    return summary.test_summaries[0].target_criteria
+
+
+def test_fallback_target_skips_rules_the_report_cannot_disambiguate():
+    """Rules gated on run conditions absent from BoH (domain_type) skip."""
+    # a4-highgpu-8g has an unconditional all-reduce rule: 642 * 0.95 -> 610.
+    assert (
+        _timed_out_nccl_target("nccl-pairwise", "a4-highgpu-8g")
+        == "Target: Peak Detected Bandwidth >= 610 GB/s"
+    )
+    # a4x-highgpu-4g rules are domain_type-gated (and nccl-cluster only
+    # validates intradomain, so interdomain runs have no threshold).
+    assert _timed_out_nccl_target("nccl-pairwise", "a4x-highgpu-4g") == ""
+    assert _timed_out_nccl_target("nccl-cluster", "a4x-highgpu-4g") == ""
+
+
+def test_html_summary_reads_slice_topology_from_boh_system_info():
+    """Slice topology populated onto boh.system_info drives target fallback."""
+    boh = pb.BillOfHealth(report_id="test-sysinfo-topo")
+    boh.system_info.metadata.fields[
+        "machine_type"
+    ].string_value = "tpu7x-standard-4t"
+    res = boh.test_results.add(
+        test_name="tpu-collectives",
+        test_level="psum",
+        result_status=pb.RESULT_STATUS_TIMEOUT,
+    )
+    res.target_resources.add(node_name="node-0")
+    builder.populate_system_entities(
+        boh, {"node-0": ["c0"]}, [{"topology": "4x4x4", "nodes": ["node-0"]}]
+    )
+
+    summary = aggregate_boh_summary(boh)
+    assert summary is not None
+    assert (
+        summary.test_summaries[0].target_criteria
+        == "Target: Peak Bandwidth (median) >= 352 GB/s"
+    )
+
+
+def test_mixed_topologies_resolve_per_test_group_in_html():
+    """Sub-slice 2x2x1 in a run does not leak onto a 4x4x4 collectives run."""
+    boh = pb.BillOfHealth(report_id="test-mixed-topo-html")
+    boh.system_info.metadata.fields[
+        "machine_type"
+    ].string_value = "tpu7x-standard-4t"
+    psum = boh.test_results.add(
+        test_name="tpu-collectives",
+        test_level="psum",
+        result_status=pb.RESULT_STATUS_FAILED,
+    )
+    psum.target_resources.add(node_name="cube-0")
+    psum.target_resources.add(node_name="cube-1")
+    info = boh.test_results.add(
+        test_name="tpu-info",
+        test_level="local",
+        result_status=pb.RESULT_STATUS_SUCCESS,
+    )
+    info.target_resources.add(node_name="sub-0")
+    builder.populate_system_entities(
+        boh,
+        {n: [f"{n}-c0"] for n in ("cube-0", "cube-1", "sub-0")},
+        [{"topology": "4x4x4", "nodes": ["cube-0", "cube-1"]}],
+        {"sub-0": {"tpu_topology": "2x2x1"}},
+    )
+
+    summary = aggregate_boh_summary(boh)
+    assert summary is not None
+    by_name = {
+        s.display_name: s.target_criteria for s in summary.test_summaries
+    }
+    assert (
+        by_name["tpu-collectives (psum)"]
+        == "Target: Peak Bandwidth (median) >= 352 GB/s"
+    )
+
+
+def test_metric_filter_single_vs_multi_rule_branch():
+    """elements/context keep one metric rule and skip ambiguous multi-rules."""
+    from chs.core.report_data import configured_thresholds
+
+    # tpu-hbm has a single elements-gated rule for ct6e-standard-4t.
+    assert configured_thresholds(
+        "tpu-hbm", "check", machine_type="ct6e-standard-4t"
+    ) == ["Bandwidth (median) >= 1045 GB/s"]
+    # dcgm has multiple distinct context-gated rules; only Result stays.
+    assert configured_thresholds(
+        "dcgm", "level-2", machine_type="a3-megagpu-8g"
+    ) == ["Result == Pass"]
+
+
+def test_no_fallback_target_when_generator_evaluated_no_thresholds():
+    """UNKNOWN results (no matching rule) must not borrow fallback targets."""
+    boh = pb.BillOfHealth(report_id="test-no-thresh")
+    boh.system_info.metadata.fields[
+        "machine_type"
+    ].string_value = "ct6e-standard-4t"
+    res = boh.test_results.add(
+        test_name="tpu-hbm",
+        test_level="check",
+        result_status=pb.RESULT_STATUS_UNKNOWN,
+    )
+    res.target_resources.add(node_name="node-0")
+    m = res.metrics.add(key="Bandwidth (median)", unit="GB/s")
+    m.value.number_value = 1200.0
+    m.metadata.fields["context"].string_value = "node-0,1048576,bfloat16"
+
+    report_data = HtmlReportGenerator().generate_report_data(boh)
+    card = report_data["test_suite_breakdown"][0]
+    assert "No thresholds set" in card["ratio_str"]
+    assert card["target_criteria"] == ""
+
+    # A host that hit DEADLINE was never evaluated, so the fallback applies.
+    other = boh.test_results.add(
+        test_name="tpu-hbm",
+        test_level="check",
+        result_status=pb.RESULT_STATUS_DEADLINE,
+    )
+    other.target_resources.add(node_name="node-1")
+    summary = aggregate_boh_summary(boh)
+    assert summary is not None
+    assert (
+        summary.test_summaries[0].target_criteria
+        == "Target: Bandwidth (median) >= 1045 GB/s"
     )

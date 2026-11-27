@@ -238,7 +238,8 @@ class BaseScheduler(abc.ABC):
     def get_host_metadata(self, nodes: list[str]) -> dict[str, dict[str, str]]:
         """Returns scheduler and instance metadata keyed by host name.
 
-        Optional keys per host: 'nodepool', 'partition', and 'instance_id'.
+        Optional keys per host: 'nodepool', 'partition', 'instance_id', and
+        'tpu_topology' (the topology the host's TPU tests ran on).
         """
         return {}
 

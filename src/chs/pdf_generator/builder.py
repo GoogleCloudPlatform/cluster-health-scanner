@@ -117,7 +117,7 @@ def _add_host_entity(
     host.type = "CHS Host"
     host.metadata.fields["node_name"].string_value = node
     meta = host_meta.get(node, {})
-    for key in ("nodepool", "partition"):
+    for key in ("nodepool", "partition", "tpu_topology"):
         if val := meta.get(key):
             host.metadata.fields[key].string_value = val
     if inst := instance_ids.get(node, ""):
@@ -219,7 +219,11 @@ class _Builder:
             self._health,
             self._multi_host,
             cell_events,
-            topologies={topo for topo, _ in self._slices},
+            host_topologies=report_data.collect_host_topologies(
+                boh,
+                tpu_slices=tpu_slices,
+                host_metadata=self._host_meta,
+            ),
         )
         field = boh.system_info.metadata.fields.get("machine_type")
         self._machine = field.string_value if field else ""

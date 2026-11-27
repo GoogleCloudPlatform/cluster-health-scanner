@@ -502,6 +502,23 @@ def _record_subslice_node(
         )
 
 
+def _node_tpu_topology(
+    node: str,
+    labels: dict[str, str],
+    subslice_nodes: set[str],
+    pool_to_topology: dict[str, str],
+) -> str:
+    """Returns the TPU topology the run tested a GKE node as.
+
+    Mirrors the tpu_topology given to the node's experiments: a dynamic
+    single-host sub-slice, else its pool's topology.
+    """
+    if node in subslice_nodes:
+        return DYNAMIC_SINGLE_HOST_TOPOLOGY
+    nodepool = labels.get(_NODEPOOL_LABEL, "").strip()
+    return pool_to_topology.get(nodepool, "")
+
+
 def _record_pool_node(
     data: "TpuSliceData",
     unhealthy_pools: set[str],
@@ -1778,7 +1795,7 @@ class KubernetesScheduler(BaseScheduler):
         return slices
 
     def get_host_metadata(self, nodes: list[str]) -> dict[str, dict[str, str]]:
-        """Returns nodepool and GCE instance ID per GKE node."""
+        """Returns nodepool, GCE instance ID, and TPU topology per GKE node."""
         if not nodes:
             return {}
         objects_by_name = {
@@ -1786,6 +1803,11 @@ class KubernetesScheduler(BaseScheduler):
             for o in self._get_node_objects(nodes)
             if o.get("metadata", {}).get("name")
         }
+        pool_topologies = (
+            self._tpu_slice_data.pool_to_topology
+            if self._tpu_slice_data
+            else {}
+        )
         metadata_map: dict[str, dict[str, str]] = {}
         need_gce = []
         for node in nodes:
@@ -1797,6 +1819,11 @@ class KubernetesScheduler(BaseScheduler):
             nodepool = labels.get("cloud.google.com/gke-nodepool", "").strip()
             if nodepool:
                 entry["nodepool"] = nodepool
+            topo = _node_tpu_topology(
+                node, labels, self._subslice_nodes, pool_topologies
+            )
+            if topo:
+                entry["tpu_topology"] = topo
             inst_id = annotations.get(
                 "container.googleapis.com/instance_id", ""
             ) or self.node_to_instance_id.get(node, "")

@@ -21,6 +21,9 @@ class TpuHbmPlugin(TpuHbmRenderer, TpuHbmExtractor, TestPlugin):
     def get_fom_aliases(self) -> dict[str, str]:
         return {"bandwidth": "Bandwidth (median)"}
 
+    def get_metric_units(self) -> dict[str, str]:
+        return {"Bandwidth (median)": "GB/s"}
+
     def creates_per_node_results(self) -> bool:
         return True
 

@@ -21,6 +21,9 @@ class NcclBaseExtractor(DefaultExtractor):
     def get_fom_aliases(self) -> dict[str, str]:
         return {"bandwidth": "Peak Detected Bandwidth"}
 
+    def get_metric_units(self) -> dict[str, str]:
+        return {"Peak Detected Bandwidth": "GB/s"}
+
     def parse_context_metadata(self, ctx_name: str) -> dict[str, Any]:
         return parse_nccl_context_metadata(ctx_name)
 
@@ -71,7 +74,9 @@ class NcclBaseExtractor(DefaultExtractor):
                     {
                         "name": "Peak Detected Bandwidth",
                         "value": max_bw,
-                        "units": "GB/s",
+                        "units": self.get_metric_units()[
+                            "Peak Detected Bandwidth"
+                        ],
                     }
                 )
 

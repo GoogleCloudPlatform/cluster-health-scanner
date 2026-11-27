@@ -18,6 +18,9 @@ from chs.protos import bill_of_health_pb2 as pb
 
 
 class TpuCollectivesExtractor(DefaultExtractor):
+    def get_metric_units(self) -> dict[str, str]:
+        return {"Peak Bandwidth (median)": "GB/s"}
+
     def get_required_contexts(
         self, contexts: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -52,7 +55,9 @@ class TpuCollectivesExtractor(DefaultExtractor):
             peak_metric = test_result.metrics.add()
             peak_metric.key = "Peak Bandwidth (median)"
             peak_metric.value.number_value = info["val"]
-            peak_metric.unit = "GB/s"
+            peak_metric.unit = self.get_metric_units()[
+                "Peak Bandwidth (median)"
+            ]
             peak_metric.metadata.fields[
                 "context"
             ].string_value = f"{node},peak,{info['matrix_dim']},{info['dtype']}"

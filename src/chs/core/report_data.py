@@ -22,12 +22,15 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 import dataclasses
 import enum
+import functools
 import logging
+import math
 from typing import Any
 
 from chs.boh_generator import NodeContextMatcher
 from chs.core.plugin_manager import PluginManager
 from chs.protos import bill_of_health_pb2 as pb
+from chs.testkit.thresholds import build_thresholds
 from chs.utils.config import load_yaml_config
 from chs.utils.lifecycle import incomplete_label
 from chs.utils.tests import get_all_supported_tests_details
@@ -316,3 +319,199 @@ def _outcome(judged: pb.TestResult, entry: _NodeTestEntry) -> TestOutcome:
     return (
         TestOutcome.MET if entry.has_val_criteria else TestOutcome.NO_THRESHOLD
     )
+
+
+@dataclasses.dataclass(frozen=True)
+class ThresholdSpec:
+    """One resolved threshold rule with its metric label and canonical unit."""
+
+    name: str
+    op: str
+    value: str
+    unit: str
+    is_number: bool
+
+    def format(self) -> str:
+        return f"{self.name} {self.op} {self.value} {self.unit}".strip()
+
+
+def is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+_TOPOLOGY_KEYS = ("topology", "tpu_topology")
+# Threshold conditions the reports can check against the Bill of Health.
+_RESOLVED_CONDITIONS = frozenset({"workload_name", "tpu_topology"})
+# Metric-level selectors evaluated within a single run's own output.
+_METRIC_FILTERS = frozenset({"context", "elements"})
+
+
+def collect_host_topologies(
+    boh: pb.BillOfHealth,
+    tpu_slices: list[dict] | None = None,
+    host_metadata: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str]:
+    """Node name -> TPU topology the run tested it as.
+
+    Reads the host entities on boh.system_info (a host inherits its
+    group's topology), plus the raw inventory when the caller has it, so
+    the HTML and PDF reports resolve the same topology for each host.
+    """
+    topologies: dict[str, str] = {}
+
+    def walk(entities: Iterable[pb.ResourceEntity], inherited: str) -> None:
+        for entity in entities:
+            fields = entity.metadata.fields
+            topo = inherited
+            for key in _TOPOLOGY_KEYS:
+                if key in fields and fields[key].string_value.strip():
+                    topo = fields[key].string_value.strip()
+            if "node_name" in fields and topo:
+                topologies.setdefault(fields["node_name"].string_value, topo)
+            walk(entity.sub_entities, topo)
+
+    walk(boh.system_info.entities, "")
+    for s in tpu_slices or []:
+        if topo := s.get("topology"):
+            for node in s.get("nodes") or []:
+                topologies.setdefault(node, topo)
+    for node, meta in (host_metadata or {}).items():
+        if topo := meta.get("tpu_topology"):
+            topologies.setdefault(node, topo)
+    return topologies
+
+
+def topologies_of(
+    host_topologies: dict[str, str], nodes: Iterable[str]
+) -> set[str]:
+    """TPU topologies of the given hosts."""
+    return {host_topologies[n] for n in nodes if n in host_topologies}
+
+
+@functools.lru_cache(maxsize=1)
+def _raw_thresholds() -> dict[str, Any]:
+    try:
+        return build_thresholds()
+    except OSError:
+        return {}
+
+
+def _unit_lookup(plugin: Any) -> dict[str, str]:
+    """Lower-cased metric name -> canonical unit declared by the plugin."""
+    if not plugin:
+        return {}
+    return {k.lower(): v for k, v in plugin.get_metric_units().items()}
+
+
+def configured_threshold_specs(
+    test_name: str,
+    test_level: str,
+    *,
+    machine_type: str = "",
+    topologies: set[str] | None = None,
+    plugin_manager: PluginManager | None = None,
+) -> list[ThresholdSpec]:
+    """Configured thresholds from thresholds.yaml with canonical FOM units."""
+    raw = _raw_thresholds()
+    default_cfg = raw.get("default", {}).get(test_name, {})
+    machine_cfg = (
+        raw.get(machine_type, {}).get(test_name, {}) if machine_type else {}
+    )
+    if not default_cfg and not machine_cfg:
+        return []
+    comp_type = machine_cfg.get("type") or default_cfg.get("type")
+    if not comp_type:
+        return []
+    merged = {
+        **default_cfg.get("thresholds", {}),
+        **machine_cfg.get("thresholds", {}),
+    }
+    pm = plugin_manager or PluginManager()
+    plugin = pm.get_plugin(test_name)
+    aliases = plugin.get_fom_aliases() if plugin else {}
+    unit_map = _unit_lookup(plugin)
+    active_topos = topologies or set()
+    seen: dict[ThresholdSpec, None] = {}
+    # Single-run metric filters (e.g. elements, context) may select one rule
+    # per metric name; any other unresolvable condition (e.g. domain_type)
+    # is skipped because the report cannot verify whether the run matched it.
+    filtered: dict[str, dict[ThresholdSpec, None]] = defaultdict(dict)
+    for metric_key, cfg in merged.items():
+        entries = cfg if isinstance(cfg, list) else [cfg]
+        for entry in entries:
+            if isinstance(entry, dict):
+                val = entry.get("value")
+                conds = entry.get("conditions") or {}
+            else:
+                val, conds = entry, {}
+            extra_conds = set(conds) - _RESOLVED_CONDITIONS
+            if extra_conds - _METRIC_FILTERS:
+                continue
+            if (
+                "workload_name" in conds
+                and str(conds["workload_name"]) != test_level
+            ):
+                continue
+            if (
+                "tpu_topology" in conds
+                and str(conds["tpu_topology"]) not in active_topos
+            ):
+                continue
+            if val is None:
+                continue
+            is_num = is_finite_number(val)
+            if is_num and comp_type == "min":
+                val = round(float(val) * 0.95)
+            elif is_num and isinstance(val, float) and val.is_integer():
+                val = int(val)
+            op = (
+                "==" if isinstance(val, bool) or comp_type == "scalar" else ">="
+            )
+            is_relative = comp_type == "relative"
+            name = (
+                metric_key.title()
+                if is_relative
+                else aliases.get(metric_key, metric_key)
+            )
+            unit = (
+                ""
+                if is_relative
+                else (
+                    unit_map.get(name.lower())
+                    or unit_map.get(metric_key.lower())
+                    or ""
+                )
+            )
+            spec = ThresholdSpec(name, op, str(val), unit, is_num)
+            if extra_conds:
+                filtered[name][spec] = None
+            else:
+                seen[spec] = None
+    resolved_names = {s.name for s in seen}
+    for name, specs in filtered.items():
+        if len(specs) == 1 and name not in resolved_names:
+            seen.update(specs)
+    return list(seen)
+
+
+def configured_thresholds(
+    test_name: str,
+    test_level: str,
+    *,
+    machine_type: str = "",
+    topologies: set[str] | None = None,
+    plugin_manager: PluginManager | None = None,
+) -> list[str]:
+    """Formatted threshold strings for fallback when no host emits metrics."""
+    specs = configured_threshold_specs(
+        test_name,
+        test_level,
+        machine_type=machine_type,
+        topologies=topologies,
+        plugin_manager=plugin_manager,
+    )
+    return list(dict.fromkeys(s.format() for s in specs))

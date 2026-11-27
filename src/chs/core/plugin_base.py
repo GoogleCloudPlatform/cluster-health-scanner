@@ -106,6 +106,10 @@ class TestPlugin(ABC):
         """Maps clean keys to raw FOM names."""
         return {}
 
+    def get_metric_units(self) -> dict[str, str]:
+        """Maps metric names (raw or aliased) to canonical display units."""
+        return {}
+
     def get_relative_fom_keys(self) -> list[tuple[str, str]]:
         """For relative tests, returns list of (achieved_fom_key,
         peak_fom_key)."""

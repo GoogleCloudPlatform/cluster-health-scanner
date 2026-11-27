@@ -42,7 +42,7 @@ from chs.pdf_generator.hardware_ids import (
 from chs.pdf_generator.pdfwriter import A3_LANDSCAPE
 from chs.protos import bill_of_health_pb2 as pb
 from chs.ramble_manager import RambleManager
-from chs.schedulers.kubernetes import KubernetesScheduler
+from chs.schedulers.kubernetes import KubernetesScheduler, _node_tpu_topology
 
 
 def _add_result(
@@ -323,8 +323,11 @@ class TestPdfBillOfHealth(unittest.TestCase):
                 [n["metadata"]["name"] for n in nodes_raw]
             )
             assert meta["cube-0"]["nodepool"] == "pool-cube"
+            assert meta["cube-0"]["tpu_topology"] == "4x4x4"
             assert meta["small-0"]["nodepool"] == "pool-small"
+            assert meta["small-0"]["tpu_topology"] == "2x2x4"
             assert meta["dyn-0"]["nodepool"] == "pool-dyn"
+            assert meta["dyn-0"]["tpu_topology"] == "2x2x1"
 
             # Partial 4x4x4 targeting drops the pool from tpu_slices.json.
             partial = sched.get_tpu_slices_tested(
@@ -1395,9 +1398,15 @@ class TestPdfBillOfHealth(unittest.TestCase):
             [{"topology": "4x4x4", "nodes": nodes}],
         )
         by_name = {t.name: t.thresholds for t in rep.tests}
-        assert by_name["tpu-compute-stress (stress)"] == ["Performance >= 998"]
+        assert by_name["tpu-compute-stress (stress)"] == [
+            "Performance >= 998 TFLOPS"
+        ]
         assert by_name["tpu-collectives (psum)"] == [
-            "Peak Bandwidth (median) >= 352"
+            "Peak Bandwidth (median) >= 352 GB/s"
+        ]
+        assert rep.sections[0].columns == [
+            "tpu-compute-stress (stress) (TFLOPS)",
+            "tpu-collectives (psum) (GB/s)",
         ]
 
         boh.metadata.fields["skip_validation"].bool_value = True
@@ -1407,6 +1416,162 @@ class TestPdfBillOfHealth(unittest.TestCase):
             [{"topology": "4x4x4", "nodes": nodes}],
         )
         assert all(t.thresholds == [] for t in skipped_rep.tests)
+        # Without validation, headers do not borrow configured units.
+        assert skipped_rep.sections[0].columns == [
+            "tpu-compute-stress (stress)",
+            "tpu-collectives (psum)",
+        ]
+
+    def test_node_tpu_topology_matches_the_tested_slice(self):
+        pools = {"dyn-pool": "4x4x4", "static-pool": "2x2x4"}
+        topo = "cloud.google.com/gke-tpu-topology"
+        pool = "cloud.google.com/gke-nodepool"
+        cases = [
+            # A dynamic single-host sub-slice wins over any label.
+            ("sub-0", {topo: "4x4x4", pool: "dyn-pool"}, {"sub-0"}, "2x2x1"),
+            # The pool topology wins over a dynamic node's stale label.
+            ("dyn-0", {topo: "2x2x1", pool: "dyn-pool"}, set(), "4x4x4"),
+            ("s-0", {pool: "static-pool"}, set(), "2x2x4"),
+        ]
+        for node, node_labels, subslices, expected in cases:
+            assert _node_tpu_topology(node, node_labels, subslices, pools) == (
+                expected
+            )
+        # Without a pool or dynamic sub-slice entry, no topology is recorded.
+        assert _node_tpu_topology("x-0", {topo: "2x2x2"}, set(), {}) == ""
+        assert _node_tpu_topology("gpu-0", {pool: "gpu"}, set(), {}) == ""
+
+    def test_mixed_topologies_resolve_per_test_group_in_pdf(self):
+        boh = _new_boh("mixed-topo-pdf", "tpu7x-standard-4t")
+        cube = ["cube-0", "cube-1"]
+        _add_result(
+            boh,
+            "tpu-collectives",
+            cube,
+            test_level="psum",
+            status=pb.RESULT_STATUS_DEADLINE,
+        )
+        _add_result(
+            boh,
+            "tpu-info",
+            ["sub-0"],
+            test_level="local",
+            status=pb.RESULT_STATUS_SUCCESS,
+        )
+        host_meta = {
+            "cube-0": {"nodepool": "static-pool", "tpu_topology": "4x4x4"},
+            "cube-1": {"nodepool": "static-pool", "tpu_topology": "4x4x4"},
+            "sub-0": {"nodepool": "dyn-pool", "tpu_topology": "2x2x1"},
+        }
+        hw_ids = {n: [f"{n}-c0"] for n in (*cube, "sub-0")}
+        rep = builder.build_report(
+            boh,
+            hw_ids,
+            [{"topology": "4x4x4", "nodes": cube}],
+            host_meta,
+        )
+        by_name = {t.name: t.thresholds for t in rep.tests}
+        assert by_name["tpu-collectives (psum)"] == [
+            "Peak Bandwidth (median) >= 352 GB/s"
+        ]
+
+    def test_no_fallback_threshold_or_unit_when_generator_evaluated_none(self):
+        boh = _new_boh("no-thresh-pdf", "ct6e-standard-4t")
+        res = _add_result(
+            boh,
+            "tpu-hbm",
+            ["node-0"],
+            test_level="check",
+            status=pb.RESULT_STATUS_UNKNOWN,
+        )
+        m = res.metrics.add(key="Bandwidth (median)", unit="GB/s")
+        m.value.number_value = 1200.0
+        m.metadata.fields["context"].string_value = "node-0,1048576,bfloat16"
+
+        rep = builder.build_report(boh, {"node-0": ["node-0-c0"]}, [])
+        assert rep.tests[0].thresholds == []
+        assert rep.sections[0].columns == ["tpu-hbm (check)"]
+
+    def test_ungrouped_topology_and_unit_fallbacks_when_all_hosts_fail(self):
+        nodes = ["spot-0", "spot-1"]
+        boh = _new_boh("nap-deadlines", "tpu7x-standard-4t")
+        for n in nodes:
+            _add_result(
+                boh,
+                "tpu-info",
+                [n],
+                test_level="local",
+                status=pb.RESULT_STATUS_DEADLINE,
+            )
+            _add_result(
+                boh,
+                "tpu-gemm-pulse",
+                [n],
+                test_level="check",
+                status=pb.RESULT_STATUS_FAILED,
+            )
+            _add_result(
+                boh,
+                "tpu-host-device",
+                [n],
+                test_level="check",
+                status=pb.RESULT_STATUS_DEADLINE,
+            )
+        _add_result(
+            boh,
+            "tpu-collectives",
+            nodes,
+            test_level="psum",
+            status=pb.RESULT_STATUS_DEADLINE,
+        )
+
+        host_meta = {
+            n: {
+                "nodepool": f"spot-tpu7x-2x2x1-{i}",
+                "tpu_topology": "2x2x1",
+            }
+            for i, n in enumerate(nodes)
+        }
+        hw_ids = {n: [f"{n}-c0"] for n in nodes}
+        rep = builder.build_report(boh, hw_ids, [], host_meta)
+        by_name = {t.name: t.thresholds for t in rep.tests}
+        assert by_name["tpu-info (local)"] == ["JAX Devices == 8"]
+        assert by_name["tpu-gemm-pulse (check)"] == [
+            "Throughput >= 954 TFLOP/s/device",
+            "Valid Checksum == True",
+            "Checksum Match == True",
+        ]
+        assert by_name["tpu-host-device (check)"] == [
+            "H2D Bandwidth >= 203 GB/s",
+            "D2H Bandwidth >= 200 GB/s",
+        ]
+        assert by_name["tpu-collectives (psum)"] == [
+            "Peak Bandwidth (median) >= 124 GB/s"
+        ]
+        assert rep.sections[0].columns == [
+            "tpu-info (local) (JAX Devices)",
+            "tpu-gemm-pulse (check) (TFLOP/s/device)",
+            "tpu-host-device (check) (GB/s)",
+            "tpu-collectives (psum) (GB/s)",
+        ]
+        # HTML resolves the same targets from the entities written onto the
+        # Bill of Health, as RambleManager does before rendering either.
+        builder.populate_system_entities(boh, hw_ids, [], host_meta)
+        html = HtmlReportGenerator().generate_report_data(boh)
+        assert {
+            s["display_name"]: s["target_criteria"]
+            for s in html["test_suite_breakdown"]
+        } == {
+            name: f"Target: {thresholds[0]}"
+            for name, thresholds in by_name.items()
+        }
+        boh.metadata.fields["skip_validation"].bool_value = True
+        html = HtmlReportGenerator().generate_report_data(boh)
+        assert all(
+            s["target_criteria"] == "" for s in html["test_suite_breakdown"]
+        )
+        boh.metadata.fields["skip_validation"].bool_value = False
+        _render_and_validate(self.tmp_path, boh, hw_ids, [], host_meta)
 
     def test_hosts_page_omits_status_and_partial_degraded_group_is_potential(
         self,

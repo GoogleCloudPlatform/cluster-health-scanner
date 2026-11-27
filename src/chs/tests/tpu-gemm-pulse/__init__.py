@@ -20,6 +20,9 @@ from .renderer import TpuGemmPulseRenderer
 class TpuGemmPulsePlugin(
     TpuGemmPulseRenderer, TpuGemmPulseExtractor, TestPlugin
 ):
+    def get_metric_units(self) -> dict[str, str]:
+        return {"Throughput": "TFLOP/s/device"}
+
     def creates_per_node_results(self) -> bool:
         return True
 

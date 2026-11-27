@@ -20,6 +20,9 @@ from .renderer import TpuComputeStressRenderer
 class TpuComputeStressPlugin(
     TpuComputeStressRenderer, TpuComputeStressExtractor, TestPlugin
 ):
+    def get_metric_units(self) -> dict[str, str]:
+        return {"Performance": "TFLOPS"}
+
     def creates_per_node_results(self) -> bool:
         return True
 

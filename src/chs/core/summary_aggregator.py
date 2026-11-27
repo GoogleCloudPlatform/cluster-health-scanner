@@ -19,6 +19,7 @@ import re
 import datetime
 from dataclasses import dataclass, field
 from chs.protos import bill_of_health_pb2 as pb
+from chs.core import report_data
 from chs.core.plugin_manager import PluginManager
 from chs.utils.app_data import ChsAppData
 from chs.core.utils.validation_analyzer import parse_threshold
@@ -121,6 +122,10 @@ def aggregate_boh_summary(
         explicit_skip_validation = boh.metadata.fields[
             "skip_validation"
         ].bool_value
+
+    machine_field = boh.system_info.metadata.fields.get("machine_type")
+    machine_type = machine_field.string_value if machine_field else ""
+    host_topologies = report_data.collect_host_topologies(boh)
 
     report_id = boh.report_id
     run_id = (
@@ -258,6 +263,22 @@ def aggregate_boh_summary(
                     break
             if target_criteria:
                 break
+        if (
+            not target_criteria
+            and not explicit_skip_validation
+            and not group_has_no_thresholds
+        ):
+            fallback = report_data.configured_thresholds(
+                canonical_name,
+                test_level,
+                machine_type=machine_type,
+                topologies=report_data.topologies_of(
+                    host_topologies, test_nodes
+                ),
+                plugin_manager=pm,
+            )
+            if fallback:
+                target_criteria = f"Target: {fallback[0]}"
         for res in results:
             failed_threshold = False
             for m in res.metrics:

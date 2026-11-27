@@ -20,7 +20,6 @@ extract_validation_data; outcomes are report_data.node_health's.
 
 import collections
 import functools
-import math
 
 from chs.core import report_data
 from chs.core.plugin_manager import PluginManager
@@ -31,7 +30,6 @@ from chs.core.utils.validation_analyzer import (
 from chs.pdf_generator import model
 from chs.pdf_generator.labels import TestKey
 from chs.protos import bill_of_health_pb2 as pb
-from chs.testkit.thresholds import build_thresholds
 
 HEALTHY = report_data.NodeStatus.HEALTHY.value
 DEGRADED = report_data.NodeStatus.DEGRADED.value
@@ -52,6 +50,8 @@ REASONS = {
 
 ChartSpec = tuple[str, str, float]  # (metric, unit, threshold)
 
+_is_number = report_data.is_finite_number
+
 
 def display(key: TestKey) -> str:
     return f"{key[0]} ({key[1]})" if key[1] else key[0]
@@ -65,14 +65,6 @@ def hosts_of(result: pb.TestResult) -> tuple[str, ...]:
     return tuple(t.node_name for t in result.target_resources)
 
 
-def _is_number(value) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-    )
-
-
 def _spec(row: ValidationRowData) -> ChartSpec | None:
     """The chart a row is drawn in: numeric >= criteria only."""
     if row.comparator != pb.COMPARATOR_GTE or row.expected is None:
@@ -80,14 +72,6 @@ def _spec(row: ValidationRowData) -> ChartSpec | None:
     return (
         (row.metric, row.unit, row.expected) if _is_number(row.value) else None
     )
-
-
-@functools.lru_cache(maxsize=1)
-def _raw_thresholds() -> dict:
-    try:
-        return build_thresholds()
-    except OSError:
-        return {}
 
 
 def _fmt(value) -> str:
@@ -143,13 +127,22 @@ class Metrics:
         health: dict[str, report_data.NodeHealth],
         multi_host: set[TestKey],
         cell_events: dict[tuple[str, str], set[str]] | None = None,
-        topologies: set[str] | None = None,
+        host_topologies: dict[str, str] | None = None,
     ):
         self._pm = pm
         self._health = health
         self._multi_host = multi_host
         self._cell_events = cell_events or {}
-        self._topologies = topologies or set()
+        self._host_topologies = host_topologies or {}
+        self._hosts: dict[TestKey, set[str]] = collections.defaultdict(set)
+        statuses: dict[TestKey, set[int]] = collections.defaultdict(set)
+        for r in boh.test_results:
+            key = (pm.resolve_test_name(r.test_name), r.test_level)
+            self._hosts[key].update(hosts_of(r))
+            statuses[key].add(r.result_status)
+        self._no_thresholds = {
+            k for k, s in statuses.items() if s == {pb.RESULT_STATUS_UNKNOWN}
+        }
         machine_field = boh.system_info.metadata.fields.get("machine_type")
         self._machine = machine_field.string_value if machine_field else ""
         skip_field = boh.metadata.fields.get("skip_validation")
@@ -179,6 +172,8 @@ class Metrics:
     def _single_column_label(self, key: TestKey) -> str:
         """Unit or threshold name to show in a single-column test header."""
         rows = [r for node_rows in self._rows[key].values() for r in node_rows]
+        if not rows:
+            return self._configured_column_label(key)
         units = list(dict.fromkeys(r.unit for r in rows if r.unit))
         if len(units) == 1:
             return units[0]
@@ -189,6 +184,26 @@ class Metrics:
             r.metric == numeric_metrics[0] for r in rows
         ):
             return numeric_metrics[0]
+        return ""
+
+    def _configured_column_label(self, key: TestKey) -> str:
+        """Fallback unit or metric name for empty single-column headers."""
+        if self._skip_validation or key in self._no_thresholds:
+            return ""
+        specs = report_data.configured_threshold_specs(
+            key[0],
+            key[1],
+            machine_type=self._machine,
+            topologies=report_data.topologies_of(
+                self._host_topologies, self._hosts[key]
+            ),
+            plugin_manager=self._pm,
+        )
+        units = list(dict.fromkeys(s.unit for s in specs if s.unit))
+        if len(units) == 1:
+            return units[0]
+        if not units and len(specs) == 1 and specs[0].is_number:
+            return specs[0].name
         return ""
 
     def _metric_columns(self, key: TestKey) -> list[tuple[str, str]]:
@@ -220,63 +235,17 @@ class Metrics:
         """Distinct evaluated thresholds of a test, as 'metric >= X unit'."""
         if self._thresholds[key]:
             return list(self._thresholds[key])
-        if self._skip_validation:
+        if self._skip_validation or key in self._no_thresholds:
             return []
-        return self._configured_thresholds(key)
-
-    def _configured_thresholds(self, key: TestKey) -> list[str]:
-        """Falls back to thresholds.yaml when no host emits metrics."""
-        raw = _raw_thresholds()
-        default_cfg = raw.get("default", {}).get(key[0], {})
-        machine_cfg = (
-            raw.get(self._machine, {}).get(key[0], {}) if self._machine else {}
+        return report_data.configured_thresholds(
+            key[0],
+            key[1],
+            machine_type=self._machine,
+            topologies=report_data.topologies_of(
+                self._host_topologies, self._hosts[key]
+            ),
+            plugin_manager=self._pm,
         )
-        if not default_cfg and not machine_cfg:
-            return []
-        comp_type = machine_cfg.get("type") or default_cfg.get("type")
-        if not comp_type:
-            return []
-        merged = {
-            **default_cfg.get("thresholds", {}),
-            **machine_cfg.get("thresholds", {}),
-        }
-        plugin = self._pm.get_plugin(key[0])
-        aliases = plugin.get_fom_aliases() if plugin else {}
-        seen: dict[str, None] = {}
-        for metric_key, cfg in merged.items():
-            entries = cfg if isinstance(cfg, list) else [cfg]
-            for entry in entries:
-                if isinstance(entry, dict):
-                    val = entry.get("value")
-                    conds = entry.get("conditions") or {}
-                else:
-                    val, conds = entry, {}
-                if (
-                    "workload_name" in conds
-                    and str(conds["workload_name"]) != key[1]
-                ):
-                    continue
-                if (
-                    "tpu_topology" in conds
-                    and str(conds["tpu_topology"]) not in self._topologies
-                ):
-                    continue
-                if val is None:
-                    continue
-                if _is_number(val) and comp_type == "min":
-                    val = round(float(val) * 0.95)
-                op = (
-                    "=="
-                    if isinstance(val, bool) or comp_type == "scalar"
-                    else ">="
-                )
-                name = (
-                    metric_key.title()
-                    if comp_type == "relative"
-                    else aliases.get(metric_key, metric_key)
-                )
-                seen[f"{name} {op} {val}"] = None
-        return list(seen)
 
     def node_tests(
         self, node: str, result_ids: set[int] | None = None
